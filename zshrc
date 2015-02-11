@@ -2,28 +2,27 @@
 source $HOME/dotfiles/antigen/antigen.zsh
 
 # conf antigen
-antigen use oh-my-zsh
-antigen bundle <<EOBUNDLES
+antigen-use oh-my-zsh
 
-command-not-found
-colored-man
+antigen-bundle command-not-found
+antigen-bundle colored-man
 
-zsh-users/zsh-completions
+antigen-bundle zsh-users/zsh-completions
 
-git
-pip
+antigen-bundle git
+antigen-bundle pip
 
-zsh-users/zsh-syntax-highlighting
+antigen-bundle zsh-users/zsh-syntax-highlighting
 
-phing
-composer
-git-extras
-npm
-brew
-EOBUNDLES
+antigen-bundle phing
+antigen-bundle composer
+antigen-bundle git-extras
+antigen-bundle npm
+antigen-bundle brew
+
 
 # theme
-antigen theme sorin
+antigen-theme sorin
 
 is_linux () {
     	[[ $('uname') == 'Linux' ]];
@@ -34,10 +33,10 @@ is_osx () {
 }
 
 if is_osx; then
-	antigen bundle osx
+	antigen-bundle osx
 fi
 
-antigen bundle zsh-users/zsh-history-substring-search
+antigen-bundle zsh-users/zsh-history-substring-search
 
 if is_osx; then
 	bindkey '^[[A' history-substring-search-up
@@ -55,7 +54,7 @@ elif is_linux; then
 fi
 
 # antigen apply
-antigen apply
+antigen-apply
 
 # User configuration
 
