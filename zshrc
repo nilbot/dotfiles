@@ -2,59 +2,28 @@
 source $HOME/dotfiles/antigen/antigen.zsh
 
 # conf antigen
-antigen-use oh-my-zsh
+antigen use oh-my-zsh
+antigen bundles <<EOBUNDLES
 
-antigen-bundle command-not-found
-antigen-bundle colored-man
+zsh-users/zsh-completions
 
-antigen-bundle zsh-users/zsh-completions
+git
+git-extras
 
-antigen-bundle git
-antigen-bundle pip
+zsh-users/zsh-syntax-highlighting
 
-antigen-bundle zsh-users/zsh-syntax-highlighting
+npm
 
-antigen-bundle phing
-antigen-bundle composer
-antigen-bundle git-extras
-antigen-bundle npm
-antigen-bundle brew
+osx
+brew
 
+EOBUNDLES
 
 # theme
-antigen-theme sorin
-
-is_linux () {
-    	[[ $('uname') == 'Linux' ]];
-}
-
-is_osx () {
-	[[ $('uname') == 'Darwin' ]]
-}
-
-if is_osx; then
-	antigen-bundle osx
-fi
-
-antigen-bundle zsh-users/zsh-history-substring-search
-
-if is_osx; then
-	bindkey '^[[A' history-substring-search-up
-	bindkey '^[[B' history-substring-search-down
-elif is_linux; then
-	zmodload zsh/terminfo
-	bindkey "$terminfo[kcuu1]" history-substring-search-up
-	bindkey "$terminfo[kcud1]" history-substring-search-down
-
-	bindkey -M emacs '^P' history-substring-search-up
-	bindkey -M emacs '^N' history-substring-search-down
-
-	bindkey -M vicmd 'k' history-substring-search-up
-	bindkey -M vicmd 'j' history-substring-search-down
-fi
+antigen theme sorin
 
 # antigen apply
-antigen-apply
+antigen apply
 
 # User configuration
 
@@ -69,5 +38,5 @@ export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin:/us
 alias goapp="$HOME/devel/google-cloud-sdk/platform/google_appengine/goapp"
 
 
-source '/Users/nilbot/devel/google-cloud-sdk/path.zsh.inc'
+source "$HOME/devel/google-cloud-sdk/path.zsh.inc"
 
