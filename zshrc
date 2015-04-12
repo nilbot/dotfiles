@@ -29,7 +29,7 @@ antigen apply
 
 
 export GREP_OPTIONS='--color=always'
-export GOPATH="$HOME/go"
+export GOPATH="$HOME/_workspace"
 export GOROOT="/usr/local/opt/go/libexec"
 export PLAN9="/usr/local/plan9"
 export PATH="$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin:/usr/local/sbin:$GOROOT/bin:$GOPATH/bin:$PLAN9/bin"
