@@ -32,15 +32,20 @@ zstyle ':prezto:load' pmodule \
   'spectrum' \
   'utility' \
   'completion' \
+  'history-substring-search' \
+  'homebrew' \
+  'osx' \
   'git' \
-  'prompt'
+  'gpg' \
+  'prompt' \
+  'syntax-highlighting'
 
 #
 # Editor
 #
 
 # Set the key mapping style to 'emacs' or 'vi'.
-zstyle ':prezto:module:editor' key-bindings 'vi'
+zstyle ':prezto:module:editor' key-bindings 'emacs'
 
 # Auto convert .... to ../..
 # zstyle ':prezto:module:editor' dot-expansion 'yes'
