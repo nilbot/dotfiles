@@ -41,7 +41,7 @@ fi
 
 # User configuration
 
-
+export GO15VENDOREXPERIMENT=1
 export GREP_OPTIONS='--color=always'
 export GOPATH="$HOME/_workspace"
 export GOROOT="/usr/local/opt/go/libexec"
