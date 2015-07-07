@@ -40,10 +40,10 @@ if [[ -s "${ZDOTDIR:-$HOME}/.zprezto/init.zsh" ]]; then
 fi
 
 # symlink vim and tmux
-if [[ ! -d $HOME/.vimrc ]]; then
-	ln -s $HOME/dotifles/vimrc $HOME/.vimrc
+if [[ ! -f $HOME/.vimrc ]]; then
+	ln -s $HOME/dotfiles/vimrc $HOME/.vimrc
 fi
-if [[ ! -d $HOME/.tmux.conf ]]; then
+if [[ ! -f $HOME/.tmux.conf ]]; then
 	ln -s $HOME/dotfiles/tmux.conf $HOME/.tmux.conf
 fi
 
