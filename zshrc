@@ -39,6 +39,14 @@ if [[ -s "${ZDOTDIR:-$HOME}/.zprezto/init.zsh" ]]; then
   source "${ZDOTDIR:-$HOME}/.zprezto/init.zsh"
 fi
 
+# symlink vim and tmux
+if [[ ! -d $HOME/.vimrc ]]; then
+	ln -s $HOME/dotifles/vimrc $HOME/.vimrc
+fi
+if [[ ! -d $HOME/.tmux.conf ]]; then
+	ln -s $HOME/dotfiles/tmux.conf $HOME/.tmux.conf
+fi
+
 # User configuration
 
 export GO15VENDOREXPERIMENT=1
