@@ -1,7 +1,7 @@
 if [ `uname -r | grep -o fc2 | wc -l` ]; then
     # install some essential packages for brew 
     sudo dnf -y groupinstall "Development Tools"
-    sudo dnf -y install gcc-g++ patch 
+    sudo dnf -y install gcc-c++ patch 
 
     # install linuxbrew
     git clone git@github.com:Homebrew/linuxbrew.git $HOME/.linuxbrew
