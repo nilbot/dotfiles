@@ -25,6 +25,8 @@ if [ "$(uname)" == "Darwin" ]; then
     ln -s ~/dotifles/nginx/nginx.conf /usr/local/etc/nginx/nginx.conf
     # symlink the code.dev from dotfiles
     ln -s ~/dotfiles/nginx/code.dev /usr/local/etc/nginx/sites-enabled/code.dev
+elif [ "$(uname -s)" == "Linux" ]; then
+	source install/fedora.sh
 fi
 
 echo "creating vim directories"
