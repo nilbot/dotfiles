@@ -5,4 +5,5 @@ function usocks() unset http_proxy https_proxy
 # calculate space for current folder
 function space() du -ch | grep total
 
-
+# visual studio code (mac osx only)
+function code() { VSCODE_CWD="$PWD" open -n -b "com.microsoft.VSCode" --args $* ;}
