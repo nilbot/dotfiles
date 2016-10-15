@@ -2,4 +2,3 @@
 # init
 brew tap homebrew/science
 brew tap neovim/neovim
-brew cask install rstudio
