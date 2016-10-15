@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-if [ "$(uname)" == "Darwin" ];then
+if [[ "$(uname)" == "Darwin" ]];then
     echo "installing prerequisite softwares using brew..."
     /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)"
     echo "installing packages..."
@@ -11,7 +11,7 @@ if [ "$(uname)" == "Darwin" ];then
     for pkg in $(cat brew/brew.cask.list); do
         brew cask install $pkg
     done
-elif [ "$(uname -r)" == *"ARCH" ]; then
+elif [[ "$(uname -r)" == *"ARCH" ]]; then
     echo "installing prerequisite softwares using pacman and AUR..."
     sudo pacman -S --noconfirm base-devel
     sudo echo <<EOF >> /etc/pacman.conf
