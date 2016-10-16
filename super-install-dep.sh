@@ -20,7 +20,7 @@ SigLevel = Never
 Server = https://repo.archlinux.fr/$arch
 EOF
     pacman -Syy && pacman -S --noconfirm yaourt
-    pacman -S --noconfirm gnupg python ruby git go
+    pacman -S --noconfirm gnupg python ruby git go shellcheck
 else
     echo "Your platform is not yet supported. Install the softwares manually please."
     exit 127
