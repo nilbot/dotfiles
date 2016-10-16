@@ -14,7 +14,7 @@ if [[ "$(uname)" == "Darwin" ]];then
 elif [[ "$(uname -r)" == *"ARCH" ]]; then
     echo "installing prerequisite softwares using pacman and AUR..."
     pacman -S --noconfirm base-devel
-    echo <<'EOF' >> /etc/pacman.conf
+    cat <<'EOF' >> /etc/pacman.conf
 [archlinuxfr]
 SigLevel = Never
 Server = https://repo.archlinux.fr/$arch
