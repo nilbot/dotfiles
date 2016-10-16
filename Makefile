@@ -7,7 +7,7 @@ prerequisite:
 	./user-install-dep.sh
 
 links:
-	for dir in $(shell find $(CURDIR) -name ".*" -not -name ".git" -not -name ".gitignore"); do \
+	for dir in $(shell find $(CURDIR) -name ".*" -not -name ".git" -not -name ".gitignore" -not -name ".gitmodules"); do \
 		target=$$(basename $$dir); \
 		ln -sfn $$dir $(HOME)/$$target; \
 	done
