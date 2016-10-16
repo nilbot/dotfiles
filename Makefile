@@ -26,6 +26,7 @@ extra:
 
 omz:
 	git clone https://github.com/robbyrussell/oh-my-zsh.git $(HOME)/.oh-my-zsh
+	ln -sfn $(INSTALL_DIR)/zsh/custom $(HOME)/.oh-my-zsh/custom
 	ln -sfn $(INSTALL_DIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(INSTALL_DIR)/zsh/zshenv $(HOME)/.zshenv
 	sudo chsh -s $(shell which zsh) $(shell whoami)
