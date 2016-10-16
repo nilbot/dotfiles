@@ -97,6 +97,7 @@ rclone
 readline
 ruby
 shared-mime-info
+shellcheck
 slackcat
 socat
 sox
