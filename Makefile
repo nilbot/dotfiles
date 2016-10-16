@@ -2,20 +2,18 @@
 
 all: prerequisite links themes vim extra omz
 
-INSTALL_DIR=$(shell find $(CURDIR))
-
 prerequisite:
 	sudo ./super-install-dep.sh
 	./user-install-dep.sh
 
 links:
-	for dir in $(shell find $(INSTALL_DIR)/dot -type d -name ".*"); do \
+	for dir in $(shell find $(CURDIR)/dot/ -type d -name ".*" -not -name ".git"); do \
 		target=$$(basename $$dir) \
 		ln -sfn $$dir $(HOME)/$$target \
 	done;
-	ln -sfn $(INSTALL_DIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
-	ln -sfn $(INSTALL_DIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
-	ln -sf $(INSTALL_DIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
+	ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
+	ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
+	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
 
 themes:
 
@@ -26,7 +24,7 @@ extra:
 
 omz:
 	git clone https://github.com/robbyrussell/oh-my-zsh.git $(HOME)/.oh-my-zsh
-	ln -sfn $(INSTALL_DIR)/zsh/custom $(HOME)/.oh-my-zsh/custom
-	ln -sfn $(INSTALL_DIR)/zsh/zshrc $(HOME)/.zshrc
-	ln -sfn $(INSTALL_DIR)/zsh/zshenv $(HOME)/.zshenv
+	ln -sfn $(CURDIR)/zsh/custom $(HOME)/.oh-my-zsh/custom
+	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
+	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	sudo chsh -s $(shell which zsh) $(shell whoami)
