@@ -5,11 +5,11 @@ all: prerequisite links themes vim extra omz
 INSTALL_DIR=$(shell find $(CURDIR))
 
 prerequisite:
-	./install-dep.sh
+	sudo ./super-install-dep.sh
+	./user-install-dep.sh
 
 links:
-	for dir in $(shell find $(INSTALL_DIR)/dot -type d -name ".*"); \
-	do \
+	for dir in $(shell find $(INSTALL_DIR)/dot -type d -name ".*"); do \
 		target=$$(basename $$dir) \
 		ln -sfn $$dir $(HOME)/$$target \
 	done;
