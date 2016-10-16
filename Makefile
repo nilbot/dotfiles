@@ -15,6 +15,7 @@ links:
 	done;
 	ln -sfn $(INSTALL_DIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
 	ln -sfn $(INSTALL_DIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
+	ln -sf $(INSTALL_DIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
 
 themes:
 
