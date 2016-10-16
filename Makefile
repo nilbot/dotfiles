@@ -7,10 +7,10 @@ prerequisite:
 	./user-install-dep.sh
 
 links:
-	for dir in $(shell find $(CURDIR)/dot/ -type d -name ".*" -not -name ".git"); do \
-		target=$$(basename $$dir) \
-		ln -sfn $$dir $(HOME)/$$target \
-	done;
+	for dir in $(shell find $(CURDIR) -name ".*" -not -name ".git" -not -name ".gitignore"); do \
+		target=$$(basename $$dir); \
+		ln -sfn $$dir $(HOME)/$$target; \
+	done
 	ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
 	ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
