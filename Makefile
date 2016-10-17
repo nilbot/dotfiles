@@ -11,6 +11,7 @@ links:
 		target=$$(basename $$dir); \
 		ln -sfn $$dir $(HOME)/$$target; \
 	done
+	mkdir -p $(HOME)/.gnupg/;
 	ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
 	ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
