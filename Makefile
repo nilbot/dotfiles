@@ -21,12 +21,12 @@ links:
 themes:
 
 vim:
-	cd neovim && git submodules update --init --recursive
+	cd neovim && git submodule update --init --recursive
 	mkdir -p $(HOME)/.config && ln -sfn $(CURDIR)/neovim $(HOME)/.config/nvim
 	ln -sf $(CURDIR)/neovom/vimrc $(HOME)/.config/nvim/init.vim
 
 extra:
-
+	mkdir -p $(CURDIR)/extras.secret/
 
 omz:
 	rm -rf $(HOME)/.oh-my-zsh
