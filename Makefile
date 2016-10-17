@@ -15,10 +15,15 @@ links:
 	ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
 	ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
+	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
+	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
 
 themes:
 
 vim:
+	cd neovim && git submodules update --init --recursive
+	mkdir -p $(HOME)/.config && ln -sfn $(CURDIR)/neovim $(HOME)/.config/nvim
+	ln -sf $(CURDIR)/neovom/vimrc $(HOME)/.config/nvim/init.vim
 
 extra:
 
