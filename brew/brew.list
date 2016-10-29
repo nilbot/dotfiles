@@ -72,7 +72,6 @@ mobile-shell
 mono
 mpfr
 mutt
-neovim
 nettle
 node
 ocaml
@@ -83,6 +82,7 @@ openssl
 pango
 pcre
 pdflib-lite
+perl
 pinentry
 pixman
 pkg-config
@@ -106,10 +106,10 @@ sshfs
 the_platinum_searcher
 tokyo-cabinet
 tree
+vim
 watchman
 webp
 wget
-wireshark
 wxmac
 x264
 xvid
