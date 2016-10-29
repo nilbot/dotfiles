@@ -1,6 +1,6 @@
 .PHONY: all bin dotfiles etc
 
-all: prerequisite links themes vim extra omz
+all: prerequisite links themes extra omz
 
 prerequisite:
 	sudo ./super-install-dep.sh
@@ -20,11 +20,6 @@ links:
 
 themes:
 
-vim:
-	cd neovim && git submodule update --init --recursive
-	mkdir -p $(HOME)/.config && ln -sfn $(CURDIR)/neovim $(HOME)/.config/nvim
-	ln -sf $(CURDIR)/neovom/vimrc $(HOME)/.config/nvim/init.vim
-
 extra:
 	mkdir -p $(CURDIR)/extras.secret/
 
@@ -36,3 +31,11 @@ omz:
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	sudo chsh -s $(shell which zsh) $(shell whoami)
+vim:
+	cd vim && git submodule update --init --recursive
+	ln -sf $(CURDIR)/neovim/vimrc $(HOME)/.vimrc
+neovim:
+	cd neovim && git submodule update --init --recursive
+	mkdir -p $(HOME)/.config && ln -sfn $(CURDIR)/neovim $(HOME)/.config/nvim
+	ln -sf $(CURDIR)/neovim/vimrc $(HOME)/.config/nvim/init.vim
+
