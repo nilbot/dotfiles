@@ -36,8 +36,8 @@ values."
      python
      ruby
      (go :variables
-	 go-use-gometalinter t
-	 gofmt-command "goimports")
+				 go-use-gometalinter t
+				 gofmt-command "goimports")
      c-c++
      helm
      auto-completion
@@ -133,7 +133,7 @@ values."
    ;; Press <SPC> T n to cycle to the next theme in the list (works great
    ;; with 2 themes variants, one dark and one light)
    dotspacemacs-themes '(monokai zenburn spacemacs-dark
-                         spacemacs-light)
+																 spacemacs-light)
    ;; If non nil the cursor color matches the state color in GUI Emacs.
    dotspacemacs-colorize-cursor-according-to-state t
    ;; Default font, or prioritized list of fonts. `powerline-scale' allows to
@@ -312,9 +312,6 @@ you should place your code here."
   (defun before-save-indent-for-some-language()
     (case major-mode
       ((ruby-mode) (spacemacs/indent-region-or-buffer))))
-  (defun indent-custom (n)
-    (setq-local c-basic-offset n)
-    )
 
   (defun my-setup-indent (n)
     ;; java/c/c++

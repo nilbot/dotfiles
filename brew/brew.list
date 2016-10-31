@@ -5,13 +5,14 @@ awscli
 c-ares
 cairo
 camlp4
+clang-format
 clasp
 cmake
 coreutils
 dbus
 diff-so-fancy
 dirmngr
-emacs-plus
+emacs-mac
 ffmpeg
 fontconfig
 freetype
