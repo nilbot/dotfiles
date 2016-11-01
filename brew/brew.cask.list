@@ -9,7 +9,7 @@ docker
 dotnet
 eclipse-java
 flux
-google-chrome
+google-chrome-dev
 gpgtools
 java
 keka
@@ -25,7 +25,6 @@ skyfonts
 skype
 slack
 splayerx
-steam
 texpad
 tunnelblick
 vagrant
@@ -35,4 +34,5 @@ visual-studio-code
 vlc
 vox
 vox-preferences-pane
+weka
 xquartz
