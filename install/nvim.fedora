@@ -1,7 +1,0 @@
-let autoload = '$HOME/.nvim/autoload'
-let lists = split(globpath(autoload,'*.vim'),'\n')
-for f in lists
-	execute 'source '.fnameescape(f)
-endfor
-
-execute 'source '.fnameescape('$HOME/.nvimrc')

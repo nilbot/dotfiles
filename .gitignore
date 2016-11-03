@@ -1,3 +1,4 @@
-nvim/nvim.symlink/plugged/
-nvim/nvim.symlink/.netrwhist
-nvim/nvim.symlink/spell/
+*.ignore
+*.extra
+*.secret[s]
+*secret/

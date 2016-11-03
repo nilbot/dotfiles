@@ -7,3 +7,9 @@ function space() du -ch | grep total
 
 # visual studio code (mac osx only)
 function code() { VSCODE_CWD="$PWD" open -n -b "com.microsoft.VSCode" --args $* ;}
+
+# findutils
+if [[ -e /usr/local/bin/gfind  ]]; then
+	alias find='gfind'
+fi
+
