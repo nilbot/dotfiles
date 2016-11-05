@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 source $HOME/dotfiles/zsh/path.env
-
+source $HOME/dotfiles/zsh/linuxpath.env
 source $HOME/dotfiles/zsh/android.env
 source $HOME/dotfiles/zsh/dotnet.env
 source $HOME/dotfiles/zsh/go.env
