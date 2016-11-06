@@ -12,7 +12,7 @@ Server = https://repo.archlinux.fr/$arch
 EOF
 		pacman -Syy && pacman -S --noconfirm yaourt
 		pacman -S --noconfirm gnupg python ruby git go shellcheck zsh
-elif [[ "$(uname -v)" =~"Ubuntu" ]];then
+elif [[ "$(uname -v)" =~ "Ubuntu" ]];then
 		apt-get update && apt-get upgrade -y
 		apt-get install -y build-essential
 		apt-get install -y ruby zsh
