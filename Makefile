@@ -19,7 +19,7 @@ links:
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
 
 editors:
-	git clone https://github.com/jessfraz/.vim.git && cd $(HOME)/.vim && git submodules update --init
+	git clone https://github.com/jessfraz/.vim.git $(HOME)/.vim && cd $(HOME)/.vim && git submodules update --init
 	ln -sf $(HOME)/.vim/vimrc $(HOME)/.vimrc
 	git clone https://github.com/syl20bnr/spacemacs.git $(HOME)/.emacs.d
 
