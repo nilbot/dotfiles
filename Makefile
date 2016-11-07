@@ -1,6 +1,6 @@
 .PHONY: all bin dotfiles etc
 
-all: prerequisite links themes extra omz
+all: prerequisite links editors extra omz
 
 prerequisite:
 	sudo ./super-install-dep.sh
@@ -18,7 +18,10 @@ links:
 	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
 
-themes:
+editors:
+	git clone https://github.com/jessfraz/.vim.git && cd $(HOME)/.vim && git submodules update --init
+	ln -sf $(HOME)/.vim/vimrc $(HOME)/.vimrc
+	git clone https://github.com/syl20bnr/spacemacs.git $(HOME)/.emacs.d
 
 extra:
 	mkdir -p $(CURDIR)/extras.secret/
