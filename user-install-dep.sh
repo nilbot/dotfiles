@@ -1,8 +1,6 @@
 #!/bin/bash
 
-if [[ "$(uname -r)" == *"ARCH" ]]; then
-		yaourt -S --noconfirm the_platinum_searcher
-elif [[ "$(uname -v)" =~ "Ubuntu" ]];then
+if [[ "$(uname)" == "Linux" ]]; then
 		ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install)"
 elif [[ "$(uname)" == "Darwin" ]]; then
 		echo "installing prerequisite softwares using brew..."
