@@ -115,6 +115,7 @@
 [diff]
     renames = copies
     mnemonicprefix = true
+	indentHeuristic = true
 [difftool]
     prompt = false
 [apply]

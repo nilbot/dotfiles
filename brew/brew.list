@@ -1,7 +1,7 @@
 aspcud
 autoconf
 automake
-awscli
+boost
 c-ares
 cairo
 camlp4
@@ -13,6 +13,8 @@ dbus
 diff-so-fancy
 dirmngr
 emacs-mac
+encfs
+exercism
 ffmpeg
 fontconfig
 freetype
@@ -70,7 +72,6 @@ mad
 menhir
 mercurial
 mobile-shell
-mono
 mpfr
 mutt
 nettle
@@ -93,13 +94,11 @@ python
 python3
 qt
 qt5
-r
 rclone
 readline
 ruby
 shared-mime-info
 shellcheck
-slackcat
 socat
 sox
 sqlite
