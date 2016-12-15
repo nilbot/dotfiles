@@ -4,21 +4,21 @@ set -e
 
 file_pattern=$1
 
-function main {
+main() {
 		for rev in $(revisions);do
 				echo "$(number_of_lines) $(commit_description)"
 		done
 }
 
-function revisions {
+revisions() {
 		git rev-list --reverse HEAD
 }
 
-function commit_description {
+commit_description() {
 		git log --pretty --oneline -1 $rev
 }
 
-function number_of_lines {
+number_of_lines() {
 		git ls-tree -r $rev |
 				grep "$file_pattern" |
 				awk '{print $3}' |
