@@ -1,0 +1,24 @@
+#!/bin/bash
+
+set -e
+
+hash=$1
+newdate=$2
+
+main() {
+    proper=$(normalise_date)
+    #debug
+    echo "$proper"
+    git filter-branch --env-filter \
+        'if [[ "$GIT_COMMIT" == "$hash" ]]; then
+            export GIT_AUTHOR_DATE="$proper"
+            export GIT_COMMITTER_DATE="$proper"
+        fi'
+}
+
+normalise_date() {
+    read d m Y <<< ${newdate//\// }
+    date -v"$d"d -v"$m"m -v"$Y"y -R
+}
+
+main
