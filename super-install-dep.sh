@@ -16,6 +16,10 @@ elif [[ "$(uname -v)" =~ "Ubuntu" ]];then
 		apt-get update && apt-get upgrade -y
 		apt-get install -y build-essential
 		apt-get install -y ruby zsh
+elif [[ "$(uname -r)" == *"MANJARO" ]]; then
+		echo "installing prerequisite softwares using pacman..."
+		pacman -S --noconfirm base-devel
+		pacman -S --noconfirm gnupg python ruby git go shellcheck zsh
 else
 		echo "Your platform is not yet supported. Install the softwares manually please."
 		exit 127
