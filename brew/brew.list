@@ -12,8 +12,6 @@ coreutils
 dbus
 diff-so-fancy
 dirmngr
-emacs-mac
-encfs
 exercism
 ffmpeg
 fontconfig
@@ -36,7 +34,6 @@ gnutls
 go
 gobject-introspection
 godep
-gotty
 gpg-agent
 graphicsmagick
 gringo
@@ -92,6 +89,7 @@ protobuf
 pth
 python
 python3
+qemu
 qt
 qt5
 rclone
@@ -102,7 +100,6 @@ shellcheck
 socat
 sox
 sqlite
-sshfs
 the_platinum_searcher
 tokyo-cabinet
 tree
@@ -115,3 +112,9 @@ x264
 xvid
 xz
 zeromq
+homebrew/fuse/encfs
+homebrew/fuse/sshfs
+railwaycat/emacsmacport/emacs-mac
+sevki/gcc_cross_compilers/x86_64-elf-binutils
+sevki/gcc_cross_compilers/x86_64-elf-gcc
+yudai/gotty/gotty
