@@ -30,7 +30,6 @@ extra:
 omz:
 	rm -rf $(HOME)/.oh-my-zsh
 	git clone https://github.com/robbyrussell/oh-my-zsh.git $(HOME)/.oh-my-zsh
-	rm -rf $(HOME)/.oh-my-zsh/custom
 	ln -sfn $(CURDIR)/zsh/custom/themes $(HOME)/.oh-my-zsh/custom/themes
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
