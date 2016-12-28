@@ -1,8 +1,4 @@
 #!/usr/bin/env zsh
-source $HOME/dotfiles/zsh/path.env
-source $HOME/dotfiles/zsh/android.env
-source $HOME/dotfiles/zsh/dotnet.env
-source $HOME/dotfiles/zsh/google.env
-source $HOME/dotfiles/zsh/plan9.env
-source $HOME/dotfiles/zsh/linuxpath.env
-source $HOME/dotfiles/zsh/go.env
+for f in $(ls "$HOME"/dotfiles/zsh/*.env); do
+    source $f
+done
