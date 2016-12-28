@@ -2,3 +2,4 @@
 # init
 brew tap homebrew/science
 brew tap railwaycat/emacsmacport
+brew tap sevki/gcc_cross_compilers
