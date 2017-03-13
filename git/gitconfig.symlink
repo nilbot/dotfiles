@@ -85,6 +85,8 @@
     # the acronym stands for "subtree update"
     sbu = "!f() { git subtree pull --prefix $2 $1 master --squash; }; f"
 
+    pushallremote = "!git remote | xargs -L1 git push"
+
 [color]
     diff = auto
     status = auto
