@@ -140,8 +140,10 @@
 	diff = diff-so-fancy | less --tabs=1,5 -RFX
 	show = diff-so-fancy | less --tabs=1,5 -RFX
 [commit]
-	gpgsign = true
+	gpgSign = true
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
 	required = true
+[tag]
+	forceSignAnnotated = true
