@@ -16,6 +16,3 @@ if [[ -e /usr/local/bin/gfind  ]]; then
 	alias find='gfind'
 fi
 
-if [[ $(hostname) == "airbot.modouwifi.com" ]]; then
-    socks
-fi
