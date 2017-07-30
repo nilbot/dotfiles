@@ -1,6 +1,3 @@
 # run only after brew is available
 # init
 brew tap homebrew/science
-brew tap railwaycat/emacsmacport
-brew tap sevki/gcc_cross_compilers
-brew tap dart-lang/dart
