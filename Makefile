@@ -22,6 +22,7 @@ links:
 editors:
 	git clone https://github.com/jessfraz/.vim.git $(HOME)/.vim && cd $(HOME)/.vim && git submodule update --init
 	ln -sf $(HOME)/.vim/vimrc $(HOME)/.vimrc
+	mkdir -p $(HOME)/.config/nvim && ln -sf $(CURDIR)/nvim/init.vim $(HOME)/.config/nvim/init.vim
 	git clone https://github.com/syl20bnr/spacemacs.git $(HOME)/.emacs.d
 
 extra:
