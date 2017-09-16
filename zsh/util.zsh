@@ -16,3 +16,7 @@ if [[ -e /usr/local/bin/gfind  ]]; then
 	alias find='gfind'
 fi
 
+# nvim instead of vim
+if [ -e /usr/local/bin/nvim ]; then
+    alias vim='nvim'
+fi
