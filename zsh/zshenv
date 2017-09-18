@@ -2,3 +2,6 @@
 for f in $(ls "$HOME"/dotfiles/zsh/*.env); do
     source $f
 done
+
+export PATH_SAVE=$PATH # to unfxxk the macOS's `path_helper`
+

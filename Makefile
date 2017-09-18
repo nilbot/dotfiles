@@ -34,4 +34,5 @@ omz:
 	ln -sfn $(CURDIR)/zsh/custom/themes $(HOME)/.oh-my-zsh/custom/themes
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
+	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
 	sudo chsh -s $(shell which zsh) $(shell whoami)

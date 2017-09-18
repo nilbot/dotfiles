@@ -1,0 +1,18 @@
+#!/usr/bin/env zsh
+# add unique paths from PATH to PATH_SAVE and replace PATH with PATH_SAVE
+if [ -n "$PATH_SAVE" ]; then
+  PATH_SAVE=:$PATH_SAVE:;
+  PATH=$PATH:
+  while [ -n "$PATH" ]; do
+   x=${PATH%%:*}  # the first remaining entry
+   case $PATH_SAVE in
+     *:$x:*) ;;  # already there
+     *) PATH_SAVE=$PATH_SAVE$x: ;;  # not there yet
+   esac
+   PATH=${PATH#*:}
+  done
+  PATH=${PATH_SAVE:1:-1}
+  unset PATH_SAVE x
+  export PATH
+fi
+
