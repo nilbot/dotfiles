@@ -119,7 +119,7 @@
     "Red Component" : 0.8980392157,
     "Blue Component" : 0.4039215686
   },
-  "Thin Strokes" : 1,
+  "Thin Strokes" : 4,
   "Use Italic Font" : true,
   "Unlimited Scrollback" : true,
   "Keyboard Map" : {
