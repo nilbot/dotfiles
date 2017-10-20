@@ -83,3 +83,10 @@ function extract() {
     fi
 }
 
+# Update machine's time using Google.com
+function gdateupdate() {
+    if [ $(uname) = "Linux" ]; then
+        sudo date -s "$(wget -qSO- --max-redirect=0 google.com 2>&1 | grep Date: | cut -d' ' -f5-8)Z"
+    fi
+}
+
