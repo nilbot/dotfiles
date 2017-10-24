@@ -1,6 +1,6 @@
 #!/bin/bash
 
-if [[ "$(uname)" == "Linux" ]]; then
+if [[ "$(uname)" == "Linux" -a $(echo $UID) != 0 ]]; then
 		ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Linuxbrew/install/master/install)"
 elif [[ "$(uname)" == "Darwin" ]]; then
 		echo "installing prerequisite softwares using brew..."
