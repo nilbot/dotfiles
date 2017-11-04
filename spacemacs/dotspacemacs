@@ -55,8 +55,6 @@ values."
      common-lisp
 		 c-c++
 		 osx
-		 (colors :variables
-						 colors-enable-nyan-cat-progress-bar t)
      git
      markdown
      org
