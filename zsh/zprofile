@@ -15,4 +15,8 @@ if [ -n "$PATH_SAVE" ]; then
   unset PATH_SAVE x
   export PATH
 fi
-
+# if on linux, reset pinentry to linux ones
+if [ $(uname) = "Linux" ]; then
+    pinentry-program /usr/bin/pinentry-tty
+    gpg-connect-agent reloadagent /bye
+fi
