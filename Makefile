@@ -27,7 +27,7 @@ editors:
 	git clone https://github.com/syl20bnr/spacemacs.git $(HOME)/.emacs.d
 
 extra:
-	mkdir -p $(CURDIR)/extras.secret/
+	ln -sfn $(HOME)/crypt/extras.secret $(CURDIR)/extras.secret
 
 omz:
 	rm -rf $(HOME)/.oh-my-zsh
