@@ -1,19 +1,30 @@
-.PHONY: all bin dotfiles etc
+.PHONY: all dep links editors extra omz bins dotfiles
 
-all: prerequisite links editors extra omz
+all: dep links editors extra omz
 
-prerequisite:
+dep:
 	sudo ./super-install-dep.sh
 	./user-install-dep.sh
 
-links:
-	for dir in $(shell find $(CURDIR) -name ".*" -not -name ".git" -not -name ".gitignore" -not -name ".gitmodules"); do \
+links: bins dotfiles
+
+	#for dir in $(shell find $(CURDIR) -name ".*" -not -name ".git" -not -name ".gitignore" -not -name ".gitmodules"); do \
 		target=$$(basename $$dir); \
 		ln -sfn $$dir $(HOME)/$$target; \
 	done
-	mkdir -p $(HOME)/.gnupg/;
-	ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
-	ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
+	#mkdir -p $(HOME)/.gnupg/;
+	#ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
+	#ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
+
+binaries := $(wildcard bin/*.bin)
+
+bins:
+	@for f in $(binaries); do \
+		tgt="$$(basename $$f .bin)"; \
+		ln -sfn $(CURDIR)/$$f $(HOME)/bin/$$tgt; \
+		done
+
+dotfiles:
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
 	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
@@ -37,3 +48,4 @@ omz:
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
 	sudo chsh -s $(shell which zsh) $(shell whoami)
+
