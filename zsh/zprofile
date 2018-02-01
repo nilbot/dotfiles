@@ -16,3 +16,4 @@ if [ -n "$PATH_SAVE" ]; then
   export PATH
 fi
 
+export EMU="-r$HOME/inferno -c0 -g1280x800"

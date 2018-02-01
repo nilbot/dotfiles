@@ -1,0 +1,2 @@
+#!/bin/sh
+exec emu $* /dis/sh.dis -c "bind '#U*/home' /usr; wm/wm wm/logon -u $USER"
