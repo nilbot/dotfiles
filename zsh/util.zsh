@@ -23,5 +23,5 @@ fi
 
 # my dl work related aliases
 function pytorch-daemon() {
-    nvidia-docker run -d --name torch-jupyter -p 8888:8888 -p 6006:6006 --ipc=host -v `pwd`:/workspace nilbot/pytorch-book:v0.3.0t
+    nvidia-docker run -d --name torch-jupyter -p 8888:8888 -p 6006:6006 --ipc=host -v `pwd`:/workspace -e PASSWORD=$PASSWORD nilbot/pytorch-book:v0.3.0t
 }
