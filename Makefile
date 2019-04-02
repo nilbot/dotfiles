@@ -8,19 +8,11 @@ dep:
 
 links: bins dotfiles
 
-	#for dir in $(shell find $(CURDIR) -name ".*" -not -name ".git" -not -name ".gitignore" -not -name ".gitmodules"); do \
-		target=$$(basename $$dir); \
-		ln -sfn $$dir $(HOME)/$$target; \
-	done
-	#mkdir -p $(HOME)/.gnupg/;
-	#ln -sfn $(CURDIR)/gnupg/gpg.conf $(HOME)/.gnupg/gpg.conf;
-	#ln -sfn $(CURDIR)/gnupg/gpg-agent.conf $(HOME)/.gnupg/gpg-agent.conf;
-
 binaries := $(wildcard bin/*.bin)
 
 bins:
 	@for f in $(binaries); do \
-		tgt="$$(basename $$f .bin)"; \
+		tgt="$$(basename $$f)"; \
 		ln -sfn $(CURDIR)/$$f $(HOME)/bin/$$tgt; \
 		done
 
@@ -43,8 +35,8 @@ extra:
 omz:
 	rm -rf $(HOME)/.oh-my-zsh
 	git clone https://github.com/robbyrussell/oh-my-zsh.git $(HOME)/.oh-my-zsh
-	@for d in $$(find zsh/custom/themes/ ! -path zsh/custom/themes/ -maxdepth 1 -type d); do \
-		ln -sfn $(CURDIR)/zsh/custom/themes $(HOME)/.oh-my-zsh/custom/themes/$$d; \
+	@for d in $$(find zsh/custom/themes/ -maxdepth 1 ! -path zsh/custom/themes/ -type d); do \
+		ln -sfn $(CURDIR)/zsh/custom/themes $(HOME)/.oh-my-zsh/custom/themes/$$(basename $$d); \
 		done
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
