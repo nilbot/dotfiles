@@ -41,5 +41,5 @@ omz:
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
-	if [ -z $(sudo -v) ]; then sudo chsh -s $(shell which zsh) $(shell whoami); fi
+	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which zsh) $(shell whoami); fi
 
