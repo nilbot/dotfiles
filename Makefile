@@ -3,7 +3,7 @@
 all: dep links editors extra omz
 
 dep:
-	sudo ./super-install-dep.sh
+	if [ -z $(sudo -v) ]; then sudo ./super-install-dep.sh; fi
 	./user-install-dep.sh
 
 links: bins dotfiles
@@ -43,9 +43,11 @@ extra:
 omz:
 	rm -rf $(HOME)/.oh-my-zsh
 	git clone https://github.com/robbyrussell/oh-my-zsh.git $(HOME)/.oh-my-zsh
-	ln -sfn $(CURDIR)/zsh/custom/themes $(HOME)/.oh-my-zsh/custom/themes
+	@for d in $$(find zsh/custom/themes/ ! -path zsh/custom/themes/ -maxdepth 1 -type d); do \
+		ln -sfn $(CURDIR)/zsh/custom/themes $(HOME)/.oh-my-zsh/custom/themes/$$d; \
+		done
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
-	sudo chsh -s $(shell which zsh) $(shell whoami)
+	if [ -z $(sudo -v) ]; then sudo chsh -s $(shell which zsh) $(shell whoami); fi
 
