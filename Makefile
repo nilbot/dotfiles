@@ -3,7 +3,7 @@
 all: dep links editors extra omz
 
 dep:
-	if [ -z $(sudo -v) ]; then sudo ./super-install-dep.sh; fi
+	sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi
 	./user-install-dep.sh
 
 links: bins dotfiles
