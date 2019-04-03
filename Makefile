@@ -39,6 +39,9 @@ omz:
 		ln -sfn $(CURDIR)/$$d $(HOME)/.oh-my-zsh/custom/themes/$$(basename $$d); \
 		ln -s $(CURDIR)/$$d/$$(basename $$d).zsh $(HOME)/.oh-my-zsh/custom/themes/$$(basename $$d).zsh-theme; \
 		done
+	@for d in $$(find zsh/custom/plugins/ -maxdepth 1 ! -path zsh/custom/plugins/ -type d); do \
+		ln -sfn $(CURDIR)/$$d $(HOME)/.oh-my-zsh/custom/plugins/$$(basename $$d); \
+		done
 	ln -sfn $(CURDIR)/zsh/zshrc $(HOME)/.zshrc
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
