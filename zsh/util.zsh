@@ -1,6 +1,8 @@
 # socks proxy
 function socks() {
-    local_socks5="socks://127.0.0.1:58124"
+    local_proxy_addr="127.0.0.1:58124"
+    export SOCKS_SERVER=$local_proxy_addr
+    local_socks5="socks://$local_proxy_addr"
     export http_proxy=$local_socks5 https_proxy=$local_socks5
 }
 function usocks() unset http_proxy https_proxy
