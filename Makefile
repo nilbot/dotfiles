@@ -11,6 +11,7 @@ links: bins dotfiles
 binaries := $(wildcard bin/*.bin)
 
 bins:
+	mkdir -p $(HOME)/bin $(HOME)/src $(HOME)/pkg
 	@for f in $(binaries); do \
 		tgt="$$(basename $$f)"; \
 		ln -sfn $(CURDIR)/$$f $(HOME)/bin/$$tgt; \
