@@ -1,7 +1,14 @@
 # socks proxy
 function socks() {
-    export SOCKS_SERVER="127.0.0.1:58124"
-    export http_proxy="socks://$SOCKS_SERVER" https_proxy="socks://$SOCKS_SERVER"
+    readonly port=${1:?"The port must be specified."}
+    export SOCKS_SERVER="127.0.0.1:$port"
+    export http_proxy="socks5://$SOCKS_SERVER" https_proxy="socks5://$SOCKS_SERVER"
+    echo http_proxy=${http_proxy}
+}
+function proxy() {
+    readonly port=${1:?"The port must be specified."}
+    export http_proxy="http://127.0.0.1:$port" https_proxy="http://127.0.0.1:$port"
+    echo http_proxy=${http_proxy}
 }
 function usocks() unset http_proxy https_proxy
 
