@@ -18,13 +18,14 @@ fi
 
 # If there are no go files, it makes no sense to run the other commands
 # (and indeed, go build would fail). This is undesirable.
-if [ -z "$(ls -R | grep '\.go$')" ]
+# Another caveat: this requires go file in the root of the repo
+if [ -z "$(ls | grep '\.go$')" ]
 then
 	exit 0
 fi
 
 # We don't want binaries to be created: append `-n` to `go build`
-go build -n ./... >/dev/null 2>&1
+go build -n >/dev/null 2>&1
 if [ $? -ne 0 ]
 then
 	echo "Failed to build project. Please check the output of"
@@ -33,7 +34,7 @@ then
 	exit 1
 fi
 
-go test ./... >/dev/null 2>&1
+go test >/dev/null 2>&1
 if [ $? -ne 0 ]
 then
 	echo "Failed to run tests. Please check the output of"
@@ -42,7 +43,7 @@ then
 	exit 1
 fi
 
-go fmt ./... >/dev/null 2>&1
+go fmt >/dev/null 2>&1
 if [ $? -ne 0 ]
 then
 	echo "Failed to run go fmt. This shouldn't happen. Please"
@@ -53,7 +54,7 @@ then
 	exit 1
 fi
 
-go vet ./... >/dev/null 2>&1
+go vet >/dev/null 2>&1
 if [ $? -ne 0 ]
 then
 	echo "go vet has detected potential issues in your project."
@@ -61,3 +62,4 @@ then
 	echo "if you know what you are doing."
 	exit 1
 fi
+
