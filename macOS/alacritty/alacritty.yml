@@ -559,6 +559,12 @@ key_bindings:
   - { key: W, mods: Command, action: Quit }
   - { key: F, mods: Command|Control, action: ToggleFullscreen }
   - { key: N, mods: Command, action: SpawnNewInstance }
+  - { key: Left,     mods: Alt,         chars: "\x1b0b" }
+  - { key: Left,     mods: Command,     chars: "\x01"  }
+  - { key: Right,    mods: Alt,         chars: "\x1b0f" }
+  - { key: Right, mods: Command, chars: "\x05" }
+  - { key: Delete,   mods: Alt,         chars: "\x1b7f" }
+  - { key: Back,   mods: Command,     chars: "\x15" }
   #- { key: Paste,                    action: Paste                            }
   #- { key: Copy,                     action: Copy                             }
   #- { key: L,         mods: Control, action: ClearLogNotice                   }
