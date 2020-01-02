@@ -1,6 +1,6 @@
-.PHONY: all dep links editors extra omz bins dotfiles
+.PHONY: all dep links editors tmux extra omz bins dotfiles
 
-all: dep links editors extra omz
+all: dep links editors tmux extra omz
 
 dep:
 	sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi
@@ -29,6 +29,10 @@ editors:
 	ln -sf $(HOME)/.vim/vimrc $(HOME)/.vimrc
 	mkdir -p $(HOME)/.config/nvim && ln -sf $(CURDIR)/nvim/init.vim $(HOME)/.config/nvim/init.vim
 	git clone https://github.com/syl20bnr/spacemacs.git $(HOME)/.emacs.d
+
+tmux:
+	mkdir -p $(HOME)/.tmux
+	git clone https://github.com/tmux-plugins/tpm $(HOME)/.tmux/plugins/tpm
 
 extra:
 	ln -sfn $(HOME)/crypt/extras.secret $(CURDIR)/extras.secret
