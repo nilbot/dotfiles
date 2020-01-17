@@ -176,7 +176,7 @@ visual_bell:
   duration: 0
 
 # Background opacity
-background_opacity: 0.1
+background_opacity: 0.9
 
 # Mouse bindings
 #
@@ -219,7 +219,7 @@ mouse:
     #
     # These are the modifiers that need to be held down for opening URLs when clicking
     # on them. The available modifiers are documented in the key binding section.
-    #modifiers: Control|Shift
+    modifiers: Control|Command
 
 selection:
   semantic_escape_chars: ",│`|:\"' ()[]{}<>"
@@ -239,7 +239,7 @@ cursor:
   #   - _ Underline
   #   - | Beam
   style: Block
-  unfocused_hollow: false
+  unfocused_hollow: true
 
 # Live config reload (changes require restart)
 live_config_reload: true
@@ -249,10 +249,10 @@ live_config_reload: true
 # You can set shell.program to the path of your favorite shell, e.g. /bin/zsh.
 # Entries in shell.args are passed unmodified as arguments to the shell.
 #
-shell:
-  program: /usr/local/bin/zsh
-  args:
-    - --login
+# shell:
+#   program: /usr/local/bin/zsh
+#   args:
+#     - --login
 
 
 # Key bindings
