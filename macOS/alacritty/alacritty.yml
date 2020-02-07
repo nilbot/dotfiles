@@ -58,24 +58,22 @@ scrolling:
   # Specifying `0` will disable faux scrolling.
   multiplier: 3
 
-  # Scroll to the bottom when new text is written to the terminal.
-  auto_scroll: false
 
 # Font configuration (changes require restart)
 font:
   # The normal (roman) font face to use.
   normal:
-    family: Cascadia Code
+    family: Cascadia Code PL
     style: Regular
 
   # The bold font face
   bold:
-    family: Cascadia Code
+    family: Cascadia Code PL
     style: Bold
 
   # The italic font face
   italic:
-    family: Cascadia Code
+    family: Cascadia Code PL
     style: Regular Italic
 
   # Point size of the font
