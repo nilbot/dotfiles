@@ -70,7 +70,7 @@ SPACESHIP_PROMPT_ORDER=(
 # Custom plugins may be added to ~/.oh-my-zsh/custom/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
-plugins=(colored-man-pages colorize gitignore gitfast golang osx themes zsh-navigation-tools battery brew kubectl helm terraform systemd zsh-syntax-highlighting zsh-navigation-tools vscode tmux fzf mosh ubuntu)
+plugins=(colored-man-pages colorize gitignore gitfast golang osx themes zsh-navigation-tools battery brew kubectl helm systemd zsh-syntax-highlighting zsh-navigation-tools vscode tmux fzf ubuntu)
 
 # User configuration
 
