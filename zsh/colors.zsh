@@ -16,3 +16,4 @@
 # COLOR_YELLOW="\e[1;33m"
 # COLOR_WHITE="\e[1;37m"
 # COLOR_NONE="\e[0m"
+eval "$(starship init zsh)"

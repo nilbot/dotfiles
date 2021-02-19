@@ -61,18 +61,18 @@ scrolling:
 font:
   # The normal (roman) font face to use.
   normal:
-    family: Cascadia Code PL
-    style: Regular
+    family: GoMono Nerd Font Mono
+    style: Book
 
   # The bold font face
   bold:
-    family: Cascadia Code PL
+    family: GoMono Nerd Font Mono
     style: Bold
 
   # The italic font face
   italic:
-    family: Cascadia Code PL
-    style: Regular Italic
+    family: GoMono Nerd Font Mono
+    style: Italic
 
   # Point size of the font
   size: 14
