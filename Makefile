@@ -55,6 +55,7 @@ omz:
 fish: starship fishshell
 
 starship:
+	rm $(HOME)/.config/starship.toml
 	ln -s $(CURDIR)/starship.toml $(HOME)/.config/starship.toml
 fishshell:
 	rm -rf $(HOME)/.config/fish
