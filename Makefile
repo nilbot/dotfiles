@@ -1,6 +1,6 @@
 .PHONY: all dep links editors tmux extra omz bins dotfiles fish
 
-all: dep links editors tmux extra omz
+all: dep links editors tmux extra fish
 
 dep:
 	sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi
