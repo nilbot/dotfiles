@@ -1,4 +1,4 @@
-.PHONY: all dep links editors tmux extra omz bins dotfiles
+.PHONY: all dep links editors tmux extra omz bins dotfiles fish
 
 all: dep links editors tmux extra omz
 
@@ -51,4 +51,11 @@ omz:
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
 	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which zsh) $(shell whoami); fi
+fish:
+	rm -rf $(HOME)/.config/fish
+	mkdir -p $(HOME)/.config/fish
+	@for f in $$(find fish -maxdepth 1 -type f); do \
+		ln -s $(CURDIR)/$$f $(HOME)/.config/fish/$$(basename $$f); \
+		done
+	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which fish) $(shell whoami); fi
 
