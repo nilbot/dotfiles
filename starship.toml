@@ -1,0 +1,111 @@
+[character]
+error_symbol = "[✖](bold red) "
+
+[cmd_duration]
+min_time = 10_000  # Show command duration over 10,000 milliseconds (=10 sec)
+format = " took [$duration]($style)"
+
+[conda]
+symbol = " "
+
+[directory]
+read_only = " "
+truncation_length = 5
+format = "[$path]($style)[$lock_symbol]($lock_style) "
+
+[docker]
+symbol = " "
+
+[git_branch]
+symbol = " "
+format = " [$symbol$branch]($style) "
+style = "bold yellow"
+
+[git_commit]
+commit_hash_length = 8
+style = "bold white"
+
+[git_state]
+progress_divider = " of "
+
+[git_status]
+conflicted = "⚔️ "
+ahead = "🏎️ 💨 ×${count}"
+behind = "🐢 ×${count}"
+diverged = "🔱 🏎️ 💨 ×${ahead_count} 🐢 ×${behind_count}"
+untracked = "🛤️  ×${count}"
+stashed = "📦 "
+modified = "📝 ×${count}"
+staged = "🗃️  ×${count}"
+renamed = "📛 ×${count}"
+deleted = "🗑️  ×${count}"
+style = "bright-white"
+format = "$all_status$ahead_behind"
+
+[golang]
+symbol = " "
+format = "via [$symbol($version )]($style)"
+disabled = false
+
+[gcloud]
+format = "[$symbol$active]($style) "
+style = "bold yellow"
+disabled = true
+
+[hostname]
+ssh_only = false
+format = "<[$hostname]($style)>"
+trim_at = "-"
+style = "bold dimmed white"
+disabled = true
+
+[julia]
+symbol = " "
+format = "[$symbol$version]($style) "
+style = "bold green"
+
+[memory_usage]
+symbol = " "
+format = "$symbol[${ram}( | ${swap})]($style) "
+show_percentage = true
+show_swap = true
+threshold = 70
+style = "bold dimmed white"
+disabled = false
+
+[nodejs]
+symbol = " "
+disabled = true
+
+[package]
+symbol = " "
+disabled = true
+
+[perl]
+symbol = " "
+
+[python]
+symbol = " "
+format = "[$symbol$version]($style) "
+style = "bold green"
+
+[ruby]
+symbol = " "
+
+[rust]
+symbol = " "
+format = "[$symbol$version]($style) "
+style = "bold green"
+
+[swift]
+symbol = "ﯣ "
+
+[time]
+time_format = "%T"
+format = "🕙 $time($style) "
+style = "bright-white"
+disabled = false
+
+[username]
+style_user = "bold dimmed blue"
+show_always = false

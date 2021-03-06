@@ -51,7 +51,12 @@ omz:
 	ln -sfn $(CURDIR)/zsh/zshenv $(HOME)/.zshenv
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
 	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which zsh) $(shell whoami); fi
-fish:
+
+fish: starship fishshell
+
+starship:
+	ln -s $(CURDIR)/starship.toml $(HOME)/.config/starship.toml
+fishshell:
 	rm -rf $(HOME)/.config/fish
 	mkdir -p $(HOME)/.config/fish
 	@for f in $$(find fish -maxdepth 1 -type f); do \
