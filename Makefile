@@ -59,9 +59,6 @@ starship:
 	ln -s $(CURDIR)/starship.toml $(HOME)/.config/starship.toml
 fishshell:
 	rm -rf $(HOME)/.config/fish
-	mkdir -p $(HOME)/.config/fish
-	@for f in $$(find fish -maxdepth 1 -type f); do \
-		ln -s $(CURDIR)/$$f $(HOME)/.config/fish/$$(basename $$f); \
-		done
+	ln -s $(CURDIR)/fish $(HOME)/.config/fish
 	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which fish) $(shell whoami); fi
 

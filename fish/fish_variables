@@ -32,6 +32,8 @@ SETUVAR _fish_abbr_yds:yadm\x20diff\x20\x2d\x2dstaged
 SETUVAR _fish_abbr_yl:yadm\x20l
 SETUVAR _fish_abbr_yp:yadm\x20push
 SETUVAR _fish_abbr_ys:yadm\x20status\x20\x2ds\x20\x2db
+SETUVAR _fisher_jorgebucaran_2F_fisher_files:/Users/nilbot/\x2econfig/fish/functions/fisher\x2efish\x1e/Users/nilbot/\x2econfig/fish/completions/fisher\x2efish
+SETUVAR _fisher_plugins:jorgebucaran/fisher
 SETUVAR fish_color_autosuggestion:555\x1ebrblack
 SETUVAR fish_color_cancel:\x2dr
 SETUVAR fish_color_command:\x2d\x2dbold
