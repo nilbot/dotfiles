@@ -74,3 +74,7 @@ end
 function space
     du -ch | grep total
 end
+
+function prunelinks
+    find . -type l -exec test ! -e {} \; -delete
+end
