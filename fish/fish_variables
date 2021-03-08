@@ -36,6 +36,7 @@ SETUVAR _fisher_jethrokuan_2F_fzf_files:/Users/nilbot/\x2econfig/fish/functions/
 SETUVAR _fisher_jorgebucaran_2F_fisher_files:/Users/nilbot/\x2econfig/fish/functions/fisher\x2efish\x1e/Users/nilbot/\x2econfig/fish/completions/fisher\x2efish
 SETUVAR _fisher_jorgebucaran_2F_hydro_files:/Users/nilbot/\x2econfig/fish/functions/fish_mode_prompt\x2efish\x1e/Users/nilbot/\x2econfig/fish/functions/fish_prompt\x2efish\x1e/Users/nilbot/\x2econfig/fish/functions/fish_title\x2efish\x1e/Users/nilbot/\x2econfig/fish/conf\x2ed/hydro\x2efish
 SETUVAR _fisher_plugins:jorgebucaran/fisher\x1ejethrokuan/fzf\x1ejorgebucaran/hydro
+SETUVAR _hydro_git_581:master\u2022\x20
 SETUVAR fish_color_autosuggestion:555\x1ebrblack
 SETUVAR fish_color_cancel:\x2dr
 SETUVAR fish_color_command:\x2d\x2dbold
