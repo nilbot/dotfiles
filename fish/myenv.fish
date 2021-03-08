@@ -51,7 +51,7 @@ end
 # miniconda (eval bugged)
 if test -d $HOME/miniconda3/bin
     # eval $HOME/miniconda3/bin/conda "shell.fish" "hook" $argv | source
-    fish_add_path $HOME/miniconda3/bin
+    # fish_add_path $HOME/miniconda3/bin
     # source $HOME/miniconda3/etc/fish/conf.d/conda.fish
 end
 
