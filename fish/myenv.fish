@@ -2,7 +2,7 @@
 set base_env /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
 # go
-set -x GOPATH $HOME
+set -gx GOPATH $HOME
 fish_add_path $GOPATH/bin
 # rust
 if test -d $HOME/.cargo/bin
@@ -16,7 +16,7 @@ if test (uname) = "Darwin"
     set -x CLOUDSDK_PYTHON /usr/bin/python
 end
 # plan9
-set -x PLAN9 /usr/local/plan9
+set -gx PLAN9 /usr/local/plan9
 
 # postgres (on macOS)
 if test -d /Applications/Postgres.app/Contents/Versions/latest/bin
@@ -27,11 +27,11 @@ end
 # java
 # android
 if test (uname) = "Darwin"
-    set -x JAVA_HOME (/usr/libexec/java_home)
+    set -gx JAVA_HOME (/usr/libexec/java_home)
 end
 if test -d $HOME/Library/Android
-    set -x ANDROID_SDK_ROOT $HOME/Library/Android/sdk
-    set -x ANDROID_NDK_ROOT $HOME/Library/Android/ndk
+    set -gx ANDROID_SDK_ROOT $HOME/Library/Android/sdk
+    set -gx ANDROID_NDK_ROOT $HOME/Library/Android/ndk
     fish_add_path $ANDROID_SDK_ROOT/platform-tools
 end
 

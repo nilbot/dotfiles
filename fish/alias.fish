@@ -22,16 +22,6 @@ abbr -a gfc git findcommit
 abbr -a gfm git findmessage
 abbr -a gco git checkout
 
-# yadm
-abbr -a ys  yadm status -s -b
-abbr -a ya  yadm add
-abbr -a yc  yadm commit
-abbr -a ycm yadm commit -m
-abbr -a yp  yadm push
-abbr -a yl  yadm l
-abbr -a yd  yadm diff
-abbr -a yds yadm diff --staged
-
 # ls
 alias l='ls -l'
 alias la='ls -a'
