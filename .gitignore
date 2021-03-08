@@ -1,3 +1,4 @@
 *.ignore
 *.extra
 *.secret
+fish/fish_variables
