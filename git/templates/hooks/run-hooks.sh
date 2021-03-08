@@ -15,7 +15,7 @@ for hook in $hooks/*.$hook_type; do
 	EXIT_CODE=$((${EXIT_CODE} + $?))
 done
 
-if [[ ${EXIT_CODE} -ne 0 ]]; then
+if test ${EXIT_CODE} -ne 0; then
 	echo ""
 	echo "${COLOR_RED}Commit Failed.${COLOR_NONE}"
 fi
