@@ -78,3 +78,38 @@ end
 function prunelinks
     find . -type l -exec test ! -e {} \; -delete
 end
+
+# proxy
+set prefix http https ftp rsync all
+set postfix _proxy
+set prefix_u (string upper $prefix)
+set postfix_u (string upper $postfix)
+set host 127.0.0.1
+set port 1080
+set protocol_header socks5h://
+
+function proxon
+    for name in $prefix$postfix
+        set -gx $name $protocol_header$host:$port
+    end
+    for name in $prefix_u$postfix_u
+        set -gx $name $protocol_header$host:$port
+    end
+    networksetup -setsocksfirewallproxy wi-fi $host $port
+    # networksetup -setwebproxy wi-fi $host $port
+    # networksetup -setsecurewebproxy wi-fi $host $port
+    networksetup -setsocksfirewallproxystate wi-fi on
+    # networksetup -setwebproxystate wi-fi on
+    # networksetup -setsecurewebproxystate wi-fi on
+end
+function proxoff
+    for name in $prefix$postfix
+        set -e $name
+    end
+    for name in $prefix_u$postfix_u
+        set -e $name
+    end
+    networksetup -setsocksfirewallproxystate wi-fi off
+    networksetup -setwebproxystate wi-fi off
+    networksetup -setsecurewebproxystate wi-fi off
+end

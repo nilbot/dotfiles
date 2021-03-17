@@ -34,8 +34,7 @@ set -g fish_color_valid_path --underline
 starship init fish | source
 
 
-# >>> conda initialize >>>
-# !! Contents within this block are managed by 'conda init' !!
-eval /home/nilbot/miniconda3/bin/conda "shell.fish" "hook" $argv | source
-# <<< conda initialize <<<
+if test -d "$HOME"/miniconda3
+    eval "$HOME"/miniconda3/bin/conda "shell.fish" "hook" $argv | source
+end
 
