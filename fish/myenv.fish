@@ -79,6 +79,18 @@ function prunelinks
     find . -type l -exec test ! -e {} \; -delete
 end
 
+# github download latest release
+# this function downloads the first link
+#   - usage: github-dl owner repo
+function github-dl
+    set org $argv[1]; set repo $argv[2];
+    curl -s https://api.github.com/repos/"$org"/"$repo"/releases/latest \
+    | grep browser_download_url \
+    | cut -d '"' -f 4 \
+    | head -n 1 \
+    | wget -qi -
+end
+
 # proxy
 set prefix http https ftp rsync all
 set postfix _proxy
