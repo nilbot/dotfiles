@@ -31,3 +31,8 @@ alias lt='ls --tree'
 # misc
 alias reload='exec fish'
 
+# brew
+alias bubo='brew update && brew outdated'
+alias bubc='brew upgrade && brew cleanup'
+alias bubu='bubo && bubc'
+
