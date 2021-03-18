@@ -91,6 +91,9 @@ function github-dl
     | wget -qi -
 end
 
+# bit is git client, but better
+set -Ux COMP_POINT 1
+
 # proxy
 set prefix http https ftp rsync all
 set postfix _proxy
