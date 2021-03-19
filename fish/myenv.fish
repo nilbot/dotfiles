@@ -94,6 +94,10 @@ end
 # bit is git client, but better
 set -Ux COMP_POINT 1
 
+# gpg
+set -gx GPG_TTY (tty)
+
+
 # proxy
 set prefix http https ftp rsync all
 set postfix _proxy
