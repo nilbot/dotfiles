@@ -118,7 +118,7 @@
 [diff]
     renames = copies
     mnemonicprefix = true
-	indentHeuristic = true
+    indentHeuristic = true
 [difftool]
     prompt = false
 [apply]
@@ -126,8 +126,17 @@
     whitespace = nowarn
 [core]
     excludesfile = ~/.gitignore_global
-    pager = less -FXRS -x2
+    pager = delta
     editor = vim
+[interactive]
+    diffFilter = delta --color-only
+[delta]
+    features = side-by-side line-numbers decorations
+    whitespace-error-style = 22 reverse
+[delta "decorations"]
+    commit-decoration-style = bold yellow box ul
+    file-style = bold yellow ul
+    file-decoration-style = none
 [rerere]
     enabled = true
 [gitsh]
@@ -137,9 +146,6 @@
     lineNumber = true
 [credential]
 	helper = osxkeychain
-[pager]
-	diff = diff-so-fancy | less --tabs=1,5 -RFX
-	show = diff-so-fancy | less --tabs=1,5 -RFX
 [commit]
 	gpgSign = true
 [filter "lfs"]
@@ -148,3 +154,5 @@
 	required = true
 [tag]
 	forceSignAnnotated = true
+[sequence]
+	editor = interactive-rebase-tool
