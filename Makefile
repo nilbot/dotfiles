@@ -18,6 +18,7 @@ bins:
 		done
 
 dotfiles:
+	mkdir -p $(HOME)/.config $(HOME)/.local
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
 	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
@@ -25,9 +26,8 @@ dotfiles:
 
 editors:
 	rm -rf $(HOME)/.vim $(HOME)/.emacs.d
-	git clone https://github.com/jessfraz/.vim.git $(HOME)/.vim && cd $(HOME)/.vim && git submodule update --init
+	git clone --recursive https://github.com/jessfraz/.vim.git $(HOME)/.vim && cd $(HOME)/.vim && git submodule update --init
 	ln -sf $(HOME)/.vim/vimrc $(HOME)/.vimrc
-	mkdir -p $(HOME)/.config/nvim && ln -sf $(CURDIR)/nvim/init.vim $(HOME)/.config/nvim/init.vim
 	git clone https://github.com/syl20bnr/spacemacs.git $(HOME)/.emacs.d
 
 tmux:
