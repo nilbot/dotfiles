@@ -16,7 +16,12 @@ if test (uname) = "Darwin"
     set -x CLOUDSDK_PYTHON /usr/bin/python
 end
 # plan9
-set -gx PLAN9 /usr/local/plan9
+if test (uname -s) = "Darwin" -a (uname -m) = "arm64"
+    set -gx PLAN9 /opt/plan9
+else
+    set -gx PLAN9 /usr/local/plan9
+end
+fish_add_path $PLAN9/bin
 
 # postgres (on macOS)
 if test -d /Applications/Postgres.app/Contents/Versions/latest/bin
