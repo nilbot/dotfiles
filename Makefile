@@ -19,6 +19,7 @@ bins:
 
 dotfiles:
 	mkdir -p $(HOME)/.config $(HOME)/.local
+	./softlinks.sh
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
 	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
