@@ -10,7 +10,11 @@ if test -d $HOME/.cargo/bin
 end
 # gcloud
 if test -d $HOME/devel/google-cloud-sdk
-    source "$HOME/devel/google-cloud-sdk/path.fish.inc"
+    # source $HOME/devel/google-cloud-sdk/path.fish.inc
+    # NOT USING official google cloud sdk fish path script
+    # Why? The author claims they don't really understand fish.
+    # and apparently sourcing this file doesn't work across sessions.
+    fish_add_path $HOME/devel/google-cloud-sdk/bin
 end
 if test (uname) = "Darwin"
     set -x CLOUDSDK_PYTHON /usr/bin/python
