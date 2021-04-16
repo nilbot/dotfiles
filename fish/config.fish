@@ -34,8 +34,8 @@ set -g fish_color_valid_path --underline
 starship init fish | source
 
 
-if test -d "$HOME"/miniconda3
-    eval "$HOME"/miniconda3/bin/conda "shell.fish" "hook" $argv | source
+if test -d "$HOME"/miniforge3
+    eval "$HOME"/miniforge3/bin/conda "shell.fish" "hook" $argv | source
     conda deactivate
 end
 
