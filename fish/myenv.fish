@@ -106,7 +106,10 @@ set -Ux COMP_POINT 1
 # gpg
 set -gx GPG_TTY (tty)
 
-
+# tmux shell var
+if test -n (which fish)
+    set -gx TMUX_SHELL_VAR (which fish)
+end
 # proxy
 # deprecated: using clash is way better than setting these up and cleaning up
 # set prefix http https ftp rsync all
