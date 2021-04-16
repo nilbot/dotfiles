@@ -61,6 +61,5 @@ starship:
 fishshell:
 	rm -rf $(HOME)/.config/fish
 	ln -s $(CURDIR)/fish $(HOME)/.config/fish
-	cp $(HOME)/.config/fish/fish_variables.init $(HOME)/.config/fish/fish_variables
 	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which fish) $(shell whoami); fi
 

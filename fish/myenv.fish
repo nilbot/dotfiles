@@ -110,6 +110,15 @@ set -gx GPG_TTY (tty)
 if test -n (which fish)
     set -gx TMUX_SHELL_VAR (which fish)
 end
+
+# remove fish-variables
+# it turns out that fish-variables resides in local,
+# and it's not cross-platform compatible (eg. macOS vs linux)
+function remove_fish_variables
+    echo '' > $HOME/dotfiles/fish/fish_variables
+    reload
+end
+
 # proxy
 # deprecated: using clash is way better than setting these up and cleaning up
 # set prefix http https ftp rsync all
