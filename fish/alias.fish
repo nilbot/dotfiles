@@ -1,5 +1,5 @@
 # apps... but better
-alias git=hub
+alias git=bit
 alias vim=nvim
 alias ls=lsd
 
