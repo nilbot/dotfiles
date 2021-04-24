@@ -1,6 +1,7 @@
 bat
 bazel
 bingrep
+bit-git
 brotli
 c-ares
 clang-format
@@ -18,12 +19,15 @@ gitui
 hub
 icu4c
 jemalloc
+jpeg
 jql
 jump
 libev
 libevent
+libidn2
 libssh2
 libtermkey
+libunistring
 libuv
 libvterm
 lsd
@@ -35,6 +39,7 @@ ncurses
 neovim
 nghttp2
 node
+openjdk
 openjdk@11
 openssl@1.1
 pcre2
@@ -50,6 +55,7 @@ tokei
 unibilium
 utf8proc
 uutils-coreutils
+wget
 xz
 yarn
 youtube-dl
