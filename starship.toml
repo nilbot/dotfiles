@@ -13,7 +13,7 @@ read_only = " "
 truncation_length = 5
 format = "[$path]($style)[$lock_symbol]($lock_style) "
 
-[docker]
+[docker_context]
 symbol = " "
 
 [git_branch]
@@ -26,7 +26,7 @@ commit_hash_length = 8
 style = "bold white"
 
 [git_state]
-progress_divider = " of "
+disabled = false
 
 [git_status]
 conflicted = "⚔️ "
@@ -67,8 +67,6 @@ style = "bold green"
 [memory_usage]
 symbol = " "
 format = "$symbol[${ram}( | ${swap})]($style) "
-show_percentage = true
-show_swap = true
 threshold = 70
 style = "bold dimmed white"
 disabled = false
