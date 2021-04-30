@@ -2,6 +2,7 @@
 alias git=bit
 alias vim=nvim
 alias ls=lsd
+alias find=gfind
 
 # git
 abbr -a gs  git status -sb

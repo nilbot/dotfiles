@@ -9,6 +9,7 @@ cmake
 diff-so-fancy
 dust
 fd
+findutils
 fish
 fzf
 gdbm
