@@ -1,5 +1,8 @@
 source ~/.config/fish/alias.fish
 source ~/.config/fish/myenv.fish
+if test -d ~/etc/extras.secret
+    source ~/etc/extras.secret/gitconfig.extra.fish
+end
 
 # Configure Jump
 status --is-interactive; and source (jump shell fish | psub)
