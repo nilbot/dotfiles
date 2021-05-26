@@ -117,6 +117,12 @@ function remove_fish_variables
     reload
 end
 
+# vscode open in temrinal
+# macOS only for now
+if test -d "/Applications/Visual Studio Code.app/"
+    fish_add_path "/Applications/Visual Studio Code.app/Contents/Resources/app/bin"
+end
+
 # proxy
 # deprecated: using clash is way better than setting these up and cleaning up
 # set prefix http https ftp rsync all
