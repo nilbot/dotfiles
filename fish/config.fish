@@ -39,9 +39,7 @@ starship init fish | source
 
 if test -d "$HOME"/miniforge3
     eval "$HOME"/miniforge3/bin/conda "shell.fish" "hook" $argv | source
-    conda deactivate
-else if test -f /opt/homebrew/Caskroom/miniforge/base/bin/conda
+else if test -d /opt/homebrew/Caskroom/miniforge/base
     eval /opt/homebrew/Caskroom/miniforge/base/bin/conda "shell.fish" "hook" $argv | source
-    conda deactivate
 end
 
