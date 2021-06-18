@@ -1,6 +1,9 @@
 # base
 set base_env /opt/homebrew/bin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
+# user base
+set user_base_env $HOME/.config/bin
+fish_add_path $user_base_env
 # go
 set -gx GOPATH $HOME
 fish_add_path $GOPATH/bin
