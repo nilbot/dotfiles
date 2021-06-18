@@ -123,6 +123,12 @@ if test -d "/Applications/Visual Studio Code.app/"
     fish_add_path "/Applications/Visual Studio Code.app/Contents/Resources/app/bin"
 end
 
+# perl (homebrew)
+# set -Ux PERL_MM_OPT INSTALL_BASE=$HOME/perl5
+# eval "perl -I$HOME/perl5/lib/perl5 -Mlocal::lib=$HOME/perl5"
+set -Ux PERL_MB_OPT "--install_base $HOME/perl5"
+set -Ux PERL_MM_OPT "INSTALL_BASE=$HOME/perl5"
+
 # proxy
 # deprecated: using clash is way better than setting these up and cleaning up
 # set prefix http https ftp rsync all
