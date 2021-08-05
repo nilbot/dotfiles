@@ -132,6 +132,10 @@ end
 set -Ux PERL_MB_OPT "--install_base $HOME/perl5"
 set -Ux PERL_MM_OPT "INSTALL_BASE=$HOME/perl5"
 
+# rbenv (homebrew)
+status --is-interactive; and source (rbenv init -| psub)
+
+
 # proxy
 # deprecated: using clash is way better than setting these up and cleaning up
 # set prefix http https ftp rsync all
