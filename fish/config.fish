@@ -38,8 +38,11 @@ starship init fish | source
 
 
 if test -d "$HOME"/miniforge3
-    eval "$HOME"/miniforge3/bin/conda "shell.fish" "hook" $argv | source
+    set CONDA_BIN "$HOME"/miniforge3/bin/conda 
 else if test -d /opt/homebrew/Caskroom/miniforge/base
-    eval /opt/homebrew/Caskroom/miniforge/base/bin/conda "shell.fish" "hook" $argv | source
+    set CONDA_BIN /opt/homebrew/Caskroom/miniforge/base/bin/conda
+else if test -d "$HOME"/miniconda3
+    set CONDA_BIN "$HOME"/miniconda3/bin/conda
 end
+eval $CONDA_BIN "shell.fish" "hook" $argv | source
 
