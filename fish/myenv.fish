@@ -135,39 +135,15 @@ set -Ux PERL_MM_OPT "INSTALL_BASE=$HOME/perl5"
 # rbenv (homebrew)
 status --is-interactive; and source (rbenv init -| psub)
 
-
-# proxy
-# deprecated: using clash is way better than setting these up and cleaning up
-# set prefix http https ftp rsync all
-# set postfix _proxy
-# set prefix_u (string upper $prefix)
-# set postfix_u (string upper $postfix)
-# set host 127.0.0.1
-# set port 1080
-# set protocol_header socks5h://
-
-# function proxon
-#     for name in $prefix$postfix
-#         set -gx $name $protocol_header$host:$port
-#     end
-#     for name in $prefix_u$postfix_u
-#         set -gx $name $protocol_header$host:$port
-#     end
-#     networksetup -setsocksfirewallproxy wi-fi $host $port
-#     # networksetup -setwebproxy wi-fi $host $port
-#     # networksetup -setsecurewebproxy wi-fi $host $port
-#     networksetup -setsocksfirewallproxystate wi-fi on
-#     # networksetup -setwebproxystate wi-fi on
-#     # networksetup -setsecurewebproxystate wi-fi on
-# end
-# function proxoff
-#     for name in $prefix$postfix
-#         set -e $name
-#     end
-#     for name in $prefix_u$postfix_u
-#         set -e $name
-#     end
-#     networksetup -setsocksfirewallproxystate wi-fi off
-#     networksetup -setwebproxystate wi-fi off
-#     networksetup -setsecurewebproxystate wi-fi off
-# end
+# wsl sshd autostart
+switch (uname -r)
+case "*microsoft*"
+    set SSH_SERVICE 'ssh'
+    if ps ax | grep -v grep | grep $SSH_SERVICE > /dev/null
+        echo "$SSH_SERVICE service running"
+    else
+        sudo /etc/init.d/ssh start
+    end
+case "*"
+    
+end
