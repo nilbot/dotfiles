@@ -146,7 +146,7 @@ case "*microsoft*"
         sudo /etc/init.d/ssh start
     end
 case "*"
-    
+    # do nothing
 end
 
 # Background: tidb, tiup, macOS, arm64 setup
