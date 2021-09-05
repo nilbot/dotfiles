@@ -101,6 +101,16 @@ function github-dl
     | wget -qi -
 end
 
+# func readenv for .env files
+function readenv --on-variable PWD
+    if test -r .env
+        while read -l line
+            set -l kv (string split -m 1 = -- $line)
+            set -gx $kv # this will set the variable named by $kv[1] to the rest of $kv
+        end
+   end
+end
+
 # bit is git client, but better
 set -Ux COMP_POINT 1
 
