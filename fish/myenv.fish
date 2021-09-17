@@ -125,7 +125,7 @@ end
 # remove fish-variables
 # it turns out that fish-variables resides in local,
 # and it's not cross-platform compatible (eg. macOS vs linux)
-function remove_fish_variables
+function fish_remove_variables
     echo '' > $HOME/dotfiles/fish/fish_variables
     reload
 end
