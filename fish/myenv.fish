@@ -102,9 +102,9 @@ function github-dl
 end
 
 # func readenv for .env files
-function readenv --on-variable PWD
+function readenv
     if test -r .env
-        while read -l line
+        cat .env | while read -l line
             set -l kv (string split -m 1 = -- $line)
             set -gx $kv # this will set the variable named by $kv[1] to the rest of $kv
         end
