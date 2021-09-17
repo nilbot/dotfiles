@@ -102,7 +102,7 @@ function github-dl
 end
 
 # func readenv for .env files
-function readenv
+function readenv --on-variable PWD
     if test -r .env
         cat .env | while read -l line
             set -l kv (string split -m 1 = -- $line)
