@@ -166,6 +166,16 @@ if test -d $HOME/.tiup/bin
     fish_add_path $TIUP_BIN_PATH
 end
 
+# fish workaround :: tensorflow-macos pip install (possibly more were impacted)
+# specific:: dependency GRPCIO version 1.34 
+# workaround solution found :: https://stackoverflow.com/questions/66640705/how-can-i-install-grpcio-on-an-apple-m1-silicon-laptop
+function fish_workaround_grpcio_install
+    set -gx GRPC_PYTHON_BUILD_SYSTEM_OPENSSL 1
+    set -gx GRPC_PYTHON_BUILD_SYSTEM_ZLIB 1
+    set -gx CFLAGS "-I /opt/homebrew/opt/openssl/include"
+    set -gx LDFLAGS "-L /opt/homebrew/opt/openssl/lib"
+end
+
 # proxy
 # deprecated: using clash is way better than setting these up and cleaning up
 # set prefix http https ftp rsync all
