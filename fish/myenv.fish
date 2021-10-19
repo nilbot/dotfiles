@@ -2,11 +2,10 @@
 set base_env /opt/homebrew/bin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
 # user base
-set user_base_env $HOME/.config/bin
+set user_base_env $HOME/bin $HOME/.config/bin
 fish_add_path $user_base_env
 # go
 set -gx GOPATH $HOME
-fish_add_path $GOPATH/bin
 # rust
 if test -d $HOME/.cargo/bin
     fish_add_path $HOME/.cargo/bin
@@ -23,11 +22,7 @@ if test (uname) = "Darwin"
     set -x CLOUDSDK_PYTHON /usr/bin/python
 end
 # plan9
-if test (uname -s) = "Darwin" -a (uname -m) = "arm64"
-    set -gx PLAN9 /opt/plan9
-else
-    set -gx PLAN9 /usr/local/plan9
-end
+set -gx PLAN9 /usr/local/plan9
 fish_add_path -maP $PLAN9/bin
 
 # postgres (on macOS)
@@ -71,8 +66,9 @@ if test -d $HOME/Library/Frameworks/flutter/bin
 end
 
 # perl
-if test -d $HOME/perl5
-    eval (perl -I$HOME/perl5/lib/perl5 -Mlocal::lib=$HOME/perl5)
+if test -d $HOME/sdk/perl5
+    set PERL5_HOME $HOME/sdk/perl5
+    eval (perl -I$PERL5_HOME/lib/perl5 -Mlocal::lib=$PERL5_HOME)
 end
 
 # misc. bin
