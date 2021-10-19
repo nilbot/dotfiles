@@ -34,12 +34,21 @@ set -g fish_color_valid_path --underline
 starship init fish | source
 
 
-if test -d "$HOME"/miniforge3
-    set CONDA_BIN "$HOME"/miniforge3/bin/conda 
+if test -d "$HOME"/sdk/miniforge3
+    set CONDA_BIN "$HOME"/sdk/miniforge3/bin/conda 
 else if test -d /opt/homebrew/Caskroom/miniforge/base
     set CONDA_BIN /opt/homebrew/Caskroom/miniforge/base/bin/conda
 else if test -d "$HOME"/miniconda3
     set CONDA_BIN "$HOME"/miniconda3/bin/conda
 end
-eval $CONDA_BIN "shell.fish" "hook" $argv | source
+if test -n "$CONDA_BIN"
+    eval $CONDA_BIN "shell.fish" "hook" $argv | source
+end
 
+
+# Mamba
+if test -d "$HOME/sdk/micromamba" -a -x "$HOME/bin/micromamba"
+    set -gx MAMBA_EXE "$HOME/bin/micromamba"
+    set -gx MAMBA_ROOT_PREFIX "$HOME/sdk/micromamba"
+    eval "$MAMBA_EXE" shell hook --shell fish --prefix "$MAMBA_ROOT_PREFIX" | source
+end
