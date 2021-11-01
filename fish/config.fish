@@ -1,5 +1,5 @@
 source ~/.config/fish/alias.fish
-source ~/.config/fish/myenv.fish
+source ~/.config/fish/mypre.fish
 if test -d ~/etc/extras.secret
     source ~/etc/extras.secret/gitconfig.extra.fish
 end
@@ -33,22 +33,6 @@ set -g fish_color_valid_path --underline
 # Install Starship
 starship init fish | source
 
+# sourcing the post scripts
+source ~/.config/fish/mypost.fish
 
-if test -d "$HOME"/sdk/miniforge3
-    set CONDA_BIN "$HOME"/sdk/miniforge3/bin/conda 
-else if test -d /opt/homebrew/Caskroom/miniforge/base
-    set CONDA_BIN /opt/homebrew/Caskroom/miniforge/base/bin/conda
-else if test -d "$HOME"/miniconda3
-    set CONDA_BIN "$HOME"/miniconda3/bin/conda
-end
-if test -n "$CONDA_BIN"
-    eval $CONDA_BIN "shell.fish" "hook" $argv | source
-end
-
-
-# Mamba
-if test -d "$HOME/sdk/micromamba" -a -x "$HOME/bin/micromamba"
-    set -gx MAMBA_EXE "$HOME/bin/micromamba"
-    set -gx MAMBA_ROOT_PREFIX "$HOME/sdk/micromamba"
-    eval "$MAMBA_EXE" shell hook --shell fish --prefix "$MAMBA_ROOT_PREFIX" | source
-end
