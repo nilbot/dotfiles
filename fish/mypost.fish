@@ -10,4 +10,5 @@ else if test -d "$HOME"/sdk/mambaforge
 end
 if test -n "$CONDA_BIN"
     eval $CONDA_BIN "shell.fish" "hook" $argv | source
+    set -e CONDA_BIN
 end
