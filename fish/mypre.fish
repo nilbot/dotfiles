@@ -1,15 +1,28 @@
 # base
 set base_env /opt/homebrew/bin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
+
 # user base
 set user_base_env $HOME/bin $HOME/.config/bin
 fish_add_path $user_base_env
+
+# pyenv
+command -sq pyenv
+if test $status -eq 0
+    set -gx PYENV_ROOT $HOME/.pyenv
+    fish_add_path $PYENV_ROOT/bin
+    status is-login; and pyenv init --path | source
+    status is-interactive; and pyenv init - | source
+end
+
 # go
 set -gx GOPATH $HOME
+
 # rust
 if test -d $HOME/.cargo/bin
     fish_add_path $HOME/.cargo/bin
 end
+
 # gcloud
 if test -d $HOME/devel/google-cloud-sdk
     # source $HOME/devel/google-cloud-sdk/path.fish.inc
@@ -21,6 +34,7 @@ end
 if test (uname) = "Darwin"
     set -x CLOUDSDK_PYTHON /usr/bin/python
 end
+
 # plan9
 set -gx PLAN9 /usr/local/plan9
 fish_add_path -maP $PLAN9/bin
@@ -55,19 +69,20 @@ if test -d /usr/local/share/dotnet
     fish_add_path /usr/local/share/dotnet
 end
 
-# # python using miniforge
-# if test -d $HOME/miniforge3/bin -a -x $HOME/miniforge3/bin/conda -a -x $HOME/miniforge3/bin/python
-#     fish_add_path -mpP $HOME/miniforge3/bin
-# end
-
 # flutter
 if test -d $HOME/Library/Frameworks/flutter/bin
     fish_add_path $HOME/Library/Frameworks/flutter/bin
 end
 
 # perl
-if test -d $HOME/sdk/perl5
+# perl (homebrew)
+# set -Ux PERL_MM_OPT INSTALL_BASE=$HOME/perl5
+# eval "perl -I$HOME/perl5/lib/perl5 -Mlocal::lib=$HOME/perl5"
+command -sq perl
+if test -d $HOME/sdk/perl5 -a $status -eq 0
     set PERL5_HOME $HOME/sdk/perl5
+    set -Ux PERL_MB_OPT "--install_base $PERL5_HOME/perl5"
+    set -Ux PERL_MM_OPT "INSTALL_BASE=$PERL5_HOME/perl5"
     eval (perl -I$PERL5_HOME/lib/perl5 -Mlocal::lib=$PERL5_HOME)
 end
 
@@ -132,15 +147,11 @@ if test -d "/Applications/Visual Studio Code.app/"
     fish_add_path "/Applications/Visual Studio Code.app/Contents/Resources/app/bin"
 end
 
-# perl (homebrew)
-# set -Ux PERL_MM_OPT INSTALL_BASE=$HOME/perl5
-# eval "perl -I$HOME/perl5/lib/perl5 -Mlocal::lib=$HOME/perl5"
-set -Ux PERL_MB_OPT "--install_base $HOME/perl5"
-set -Ux PERL_MM_OPT "INSTALL_BASE=$HOME/perl5"
-
 # rbenv (homebrew)
-status --is-interactive; and source (rbenv init -| psub)
-
+command -sq rbenv
+if test $status -eq 0
+    status --is-interactive; and source (rbenv init -| psub)
+end
 
 # wsl sshd autostart
 switch (uname -r)
