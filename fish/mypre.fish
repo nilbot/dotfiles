@@ -156,7 +156,7 @@ end
 # wsl sshd autostart
 switch (uname -r)
 case "*microsoft*"
-    if set -q INSIDE_GENIE
+    if ! set -q INSIDE_GENIE
         exec /usr/bin/genie -s
     end
 case "*"
