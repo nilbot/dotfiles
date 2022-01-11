@@ -153,18 +153,15 @@ if test $status -eq 0
     status --is-interactive; and source (rbenv init -| psub)
 end
 
-# # wsl sshd autostart
-# switch (uname -r)
-# case "*microsoft*"
-#     set SSH_SERVICE 'ssh'
-#     if ps ax | grep -v grep | grep $SSH_SERVICE > /dev/null
-#         echo "$SSH_SERVICE service running"
-#     else
-#         sudo /etc/init.d/ssh start
-#     end
-# case "*"
-#     # do nothing
-# end
+# wsl sshd autostart
+switch (uname -r)
+case "*microsoft*"
+    if set -q INSIDE_GENIE
+        exec /usr/bin/genie -s
+    end
+case "*"
+    # do nothing
+end
 
 # Background: tidb, tiup, macOS, arm64 setup
 # include tidb bin path
