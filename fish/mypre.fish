@@ -159,6 +159,9 @@ case "*microsoft*"
     if ! set -q INSIDE_GENIE
         exec /usr/bin/genie -s
     end
+    if set -q SSH_CLIENT 
+        source <(systemctl show-environment | awk '{print "export "$0}')
+    end
 case "*"
     # do nothing
 end
