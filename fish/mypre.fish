@@ -1,3 +1,16 @@
+# wsl systemd and ssh hack with genie, need to be run first
+switch (uname -r)
+case "*microsoft*"
+    if ! set -q INSIDE_GENIE
+        exec /usr/bin/genie -s
+    end
+    if set -q SSH_CLIENT 
+        eval (systemctl show-environment | awk -F '=' '{print "set -x "$1" "$2";"}')
+    end
+case "*"
+    # do nothing
+end
+
 # base
 set base_env /opt/homebrew/bin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
@@ -151,19 +164,6 @@ end
 command -sq rbenv
 if test $status -eq 0
     status --is-interactive; and source (rbenv init -| psub)
-end
-
-# wsl sshd autostart
-switch (uname -r)
-case "*microsoft*"
-    if ! set -q INSIDE_GENIE
-        exec /usr/bin/genie -s
-    end
-    if set -q SSH_CLIENT 
-        source <(systemctl show-environment | awk '{print "export "$0}')
-    end
-case "*"
-    # do nothing
 end
 
 # Background: tidb, tiup, macOS, arm64 setup
