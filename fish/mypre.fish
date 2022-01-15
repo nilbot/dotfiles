@@ -1,10 +1,10 @@
 # wsl systemd and ssh hack with genie, need to be run first
 switch (uname -r)
 case "*microsoft*"
-    if ! set -q INSIDE_GENIE
+    if ! set -q INSIDE_GENIE; and test -x /usr/bin/genie
         exec /usr/bin/genie -s
     end
-    if set -q SSH_CLIENT 
+    if set -q SSH_CLIENT; and set -q INSIDE_GENIE
         eval (systemctl show-environment | awk -F '=' '{print "set -x "$1" "$2";"}')
     end
 case "*"
