@@ -45,7 +45,7 @@ if test -d $HOME/sdk/google-cloud-sdk
     fish_add_path $HOME/sdk/google-cloud-sdk/bin
 end
 if test (uname) = "Darwin"
-    set -x CLOUDSDK_PYTHON /usr/bin/python
+    set -x CLOUDSDK_PYTHON (which python)
 end
 
 # plan9
