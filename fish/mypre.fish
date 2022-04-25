@@ -87,18 +87,6 @@ if test -d $HOME/Library/Frameworks/flutter/bin
     fish_add_path $HOME/Library/Frameworks/flutter/bin
 end
 
-# perl
-# perl (homebrew)
-# set -Ux PERL_MM_OPT INSTALL_BASE=$HOME/perl5
-# eval "perl -I$HOME/perl5/lib/perl5 -Mlocal::lib=$HOME/perl5"
-command -sq perl
-if test -d $HOME/sdk/perl5 -a $status -eq 0
-    set PERL5_HOME $HOME/sdk/perl5
-    set -Ux PERL_MB_OPT "--install_base $PERL5_HOME/perl5"
-    set -Ux PERL_MM_OPT "INSTALL_BASE=$PERL5_HOME/perl5"
-    eval (perl -I$PERL5_HOME/lib/perl5 -Mlocal::lib=$PERL5_HOME)
-end
-
 # misc. bin
 if test -d $HOME/.local/bin
     fish_add_path $HOME/.local/bin
