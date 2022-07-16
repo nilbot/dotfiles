@@ -37,3 +37,8 @@ alias bubo='brew update && brew outdated'
 alias bubc='brew upgrade && brew cleanup'
 alias bubu='bubo && bubc'
 
+# macOS
+## tailscale cli
+if test -x /Applications/Tailscale.app/Contents/MacOS/Tailscale
+    alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+end
