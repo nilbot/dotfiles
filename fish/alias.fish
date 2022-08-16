@@ -1,8 +1,16 @@
 # apps... but better
-alias git=bit
-alias vim=nvim
-alias ls=lsd
-alias find=gfind
+if type -q (which bit)
+    alias git=bit
+end
+if type -q (which nvim)
+    alias vim=nvim
+end
+if type -q (which lsd)
+    alias ls=lsd
+end
+if type -q (which gfind)
+    alias find=gfind
+end
 
 # git
 abbr -a gs  git status -sb
@@ -33,12 +41,14 @@ alias lt='ls --tree'
 alias reload='exec fish'
 
 # brew
-alias bubo='brew update && brew outdated'
-alias bubc='brew upgrade && brew cleanup'
-alias bubu='bubo && bubc'
+if type -q (which brew)
+    alias bubo='brew update && brew outdated'
+    alias bubc='brew upgrade && brew cleanup'
+    alias bubu='bubo && bubc'
+end
 
 # macOS
 ## tailscale cli
-if test -x /Applications/Tailscale.app/Contents/MacOS/Tailscale
+if type -q /Applications/Tailscale.app/Contents/MacOS/Tailscale
     alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 end
