@@ -14,6 +14,10 @@ end
 # base
 set base_env /opt/homebrew/bin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
+if type -q /usr/local/go/bin/go # manual go installation on linux machines
+    fish_add_path /usr/local/go/bin
+end
+
 
 # user base
 set user_base_env $HOME/bin $HOME/.config/bin
