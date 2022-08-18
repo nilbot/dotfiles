@@ -12,7 +12,7 @@ case "*"
 end
 
 # base
-set base_env /opt/homebrew/bin /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
+set base_env /usr/local/bin /usr/local/sbin /usr/bin /bin /usr/sbin /sbin
 fish_add_path $base_env
 if type -q /usr/local/go/bin/go # manual go installation on linux machines
     fish_add_path /usr/local/go/bin
@@ -22,6 +22,17 @@ end
 # user base
 set user_base_env $HOME/bin $HOME/.config/bin
 fish_add_path $user_base_env
+
+# brew base
+switch (uname -s)
+    case Linux
+        set brew_bin_path /home/linuxbrew/.linuxbrew/bin
+    case Darwin
+        set brew_bin_path /opt/homebrew/bin
+    case "*"
+        set brew_bin_path /usr/local/bin
+end
+fish_add_path $brew_bin_path
 
 # pyenv
 command -sq pyenv
