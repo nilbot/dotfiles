@@ -8,7 +8,7 @@ end
 if type -q (which lsd)
     alias ls=lsd
 end
-if type -q (which gfind)
+if type -q (which fd)
     alias find=gfind
 end
 
