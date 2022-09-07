@@ -84,7 +84,13 @@ if test -d $HOME/Library/Android
     fish_add_path $ANDROID_SDK_ROOT/platform-tools
 end
 
-# dart
+# cocoapods
+if test (uname -s) = "Darwin"
+    set -gx GEM_HOME $HOME/.gem
+    fish_add_path $GEM_HOME/bin
+end
+
+# dart; not required when installed via homebrew
 if test -d /usr/local/opt/dart
     fish_add_path /usr/local/opt/dart/libexec/bin
 end
@@ -97,7 +103,7 @@ if test -d /usr/local/share/dotnet
     fish_add_path /usr/local/share/dotnet
 end
 
-# flutter
+# flutter; not required when installed via homebrew
 if test -d $HOME/Library/Frameworks/flutter/bin
     fish_add_path $HOME/Library/Frameworks/flutter/bin
 end
