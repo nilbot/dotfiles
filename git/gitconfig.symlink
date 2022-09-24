@@ -235,12 +235,7 @@
 [sequence]
 
 	editor = interactive-rebase-tool
-[user]
-	name = Ersi Ni
-	email = ersi.ni@nilbot.net
-	signingkey = 4F9418E1
-[github]
-	user = nilbot
+
 [filter "lfs"]
 	clean = git-lfs clean -- %f
 	smudge = git-lfs smudge -- %f
