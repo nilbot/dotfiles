@@ -138,8 +138,11 @@ end
 function readenv --on-variable PWD
     if test -r .env
         cat .env | while read -l line
-            set -l kv (string split -m 1 = -- $line)
-            set -gx $kv # this will set the variable named by $kv[1] to the rest of $kv
+            # split on the first =, and set the variable, but only if the starting character is not #
+            if test (string sub -s 1 -l 1 $line) != "#"
+                set -l kv (string split -m 1 = -- $line)
+                set -gx $kv # this will set the variable named by $kv[1] to the rest of $kv
+            end
         end
    end
 end
