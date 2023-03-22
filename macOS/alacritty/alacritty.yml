@@ -41,7 +41,7 @@ draw_bold_text_with_bright_colors: true
 scrolling:
   # Maximum number of lines in the scrollback buffer.
   # Specifying '0' will disable scrolling.
-  history: 10000
+  history: 65535
 
   # Faux Scrolling
   #
@@ -236,7 +236,9 @@ cursor:
   #   - ▇ Block
   #   - _ Underline
   #   - | Beam
-  style: Block
+  style:
+    shape: Block
+    blinking: On
   unfocused_hollow: true
 
 # Live config reload (changes require restart)
