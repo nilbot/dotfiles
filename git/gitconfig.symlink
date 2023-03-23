@@ -241,3 +241,7 @@
 	smudge = git-lfs smudge -- %f
 	process = git-lfs filter-process
 	required = true
+
+[include]
+
+	path = ~/etc/extras.secret/gitconfig
