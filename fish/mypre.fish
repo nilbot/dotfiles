@@ -230,3 +230,10 @@ end
 #     networksetup -setwebproxystate wi-fi off
 #     networksetup -setsecurewebproxystate wi-fi off
 # end
+
+
+# bun
+if test -d $HOME/.bun
+    set -gx BUN_INSTALL $HOME/.bun
+    fish_add_path $BUN_INSTALL/bin
+end
