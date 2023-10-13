@@ -1,6 +1,4 @@
 live_config_reload = true
-"window.dynamic_title" = true
-"window.opacity" = 0.9
 
 [bell]
 animation = "EaseOutExpo"
@@ -711,16 +709,6 @@ hide_when_typing = true
 [[mouse.bindings]]
 action = "PasteSelection"
 mouse = "Middle"
-
-[mouse.double_click]
-threshold = 300
-
-[mouse.hints]
-launcher = "open"
-modifiers = "Control|Command"
-
-[mouse.triple_click]
-threshold = 300
 
 [scrolling]
 history = 65535
