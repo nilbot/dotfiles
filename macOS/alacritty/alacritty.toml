@@ -719,8 +719,8 @@ save_to_clipboard = true
 semantic_escape_chars = ",│`|:\"' ()[]{}<>"
 
 [window]
-decorations = "full"
-dynamic_padding = false
+decorations = "transparent"
+dynamic_padding = true
 
 [window.dimensions]
 columns = 160
@@ -728,4 +728,4 @@ lines = 48
 
 [window.padding]
 x = 2
-y = 2
+y = 30
