@@ -1,6 +1,6 @@
 bat
 bingrep
-bit-git
+btop
 diff-so-fancy
 dua-cli
 fd
@@ -10,6 +10,7 @@ git-interactive-rebase-tool
 jql
 jump
 lsd
+micromamba
 procs
 re2
 ripgrep

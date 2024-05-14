@@ -11,6 +11,14 @@ end
 if type -q (which fd)
     alias find=fd
 end
+if type -q (which micromamba)
+    alias mamba=micromamba
+    alias conda=micromamba
+end
+if type -q (which uv)
+    alias pip='uv pip'
+    alias venv='uv venv'
+end
 
 # git
 abbr -a gs  git status -sb
