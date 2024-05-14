@@ -59,11 +59,11 @@ TERM = "xterm-256color"
 size = 14.0
 
 [font.bold]
-family = "Hack Nerd Font Mono"
+family = "0xProto Nerd Font Mono"
 style = "Bold"
 
 [font.bold_italic]
-family = "Hack Nerd Font Mono"
+family = "0xProto Nerd Font Mono"
 style = "Bold Italic"
 
 [font.glyph_offset]
@@ -71,11 +71,11 @@ x = 0
 y = 0
 
 [font.italic]
-family = "Hack Nerd Font Mono"
+family = "0xProto Nerd Font Mono"
 style = "Italic"
 
 [font.normal]
-family = "Hack Nerd Font Mono"
+family = "0xProto Nerd Font Mono"
 style = "Regular"
 
 [font.offset]
@@ -719,13 +719,13 @@ save_to_clipboard = true
 semantic_escape_chars = ",│`|:\"' ()[]{}<>"
 
 [window]
-decorations = "transparent"
+#decorations = "transparent"
 dynamic_padding = true
 
 [window.dimensions]
 columns = 160
 lines = 48
 
-[window.padding]
-x = 2
-y = 30
+#[window.padding]
+#x = 2
+#y = 30
