@@ -2,3 +2,7 @@
 *.extra
 *.secret
 fish/fish_variables
+fish/fish_plugins
+fish/functions/
+fish/completions/
+fish/conf.d/

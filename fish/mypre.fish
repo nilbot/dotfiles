@@ -1,3 +1,10 @@
+# >>> fisher plugin manager >>>
+function install_fisher
+    set --local plugins (read --null <$HOME/dotfiles/fish/fishfile)
+    curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher $plugins
+end
+# <<< fisher plugin manager <<<
+
 # wsl systemd and ssh hack with genie, need to be run first
 switch (uname -r)
 case "*microsoft*"
@@ -161,8 +168,12 @@ end
 # remove fish-variables
 # it turns out that fish-variables resides in local,
 # and it's not cross-platform compatible (eg. macOS vs linux)
-function fish_remove_variables
-    echo '' > $HOME/dotfiles/fish/fish_variables
+function fish_reset_all
+    set --local fish_path_prefix $HOME/dotfiles/fish
+    echo '' > $fish_path_prefix/fish_plugins
+    echo '' > $fish_path_prefix/fish_variables
+    rm -rf $fish_path_prefix/{functions,completions,conf.d}/
+    install_fisher
     reload
 end
 
