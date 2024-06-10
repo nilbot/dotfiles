@@ -50,6 +50,12 @@ if test $status -eq 0
     status is-interactive; and pyenv init - | source
 end
 
+# fzf
+command -q fzf
+if test $status -eq 0
+    fzf --fish | source
+end
+
 # go
 set -gx GOPATH $HOME
 
