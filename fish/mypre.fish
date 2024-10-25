@@ -87,6 +87,10 @@ end
 
 # TODO(n)
 # java
+# scala
+if test -d "$HOME/Library/Application Support/Coursier/bin"
+    fish_add_path "$HOME/Library/Application Support/Coursier/bin"
+end
 # android
 if test (uname) = "Darwin"
     set -gx JAVA_HOME (/usr/libexec/java_home)
@@ -253,4 +257,17 @@ end
 if test -d $HOME/.bun
     set -gx BUN_INSTALL $HOME/.bun
     fish_add_path $BUN_INSTALL/bin
+end
+
+
+# Add LM Studio CLI (lms)
+if test -d $HOME/.cache/lm-studio
+    set -gx LMSTUDIO_INSTALL $HOME/.cache/lm-studio
+    fish_add_path $LMSTUDIO_INSTALL/bin
+end
+
+# Add Modular CLI (modular / magic)
+if test -d $HOME/.modular
+    set -gx MODULAR_INSTALL $HOME/.modular
+    fish_add_path $MODULAR_INSTALL/bin
 end
