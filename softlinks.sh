@@ -9,3 +9,9 @@ if test $SYSTEM = "Darwin"; then
 	mkdir -p $HOME/.config/alacritty
 	ln -s $CURDIR/macOS/alacritty/alacritty.toml $HOME/.config/alacritty/alacritty.toml
 fi
+
+if test $SYSTEM = "Darwin"; then
+	rm -rf $HOME/.config/ghostty
+	ln -s $CURDIR/macOS/ghostty $HOME/.config/ghostty
+fi
+
