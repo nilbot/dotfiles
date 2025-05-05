@@ -121,8 +121,8 @@ if test -d /usr/local/share/dotnet
 end
 
 # flutter; not required when installed via homebrew
-if test -d $HOME/Library/Frameworks/flutter/bin
-    fish_add_path $HOME/Library/Frameworks/flutter/bin
+if test -d $HOME/sdk/flutter/bin
+    fish_add_path $HOME/sdk/flutter/bin
 end
 
 # misc. bin
@@ -204,16 +204,6 @@ end
 if test -d $HOME/.tiup/bin
     set TIUP_BIN_PATH $HOME/.tiup/bin
     fish_add_path $TIUP_BIN_PATH
-end
-
-# fish workaround :: tensorflow-macos pip install (possibly more were impacted)
-# specific:: dependency GRPCIO version 1.34 
-# workaround solution found :: https://stackoverflow.com/questions/66640705/how-can-i-install-grpcio-on-an-apple-m1-silicon-laptop
-function fish_workaround_grpcio_install
-    set -gx GRPC_PYTHON_BUILD_SYSTEM_OPENSSL 1
-    set -gx GRPC_PYTHON_BUILD_SYSTEM_ZLIB 1
-    set -gx CFLAGS "-I /opt/homebrew/opt/openssl/include"
-    set -gx LDFLAGS "-L /opt/homebrew/opt/openssl/lib"
 end
 
 # proxy
