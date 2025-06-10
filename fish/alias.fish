@@ -56,7 +56,7 @@ if type -q (which brew)
 end
 
 # macOS
-## tailscale cli
-if type -q /Applications/Tailscale.app/Contents/MacOS/Tailscale
-    alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-end
+## tailscale cli (deprecated because using standalone tailscale)
+# if type -q /Applications/Tailscale.app/Contents/MacOS/Tailscale
+#     alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+# end
