@@ -7,15 +7,15 @@ end
 
 # wsl systemd and ssh hack with genie, need to be run first
 switch (uname -r)
-case "*microsoft*"
-    if ! set -q INSIDE_GENIE; and test -x /usr/bin/genie
-        exec /usr/bin/genie -s
-    end
-    if set -q SSH_CLIENT; and set -q INSIDE_GENIE
-        eval (systemctl show-environment | awk -F '=' '{print "set -x "$1" "$2";"}')
-    end
-case "*"
-    # do nothing
+    case "*microsoft*"
+        if ! set -q INSIDE_GENIE; and test -x /usr/bin/genie
+            exec /usr/bin/genie -s
+        end
+        if set -q SSH_CLIENT; and set -q INSIDE_GENIE
+            eval (systemctl show-environment | awk -F '=' '{print "set -x "$1" "$2";"}')
+        end
+    case "*"
+        # do nothing
 end
 
 # base
@@ -24,7 +24,6 @@ fish_add_path $base_env
 if type -q /usr/local/go/bin/go # manual go installation on linux machines
     fish_add_path /usr/local/go/bin
 end
-
 
 # user base
 set user_base_env $HOME/bin $HOME/.config/bin
@@ -72,7 +71,7 @@ if test -d $HOME/sdk/google-cloud-sdk
     # and apparently sourcing this file doesn't work across sessions.
     fish_add_path $HOME/sdk/google-cloud-sdk/bin
 end
-if test (uname) = "Darwin"
+if test (uname) = Darwin
     set -x CLOUDSDK_PYTHON (which python)
 end
 
@@ -92,7 +91,7 @@ if test -d "$HOME/Library/Application Support/Coursier/bin"
     fish_add_path "$HOME/Library/Application Support/Coursier/bin"
 end
 # android
-if test (uname) = "Darwin"
+if test (uname) = Darwin
     set -gx JAVA_HOME (/usr/libexec/java_home)
 end
 if test -d $HOME/Library/Android
@@ -102,7 +101,7 @@ if test -d $HOME/Library/Android
 end
 
 # cocoapods
-if test (uname -s) = "Darwin"
+if test (uname -s) = Darwin
     set -gx GEM_HOME $HOME/.gem
     fish_add_path $GEM_HOME/bin
 end
@@ -143,12 +142,14 @@ end
 # this function downloads the first link
 #   - usage: github-dl owner repo
 function github-dl
-    set org $argv[1]; set repo $argv[2];
+    set org $argv[1]
+    set repo $argv[2]
+
     curl -s https://api.github.com/repos/"$org"/"$repo"/releases/latest \
-    | grep browser_download_url \
-    | cut -d '"' -f 4 \
-    | head -n 1 \
-    | wget -qi -
+        | grep browser_download_url \
+        | cut -d '"' -f 4 \
+        | head -n 1 \
+        | wget -qi -
 end
 
 # func readenv for .env files
@@ -161,7 +162,7 @@ function readenv --on-variable PWD
                 set -gx $kv # this will set the variable named by $kv[1] to the rest of $kv
             end
         end
-   end
+    end
 end
 
 # bit is git client, but better
@@ -180,8 +181,8 @@ end
 # and it's not cross-platform compatible (eg. macOS vs linux)
 function fish_reset_all
     set --local fish_path_prefix $HOME/dotfiles/fish
-    echo '' > $fish_path_prefix/fish_plugins
-    echo '' > $fish_path_prefix/fish_variables
+    echo '' >$fish_path_prefix/fish_plugins
+    echo '' >$fish_path_prefix/fish_variables
     rm -rf $fish_path_prefix/{functions,completions,conf.d}/
     install_fisher
     reload
@@ -242,22 +243,14 @@ end
 #     networksetup -setsecurewebproxystate wi-fi off
 # end
 
-
 # bun
 if test -d $HOME/.bun
     set -gx BUN_INSTALL $HOME/.bun
     fish_add_path $BUN_INSTALL/bin
 end
 
-
 # Add LM Studio CLI (lms)
 if test -d $HOME/.cache/lm-studio
     set -gx LMSTUDIO_INSTALL $HOME/.cache/lm-studio
     fish_add_path $LMSTUDIO_INSTALL/bin
-end
-
-# Add Modular CLI (modular / magic)
-if test -d $HOME/.modular
-    set -gx MODULAR_INSTALL $HOME/.modular
-    fish_add_path $MODULAR_INSTALL/bin
 end
