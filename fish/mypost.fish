@@ -11,8 +11,8 @@
 
 # >>> mamba initialize >>>
 # !! Contents within this block are managed by 'mamba init' !!
-if test -x "/opt/homebrew/bin/micromamba"
-    set -gx MAMBA_EXE "/opt/homebrew/bin/micromamba"
+if test -x /opt/homebrew/bin/micromamba
+    set -gx MAMBA_EXE /opt/homebrew/bin/micromamba
     set -gx MAMBA_ROOT_PREFIX "$HOME/sdk/mambaforge"
     $MAMBA_EXE shell hook --shell fish --root-prefix $MAMBA_ROOT_PREFIX | source
 end
