@@ -2,3 +2,4 @@ font-family = "0xProto Nerd Font Mono"
 font-size = 14
 theme = "frappe"
 shell-integration-features = sudo
+scrollback-limit = 67108864
