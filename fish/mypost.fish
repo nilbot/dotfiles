@@ -25,3 +25,8 @@ if test -d "$HOME/.modular"
     fish_add_path "$MODULAR_HOME/pkg/packages.modular.com_mojo/bin"
 end
 # <<< mojo <<<
+
+# >>> eve frontier foundry >>>
+if test -d "$HOME/.foundry/bin"
+    fish_add_path -a /Users/nilbot/.foundry/bin
+end
