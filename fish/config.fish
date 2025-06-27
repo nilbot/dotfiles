@@ -1,5 +1,5 @@
-source ~/.config/fish/alias.fish
 source ~/.config/fish/mypre.fish
+source ~/.config/fish/alias.fish
 # if test -d ~/etc/extras.secret
 #     source ~/etc/extras.secret/gitconfig.extra.fish
 # end
