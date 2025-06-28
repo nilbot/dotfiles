@@ -1,23 +1,23 @@
 # apps... but better
 if type -q (which bit)
-    abbr -a git bit
+    alias git=bit
 end
 if type -q (which nvim)
-    abbr -a vim nvim
+    alias vim=nvim
 end
 if type -q (which lsd)
-    abbr -a ls lsd
+    alias ls=lsd
 end
 if type -q (which fd)
-    abbr -a find fd
+    alias find=fd
 end
 if type -q (which micromamba)
-    abbr -a mamba micromamba
-    abbr -a conda micromamba
+    alias mamba=micromamba
+    alias conda=micromamba
 end
 if type -q (which uv)
-    abbr -a pip 'uv pip'
-    abbr -a venv 'uv venv'
+    alias pip='uv pip'
+    alias venv='uv venv'
 end
 
 # git
@@ -40,23 +40,23 @@ abbr -a gfm git findmessage
 abbr -a gco git checkout
 
 # ls
-abbr -a l 'ls -l'
-abbr -a la 'ls -a'
-abbr -a lla 'ls -la'
-abbr -a lt 'ls --tree'
+alias l='ls -l'
+alias la='ls -a'
+alias lla='ls -la'
+alias lt='ls --tree'
 
 # misc
-abbr -a reload 'exec fish'
+alias reload='exec fish'
 
 # brew
 if type -q (which brew)
-    abbr -a bubo 'brew update && brew outdated'
-    abbr -a bubc 'brew upgrade && brew cleanup'
-    abbr -a bubu 'bubo && bubc'
+    alias bubo='brew update && brew outdated'
+    alias bubc='brew upgrade && brew cleanup'
+    alias bubu='bubo && bubc'
 end
 
 # macOS
 ## tailscale cli (deprecated because using standalone tailscale)
 # if type -q /Applications/Tailscale.app/Contents/MacOS/Tailscale
-#     abbr -a tailscale "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+#     alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 # end
