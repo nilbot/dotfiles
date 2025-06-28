@@ -45,9 +45,6 @@ alias la='ls -a'
 alias lla='ls -la'
 alias lt='ls --tree'
 
-# misc
-alias reload='exec fish'
-
 # brew
 if type -q (which brew)
     alias bubo='brew update && brew outdated'

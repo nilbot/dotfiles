@@ -1,3 +1,8 @@
+# misc reload function
+function reload
+    exec fish
+end
+
 # >>> fisher plugin manager >>>
 function install_fisher
     set --local plugins (read --null <$HOME/dotfiles/fish/fishfile)
