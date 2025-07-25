@@ -1,21 +1,21 @@
 # apps... but better
-if type -q (which bit)
+if type -q (command -v bit)
     alias git=bit
 end
-if type -q (which nvim)
+if type -q (command -v nvim)
     alias vim=nvim
 end
-if type -q (which lsd)
+if type -q (command -v lsd)
     alias ls=lsd
 end
-if type -q (which fd)
+if type -q (command -v fd)
     alias find=fd
 end
-if type -q (which micromamba)
+if type -q (command -v micromamba)
     alias mamba=micromamba
     alias conda=micromamba
 end
-if type -q (which uv)
+if type -q (command -v uv)
     alias pip='uv pip'
     alias venv='uv venv'
 end
@@ -46,7 +46,7 @@ alias lla='ls -la'
 alias lt='ls --tree'
 
 # brew
-if type -q (which brew)
+if type -q (command -v brew)
     alias bubo='brew update && brew outdated'
     alias bubc='brew upgrade && brew cleanup'
     alias bubu='bubo && bubc'
