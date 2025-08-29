@@ -1,6 +1,6 @@
 [init]
 
-    templatedir=~/dotfiles/git/templates
+	templatedir = /home/nilbot/dotfiles/git/templates
 
 [alias]
 

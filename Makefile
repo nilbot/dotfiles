@@ -24,6 +24,7 @@ dotfiles:
 	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
 	ln -sf $(CURDIR)/tmux/tmux.conf $(HOME)/.tmux.conf;
+	ln -sfn $(CURDIR)/claude $(HOME)/.claude;
 
 editors:
 	rm -rf $(HOME)/.vim $(HOME)/.emacs.d

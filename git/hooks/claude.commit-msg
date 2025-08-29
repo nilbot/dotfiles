@@ -1,0 +1,24 @@
+#!/bin/bash
+# Claude Code commit message protection hook
+# Automatically strips forbidden content from commit messages
+
+# Path to the commit message file
+COMMIT_MSG_FILE="$1"
+
+# Strip Claude Code footers
+sed -i '/🤖 Generated with \[Claude Code\]/d' "$COMMIT_MSG_FILE"
+sed -i '/Co-Authored-By: Claude/d' "$COMMIT_MSG_FILE"
+
+# Remove excessive blank lines (more than 2 consecutive)
+sed -i '/^$/N;/^\n$/d' "$COMMIT_MSG_FILE"
+
+# Remove trailing empty lines
+sed -i -e :a -e '/^\s*$/N;$ba' -e '$d' "$COMMIT_MSG_FILE"
+
+# Optional: Log cleaning action
+# Uncomment next 3 lines if you want notifications
+# if grep -q "Generated with.*Claude Code\|Co-Authored-By: Claude" "$COMMIT_MSG_FILE" 2>/dev/null; then
+#     echo "🧹 Stripped Claude Code footers from commit message"
+# fi
+
+exit 0

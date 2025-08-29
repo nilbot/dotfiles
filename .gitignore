@@ -6,3 +6,9 @@ fish/fish_plugins
 fish/functions/
 fish/completions/
 fish/conf.d/
+.claude
+claude/.credentials.json
+claude/projects/
+claude/shell-snapshots/
+claude/todos/
+claude/.anthropic/
