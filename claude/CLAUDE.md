@@ -14,115 +14,93 @@ The following content is **PERMANENTLY BANNED** from all commit messages:
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-### Implementation Methods
+## Implementation - Dotfiles Integration
 
-#### Method 1: Git Hook (Recommended)
-Create a commit-msg hook that automatically strips forbidden content:
+**This protection system is now fully integrated into the dotfiles repository.**
+
+### Automated Setup via Dotfiles
+The protection is automatically installed when you set up dotfiles:
 
 ```bash
-# Create the hook
-cat > ~/.git-templates/hooks/commit-msg << 'EOF'
-#!/bin/bash
-# Strip Claude Code footers from commit messages
+# Standard dotfiles installation includes Claude protection
+make dotfiles
 
-# Remove Claude footers
-sed -i '/🤖 Generated with \[Claude Code\]/d' "$1"
-sed -i '/Co-Authored-By: Claude/d' "$1"
+# This automatically:
+# 1. Symlinks ~/.claude to dotfiles/claude/
+# 2. Configures git to use dotfiles/git/templates/
+# 3. Installs commit-msg hooks in all new repositories
+# 4. Applies protection to the current repository
+```
 
-# Remove trailing empty lines
-sed -i -e :a -e '/^\s*$/N;$ba' -e '$d' "$1"
-EOF
+### How It Works
+1. **Template System**: `dotfiles/git/templates/hooks/commit-msg` runs modular hooks
+2. **Modular Hooks**: `dotfiles/git/hooks/claude.commit-msg` strips Claude footers
+3. **Automatic Application**: All new `git init` and `git clone` get protection
+4. **Symlinked Access**: `~/.claude/` points to `dotfiles/claude/` for easy access
 
-# Make executable
+## Manual Installation Methods (Alternative)
+
+### Method 1: Standalone Git Hook
+If not using dotfiles integration:
+
+```bash
+# Create hook directory
+mkdir -p ~/.git-templates/hooks
+
+# Install protection hook
+cp ~/.claude/commit-msg ~/.git-templates/hooks/
 chmod +x ~/.git-templates/hooks/commit-msg
 
-# Configure git to use template
+# Configure git globally
 git config --global init.templatedir ~/.git-templates
 ```
 
-#### Method 2: Global Git Alias
-Create a git alias that automatically cleans commit messages:
+### Method 2: Per-Repository Hook
+For individual repositories:
 
 ```bash
-# Add to ~/.gitconfig
-git config --global alias.commit-clean '!f() { 
-    git commit "$@" && 
-    git log -1 --format="%B" | 
-    sed "/🤖 Generated with \[Claude Code\]/d; /Co-Authored-By: Claude/d" | 
-    git commit --amend -F -; 
-}; f'
+# Copy hook to specific repo
+cp ~/.claude/commit-msg .git/hooks/
+chmod +x .git/hooks/commit-msg
 ```
 
-#### Method 3: Pre-commit Hook Integration
-If using pre-commit, add this to `.pre-commit-config.yaml`:
+## Verification and Testing
 
-```yaml
-repos:
-  - repo: local
-    hooks:
-      - id: strip-claude-footers
-        name: Strip Claude Code footers
-        entry: bash -c 'sed -i "/🤖 Generated with \[Claude Code\]/d; /Co-Authored-By: Claude/d" "$@"'
-        language: system
-        stages: [commit-msg]
-```
-
-#### Method 4: Claude Code Setting Override
-For Claude Code sessions, always use this pattern in commit commands:
-
+### Check Protection Status
 ```bash
-# Good pattern - use HEREDOC without footers
-git commit -m "$(cat <<'EOF'
-Your commit message here
+# Verify dotfiles integration
+ls -la ~/.claude  # Should show symlink to dotfiles/claude/
 
-Technical details...
-EOF
-)"
+# Check git configuration
+git config --global --get init.templatedir  # Should show dotfiles/git/templates
+
+# Verify hook in current repo
+ls -la .git/hooks/commit-msg
 ```
 
-### Automatic Detection Script
-Create a script to detect violations in existing repos:
-
+### Test Protection
 ```bash
-#!/bin/bash
-# ~/.claude/check-commits.sh
-# Usage: check-commits.sh [repo-path]
+# Check for violations in any repository
+~/.claude/check-commits.sh [repo-path] [num-commits]
 
-REPO_PATH="${1:-.}"
-cd "$REPO_PATH"
+# Test hook functionality (creates no actual commit)
+echo "Test
 
-echo "🔍 Checking for Claude Code footer violations..."
-
-# Check recent commits for violations
-VIOLATIONS=$(git log --oneline -20 --grep="Generated with.*Claude Code" --grep="Co-Authored-By: Claude")
-
-if [ -n "$VIOLATIONS" ]; then
-    echo "❌ VIOLATIONS FOUND:"
-    echo "$VIOLATIONS"
-    echo ""
-    echo "💡 To fix: git filter-branch --msg-filter 'sed \"/🤖 Generated with.*Claude Code/d; /Co-Authored-By: Claude/d\"' HEAD~20..HEAD"
-    exit 1
-else
-    echo "✅ No violations found in recent commits"
-    exit 0
-fi
+🤖 Generated with [Claude Code](https://claude.ai/code)" | .git/hooks/commit-msg /dev/stdin
 ```
 
-### Repository-Specific Integration
-Add this to any project's CLAUDE.md:
+## Files and Scripts
 
-```markdown
-## Commit Message Constraints (ENFORCED)
+### Core Files (in dotfiles/claude/)
+- **`CLAUDE.md`** - This configuration file
+- **`commit-msg`** - Standalone commit message hook
+- **`check-commits.sh`** - Violation detection script  
+- **`setup-protection.sh`** - Manual setup helper (deprecated - use dotfiles)
 
-**NEVER include these footers in commit messages:**
-- `🤖 Generated with [Claude Code](https://claude.ai/code)`
-- `Co-Authored-By: Claude <noreply@anthropic.com>`
-
-This constraint is enforced by:
-1. Global git hooks (see ~/.claude/CLAUDE.md)
-2. Pre-commit validation
-3. Manual review process
-```
+### Dotfiles Integration Files
+- **`git/templates/hooks/commit-msg`** - Template hook dispatcher
+- **`git/hooks/claude.commit-msg`** - Modular Claude protection hook
+- **`Makefile`** - Updated to include ~/.claude symlink management
 
 ## Session Behavior Rules
 
@@ -145,54 +123,57 @@ git commit -m "fix: resolve critical issue
 🤖 Generated with [Claude Code](https://claude.ai/code)"
 ```
 
-## Setup Instructions
-
-### One-time Global Setup
-```bash
-# 1. Create git template directory
-mkdir -p ~/.git-templates/hooks
-
-# 2. Install commit-msg hook
-cp ~/.claude/commit-msg ~/.git-templates/hooks/
-chmod +x ~/.git-templates/hooks/commit-msg
-
-# 3. Configure git to use templates
-git config --global init.templatedir ~/.git-templates
-
-# 4. Apply to existing repos
-find ~/devel -name ".git" -type d -exec cp ~/.git-templates/hooks/commit-msg {}/hooks/ \;
-```
-
-### Per-Repository Verification
-```bash
-# Check if protection is active
-ls -la .git/hooks/commit-msg
-
-# Test protection (should strip footers)
-echo "Test commit
-
-🤖 Generated with [Claude Code](https://claude.ai/code)" | .git/hooks/commit-msg /dev/stdin
-```
-
 ## Troubleshooting
 
-### If Violation Occurs
-1. **Immediate fix**: `git commit --amend` to clean message
-2. **Bulk fix**: Use `git filter-branch` for multiple commits  
-3. **Prevention**: Verify hooks are installed and active
-
-### Hook Not Working
+### If Protection Isn't Working
 ```bash
-# Reinstall hook
-cp ~/.claude/commit-msg ~/.git-templates/hooks/
-chmod +x ~/.git-templates/hooks/commit-msg
+# 1. Verify dotfiles setup
+make dotfiles
 
-# Copy to current repo
-cp ~/.git-templates/hooks/commit-msg .git/hooks/
+# 2. Check current repo has hook
+ls -la .git/hooks/commit-msg
+
+# 3. Manually install if needed
+cp ~/dotfiles/git/templates/hooks/commit-msg .git/hooks/
+chmod +x .git/hooks/commit-msg
+
+# 4. Test hook manually
+echo "test" > /tmp/msg && .git/hooks/commit-msg /tmp/msg
+```
+
+### If Violations Occurred
+```bash
+# Immediate fix for last commit
+git commit --amend -m "Clean message without footers"
+
+# Bulk fix for multiple commits (DANGEROUS - rewrites history)
+git filter-branch -f --msg-filter 'grep -v "🤖 Generated with.*Claude Code" | grep -v "Co-Authored-By: Claude"' HEAD~N..HEAD
+```
+
+### Hook Performance Issues
+If commits hang:
+1. Check hook syntax: `bash -n .git/hooks/commit-msg`
+2. Test manually: `.git/hooks/commit-msg /tmp/test_msg`
+3. Reinstall from templates: `cp ~/dotfiles/git/templates/hooks/commit-msg .git/hooks/`
+
+## Migration Notes
+
+### Upgrading from Standalone System
+If you previously used `~/.git-templates/hooks/commit-msg`:
+
+```bash
+# 1. Install dotfiles integration
+make dotfiles
+
+# 2. Update git configuration (done automatically by dotfiles)
+git config --global init.templatedir ~/dotfiles/git/templates
+
+# 3. Update existing repositories
+find ~/devel -name ".git" -type d -exec cp ~/dotfiles/git/templates/hooks/commit-msg {}/hooks/ \;
 ```
 
 ---
 
-**🚨 CRITICAL**: This configuration is mandatory for ALL Claude Code usage.
-**🔄 SYNC**: Keep this file updated across all development machines.
-**✅ VERIFY**: Test protection after any git configuration changes.
+**🚨 CRITICAL**: This configuration is mandatory for ALL Claude Code usage.  
+**🔄 DOTFILES**: Protection is now managed through dotfiles repository.  
+**✅ VERIFY**: Test protection after any system changes or updates.
