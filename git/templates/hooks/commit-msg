@@ -2,24 +2,38 @@
 
 EXIT_CODE=0
 
-repo=$( git rev-parse --show-toplevel )
-hook_type=$( basename $0 )
-hooks=~/dotfiles/git/hooks
+hook_type=$( basename "$0" )
+hooks="$HOME/dotfiles/git/hooks"
+
+# Check if hooks directory exists
+if [ ! -d "$hooks" ]; then
+	exit 0
+fi
+
+# Use nullglob to handle case where no files match pattern
+shopt -s nullglob
+hook_files=("$hooks"/*."$hook_type")
+shopt -u nullglob
+
+# Exit if no hooks found
+if [ ${#hook_files[@]} -eq 0 ]; then
+	exit 0
+fi
 
 echo "Executing $hook_type hook(s)"
 
-for hook in $hooks/*.$hook_type; do
-	if [ -f "$hook" ]; then
+for hook in "${hook_files[@]}"; do
+	if [ -f "$hook" ] && [ -x "$hook" ]; then
 		echo ""
-		echo "${COLOR_LIGHTPURPLE}Executing ${hook}${COLOR_NONE}"
-		${hook} "$@"
-		EXIT_CODE=$((${EXIT_CODE} + $?))
+		echo "Executing ${hook}"
+		"$hook" "$@"
+		EXIT_CODE=$((EXIT_CODE + $?))
 	fi
 done
 
-if test ${EXIT_CODE} -ne 0; then
+if [ $EXIT_CODE -ne 0 ]; then
 	echo ""
-	echo "${COLOR_RED}Commit Failed.${COLOR_NONE}"
+	echo "Commit Failed."
 fi
 
-exit $((${EXIT_CODE}))
+exit $EXIT_CODE
