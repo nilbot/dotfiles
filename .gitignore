@@ -12,3 +12,7 @@ claude/projects/
 claude/shell-snapshots/
 claude/todos/
 claude/.anthropic/
+claude/ide/
+claude/plugins/
+claude/statsig/
+
