@@ -4,6 +4,12 @@
 
 set -e
 
+# Function to handle errors without exiting
+handle_error() {
+    echo "⚠️  Warning: $1"
+    return 0
+}
+
 echo "🛡️  Setting up Claude Code commit message protection..."
 
 # Create directories
@@ -14,8 +20,12 @@ mkdir -p ~/.claude
 if [ -f ~/.claude/CLAUDE.md ]; then
     echo "✅ ~/.claude/CLAUDE.md already exists"
 else
-    echo "❌ ~/.claude/CLAUDE.md missing - please run this from Claude Code session"
-    exit 1
+    echo "📋 Creating ~/.claude/CLAUDE.md from dotfiles..."
+    # CLAUDE.md should already be linked via the dotfiles Makefile
+    if [ ! -f ~/.claude/CLAUDE.md ]; then
+        echo "❌ ~/.claude/CLAUDE.md still missing after dotfiles setup"
+        exit 1
+    fi
 fi
 
 # Install git hook globally
@@ -34,12 +44,6 @@ COMMIT_MSG_FILE="$1"
 sed -i '/🤖 Generated with \[Claude Code\]/d' "$COMMIT_MSG_FILE"
 sed -i '/Co-Authored-By: Claude/d' "$COMMIT_MSG_FILE"
 
-# Remove excessive blank lines (more than 2 consecutive)
-sed -i '/^$/N;/^\n$/d' "$COMMIT_MSG_FILE"
-
-# Remove trailing empty lines
-sed -i -e :a -e '/^\s*$/N;$ba' -e '$d' "$COMMIT_MSG_FILE"
-
 # Optional: Log cleaning action
 # Uncomment next 3 lines if you want notifications
 # if grep -q "Generated with.*Claude Code\|Co-Authored-By: Claude" "$COMMIT_MSG_FILE" 2>/dev/null; then
@@ -53,33 +57,13 @@ chmod +x ~/.git-templates/hooks/commit-msg
 echo "⚙️  Configuring git to use global templates..."
 git config --global init.templatedir ~/.git-templates
 
-# Apply to existing repositories
-echo "🔍 Searching for existing git repositories..."
-REPOS_FOUND=0
-
-# Search common development directories
-for search_dir in ~/devel ~/dev ~/src ~/code ~/projects ~; do
-    if [ -d "$search_dir" ]; then
-        echo "   Searching in $search_dir..."
-        while IFS= read -r -d '' git_dir; do
-            repo_dir=$(dirname "$git_dir")
-            hooks_dir="$git_dir/hooks"
-            
-            # Install hook in this repository
-            cp ~/.git-templates/hooks/commit-msg "$hooks_dir/" 2>/dev/null || continue
-            chmod +x "$hooks_dir/commit-msg" 2>/dev/null || continue
-            
-            echo "   ✅ Protected: $repo_dir"
-            ((REPOS_FOUND++))
-        done < <(find "$search_dir" -name ".git" -type d -print0 2>/dev/null)
-    fi
-done
-
 echo "🎉 Setup complete!"
-echo "   - Global template installed: ~/.git-templates/hooks/commit-msg"
+echo "   - Global template installed: ~/.git-templates/hooks/commit-msg"  
 echo "   - Git configured to use templates for new repos"
-echo "   - Protected $REPOS_FOUND existing repositories"
 echo ""
+echo "📋 For existing repositories, run:"
+echo "   git init  # This will apply the global template to current repo"
+echo ""  
 echo "🧪 To test protection:"
 echo "   ~/.claude/check-commits.sh [repo-path]"
 echo ""
