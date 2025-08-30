@@ -13,7 +13,6 @@ handle_error() {
 echo "🛡️  Setting up Claude Code commit message protection..."
 
 # Create directories
-mkdir -p ~/.git-templates/hooks
 mkdir -p ~/.claude
 
 # Check if files already exist
@@ -28,19 +27,15 @@ else
     fi
 fi
 
-# Install git hook globally
-echo "📝 Installing global commit-msg hook..."
-cp ~/.git-templates/hooks/commit-msg ~/.git-templates/hooks/commit-msg.bak 2>/dev/null || true
-
-# No automatic git hooks - they cause infinite loops and hangs
+# No hook installation needed - hooks live in dotfiles repo
 
 # Configure git to use templates globally
-echo "⚙️  Configuring git to use global templates..."
-git config --global init.templatedir ~/.git-templates
+echo "⚙️  Configuring git to use dotfiles templates..."
+git config --global init.templatedir ~/dotfiles/git/templates
 
 echo "🎉 Setup complete!"
-echo "   - Global template installed: ~/.git-templates/hooks/commit-msg"  
-echo "   - Git configured to use templates for new repos"
+echo "   - Template hooks available in: ~/dotfiles/git/templates/hooks/"  
+echo "   - Git configured to use dotfiles templates for new repos"
 echo ""
 echo "📋 For existing repositories, run:"
 echo "   git init  # This will apply the global template to current repo"

@@ -17,13 +17,13 @@ echo "🔄 Updating git hooks for repository: $REPO_PATH"
 
 cd "$REPO_PATH"
 
-# Force copy hooks from global template (git init doesn't overwrite existing hooks)
-if [ -f ~/.git-templates/hooks/commit-msg ]; then
-    cp ~/.git-templates/hooks/commit-msg .git/hooks/commit-msg
+# Force copy hooks from dotfiles repo template 
+if [ -f ~/dotfiles/git/templates/hooks/commit-msg ]; then
+    cp ~/dotfiles/git/templates/hooks/commit-msg .git/hooks/commit-msg
     chmod +x .git/hooks/commit-msg
     echo "✅ Repository hooks updated successfully"
 else
-    echo "❌ Global template hook not found. Run 'make dotfiles' first."
+    echo "❌ Dotfiles template hook not found. Run 'make dotfiles' first."
     exit 1
 fi
 
