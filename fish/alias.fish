@@ -46,11 +46,9 @@ alias lla='ls -la'
 alias lt='ls --tree'
 
 # brew
-if type -q (command -v brew)
-    alias bubo='brew update && brew outdated'
-    alias bubc='brew upgrade && brew cleanup'
-    alias bubu='bubo && bubc'
-end
+alias bubo='brew update && brew outdated'
+alias bubc='brew upgrade && brew cleanup'
+alias bubu='bubo && bubc'
 
 # macOS
 ## tailscale cli (deprecated because using standalone tailscale)
