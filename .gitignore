@@ -16,3 +16,7 @@ claude/ide/
 claude/plugins/
 claude/statsig/
 
+# Python bytecode (e.g. from skill helper scripts)
+__pycache__/
+*.py[cod]
+
