@@ -544,23 +544,41 @@ func TestCodexWireMatchesTheVerifiedSchema(t *testing.T) {
 // persisted hook trust for this invocation"). Naming only the first gate leaves
 // a wired repo silently recording nothing.
 func TestCodexTrustStepsNameBothGates(t *testing.T) {
-	steps := mustGet(t, "codex").TrustSteps("/repo/root")
+	repoRoot := "/repo/root"
+	steps := mustGet(t, "codex").TrustSteps(repoRoot)
 	if len(steps) < 2 {
 		t.Fatalf("TrustSteps = %v, want both the directory gate and the hook gate", steps)
 	}
 	joined := strings.Join(steps, "\n")
-	if !strings.Contains(joined, "/repo/root") {
+	if !strings.Contains(joined, repoRoot) {
 		t.Errorf("TrustSteps must name the repo: %v", steps)
 	}
+
+	// Find the directory gate (should be the step mentioning the repo root).
+	var dirGateIdx int
+	for i, s := range steps {
+		if strings.Contains(s, repoRoot) {
+			dirGateIdx = i
+			break
+		}
+	}
+
+	// Require hook trust to be mentioned in a different step from the directory
+	// gate. The directory gate contains both "hook" (hooks.json) and "trust"
+	// ("trust the contents"), so checking only within a single step is
+	// insufficient. Mutation proof: replacing step 1 with unrelated text must
+	// fail this assertion, not just the others.
 	var hookGate bool
-	for _, s := range steps {
-		if strings.Contains(s, "hook") && strings.Contains(s, "trust") {
+	for i, s := range steps {
+		if i != dirGateIdx && strings.Contains(s, "hook") && strings.Contains(s, "trust") {
 			hookGate = true
+			break
 		}
 	}
 	if !hookGate {
-		t.Errorf("no step covers hook trust, which is recorded separately from directory trust: %v", steps)
+		t.Errorf("hook trust must be in a separate step from the directory gate: %v", steps)
 	}
+
 	// Hash-recorded means it comes back after any edit to the command. A user
 	// told only "do this once" will not know why recording stopped after the
 	// next `agents wire`.
