@@ -155,6 +155,11 @@ One JSON object per line in `.agents/reports/traces/YYYY-MM-DD.jsonl`:
  "pointer_verified":true}
 ```
 
+`turn_id` is the record's name for the per-turn identifier under either harness:
+Codex sends `turn_id`, Claude Code sends `prompt_id` and has no `turn_id` at all
+(see [Measured facts](#measured-facts-2026-08-07)). The decoder accepts both and
+prefers `turn_id`. It is omitted when neither is present, as on `SessionStart`.
+
 ### 3.2 What is never written
 
 `last_assistant_message`, `tool_input`, `tool_response`. All three appear in the
@@ -712,19 +717,49 @@ environment unfiltered to anything it spawns.
   customization directory. That is either IDE-only or newer than the 1.1.0 CLI.
 - **Re-test trigger:** any `agy` upgrade.
 
-### Claude Code
+### Claude Code 2.1.224
 
-From `agents_clone`'s working implementation and the published settings schema; not
-re-measured in this session.
+Measured in task 8 by wiring a dump script to `<repo>/.claude/settings.json` in a
+throwaway repo and running one headless `claude -p` session that dispatched one
+`Explore` subagent. No permission- or trust-bypass flag was used; the hooks fired
+on the first run. Fixtures:
+[`fixtures/2026-08-07-claude-code-hook-payloads/`](fixtures/2026-08-07-claude-code-hook-payloads/).
 
-- `SubagentStop` payload: `agent_id`, `agent_type`, `session_id`,
-  `agent_transcript_path`, `last_assistant_message`.
-- `description` comes from the `agent-<id>.meta.json` sidecar the harness writes at
-  spawn time, not from the payload.
-- `SessionStart` does **not** fire for subagents. Subagents inherit `CLAUDE.md` but
+- Project-local `<repo>/.claude/settings.json` **loads and fires**, including for a
+  non-interactive `claude -p` session in a repo with no prior trust record.
+- Events observed firing: `SessionStart` (`source: startup`), `SubagentStart`,
+  `SubagentStop`, `Stop`. **`SubagentStart` exists** — the plan had listed it
+  without evidence, and the evidence now supports it.
+- Full payload key sets, exactly as captured:
+  - `SessionStart`: `cwd`, `hook_event_name`, `session_id`, `source`, `transcript_path`.
+  - `SubagentStart`: `agent_id`, `agent_type`, `cwd`, `hook_event_name`, `prompt_id`,
+    `session_id`, `transcript_path`.
+  - `SubagentStop`: the `SubagentStart` set plus `agent_transcript_path`,
+    `background_tasks`, `effort`, `last_assistant_message`, `permission_mode`,
+    `session_crons`, `stop_hook_active`.
+  - `Stop`: the `SubagentStop` set minus the three `agent_*` keys.
+- **There is no `turn_id`.** Claude Code names the per-turn identifier `prompt_id`;
+  `turn_id` is Codex's spelling only. The adapter test had been reconstructed with
+  `turn_id` and was wrong. `harness.Payload` now decodes both names and prefers
+  `turn_id`, so one record field is populated under either harness.
+- **Per-event asymmetry, opposite to Codex's.** At `SubagentStart` there is no
+  `agent_transcript_path` at all and `transcript_path` is the *parent's*; at
+  `SubagentStop` `agent_transcript_path` is the child's and `transcript_path` is the
+  parent's. Codex instead sends the *child's* path in `transcript_path` at
+  `SubagentStart`. Consequently a Claude Code `subagent_start` record can only ever
+  carry `pointer_verified: false` — the subagent's transcript does not exist under a
+  name the payload discloses yet. This is expected, not a defect, and is a second
+  independent reason §3.5 derives rather than hardcodes.
+- `description` is **not** in any payload. It comes from the `agent-<id>.meta.json`
+  sidecar the harness writes at spawn time, beside the transcript. Measured sidecar
+  shape: `{"agentType","description","toolUseId","spawnDepth"}`. The adapter's
+  sidecar read is confirmed as the only available source.
+- `SessionStart` does **not** fire for subagents — confirmed: one session with one
+  subagent produced exactly one `SessionStart`. Subagents inherit `CLAUDE.md` but
   do not act on it — 0 of 31 observed subagents followed an inherited bootstrap
   directive. **This is why recording must be a hook and never an instruction.**
-- Transcripts: `~/.claude/projects/<slug>/<session-uuid>/subagents/agent-<id>.jsonl`.
+- Transcripts: `~/.claude/projects/<slug>/<session-uuid>/subagents/agent-<id>.jsonl`,
+  confirmed.
 
 ---
 

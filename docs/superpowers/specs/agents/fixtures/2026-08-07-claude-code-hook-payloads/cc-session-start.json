@@ -1,0 +1,7 @@
+{
+  "cwd": "/private/tmp/ccprobe",
+  "hook_event_name": "SessionStart",
+  "session_id": "1bd3be63-bb4a-4de5-a9a5-6aefd94b64c1",
+  "source": "startup",
+  "transcript_path": "/Users/nilbot/.claude/projects/-private-tmp-ccprobe/1bd3be63-bb4a-4de5-a9a5-6aefd94b64c1.jsonl"
+}

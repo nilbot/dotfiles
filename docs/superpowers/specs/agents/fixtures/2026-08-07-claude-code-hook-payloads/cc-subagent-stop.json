@@ -1,0 +1,18 @@
+{
+  "agent_id": "a4b36fbbd89734e03",
+  "agent_transcript_path": "/Users/nilbot/.claude/projects/-private-tmp-ccprobe/1bd3be63-bb4a-4de5-a9a5-6aefd94b64c1/subagents/agent-a4b36fbbd89734e03.jsonl",
+  "agent_type": "Explore",
+  "background_tasks": [],
+  "cwd": "/private/tmp/ccprobe",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "SubagentStop",
+  "last_assistant_message": "<REDACTED — see spec 3.2>",
+  "permission_mode": "default",
+  "prompt_id": "eb11ab17-1eef-4d99-b1bb-5d5bd70bb913",
+  "session_crons": [],
+  "session_id": "1bd3be63-bb4a-4de5-a9a5-6aefd94b64c1",
+  "stop_hook_active": false,
+  "transcript_path": "/Users/nilbot/.claude/projects/-private-tmp-ccprobe/1bd3be63-bb4a-4de5-a9a5-6aefd94b64c1.jsonl"
+}

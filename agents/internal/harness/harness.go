@@ -36,9 +36,16 @@ const (
 // tool_input, tool_response -- cannot reach any writer, whatever a future
 // harness decides to send.
 type Payload struct {
-	HookEventName       string `json:"hook_event_name"`
-	SessionID           string `json:"session_id"`
-	TurnID              string `json:"turn_id"`
+	HookEventName string `json:"hook_event_name"`
+	SessionID     string `json:"session_id"`
+
+	// The per-turn identifier, under both spellings in use. Codex sends
+	// turn_id; Claude Code sends prompt_id and has no turn_id at all (measured
+	// 2026-08-07, fixtures/2026-08-07-claude-code-hook-payloads). Build picks
+	// whichever is present rather than each adapter restating it.
+	TurnID   string `json:"turn_id"`
+	PromptID string `json:"prompt_id"`
+
 	AgentID             string `json:"agent_id"`
 	AgentType           string `json:"agent_type"`
 	Cwd                 string `json:"cwd"`
@@ -127,12 +134,22 @@ func Decode(r io.Reader) (Payload, error) {
 	return p, nil
 }
 
+// turnID returns the per-turn identifier under whichever spelling the harness
+// used. turn_id wins when both are set, so a harness that adds the other name
+// later does not silently change which value is recorded.
+func turnID(p Payload) string {
+	if p.TurnID != "" {
+		return p.TurnID
+	}
+	return p.PromptID
+}
+
 // Build assembles the harness-determined part of a record.
 func Build(a Adapter, semantic string, p Payload) Trace {
 	tr := Trace{
 		Event:     semantic,
 		SessionID: p.SessionID,
-		TurnID:    p.TurnID,
+		TurnID:    turnID(p),
 		Cwd:       p.Cwd,
 	}
 
