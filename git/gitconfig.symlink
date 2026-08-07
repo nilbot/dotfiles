@@ -241,14 +241,14 @@
 [gpg]
 	format = ssh
 
-# Defaults. These sit BEFORE the include on purpose: git applies later values last,
-# so ~/etc/extras.secret/gitconfig can override identity and signing per machine
-# (it supplies user.name, user.email, user.signingkey and gpg.ssh.program for the
-# 1Password signer). Placed after the include, this public file would silently win.
-[user]
-	name = Ersi Ni
-	email = ersi.ni@nilbot.net
-
+# Identity (user.name, user.email, user.signingkey) and the signer program live in
+# ~/etc/extras.secret/gitconfig, NOT here. This file is public and is meant to
+# bootstrap any machine; who you are is per-machine and is not shared.
+#
+# If git says "Please tell me who you are", the fix is to set up extras.secret --
+# not to run `git config --global user.email ...`. That writes into ~/.gitconfig,
+# and if ~/.gitconfig is a symlink to this file, the value lands in this public
+# repo and silently overrides the private include below.
 [include]
 
 	path = ~/etc/extras.secret/gitconfig
