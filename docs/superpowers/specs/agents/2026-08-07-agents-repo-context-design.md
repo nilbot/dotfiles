@@ -481,10 +481,22 @@ same rule.
 
 ## 9. Bootstrap and trust
 
-**No harness lets a freshly cloned repo's hooks fire unattended.** Claude Code gates
-on project trust; Codex gates on project trust *and* a hash-recorded trust of each
-hook definition; `agy` gates on a `trustedWorkspaces` list. This is a pattern, not a
-quirk.
+**This section originally claimed no harness lets a freshly cloned repo's hooks fire
+unattended. Measurement says half of that is wrong — and the surviving half is the
+load-bearing one.** Both corrections are recorded under
+[Measured facts](#measured-facts-2026-08-07):
+
+- *Project* trust is **not** a gate for non-interactive mode. `claude -p` fired
+  project-local hooks on the very first run in a fresh repo with no trust prompt at
+  all, and `codex exec` silently writes `trust_level = "trusted"` for its own workspace.
+- *Hook* trust **is** a gate, for Codex, and a hard one. `codex exec` will not run a
+  hook whose definition has no persisted hash trust, says nothing when it declines, and
+  cannot create that trust — only the interactive TUI's hook-review flow can.
+- `agy` gates on a `trustedWorkspaces` list, untested in practice because 1.1.0 reads no
+  workspace-local hooks at all.
+
+So the manual step is real for Codex and absent for Claude Code, and the wiring must not
+assume either way.
 
 **Trust is a human gate by design, and this tool does not defeat it.** Codex ships
 `--dangerously-bypass-hook-trust`; wiring it in is an explicit non-goal. So yes —
@@ -658,7 +670,9 @@ Documentation was wrong or stale in three of these cases.
 - `codex features list` → `hooks  stable  true`. Enabled by default, no flag needed.
   Third-party guides claiming `codex_hooks = true` is required are stale.
 - Project-local `<repo>/.codex/hooks.json` **loads and fires** — confirmed by a live
-  run, not inferred from documentation.
+  run, not inferred from documentation. The capture run cleared the hook-trust gate;
+  a later re-check without any bypass flag found the same wiring inert. See
+  [the live-session re-check](#codex-cli-01470--live-session-re-check-task-10) below.
 - Events observed firing: `SessionStart`, `PreToolUse`, `SubagentStart`,
   `SubagentStop`, `Stop`. The binary also implements `PostToolUse`,
   `PermissionRequest`, `PreCompact`, `PostCompact`, `SessionEnd`, `UserPromptSubmit`.
@@ -681,6 +695,54 @@ Documentation was wrong or stale in three of these cases.
 - `~/.codex/config.toml` is co-owned by the ChatGPT desktop app, which writes
   `[desktop]` and `[projects]` sections into it. Prefer the dedicated `hooks.json`
   over an inline `[hooks]` block there.
+
+### Codex CLI 0.147.0 — live-session re-check (task 10)
+
+Task 9 golden-tested the adapter against captured payloads. Task 10 asked a different
+question: does a live `codex exec` session, in a fresh repo wired only by `agents init`,
+actually write records? **It does not** — and the mechanism is worth pinning down,
+because it is not the one §9 assumed.
+
+Procedure: fresh `git init` repo at `/private/tmp/codexprobe2`, `agents init` (exit 1,
+advisory; `.codex/hooks.json` written), then `codex exec 'Use a subagent to count the
+files in this directory, then stop.'` with **no trust- or permission-bypass flag**.
+
+- The session ran to completion (exit 0) and did delegate — stderr showed `collab: Wait`.
+  `.agents/reports/traces/` stayed empty. No hook ran.
+- **The directory gate does not apply to `codex exec`.** The repo was absent from
+  `~/.codex/config.toml` before the run; afterwards the file had gained
+  `[projects."/private/tmp/codexprobe2"]` with `trust_level = "trusted"`. No prompt was
+  shown and stdin was `/dev/null`. `codex exec` self-trusts its workspace.
+- **`.codex/hooks.json` is read regardless.** Replacing it with invalid JSON produced
+  `warning: failed to parse hooks config /private/tmp/codexprobe2/.codex/hooks.json: key
+  must be a string at line 1 column 3` on stderr. The file is loaded and parsed; the hook
+  is dropped later.
+- **The hook-trust gate is silent.** With valid wiring and `RUST_LOG=codex_hooks=trace`,
+  not one `codex_hooks::engine::command_runner` span appeared. Nothing on stderr mentioned
+  hooks, nothing prompted, exit was 0. A user gets no signal at all. `codex doctor` does
+  not mention hooks either.
+- **Not the binary's fault.** Piping a captured `SessionStart` payload (`cwd` rewritten to
+  the probe repo) straight into `agents hook session-start --harness codex` wrote a correct
+  record with `pointer_verified: true`. The hook works; Codex never calls it.
+- **Nothing on this machine has persisted hook trust.** No `[hooks]` section in
+  `~/.codex/config.toml`, no file under `~/.codex/` containing `trusted_hash`, no matching
+  table in `state_5.sqlite`. A control `codex exec` in the *original fixture-capture repo*
+  — still present, still `trust_level = "trusted"`, whose hooks demonstrably fired earlier
+  the same day — also produced **zero** new dumps.
+- **Only the TUI can clear it.** The review UI is `tui/src/startup_hooks_review.rs`
+  ("Hooks need review" / "Trust all and continue" / "Continue without trusting (hooks
+  won't run)"). `codex exec` has no equivalent; its only escape is
+  `--dangerously-bypass-hook-trust`, whose help text — run hooks "without requiring
+  *persisted* hook trust" — is itself the confirmation that trust is persisted state that
+  `exec` cannot create.
+- *Inference, not measurement:* because the fixture-capture repo carries no persisted hook
+  trust, the 2026-08-07 capture run must have used `--dangerously-bypass-hook-trust`. The
+  capture command was not recorded, so this is reconstruction from surviving state.
+
+**No payload divergence was observed** — nothing contradicted the payload keys, event
+names, transcript paths, or the per-event `transcript_path` asymmetry recorded above. But
+no live payloads were captured either, so that is *absence of contradiction*, not
+confirmation. Re-capturing fixtures against 0.147.x is flagged, not done.
 
 ### Environment contamination
 
