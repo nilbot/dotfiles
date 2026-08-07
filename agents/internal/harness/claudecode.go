@@ -53,9 +53,14 @@ func (claudeCode) WireConfigPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".claude", "settings.json")
 }
 
-// Wire is implemented in Task 7; the stub exists so claudeCode satisfies
-// Adapter until then.
-func (claudeCode) Wire(repoRoot, binary string) error { return nil }
+func (c claudeCode) Wire(repoRoot, binary string) error {
+	if err := writeHooksJSON(c.WireConfigPath(repoRoot), c.Name(), c.Events(), binary); err != nil {
+		return err
+	}
+	// Neither harness discovers .agents/skills on its own: Claude Code reads
+	// .claude/skills, Codex reads .codex/skills. One directory, two names.
+	return linkSkills(filepath.Join(repoRoot, ".claude", "skills"))
+}
 
 func (claudeCode) TrustSteps(repoRoot string) []string {
 	return []string{

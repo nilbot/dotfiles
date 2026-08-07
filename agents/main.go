@@ -21,6 +21,10 @@ func run(args []string) int {
 	switch args[0] {
 	case "hook":
 		return runHook(args[1:], os.Stdin, os.Stderr)
+	case "init":
+		return runInit(args[1:], os.Stdout)
+	case "wire":
+		return runWire(args[1:], os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
 		usage()
