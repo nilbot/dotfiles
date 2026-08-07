@@ -172,3 +172,4 @@ _testmain.go
 
 # linux kernel debs
 linux-*.deb
+**/.claude/settings.local.json
