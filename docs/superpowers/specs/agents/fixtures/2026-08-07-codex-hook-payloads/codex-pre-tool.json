@@ -1,0 +1,12 @@
+{
+  "cwd": "/private/tmp/claude-501/-Users-nilbot-dotfiles/84837ec0-e818-47e1-a08f-7a2f5b264d1e/scratchpad/agentprobe",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "bypassPermissions",
+  "session_id": "019fdcab-9733-72e3-ba7c-d2e0cc7fb334",
+  "tool_input": "<REDACTED \u2014 see spec 3.2>",
+  "tool_name": "collaborationspawn_agent",
+  "tool_use_id": "call_10mftfzAbskbkuPmlzzV2TfJ",
+  "transcript_path": "/Users/nilbot/.codex/sessions/2026/08/07/rollout-2026-08-07T15-41-00-019fdcab-9733-72e3-ba7c-d2e0cc7fb334.jsonl",
+  "turn_id": "019fdcab-97c0-71b2-9b13-8e222925686b"
+}
