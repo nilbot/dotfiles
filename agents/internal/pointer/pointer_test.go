@@ -52,11 +52,12 @@ func TestBasenameBeatsPathComponent(t *testing.T) {
 }
 
 // Degrade, never drop. An unverified pointer is still a lead; a missing record
-// is nothing.
+// is nothing. When no key matches, returns the first candidate unverified.
 func TestUnverifiedWhenNoCandidateMatches(t *testing.T) {
-	got, verified := Resolve([]string{codexParent}, "some-other-id")
+	// Pass two candidates, neither matching the key. Should return the first.
+	got, verified := Resolve([]string{codexParent, codexChild}, "some-other-id")
 	if got != codexParent {
-		t.Fatalf("Resolve = %q, want the best candidate anyway", got)
+		t.Fatalf("Resolve = %q, want first candidate %q", got, codexParent)
 	}
 	if verified {
 		t.Fatal("verified = true, want false")
@@ -64,7 +65,12 @@ func TestUnverifiedWhenNoCandidateMatches(t *testing.T) {
 }
 
 func TestEmptyKeyIsNeverVerified(t *testing.T) {
-	if _, verified := Resolve([]string{codexParent}, ""); verified {
+	// Empty key returns first candidate but never verified. Pass two to verify ordering.
+	got, verified := Resolve([]string{codexParent, codexChild}, "")
+	if got != codexParent {
+		t.Fatalf("Resolve = %q, want first candidate %q", got, codexParent)
+	}
+	if verified {
 		t.Fatal("an empty key cannot verify anything")
 	}
 }
@@ -73,5 +79,32 @@ func TestNoCandidates(t *testing.T) {
 	got, verified := Resolve([]string{"", "  "}, "id")
 	if got != "" || verified {
 		t.Fatalf("Resolve = (%q, %v), want empty and unverified", got, verified)
+	}
+}
+
+// When both candidates match by basename, the first wins. Both Codex constants
+// share the prefix 019fdcab in their basenames, creating a realistic tie.
+func TestFirstWinsWhenBothMatchByBasename(t *testing.T) {
+	got, verified := Resolve([]string{codexParent, codexChild}, "019fdcab")
+	if got != codexParent {
+		t.Fatalf("Resolve = %q, want first candidate %q when both match basename", got, codexParent)
+	}
+	if !verified {
+		t.Fatal("verified = false, want true")
+	}
+}
+
+// When both candidates match by path-component only (key in directory, not
+// basename), the first wins. Both paths contain the key but not in their
+// filenames, only in the directory structure.
+func TestFirstWinsWhenBothMatchByPathComponent(t *testing.T) {
+	first := "/Users/n/.claude/projects/a1b2c3d4-5678/session-file.jsonl"
+	second := "/Users/n/.claude/projects/other/a1b2c3d4-5678/session.jsonl"
+	got, verified := Resolve([]string{first, second}, "a1b2c3d4-5678")
+	if got != first {
+		t.Fatalf("Resolve = %q, want first candidate %q when both match path-component", got, first)
+	}
+	if !verified {
+		t.Fatal("verified = false, want true")
 	}
 }
