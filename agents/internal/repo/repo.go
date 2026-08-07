@@ -10,6 +10,7 @@ package repo
 import (
 	"bytes"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -62,8 +63,32 @@ func run(dir string, args ...string) (string, error) {
 	cmd.Dir = dir
 	var out bytes.Buffer
 	cmd.Stdout = &out
+	// Sanitize git environment so our invocations answer questions about the
+	// caller's working directory, not whatever repo a hook was fired from.
+	cmd.Env = sanitizeEnv(os.Environ())
 	if err := cmd.Run(); err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out.String()), nil
+}
+
+func sanitizeEnv(env []string) []string {
+	forbid := map[string]bool{
+		"GIT_DIR":              true,
+		"GIT_WORK_TREE":        true,
+		"GIT_INDEX_FILE":       true,
+		"GIT_OBJECT_DIRECTORY": true,
+		"GIT_COMMON_DIR":       true,
+		"GIT_NAMESPACE":        true,
+	}
+	var result []string
+	for _, kv := range env {
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			key := kv[:idx]
+			if !forbid[key] {
+				result = append(result, kv)
+			}
+		}
+	}
+	return result
 }

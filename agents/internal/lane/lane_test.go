@@ -1,6 +1,7 @@
 package lane
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nilbot/dotfiles/agents/internal/repo"
@@ -23,13 +24,13 @@ func TestSlugify(t *testing.T) {
 func TestSlugifyTruncatesWithoutTrailingDash(t *testing.T) {
 	long := ""
 	for i := 0; i < 100; i++ {
-		long += "ab-"
+		long += "a-"
 	}
 	got := Slugify(long)
 	if len(got) > 64 {
 		t.Fatalf("len = %d, want <= 64", len(got))
 	}
-	if got[len(got)-1] == '-' {
+	if strings.HasSuffix(got, "-") {
 		t.Fatalf("Slugify left a trailing dash: %q", got)
 	}
 }
