@@ -489,14 +489,12 @@ load-bearing one.** Both corrections are recorded under
 - *Project* trust is **not** a gate for non-interactive mode. `claude -p` fired
   project-local hooks on the very first run in a fresh repo with no trust prompt at
   all, and `codex exec` silently writes `trust_level = "trusted"` for its own workspace.
-- *Hook* trust **is** a gate, for Codex, and a hard one. `codex exec` will not run a
-  hook whose definition has no persisted hash trust, says nothing when it declines, and
-  cannot create that trust — only the interactive TUI's hook-review flow can.
+- *Hook* trust gates Codex execution for hooks, and appears to be a hard gate. No dispatch spans appeared, no diagnostics at any log level, no readable hook-trust store was found, and a previously-firing repo became inert. The most consistent explanation is persisted hook-trust — the `--dangerously-bypass-hook-trust` help text names exactly this gate — though the mechanism was not directly observed. `codex exec` cannot create this trust; only the interactive TUI's hook-review flow can.
 - `agy` gates on a `trustedWorkspaces` list, untested in practice because 1.1.0 reads no
   workspace-local hooks at all.
 
-So the manual step is real for Codex and absent for Claude Code, and the wiring must not
-assume either way.
+So the manual step is real for Codex and absent for Claude Code in non-interactive mode
+(`claude -p`); interactive project trust was not retested. The wiring must not assume either way.
 
 **Trust is a human gate by design, and this tool does not defeat it.** Codex ships
 `--dangerously-bypass-hook-trust`; wiring it in is an explicit non-goal. So yes —
@@ -514,9 +512,9 @@ than a silent failure. Concretely:
 
 1. Is the generated wiring present?
 2. Is the `agents` binary present and on `PATH`?
-3. Is the project trusted by this harness?
+3. Is the project trusted by this harness? (Note: not a gate for either harness's non-interactive mode.)
 4. Is the hook's current hash trusted? (Codex re-flags a hook after any edit, so
-   this recurs whenever the wiring changes.)
+   this recurs whenever the wiring changes. Note: no readable hook-trust store was located — trust is TUI-only (`tui/src/startup_hooks_review.rs`). Q4 may only be answerable indirectly via wiring presence and observation of silence over a window, rather than by reading stored trust state.)
 
 ## 10. Fleet registry
 
@@ -670,7 +668,8 @@ Documentation was wrong or stale in three of these cases.
 - `codex features list` → `hooks  stable  true`. Enabled by default, no flag needed.
   Third-party guides claiming `codex_hooks = true` is required are stale.
 - Project-local `<repo>/.codex/hooks.json` **loads and fires** — confirmed by a live
-  run, not inferred from documentation. The capture run cleared the hook-trust gate;
+  run, not inferred from documentation. The capture run cleared the hook-trust gate
+  (inference — see the 2026-08-07 re-check below);
   a later re-check without any bypass flag found the same wiring inert. See
   [the live-session re-check](#codex-cli-01470--live-session-re-check-task-10) below.
 - Events observed firing: `SessionStart`, `PreToolUse`, `SubagentStart`,
@@ -725,7 +724,7 @@ files in this directory, then stop.'` with **no trust- or permission-bypass flag
   the probe repo) straight into `agents hook session-start --harness codex` wrote a correct
   record with `pointer_verified: true`. The hook works; Codex never calls it.
 - **Nothing on this machine has persisted hook trust.** No `[hooks]` section in
-  `~/.codex/config.toml`, no file under `~/.codex/` containing `trusted_hash`, no matching
+  `~/.codex/config.toml`, no file under `~/.codex/` containing `trusted_hash` (search covered `*.toml`, `*.json`, `*.jsonl`), no matching
   table in `state_5.sqlite`. A control `codex exec` in the *original fixture-capture repo*
   — still present, still `trust_level = "trusted"`, whose hooks demonstrably fired earlier
   the same day — also produced **zero** new dumps.
@@ -857,7 +856,7 @@ which covers pre-existing repos for free.
 | Risk | Mitigation |
 |---|---|
 | Auto-drafted handoffs go stale and read as authoritative | `draft` vs `reviewed` provenance; reader weighs by age. Reduced, not eliminated. |
-| `agents init` cannot make hooks live in either harness | `doctor` reports trust state with remediation; `CLAUDE.md` carries the check |
+| `agents init` cannot make hooks live in Codex | `doctor` reports hook trust state with remediation (depends on trust store being readable); `CLAUDE.md` carries the check |
 | `core.hooksPath` shadows repo-local hooks | Dispatcher chains to `.git/hooks/<name>` first; `doctor` reports local overrides |
 | `update --all` touching many repos at once | `--dry-run` is the default |
 | Codex contract churn | Every payload assumption is a golden-file test; `pointer_verified` degrades instead of breaking |
