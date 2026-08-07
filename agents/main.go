@@ -19,6 +19,8 @@ func run(args []string) int {
 		return exitcode.Malformed
 	}
 	switch args[0] {
+	case "hook":
+		return runHook(args[1:], os.Stdin, os.Stderr)
 	default:
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
 		usage()
