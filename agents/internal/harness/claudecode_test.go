@@ -13,6 +13,7 @@ import (
 const ccSubagentStopPayload = `{
   "hook_event_name": "SubagentStop",
   "session_id": "019fdcab-9733-72e3-ba7c-d2e0cc7fb334",
+  "turn_id": "turn-11",
   "agent_id": "a4e4a1bc424b2047f",
   "agent_type": "Explore",
   "cwd": "/Users/n/work/myrepo",
@@ -54,6 +55,20 @@ func TestClaudeCodeBuildsVerifiedSubagentTrace(t *testing.T) {
 	if tr.AgentID != "a4e4a1bc424b2047f" || tr.AgentType != "Explore" {
 		t.Errorf("agent fields wrong: %+v", tr)
 	}
+	// The pass-through half of Build. Cwd in particular is what the record's
+	// provenance is anchored to, so it has to survive the trip.
+	if tr.Event != SubagentStop {
+		t.Errorf("Event = %q, want %q", tr.Event, SubagentStop)
+	}
+	if tr.SessionID != "019fdcab-9733-72e3-ba7c-d2e0cc7fb334" {
+		t.Errorf("SessionID = %q, want it carried from the payload", tr.SessionID)
+	}
+	if tr.TurnID != "turn-11" {
+		t.Errorf("TurnID = %q, want %q", tr.TurnID, "turn-11")
+	}
+	if tr.Cwd != "/Users/n/work/myrepo" {
+		t.Errorf("Cwd = %q, want %q", tr.Cwd, "/Users/n/work/myrepo")
+	}
 	if tr.Description != "Find the retry window" {
 		t.Errorf("Description = %q, want it read from the sidecar", tr.Description)
 	}
@@ -82,8 +97,13 @@ func TestClaudeCodeDescriptionEmptyWithoutSidecar(t *testing.T) {
 
 func TestClaudeCodeSessionEventsKeyOnSessionID(t *testing.T) {
 	a, _ := Get("claude-code")
+	// The agent fields are populated on purpose: a session event that copied
+	// them through would be indistinguishable from a subagent event in the
+	// record, so the guard in Build has to drop them even when they are there.
 	tr := Build(a, SessionStart, Payload{
 		SessionID:      "019fdcab-9733",
+		AgentID:        "leaked-agent",
+		AgentType:      "leaked-type",
 		TranscriptPath: "/Users/n/.claude/projects/p/019fdcab-9733.jsonl",
 	})
 	if !tr.PointerVerified {
@@ -91,6 +111,9 @@ func TestClaudeCodeSessionEventsKeyOnSessionID(t *testing.T) {
 	}
 	if tr.AgentID != "" {
 		t.Fatalf("AgentID = %q, want empty for a session event", tr.AgentID)
+	}
+	if tr.AgentType != "" {
+		t.Fatalf("AgentType = %q, want empty for a session event", tr.AgentType)
 	}
 }
 

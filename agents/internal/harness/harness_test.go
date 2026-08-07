@@ -35,7 +35,6 @@ func TestDecodeDiscardsForbiddenFields(t *testing.T) {
 			t.Fatalf("decoded payload retained %q: %s", bad, rendered)
 		}
 	}
-	_ = record.ForbiddenFields
 }
 
 func fmtPayload(p Payload) string {
@@ -47,19 +46,32 @@ func fmtPayload(p Payload) string {
 
 // fmtPayload only renders fields it already knows about, so it cannot notice a
 // newly added destination field for a forbidden key. This does: the guarantee
-// is that Payload has nowhere to put one, and that is a property of the struct
-// tags, not of any one decoded value.
+// is that Payload has nowhere to put one, and that is a property of the type,
+// not of any one decoded value.
+//
+// A json tag is not the only way to name a destination. encoding/json falls
+// back to case-insensitive matching against the field name when the tag is
+// absent, so an untagged Tool_Input field decodes tool_input just as well.
+// Compare on the normalised key, which is what the decoder effectively does.
 func TestPayloadHasNoDestinationForForbiddenFields(t *testing.T) {
 	rt := reflect.TypeOf(Payload{})
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
-		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		key, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		if key == "" {
+			key = f.Name // untagged: encoding/json matches on the field name
+		}
 		for _, bad := range record.ForbiddenFields {
-			if name == bad {
-				t.Errorf("Payload.%s decodes %q; forbidden keys must have no destination field", f.Name, bad)
+			if normalizeKey(key) == normalizeKey(bad) {
+				t.Errorf("Payload.%s is a destination for %q; forbidden keys must have none", f.Name, bad)
 			}
 		}
 	}
+}
+
+// normalizeKey collapses the spellings encoding/json treats as the same key.
+func normalizeKey(s string) string {
+	return strings.ToLower(strings.ReplaceAll(s, "_", ""))
 }
 
 func TestDecodeRejectsGarbage(t *testing.T) {
