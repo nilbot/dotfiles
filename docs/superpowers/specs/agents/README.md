@@ -17,6 +17,17 @@ The specs, in dependency order:
 pointer format that specs 2–4 all assume. Specs 2–4 are scope documents, not
 finished designs — each gets a full brainstorm → design → plan cycle when started.
 
+## Implementation plans
+
+| Spec | Plan | Status |
+|---|---|---|
+| 1 | [repo-tracked agent context](../../plans/2026-08-07-agents-repo-context.md) | written, not executed |
+
+Spec 1's plan is phased: the record loop on Claude Code (Phase 1), Codex
+(Phase 2), retrieval (Phase 3), memory and handoffs (Phase 4), guards and the
+git-hook subsystem (Phase 5), fleet and doctor (Phase 6). Each phase ends
+somewhere working.
+
 ## Supporting material
 
 - [`fixtures/`](fixtures/) — real hook payloads captured from live agent runs,
