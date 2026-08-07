@@ -489,7 +489,13 @@ load-bearing one.** Both corrections are recorded under
 - *Project* trust is **not** a gate for non-interactive mode. `claude -p` fired
   project-local hooks on the very first run in a fresh repo with no trust prompt at
   all, and `codex exec` silently writes `trust_level = "trusted"` for its own workspace.
-- *Hook* trust gates Codex execution for hooks, and appears to be a hard gate. No dispatch spans appeared, no diagnostics at any log level, no readable hook-trust store was found, and a previously-firing repo became inert. The most consistent explanation is persisted hook-trust — the `--dangerously-bypass-hook-trust` help text names exactly this gate — though the mechanism was not directly observed. `codex exec` cannot create this trust; only the interactive TUI's hook-review flow can.
+- *Hook* trust **is** a gate for Codex, and a hard, silent one. This was confirmed by
+  the positive control on 2026-08-07 (see
+  [the hook-trust control](#codex-hook-trust-confirmed-by-positive-control-2026-08-07)):
+  untrusted, no hook dispatches and nothing is printed at any log level; after
+  accepting the TUI's hook-review prompt, the same wiring fires and writes records.
+  `codex exec` cannot create that trust — only the interactive TUI's hook-review
+  flow can.
 - `agy` gates on a `trustedWorkspaces` list, untested in practice because 1.1.0 reads no
   workspace-local hooks at all.
 
@@ -514,7 +520,15 @@ than a silent failure. Concretely:
 2. Is the `agents` binary present and on `PATH`?
 3. Is the project trusted by this harness? (Note: not a gate for either harness's non-interactive mode.)
 4. Is the hook's current hash trusted? (Codex re-flags a hook after any edit, so
-   this recurs whenever the wiring changes. Note: no readable hook-trust store was located — trust is TUI-only (`tui/src/startup_hooks_review.rs`). Q4 may only be answerable indirectly via wiring presence and observation of silence over a window, rather than by reading stored trust state.)
+   this recurs whenever the wiring changes — confirmed by control, see below.)
+
+**Q4 is answerable by reading `~/.codex/config.toml`.** It gains a `trusted_hash`
+entry once the TUI's hook-review prompt is accepted; before any grant on a machine,
+the key is absent entirely, which is why an earlier search found no store. Granting
+trust is still TUI-only, so `doctor` can *report* the state but never establish it.
+
+Q3 is worth keeping only as a diagnostic, not as a gate: project trust gates neither
+harness in non-interactive mode.
 
 ## 10. Fleet registry
 
@@ -742,6 +756,36 @@ files in this directory, then stop.'` with **no trust- or permission-bypass flag
 names, transcript paths, or the per-event `transcript_path` asymmetry recorded above. But
 no live payloads were captured either, so that is *absence of contradiction*, not
 confirmation. Re-capturing fixtures against 0.147.x is flagged, not done.
+
+### Codex hook trust, confirmed by positive control (2026-08-07)
+
+The re-check above established only the negative half — untrusted wiring does not fire —
+and left the mechanism as inference, because an agent must not click through a security
+consent prompt on a user's behalf. The repo owner supplied the positive half by hand.
+
+Setup was `agents init` in a throwaway repo, then the TUI's hook-review prompt accepted
+with "Trust all and continue" **before** any `codex exec` run.
+
+- **Trusted wiring fires.** `codex exec` printed `hook: SessionStart` /
+  `hook: SessionStart Completed` … `hook: Stop` / `hook: Stop Completed`, and wrote a
+  trace file. Identical wiring, identical command, opposite result from the untrusted
+  run — so persisted hook trust is the variable, observed rather than inferred.
+- **Trust is per-hook and keyed by the command string.** Editing one hook's command
+  (adding `--lane probe` to `session-start` only) and re-running left `Stop` firing while
+  `SessionStart` went **silently** inert — no warning, no non-zero exit. Record tallies
+  before/after confirm it: `session-start` stayed at 1 while `stop` incremented to 2.
+  This is the behaviour `TrustSteps` promises users, now measured.
+- **The store is `~/.codex/config.toml`.** After the grant, `trusted_hash` appears there.
+  Before any grant on a machine the key is absent entirely, which is why the earlier
+  search found nothing — the store is created on first trust, not shipped empty. So
+  `agents doctor` **can** read hook-trust state; it just cannot create it.
+- **`.codex/hooks.json` is read regardless of hook trust.** Replacing it with invalid
+  JSON produced `warning: failed to parse hooks config <abs path>` even while hooks were
+  inert — parsing and dispatch are separate stages.
+
+Correction to the bullet above: "nothing on this machine has persisted hook trust" was
+true when written and false immediately after the first TUI grant. The absence of a
+readable store is a property of a machine that has never granted trust, not of Codex.
 
 ### Environment contamination
 
