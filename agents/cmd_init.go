@@ -50,7 +50,7 @@ func runInit(args []string, stdout io.Writer) int {
 			fmt.Fprintf(stdout, "  - %s\n", s)
 		}
 	}
-	fmt.Fprintln(stdout, "\nRun `agents doctor` here afterwards to confirm.")
+	fmt.Fprintln(stdout, "\nTo confirm the setup is recording, check Codex `/hooks` for Active hooks, or look for traces in `.agents/reports/traces/`.")
 	return exitcode.Advisory
 }
 

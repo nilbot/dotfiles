@@ -21,7 +21,7 @@ import (
 // It returns 0 on every path, deliberately. A harness is blocked on this
 // process; a trace record is worth strictly less than the dispatch it would
 // interrupt. Every reason for not recording is reported on stderr instead,
-// where `agents doctor` and the user can see it.
+// where the user can see it.
 func runHook(args []string, stdin io.Reader, stderr io.Writer) int {
 	if err := recordHook(args, stdin); err != nil {
 		fmt.Fprintf(stderr, "agents hook: not recorded: %v\n", err)
