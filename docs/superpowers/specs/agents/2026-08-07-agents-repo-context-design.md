@@ -787,6 +787,38 @@ Correction to the bullet above: "nothing on this machine has persisted hook trus
 true when written and false immediately after the first TUI grant. The absence of a
 readable store is a property of a machine that has never granted trust, not of Codex.
 
+### Codex `/hooks` confirmed in the TUI (2026-08-07)
+
+Task 9 could not find a `/hooks` literal in the binary and concluded the command was
+"neither confirmed nor refuted", removing it from the printed guidance. **That
+conclusion was wrong.** Driven under a PTY (`tmux new-session` → `send-keys` →
+`capture-pane`) in an already-trusted directory, so no consent prompt was encountered:
+
+- **`/hooks` exists**, described in Codex's own command list as *"view and manage
+  lifecycle hooks"*. The strings analysis failed because slash commands are rendered
+  from names stored without the prefix, and the bare `hooks` token sits in a serde
+  struct-name region (`configRequirements/read.hooks`) rather than the command cluster.
+  This is the same failure shape as the hook-trust inference: absence of evidence in
+  one search read as evidence of absence.
+- **The view is a ready-made diagnostic.** It tabulates every event with **Installed**
+  and **Active** counts — precisely the distinction `agents doctor` needs, since
+  installed-but-not-active is exactly the silent-failure state. All eleven events are
+  listed, matching the event list recorded above: `PreToolUse`, `PermissionRequest`,
+  `PostToolUse`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`,
+  `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `Stop`.
+- **Per-hook hash trust is visible in the prompt.** Re-opening with wiring whose
+  `session-start` command had been edited (and its three siblings untouched) showed
+  *"Hooks need review — **1 hook** is new or changed"*, not four. The prompt offers
+  "Review hooks" / "Trust all and continue" / "Continue without trusting (hooks won't
+  run)".
+- **The interactive TUI does gate on directory trust**, unlike `codex exec`. Opening in
+  a fresh untrusted directory presented *"Do you trust the contents of this
+  directory?"* before anything else. So `TrustSteps`' first step is accurate for the
+  TUI path and wrong only for `exec` — both halves now observed.
+
+Neither consent prompt was answered; both sessions were terminated instead, and
+`~/.codex/config.toml` was verified byte-identical afterwards.
+
 ### Environment contamination
 
 A Codex hook launched from a Claude Code session inherits `CLAUDE_CODE_ENTRYPOINT`,
