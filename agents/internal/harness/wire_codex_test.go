@@ -68,6 +68,7 @@ func TestCodexWireWritesEveryEventAndTheSkillsLink(t *testing.T) {
 		if len(cmds) != 1 || cmds[0] != want {
 			t.Errorf("%s: commands = %v, want exactly [%q]", vendor, cmds, want)
 		}
+		assertHookTypes(t, settings, vendor)
 	}
 
 	// The matcher is what keeps a SessionStart hook from firing on every source

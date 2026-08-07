@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,103 @@ func initRepo(t *testing.T) string {
 		}
 	}
 	return dir
+}
+
+// git in a directory, failing the test rather than the caller.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return string(out)
+}
+
+func resolved(t *testing.T, path string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%s): %v", path, err)
+	}
+	return r
+}
+
+func TestInfoExcludePathInAPlainRepo(t *testing.T) {
+	dir := initRepo(t)
+	sub := filepath.Join(dir, "payments", "api")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	want := filepath.Join(resolved(t, dir), ".git", "info", "exclude")
+	// The answer must not depend on where the caller is standing.
+	for _, from := range []string{dir, sub} {
+		got, err := InfoExcludePath(from)
+		if err != nil {
+			t.Fatalf("InfoExcludePath(%s): %v", from, err)
+		}
+		if resolved(t, filepath.Dir(filepath.Dir(got))) != resolved(t, filepath.Join(dir, ".git")) {
+			t.Errorf("InfoExcludePath(%s) = %q, want it under %q", from, got, want)
+		}
+		if filepath.Base(got) != "exclude" || filepath.Base(filepath.Dir(got)) != "info" {
+			t.Errorf("InfoExcludePath(%s) = %q, want .../info/exclude", from, got)
+		}
+	}
+}
+
+// In a linked worktree .git is a regular FILE, so <root>/.git/info/exclude is
+// not a path that can be created -- MkdirAll on it fails with ENOTDIR, and
+// `agents init` dies after scaffolding but before wiring. git keeps info/exclude
+// in the common directory, shared with the main checkout.
+func TestInfoExcludePathInALinkedWorktree(t *testing.T) {
+	main := initRepo(t)
+	if err := os.WriteFile(filepath.Join(main, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, main, "add", "f.txt")
+	git(t, main, "-c", "commit.gpgsign=false", "commit", "-m", "init", "--no-verify")
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(t, main, "worktree", "add", "-b", "feat", linked)
+
+	// Precondition: this is a real linked worktree, not a second clone.
+	if fi, err := os.Lstat(filepath.Join(linked, ".git")); err != nil || fi.IsDir() {
+		t.Fatalf("fixture is not a linked worktree: .git must be a regular file (err=%v)", err)
+	}
+
+	got, err := InfoExcludePath(linked)
+	if err != nil {
+		t.Fatalf("InfoExcludePath: %v", err)
+	}
+	// Compare against the resolved main checkout: git reports an absolute,
+	// symlink-resolved common dir for a worktree. .git/info itself may not exist
+	// yet, so this cannot go through EvalSymlinks.
+	want := filepath.Join(resolved(t, main), ".git", "info", "exclude")
+	if got != want {
+		t.Errorf("InfoExcludePath = %q, want the common dir's %q", got, want)
+	}
+	// The whole point: not the worktree's own .git, which is a file.
+	if strings.HasPrefix(got, linked+string(filepath.Separator)+".git") {
+		t.Errorf("InfoExcludePath = %q, which is inside the worktree's .git FILE", got)
+	}
+	// And the directory must actually be creatable, which is what broke.
+	if err := os.MkdirAll(filepath.Dir(got), 0o755); err != nil {
+		t.Errorf("cannot create %s: %v", filepath.Dir(got), err)
+	}
+}
+
+func TestInfoExcludePathOutsideRepo(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
+	outside := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InfoExcludePath(outside); !errors.Is(err, ErrNotARepo) {
+		t.Fatalf("err = %v, want ErrNotARepo", err)
+	}
 }
 
 func TestDiscoverFindsRootBranchAndRelativeCwd(t *testing.T) {

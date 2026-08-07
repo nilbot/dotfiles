@@ -30,6 +30,25 @@ type Context struct {
 // AgentsDir is the tracked context directory for a repo root.
 func AgentsDir(root string) string { return filepath.Join(root, ".agents") }
 
+// InfoExcludePath resolves the machine-local exclude file for a repo.
+//
+// It is deliberately not <root>/.git/info/exclude. In a linked worktree .git is
+// a regular file holding a gitdir: pointer, so that path cannot even be created
+// -- MkdirAll on it fails with ENOTDIR. git reads info/exclude from the common
+// directory, which a worktree shares with its main checkout, so this is also the
+// only spelling under which the two agree about what is ignored.
+func InfoExcludePath(dir string) (string, error) {
+	common, err := run(dir, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", ErrNotARepo
+	}
+	// git answers relative to its own working directory, which is dir.
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	return filepath.Join(common, "info", "exclude"), nil
+}
+
 func Discover(cwd string) (*Context, error) {
 	root, err := run(cwd, "rev-parse", "--show-toplevel")
 	if err != nil {

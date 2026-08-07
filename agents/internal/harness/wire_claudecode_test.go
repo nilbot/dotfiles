@@ -22,6 +22,35 @@ func readSettings(t *testing.T, path string) map[string]any {
 	return m
 }
 
+// assertHookTypes checks the "type" discriminator on every generated hook.
+// commandsFor reads only "command", and nothing in this module reads "type" at
+// all -- so a wrong value here is invisible from the inside and total from the
+// outside: both harnesses refuse to run the hook and nothing is ever recorded.
+func assertHookTypes(t *testing.T, settings map[string]any, event string) {
+	t.Helper()
+	hooks, _ := settings["hooks"].(map[string]any)
+	groups, _ := hooks[event].([]any)
+	var seen int
+	for _, g := range groups {
+		gm, _ := g.(map[string]any)
+		inner, _ := gm["hooks"].([]any)
+		for _, h := range inner {
+			hm, _ := h.(map[string]any)
+			cmd, _ := hm["command"].(string)
+			if !strings.Contains(cmd, " --harness ") {
+				continue // a foreign hook; its type is not ours to police
+			}
+			seen++
+			if hm["type"] != "command" {
+				t.Errorf("%s: hook type = %v, want the literal %q", event, hm["type"], "command")
+			}
+		}
+	}
+	if seen == 0 {
+		t.Errorf("%s: no generated hook found to check the type of", event)
+	}
+}
+
 func commandsFor(t *testing.T, settings map[string]any, event string) []string {
 	t.Helper()
 	hooks, _ := settings["hooks"].(map[string]any)
@@ -125,6 +154,7 @@ func TestClaudeCodeWireMapsEachVendorEventToItsSemanticName(t *testing.T) {
 		if len(cmds) != 1 || cmds[0] != want {
 			t.Errorf("%s: commands = %v, want exactly [%q]", vendor, cmds, want)
 		}
+		assertHookTypes(t, settings, vendor)
 	}
 }
 

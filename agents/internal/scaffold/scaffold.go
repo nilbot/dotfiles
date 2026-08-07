@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 // ClaudeMD is the trigger, not the payload.
@@ -98,7 +100,13 @@ func Create(root string, local bool) error {
 		// committing agent artifacts is not acceptable. Same layout either way.
 		lines = append(append([]string{}, excludeLines...), "/.agents/")
 	}
-	return appendMissingLines(filepath.Join(root, ".git", "info", "exclude"), lines)
+	// Ask git where the exclude file is rather than assuming <root>/.git/info:
+	// in a linked worktree .git is a regular file and that path cannot exist.
+	exclude, err := repo.InfoExcludePath(root)
+	if err != nil {
+		return err
+	}
+	return appendMissingLines(exclude, lines)
 }
 
 func writeIfAbsent(path, content string) error {
