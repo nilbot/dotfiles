@@ -1,4 +1,4 @@
-.PHONY: all dep links editors tmux extra omz bins dotfiles fish
+.PHONY: all dep links editors tmux extra omz bins dotfiles fish agents
 
 all: dep links editors tmux extra fish
 
@@ -16,6 +16,13 @@ bins:
 		tgt="$$(basename $$f)"; \
 		ln -sfn $(CURDIR)/$$f $(HOME)/bin/$$tgt; \
 		done
+
+# The agents binary lives in dotfiles and is invoked by absolute path from
+# generated harness configs. Nothing is vendored per-repo.
+agents:
+	mkdir -p $(HOME)/bin
+	cd $(CURDIR)/agents && go build -trimpath -o $(HOME)/bin/agents .
+	@echo "built $(HOME)/bin/agents"
 
 dotfiles:
 	mkdir -p $(HOME)/.config $(HOME)/.local
