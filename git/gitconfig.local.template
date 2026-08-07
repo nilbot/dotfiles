@@ -1,0 +1,23 @@
+# Machine-local git configuration.  NOT tracked by dotfiles.
+#
+# This file exists so that `git config --global ...` has somewhere to write that
+# is NOT the public dotfiles repo.  ~/.gitconfig used to be a symlink straight
+# into the repo, so every global write landed in tracked, published content --
+# which is how user.name/user.email and 1Password's `gpg.format = ssh` ended up
+# committed there.
+#
+# Include order matters: git applies values in the order it reads them, last one
+# wins.  The include below pulls in the shared config (which in turn includes
+# ~/etc/extras.secret/gitconfig for identity and signing).  Anything git appends
+# to the bottom of THIS file therefore overrides both -- which is exactly what a
+# per-machine override should do.
+#
+# Put machine-specific settings here.  Put anything worth sharing in
+# ~/dotfiles/git/gitconfig.symlink.  Put identity and secrets in
+# ~/etc/extras.secret/gitconfig.
+
+[include]
+
+	path = ~/dotfiles/git/gitconfig.symlink
+
+# --- `git config --global ...` writes appear below this line ---

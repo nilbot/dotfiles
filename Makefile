@@ -21,10 +21,27 @@ dotfiles:
 	mkdir -p $(HOME)/.config $(HOME)/.local
 	./softlinks.sh
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
-	ln -sf $(CURDIR)/git/gitconfig.symlink $(HOME)/.gitconfig;
 	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
 	ln -sf $(CURDIR)/tmux/tmux.conf $(HOME)/.tmux.conf;
-	ln -sfn $(CURDIR)/claude $(HOME)/.claude;
+# ~/.gitconfig is a machine-local FILE, not a symlink into this repo. It only
+# includes the shared config, so that `git config --global ...` -- run by you, by
+# git after "Please tell me who you are", or by 1Password's signing setup -- writes
+# here instead of into published content.
+	@if [ -L $(HOME)/.gitconfig ]; then \
+		echo "removing legacy ~/.gitconfig symlink into this repo"; \
+		rm -f $(HOME)/.gitconfig; \
+	fi
+	@if [ ! -e $(HOME)/.gitconfig ]; then \
+		cp $(CURDIR)/git/gitconfig.local.template $(HOME)/.gitconfig; \
+		echo "created ~/.gitconfig (machine-local; includes $(CURDIR)/git/gitconfig.symlink)"; \
+	else \
+		echo "~/.gitconfig exists and is a regular file; leaving it alone"; \
+	fi
+# ~/.claude is owned by the Claude Code harness (plugins/, projects/, sessions/,
+# settings.json). Only skills/ comes from this repo. Symlinking the whole directory
+# put a stray ~/.claude/claude inside it.
+	mkdir -p $(HOME)/.claude
+	ln -sfn $(CURDIR)/claude/skills $(HOME)/.claude/skills;
 
 editors:
 	rm -rf $(HOME)/.vim $(HOME)/.emacs.d
