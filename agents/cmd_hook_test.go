@@ -10,6 +10,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nilbot/dotfiles/agents/internal/record"
 )
 
 func newRepo(t *testing.T) string {
@@ -64,7 +67,7 @@ func TestHookWritesRecordWithProvenanceAndLane(t *testing.T) {
 	}
 	t.Chdir(sub)
 
-	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","agent_id":"a1",` +
+	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","turn_id":"t1","agent_id":"a1",` +
 		`"agent_type":"Explore","cwd":"` + sub + `",` +
 		`"agent_transcript_path":"/tmp/agent-a1.jsonl",` +
 		`"last_assistant_message":"SECRET-LEAK"}`
@@ -88,15 +91,45 @@ func TestHookWritesRecordWithProvenanceAndLane(t *testing.T) {
 	if rec["cwd"] != "payments/api" {
 		t.Errorf("cwd = %v, want repo-relative payments/api", rec["cwd"])
 	}
+	if rec["event"] != "subagent-stop" {
+		t.Errorf("event = %v, want the semantic name subagent-stop", rec["event"])
+	}
+	if rec["session_id"] != "s1" {
+		t.Errorf("session_id = %v", rec["session_id"])
+	}
+	if rec["turn_id"] != "t1" {
+		t.Errorf("turn_id = %v", rec["turn_id"])
+	}
 	if rec["agent_id"] != "a1" {
 		t.Errorf("agent_id = %v", rec["agent_id"])
+	}
+	if rec["agent_type"] != "Explore" {
+		t.Errorf("agent_type = %v", rec["agent_type"])
+	}
+	// The pointer is what the record exists to carry. An empty transcript
+	// beside pointer_verified true is a self-contradictory record.
+	if rec["transcript"] != "/tmp/agent-a1.jsonl" {
+		t.Errorf("transcript = %v, want /tmp/agent-a1.jsonl", rec["transcript"])
 	}
 	if rec["pointer_verified"] != true {
 		t.Errorf("pointer_verified = %v, want true", rec["pointer_verified"])
 	}
-	for k := range rec {
-		if k == "last_assistant_message" || k == "tool_input" || k == "tool_response" {
-			t.Errorf("forbidden field %q reached the record", k)
+	// Records are UTC-partitioned; a local-time instant would land two records
+	// from two timezones in files that cannot merge.
+	if when, ok := rec["when"].(string); !ok || !strings.HasSuffix(when, "Z") {
+		t.Errorf("when = %v, want an RFC3339 instant in UTC (trailing Z)", rec["when"])
+	} else if ts, err := time.Parse(time.RFC3339, when); err != nil {
+		t.Errorf("when = %q does not parse as RFC3339: %v", when, err)
+	} else if d := time.Since(ts); d < -time.Minute || d > time.Hour {
+		// A zero or stale instant still formats as valid UTC RFC3339, and it
+		// picks the file the record is partitioned into.
+		t.Errorf("when = %q is %v away from now, want the firing time", when, d)
+	}
+	// Iterate the package's own list rather than restating it, so a fourth
+	// forbidden field added there is enforced here without an edit.
+	for _, forbidden := range record.ForbiddenFields {
+		if _, present := rec[forbidden]; present {
+			t.Errorf("forbidden field %q reached the record", forbidden)
 		}
 	}
 }
@@ -111,7 +144,10 @@ func TestHookFailsOpenOnEverything(t *testing.T) {
 	}{
 		{"malformed payload", []string{"stop", "--harness", "claude-code"}, "not json", true},
 		{"unknown harness", []string{"stop", "--harness", "gemini"}, "{}", true},
-		{"unknown event", []string{"teatime", "--harness", "codex"}, "{}", true},
+		// A registered harness, deliberately: with an unregistered one this case
+		// returns at harness.Get and never reaches the event guard, so deleting
+		// the guard would go unnoticed.
+		{"unknown event", []string{"teatime", "--harness", "claude-code"}, "{}", true},
 		{"missing flag", []string{"stop"}, "{}", true},
 		{"no .agents dir", []string{"stop", "--harness", "codex"}, "{}", false},
 	}
@@ -155,6 +191,33 @@ func TestHookRecordsPayloadCwdNotShellCwd(t *testing.T) {
 	}
 	if rec := readOnlyRecord(t, root); rec["cwd"] != "services/billing" {
 		t.Errorf("cwd = %v, want services/billing (the payload's cwd, not the shell's)", rec["cwd"])
+	}
+}
+
+func TestHookRecordsDescriptionFromSidecar(t *testing.T) {
+	root := newRepo(t)
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Chdir(root)
+
+	// claudeCode.Describe reads an agent-<id>.meta.json written beside the
+	// transcript at spawn time. A fixture without a sidecar cannot tell a wired
+	// Description from a dropped one, because both produce "".
+	transcript := filepath.Join(t.TempDir(), "agent-a1.jsonl")
+	sidecar := strings.TrimSuffix(transcript, ".jsonl") + ".meta.json"
+	if err := os.WriteFile(sidecar, []byte(`{"description":"Explore the payments module"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","agent_id":"a1",` +
+		`"cwd":"` + root + `","agent_transcript_path":"` + transcript + `"}`
+
+	var stderr bytes.Buffer
+	code := runHook([]string{"subagent-stop", "--harness", "claude-code"}, strings.NewReader(payload), &stderr)
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if rec := readOnlyRecord(t, root); rec["description"] != "Explore the payments module" {
+		t.Errorf("description = %v, want the sidecar's label", rec["description"])
 	}
 }
 
