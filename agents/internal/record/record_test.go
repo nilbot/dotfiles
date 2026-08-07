@@ -28,7 +28,7 @@ func TestRecordCannotCarryForbiddenFields(t *testing.T) {
 
 func TestLineIsOneJSONObjectPerLine(t *testing.T) {
 	r := Record{
-		When:            time.Date(2026, 8, 7, 15, 41, 14, 0, time.UTC),
+		When:            time.Date(2026, 8, 7, 15, 41, 14, 987654321, time.UTC),
 		Harness:         "codex",
 		Machine:         "m1-mbp-a7f3",
 		Event:           "subagent_stop",
@@ -88,8 +88,8 @@ func TestAppendPartitionsByUTC(t *testing.T) {
 	dir := t.TempDir()
 	w := NewWriter(dir)
 
-	// 2026-08-08T01:30Z is still 2026-08-07 in most of the Americas.
-	when := time.Date(2026, 8, 8, 1, 30, 0, 0, time.FixedZone("UTC-8", -8*3600))
+	// 2026-08-07T17:30 in UTC-8 is 2026-08-08T01:30Z; local date differs from UTC date.
+	when := time.Date(2026, 8, 7, 17, 30, 0, 0, time.FixedZone("UTC-8", -8*3600))
 	if err := w.Append(Record{When: when, Harness: "codex", Machine: "m", Event: "stop"}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
