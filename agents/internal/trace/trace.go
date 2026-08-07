@@ -8,6 +8,7 @@ package trace
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,11 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/record"
 )
+
+// maxDuration is the widest window a time.Duration can hold. A request wider
+// than this wraps to a negative duration, which reads downstream as "no window
+// at all" -- the caller asked to narrow and would get everything back.
+const maxDuration = time.Duration(1<<63 - 1)
 
 type Filter struct {
 	Lane    string        // exact
@@ -40,18 +46,43 @@ type Result struct {
 
 // ParseSince accepts d/w on top of Go's own duration units, because "3d" is
 // what a person types and time.ParseDuration does not know about days.
+//
+// Only a positive window is a window. A negative, zero or overflowed one puts
+// the cutoff at or after now, and Query treats any such duration as no bound at
+// all -- so a caller who asked to narrow the history would be answered with the
+// whole of it and no sign that the flag was ignored. Refusing the input is the
+// only answer that is not a lie.
 func ParseSince(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return 0, nil
 	}
 	if n, err := strconv.Atoi(strings.TrimSuffix(s, "d")); err == nil && strings.HasSuffix(s, "d") {
-		return time.Duration(n) * 24 * time.Hour, nil
+		return scaleWindow(s, n, 24*time.Hour)
 	}
 	if n, err := strconv.Atoi(strings.TrimSuffix(s, "w")); err == nil && strings.HasSuffix(s, "w") {
-		return time.Duration(n) * 7 * 24 * time.Hour, nil
+		return scaleWindow(s, n, 7*24*time.Hour)
 	}
-	return time.ParseDuration(s)
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%q is not a positive time window", s)
+	}
+	return d, nil
+}
+
+// scaleWindow multiplies a whole number of units, refusing both ways the
+// product stops describing a window: non-positive, and too wide to hold.
+func scaleWindow(s string, n int, unit time.Duration) (time.Duration, error) {
+	if n <= 0 {
+		return 0, fmt.Errorf("%q is not a positive time window", s)
+	}
+	if int64(n) > int64(maxDuration/unit) {
+		return 0, fmt.Errorf("%q is wider than the maximum window of %v", s, maxDuration)
+	}
+	return time.Duration(n) * unit, nil
 }
 
 func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
@@ -70,17 +101,27 @@ func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
 	for _, p := range paths {
 		file, err := os.Open(p)
 		if err != nil {
+			// Loud, never skipped. A daily file we cannot open is history we
+			// cannot see, and continuing past it would answer with a smaller
+			// history wearing the same face as a complete one. os.Open's error
+			// already names the file it failed on; keep it that way.
 			return res, err
 		}
 		sc := bufio.NewScanner(file)
 		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		lines := 0
 		for sc.Scan() {
+			lines++
 			line := strings.TrimSpace(sc.Text())
 			if line == "" {
 				continue
 			}
 			var r record.Record
 			if err := json.Unmarshal([]byte(line), &r); err != nil {
+				// A conflict block is several bad lines in the middle of a
+				// file with good records on both sides of it. Count each one
+				// and keep reading: stopping here would silently drop every
+				// record below the damage.
 				res.Skipped++
 				continue
 			}
@@ -90,7 +131,11 @@ func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
 		}
 		file.Close()
 		if err := sc.Err(); err != nil {
-			return res, err
+			// The scanner stops at the first line it cannot hold, and every
+			// later daily file then goes unread -- so the bare "token too
+			// long" points at nothing. Name the file and the line, because
+			// that is what someone has to go and repair.
+			return res, fmt.Errorf("%s:%d: %w", p, lines+1, err)
 		}
 	}
 

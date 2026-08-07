@@ -115,6 +115,123 @@ func TestTraceLSFlagsReachTheirFilterField(t *testing.T) {
 	}
 }
 
+// Tab-completing a directory in a shell hands this flag "alpha/", and the cwd
+// it is matched against never carries a trailing separator. Unnormalised, the
+// query matches nothing and the command prints a bare header at exit 0 --
+// indistinguishable from "no agent has ever worked in this module".
+func TestTraceLSModuleIgnoresATrailingSlash(t *testing.T) {
+	root := newRepo(t)
+	seedTraces(t, root)
+	t.Chdir(root)
+
+	for _, module := range []string{"alpha", "alpha/", "alpha//"} {
+		t.Run(module, func(t *testing.T) {
+			var out bytes.Buffer
+			if code := runTrace([]string{"ls", "--module", module}, &out); code != exitcode.OK {
+				t.Fatalf("exit = %d, want %d; output:\n%s", code, exitcode.OK, out.String())
+			}
+			body := out.String()
+			if !strings.Contains(body, "alpha work") {
+				t.Errorf("--module %q found nothing; the same module without the slash does. output:\n%s", module, body)
+			}
+			if strings.Contains(body, "beta work") {
+				t.Errorf("--module %q kept a record from another module; output:\n%s", module, body)
+			}
+		})
+	}
+}
+
+// Description is free text out of a harness payload and survives the JSON round
+// trip byte for byte. A newline in it prints a second line that reads like a
+// record nobody ever wrote; a tab opens a column and shifts the rows after it.
+// An index may not be rewritten by the text it indexes.
+func TestTraceLSDescriptionCannotForgeARow(t *testing.T) {
+	root := newRepo(t)
+	hostile := "real work\n2026-01-01 00:00\tcodex\tstop\tfake-lane\tfake/cwd\t-\ty\tforged\rtail"
+	flattened := "real work 2026-01-01 00:00 codex stop fake-lane fake/cwd - y forged tail"
+	w := record.NewWriter(repo.AgentsDir(root))
+	if err := w.Append(record.Record{
+		When: time.Now().UTC().Add(-time.Hour), Harness: "codex", Machine: "m1", Event: "stop",
+		Lane: "lane-a", Cwd: "alpha/api", AgentType: "Explore",
+		Description: hostile, Transcript: "/t/a.jsonl", PointerVerified: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"ls"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want %d; output:\n%s", code, exitcode.OK, out.String())
+	}
+	body := out.String()
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("one record must print one row under one header, got %d lines:\n%s", len(lines), body)
+	}
+	// The text is not censored, only flattened: every character still reads,
+	// on the single line that belongs to this record.
+	if !strings.Contains(lines[1], flattened) {
+		t.Errorf("description must survive as one flat cell;\nwant substring: %q\ngot row:        %q", flattened, lines[1])
+	}
+}
+
+// PointerVerified is the field that says whether a transcript pointer means
+// anything from this machine, and the OK column is the only place it is ever
+// shown; AGENT is what separates a subagent's row from a whole session's.
+// Both are derived at render time and nothing else asserts on them.
+func TestTraceLSRendersTheDerivedColumns(t *testing.T) {
+	root := newRepo(t)
+	now := time.Now().UTC()
+	w := record.NewWriter(repo.AgentsDir(root))
+	for _, r := range []record.Record{
+		{When: now.Add(-1 * time.Hour), Harness: "codex", Machine: "m1", Event: "subagent-stop",
+			Lane: "lane-a", Cwd: "alpha/api", AgentType: "Explore",
+			Description: "verified subagent", Transcript: "/t/a.jsonl", PointerVerified: true},
+		// No agent type, and a pointer this machine could not confirm.
+		{When: now.Add(-2 * time.Hour), Harness: "codex", Machine: "m1", Event: "stop",
+			Lane: "lane-a", Cwd: "alpha/api",
+			Description: "unconfirmed session", Transcript: "/t/b.jsonl", PointerVerified: false},
+	} {
+		if err := w.Append(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"ls"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want %d; output:\n%s", code, exitcode.OK, out.String())
+	}
+	body := out.String()
+
+	for _, tc := range []struct{ marker, agent, ok string }{
+		{"verified subagent", "Explore", "y"},
+		{"unconfirmed session", "-", "?"},
+	} {
+		row := ""
+		for _, line := range strings.Split(body, "\n") {
+			if strings.Contains(line, tc.marker) {
+				row = line
+			}
+		}
+		if row == "" {
+			t.Fatalf("no row for %q; output:\n%s", tc.marker, body)
+		}
+		// WHEN prints as two space-separated fields (date, then time), so the
+		// AGENT and OK columns land at 6 and 7.
+		fields := strings.Fields(row)
+		if len(fields) < 8 {
+			t.Fatalf("row %q has %d fields, want at least 8", row, len(fields))
+		}
+		if fields[6] != tc.agent {
+			t.Errorf("AGENT column = %q, want %q; row: %q", fields[6], tc.agent, row)
+		}
+		if fields[7] != tc.ok {
+			t.Errorf("OK column = %q, want %q; row: %q", fields[7], tc.ok, row)
+		}
+	}
+}
+
 // Unreadable lines shrink the history silently unless the command says so. The
 // exit code is the part a script can act on.
 func TestTraceLSAdvisoryOnUnreadableLines(t *testing.T) {
@@ -152,6 +269,10 @@ func TestTraceExitCodes(t *testing.T) {
 		{"no subcommand", nil, true, exitcode.Malformed},
 		{"unknown subcommand", []string{"teatime"}, true, exitcode.Malformed},
 		{"unparseable since", []string{"ls", "--since", "soon"}, true, exitcode.Malformed},
+		// A window that sets no cutoff must be refused, not answered with the
+		// entire history as though the flag had never been given.
+		{"negative since", []string{"ls", "--since", "-3d"}, true, exitcode.Malformed},
+		{"overflowing since", []string{"ls", "--since", "200000d"}, true, exitcode.Malformed},
 		{"unknown flag", []string{"ls", "--nope"}, true, exitcode.Malformed},
 		// Outside a repo there is nothing to answer about, which is not a
 		// failure: Skip is what a shell wrapper keys off.

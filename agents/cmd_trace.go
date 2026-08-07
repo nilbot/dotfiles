@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
@@ -66,6 +68,14 @@ func runTraceLS(args []string, stdout io.Writer) int {
 	}
 	f.Since = d
 
+	// Tab-completing a directory hands this flag "payments/", while the cwd it
+	// is matched against is repo-relative and never carries a trailing
+	// separator. Left as typed it matches nothing and prints a bare header at
+	// exit 0, which reads exactly like "no agent has touched this module" --
+	// a wrong answer rather than an error. Normalising is the command's job:
+	// the matcher compares paths, it does not guess at spellings.
+	f.Module = strings.TrimRight(f.Module, "/")
+
 	dir, code := agentsDirHere(stdout)
 	if code != exitcode.OK {
 		return code
@@ -89,7 +99,8 @@ func runTraceLS(args []string, stdout io.Writer) int {
 			agent = "-"
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.When.Format("2006-01-02 15:04"), r.Harness, r.Event, r.Lane, r.Cwd, agent, ok, r.Description)
+			r.When.Format("2006-01-02 15:04"), tableCell(r.Harness), tableCell(r.Event),
+			tableCell(r.Lane), tableCell(r.Cwd), tableCell(agent), ok, tableCell(r.Description))
 	}
 	tw.Flush()
 
@@ -100,6 +111,22 @@ func runTraceLS(args []string, stdout io.Writer) int {
 		return exitcode.Advisory
 	}
 	return exitcode.OK
+}
+
+// tableCell flattens the control characters that would let text this tool did
+// not author rewrite the table around it. Description is free text out of a
+// harness payload and survives the JSON round trip byte for byte: a newline in
+// it prints a second line that reads like a record nobody ever wrote, and a tab
+// opens a column that shifts every row after it. Cwd comes from a filesystem
+// path, which may legally hold either. The listing is an index, so a cell may
+// only ever describe one record on one line.
+func tableCell(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) { // \n, \r and \t among them
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // runTraceCache is replaced in the task that builds the cache; it exists so the

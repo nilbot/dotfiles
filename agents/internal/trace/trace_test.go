@@ -3,6 +3,7 @@ package trace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +46,30 @@ func seedRecords(t *testing.T, recs ...record.Record) string {
 		}
 	}
 	return dir
+}
+
+// writeTraceFile puts an exact byte sequence in one daily file. record.Writer
+// can only append well-formed lines, and damage is the point of some fixtures.
+func writeTraceFile(t *testing.T, dir, day, body string) string {
+	t.Helper()
+	tdir := filepath.Join(dir, "reports", "traces")
+	if err := os.MkdirAll(tdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tdir, day+".jsonl")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func jsonLine(t *testing.T, r record.Record) string {
+	t.Helper()
+	b, err := r.Line()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 func TestQueryNewestFirst(t *testing.T) {
@@ -217,6 +242,95 @@ func TestQueryCountsUnreadableLines(t *testing.T) {
 	}
 }
 
+// A merge=union attribute that goes missing does not leave one marker at the
+// end of a file. It leaves a three-line conflict block in the middle of one,
+// with a record on each side of the divider and more records below it. Both
+// halves of the requirement live here: all three marker lines are counted, and
+// every record around the damage is still returned. A reader that stops at the
+// first line it cannot parse answers with a shorter history wearing the face of
+// a complete one, which is the exact failure the count exists to expose.
+func TestQueryReadsPastAConflictBlockAndCountsEveryMarker(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	writeTraceFile(t, dir, "2026-08-10",
+		jsonLine(t, record.Record{When: now.Add(-1 * time.Minute), AgentID: "before"})+
+			"<<<<<<< HEAD\n"+
+			jsonLine(t, record.Record{When: now.Add(-2 * time.Minute), AgentID: "ours"})+
+			"=======\n"+
+			jsonLine(t, record.Record{When: now.Add(-3 * time.Minute), AgentID: "theirs"})+
+			">>>>>>> feature/other\n"+
+			jsonLine(t, record.Record{When: now.Add(-4 * time.Minute), AgentID: "after"}))
+
+	res, err := Query(dir, Filter{}, now)
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if res.Skipped != 3 {
+		t.Errorf("Skipped = %d, want 3: <<<<<<<, ======= and >>>>>>> are three unreadable lines", res.Skipped)
+	}
+	var got []string
+	for _, r := range res.Records {
+		got = append(got, r.AgentID)
+	}
+	// Newest first, and the block is not a wall: what sits above it, inside it
+	// and below it all belong to the history.
+	want := []string{"before", "ours", "theirs", "after"}
+	if len(got) != len(want) {
+		t.Fatalf("returned %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("returned %v, want %v", got, want)
+		}
+	}
+}
+
+// An over-long line stops the scanner, and with it every daily file that sorts
+// after the damaged one -- so failing quietly here would hide whole days.
+// Failing loudly is right; failing anonymously is not, because "token too long"
+// alone names nothing to go and repair.
+func TestQueryNamesTheFileAndLineItCouldNotRead(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	overlong := strings.Repeat("x", 2*1024*1024)
+	writeTraceFile(t, dir, "2026-08-09",
+		jsonLine(t, record.Record{When: now.Add(-24 * time.Hour), AgentID: "day-before"})+overlong+"\n")
+	// A newer file the scanner never reaches: the loss is not one line.
+	writeTraceFile(t, dir, "2026-08-10", jsonLine(t, record.Record{When: now, AgentID: "newer"}))
+
+	_, err := Query(dir, Filter{}, now)
+	if err == nil {
+		t.Fatal("a file that cannot be read through must be an error, not a shorter history")
+	}
+	if !strings.Contains(err.Error(), "2026-08-09.jsonl:2") {
+		t.Errorf("error must name the file and line to repair, got: %v", err)
+	}
+}
+
+func TestQueryFailsLoudlyOnAnUnopenableFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root opens a 0000 file regardless of the mode bits")
+	}
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	unreadable := writeTraceFile(t, dir, "2026-08-09",
+		jsonLine(t, record.Record{When: now.Add(-24 * time.Hour), AgentID: "day-before"}))
+	if err := os.Chmod(unreadable, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	writeTraceFile(t, dir, "2026-08-10", jsonLine(t, record.Record{When: now, AgentID: "newer"}))
+
+	// Skipping the file would answer with only the newer day and no sign that
+	// a day is missing -- an index that quietly shrinks.
+	_, err := Query(dir, Filter{}, now)
+	if err == nil {
+		t.Fatal("a daily file that will not open must be an error, not a shorter history")
+	}
+	if !strings.Contains(err.Error(), "2026-08-09.jsonl") {
+		t.Errorf("error must name the file it could not open, got: %v", err)
+	}
+}
+
 func TestQueryOnEmptyRepo(t *testing.T) {
 	res, err := Query(t.TempDir(), Filter{}, time.Now())
 	if err != nil {
@@ -246,5 +360,20 @@ func TestParseSince(t *testing.T) {
 	}
 	if _, err := ParseSince("soon"); err == nil {
 		t.Error("want an error for unparseable input")
+	}
+}
+
+// A window that is not positive is not a window. Every input here parses into
+// a duration Query reads as "no time bound" -- a negative one directly, an
+// overflowed one after it wraps -- so accepting any of them answers a request
+// to narrow the history with the whole of it, at exit 0. The refusal has to
+// happen here, because by the time Query sees the duration it cannot tell the
+// difference between "no --since" and "--since that meant nothing".
+func TestParseSinceRejectsWindowsThatWouldSilentlyMeanNoWindow(t *testing.T) {
+	for _, in := range []string{"-3d", "-2w", "-1h", "0h", "0", "200000d", "20000w"} {
+		got, err := ParseSince(in)
+		if err == nil {
+			t.Errorf("ParseSince(%q) = %v, want an error: that duration sets no cutoff and returns the full history", in, got)
+		}
 	}
 }
