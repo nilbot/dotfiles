@@ -112,6 +112,72 @@ func TestInfoExcludePathInALinkedWorktree(t *testing.T) {
 	}
 }
 
+// IsLinkedWorktree is what `init --local` consults before appending to a SHARED
+// info/exclude, so both answers are load-bearing: a false negative hides every
+// new .agents/ file from the main checkout too, and a false positive refuses
+// --local in ordinary repositories.
+//
+// The subdirectory rows are the ones that catch a naive implementation. git
+// answers --git-dir absolute and symlink-resolved from a subdirectory but
+// --git-common-dir as "../../.git", so comparing the two raw labels every plain
+// repo under a symlinked path -- /var/folders, where t.TempDir lives -- a linked
+// worktree.
+func TestIsLinkedWorktreeDistinguishesMainFromLinked(t *testing.T) {
+	main := initRepo(t)
+	if err := os.WriteFile(filepath.Join(main, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, main, "add", "f.txt")
+	git(t, main, "-c", "commit.gpgsign=false", "commit", "-m", "init", "--no-verify")
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(t, main, "worktree", "add", "-b", "feat", linked)
+
+	// Precondition: a real linked worktree, not a second clone. Without this the
+	// whole test degrades into asserting false twice.
+	if fi, err := os.Lstat(filepath.Join(linked, ".git")); err != nil || fi.IsDir() {
+		t.Fatalf("fixture is not a linked worktree: .git must be a regular file (err=%v)", err)
+	}
+
+	mainSub := filepath.Join(main, "payments", "api")
+	linkedSub := filepath.Join(linked, "payments", "api")
+	for _, d := range []string{mainSub, linkedSub} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, tc := range []struct {
+		dir  string
+		want bool
+	}{
+		{main, false},
+		{mainSub, false},
+		{linked, true},
+		{linkedSub, true},
+	} {
+		got, err := IsLinkedWorktree(tc.dir)
+		if err != nil {
+			t.Fatalf("IsLinkedWorktree(%s): %v", tc.dir, err)
+		}
+		if got != tc.want {
+			t.Errorf("IsLinkedWorktree(%s) = %v, want %v", tc.dir, got, tc.want)
+		}
+	}
+}
+
+func TestIsLinkedWorktreeOutsideRepo(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
+	outside := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := IsLinkedWorktree(outside); !errors.Is(err, ErrNotARepo) {
+		t.Fatalf("err = %v, want ErrNotARepo", err)
+	}
+}
+
 func TestInfoExcludePathOutsideRepo(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", dir)

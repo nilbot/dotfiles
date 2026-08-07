@@ -585,4 +585,18 @@ func TestCodexTrustStepsNameBothGates(t *testing.T) {
 	if !strings.Contains(joined, "agents wire") {
 		t.Errorf("no step says hook trust recurs when the wiring changes: %v", steps)
 	}
+
+	// Both gates are things to do; this is the way to check they took. `/hooks`
+	// exists in 0.147.0 -- measured, and its own command list calls it "view and
+	// manage lifecycle hooks" -- and its Installed/Active columns are the only
+	// place the installed-but-inert state is visible from inside a session. That
+	// state is precisely a cleared directory gate with an uncleared hook gate,
+	// which otherwise looks identical to a working setup.
+	//
+	// Matched with its backticks: the bare token "/hooks" is a substring of
+	// ".codex/hooks.json" in the directory-gate step, so it passes with the
+	// command named nowhere. Deleting the step below has to fail this.
+	if !strings.Contains(joined, "`/hooks`") {
+		t.Errorf("no step names `/hooks` as the way to check the wired hooks are active: %v", steps)
+	}
 }

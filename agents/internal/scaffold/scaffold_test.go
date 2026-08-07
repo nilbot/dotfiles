@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,8 +35,10 @@ func git(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// readExclude reads the exclude file git itself would consult for dir.
-func readExclude(t *testing.T, dir string) string {
+// excludePath is where git itself would look for dir's exclude file. Asked of
+// git rather than computed, so it does not agree with the code under test by
+// construction.
+func excludePath(t *testing.T, dir string) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--git-common-dir").Output()
 	if err != nil {
@@ -45,7 +48,13 @@ func readExclude(t *testing.T, dir string) string {
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(dir, common)
 	}
-	b, err := os.ReadFile(filepath.Join(common, "info", "exclude"))
+	return filepath.Join(common, "info", "exclude")
+}
+
+// readExclude reads the exclude file git itself would consult for dir.
+func readExclude(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := os.ReadFile(excludePath(t, dir))
 	if err != nil {
 		t.Fatalf("exclude: %v", err)
 	}
@@ -150,6 +159,78 @@ func TestCreateWorksInALinkedWorktree(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(linked, ".agents", "memory")); err != nil {
 		t.Errorf("layout missing in the worktree: %v", err)
+	}
+}
+
+// --local's only mechanism is an exclude entry, and a linked worktree SHARES
+// info/exclude with its main checkout. Measured consequence over there:
+// already-tracked .agents/ content stays visible, but every NEW file under
+// .agents/ becomes invisible -- git check-ignore matches it, it drops out of
+// `git status --untracked-files=all`, and `git add .` skips it. That silently
+// discards exactly the handoffs, memory notes and traces this tool exists to
+// preserve, so Create refuses. A warning in scrollback would not be a defence.
+func TestCreateLocalRefusesInALinkedWorktree(t *testing.T) {
+	main := newRepo(t)
+	if err := os.WriteFile(filepath.Join(main, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, main, "add", "f.txt")
+	git(t, main, "commit", "-m", "init", "--no-verify")
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(t, main, "worktree", "add", "-b", "feat", linked)
+
+	// Precondition: a hand-made .git/info is not a repository git will accept,
+	// and a second clone shares no exclude file. Only a real `git worktree add`
+	// exercises this.
+	if fi, err := os.Lstat(filepath.Join(linked, ".git")); err != nil || fi.IsDir() {
+		t.Fatalf("fixture is not a linked worktree: .git must be a regular file (err=%v)", err)
+	}
+
+	// Errorf, not Fatalf: everything below is what refusing is FOR, and a run
+	// that stops here would report the missing error without ever showing the
+	// damage it prevents.
+	if err := Create(linked, true); !errors.Is(err, ErrLocalInLinkedWorktree) {
+		t.Errorf("Create(--local) in a linked worktree: err = %v, want ErrLocalInLinkedWorktree", err)
+	}
+
+	// Refused before writing anything: a repo left half-scaffolded and unwired is
+	// the other way this goes wrong, and `init` reports the same failure either
+	// way.
+	for _, rel := range []string{".agents", "CLAUDE.md", "AGENTS.md", ".gitattributes"} {
+		if _, err := os.Lstat(filepath.Join(linked, rel)); !os.IsNotExist(err) {
+			t.Errorf("refusal left %s behind (err=%v)", rel, err)
+		}
+	}
+
+	// The shared exclude is what the refusal protects. It may not exist at all
+	// here, which is equally fine; what must not be true is that /.agents/ is in
+	// it.
+	if b, err := os.ReadFile(excludePath(t, linked)); err == nil && hasLine(string(b), "/.agents/") {
+		t.Errorf("refusal still wrote /.agents/ to the shared exclude:\n%s", b)
+	}
+	// git is the arbiter, and the main checkout is where the damage would show.
+	for _, dir := range []string{main, linked} {
+		assertNotIgnored(t, dir, ".agents/reports/handoff/2026-08-07-lane.md")
+	}
+
+	// The main checkout of the very same repo is not a linked worktree, so
+	// --local still works there. Without this the refusal could be "any repo that
+	// has worktrees" and nothing would notice.
+	if err := Create(main, true); err != nil {
+		t.Fatalf("Create(--local) in the main checkout: %v", err)
+	}
+	if !hasLine(readExclude(t, main), "/.agents/") {
+		t.Errorf("--local in the main checkout must still exclude .agents/:\n%s", readExclude(t, main))
+	}
+}
+
+func assertNotIgnored(t *testing.T, dir, path string) {
+	t.Helper()
+	cmd := exec.Command("git", "check-ignore", "-q", path)
+	cmd.Dir = dir
+	if err := cmd.Run(); err == nil {
+		t.Errorf("git ignores %s in %s: new agent output would be dropped silently", path, dir)
 	}
 }
 

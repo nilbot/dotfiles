@@ -49,6 +49,51 @@ func InfoExcludePath(dir string) (string, error) {
 	return filepath.Join(common, "info", "exclude"), nil
 }
 
+// IsLinkedWorktree reports whether dir sits in a linked worktree rather than in
+// the main checkout, told apart the way git itself tells them apart: a linked
+// worktree has its own git dir under <common>/worktrees/<name>, while the common
+// directory -- and everything in it, info/exclude included -- is shared with the
+// main checkout.
+//
+// The caller that needs this is `init --local`, which appends /.agents/ to that
+// shared exclude file. In a worktree that entry also applies to the main
+// checkout, where every NEW file under .agents/ then disappears from
+// `git status --untracked-files=all` and is skipped by `git add`.
+func IsLinkedWorktree(dir string) (bool, error) {
+	gitDir, err := gitPath(dir, "--git-dir")
+	if err != nil {
+		return false, ErrNotARepo
+	}
+	common, err := gitPath(dir, "--git-common-dir")
+	if err != nil {
+		return false, ErrNotARepo
+	}
+	return gitDir != common, nil
+}
+
+// gitPath normalizes one of git's own directory answers into something two of
+// them can be compared by. git answers relative to its working directory and not
+// in a single spelling: from a subdirectory of a plain repo --git-dir comes back
+// absolute and symlink-resolved while --git-common-dir comes back as "../../.git".
+// Comparing those two answers raw labels every plain repo under a symlinked path
+// a linked worktree -- /var on macOS, which is where the tests run.
+func gitPath(dir, arg string) (string, error) {
+	out, err := run(dir, "rev-parse", arg)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(out) {
+		out = filepath.Join(dir, out)
+	}
+	out = filepath.Clean(out)
+	// Best effort: the path exists in every case that reaches here, but a
+	// failure to resolve is not a reason to refuse to answer.
+	if resolved, err := filepath.EvalSymlinks(out); err == nil {
+		out = resolved
+	}
+	return out, nil
+}
+
 func Discover(cwd string) (*Context, error) {
 	root, err := run(cwd, "rev-parse", "--show-toplevel")
 	if err != nil {

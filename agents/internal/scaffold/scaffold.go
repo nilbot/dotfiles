@@ -3,12 +3,24 @@
 package scaffold
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
+
+// ErrLocalInLinkedWorktree refuses --local where it would silently delete work.
+//
+// --local's only mechanism is an exclude entry, and a linked worktree shares
+// info/exclude with its main checkout. Measured: already-tracked .agents/ files
+// stay visible, but every new one is ignored everywhere -- `git check-ignore`
+// matches it, `git status --untracked-files=all` omits it, `git add .` skips it.
+// The handoffs, memory notes and traces this tool exists to preserve would be
+// dropped without a message. A warning in scrollback is not a defence against
+// that, so this is an error.
+var ErrLocalInLinkedWorktree = errors.New("--local is not supported inside a linked worktree: info/exclude is shared with the main checkout, so excluding /.agents/ here would hide every new file under .agents/ from git in every worktree of this repo, including files already written. Run `agents init --local` in the main checkout instead, or drop --local here")
 
 // ClaudeMD is the trigger, not the payload.
 //
@@ -24,9 +36,9 @@ it is the record, and this file is only the pointer to it.
 - ` + "`.agents/reports/`" + ` — specs, plans, analysis, and trace pointers
 - ` + "`.agents/skills/`" + ` — procedures specific to this repo
 
-Run ` + "`agents doctor`" + ` early and surface what it says. A hook cannot install
-itself and a missing hook fails silently, so an unreported failure here means
-nothing is being recorded.
+A hook cannot install itself and a missing hook fails silently: an empty or
+stale ` + "`.agents/`" + ` means the setup is broken, not that there is nothing to
+say -- report it rather than working around it.
 
 Write handoffs with ` + "`agents handoff write`" + `, not by hand. Commit ` + "`.agents/`" + `
 changes with ` + "`agents save`" + ` so they do not ride along with code changes.
@@ -66,6 +78,18 @@ var dirs = []string{
 
 // Create is idempotent. Running it on an initialized repo must change nothing.
 func Create(root string, local bool) error {
+	// First, before anything is written: a refusal that leaves a half-scaffolded
+	// repo behind is a worse outcome than the one it is refusing.
+	if local {
+		linked, err := repo.IsLinkedWorktree(root)
+		if err != nil {
+			return err
+		}
+		if linked {
+			return ErrLocalInLinkedWorktree
+		}
+	}
+
 	agents := filepath.Join(root, ".agents")
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(agents, d), 0o755); err != nil {

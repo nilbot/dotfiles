@@ -63,15 +63,21 @@ func (c codex) Wire(repoRoot, binary string) error {
 //     required", "Trusted", and "Modified since last trusted - review
 //     required", and the stored key is `trusted_hash`. So it recurs whenever a
 //     generated command changes.
-//
-// Not asserted here: spec 1 §9 names `/hooks` as the slash command that reviews
-// and trusts. The 0.147.0 binary does contain a hooks browser view, but no
-// `/hooks` literal, and slash commands are rendered from names stored without
-// the prefix -- so that command name is neither confirmed nor refuted. The
-// startup prompt below is what was actually measured, so it is what is printed.
+//   - `/hooks` exists, and its own entry in the command list describes it as
+//     "view and manage lifecycle hooks". An earlier binary-strings search
+//     concluded otherwise and was wrong: slash commands are stored without the
+//     `/` prefix, and the bare `hooks` token sits in a serde struct-name region
+//     (`configRequirements/read.hooks`) rather than in the command cluster.
+//     The view is a table of all eleven lifecycle events -- PreToolUse,
+//     PermissionRequest, PostToolUse, PreCompact, PostCompact, SessionStart,
+//     SessionEnd, UserPromptSubmit, SubagentStart, SubagentStop, Stop -- each
+//     with an Installed and an Active count. That pair is the only way to see
+//     the installed-but-inert state from inside a session, which is exactly the
+//     shape a cleared directory gate and an uncleared hook gate produce.
 func (codex) TrustSteps(repoRoot string) []string {
 	return []string{
 		"Codex: start a session in " + repoRoot + " once and answer yes to \"Do you trust the contents of this directory?\"; until the directory is trusted, .codex/hooks.json is not loaded at all.",
 		"Codex: in that session, accept the hook-review prompt (\"Trust all and continue\"; \"Continue without trusting\" leaves the hooks inert). Hook trust is recorded per hook by hash, so it comes back after any `agents wire` that changes a command.",
+		"Codex: check with `/hooks`, which tables every lifecycle event with an Installed and an Active count. Installed but not Active on SessionStart, SubagentStart, SubagentStop or Stop is the silent-failure state -- the config loaded and nothing will run.",
 	}
 }
