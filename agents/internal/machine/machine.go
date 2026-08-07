@@ -9,6 +9,8 @@ package machine
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,7 +26,7 @@ func StateDir() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(".local", "state", "agents")
+		return filepath.Join(os.TempDir(), "agents")
 	}
 	return filepath.Join(home, ".local", "state", "agents")
 }
@@ -34,8 +36,23 @@ func StateDir() string {
 // and a changed hostname would split one machine's history into two identities
 // with no way to notice after the fact.
 func ID() (string, error) {
+	// If $HOME is unset and XDG_STATE_HOME is unset, we cannot proceed safely.
+	// We would fall back to os.TempDir(), which is not stable across invocations.
+	if os.Getenv("XDG_STATE_HOME") == "" {
+		_, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+	}
+
 	path := filepath.Join(StateDir(), "machine-id")
-	if b, err := os.ReadFile(path); err == nil {
+	b, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// Any error other than "file doesn't exist" is a problem we should
+		// report (EACCES, I/O error, etc). We must not silently mint a new id.
+		return "", err
+	}
+	if err == nil {
 		if id := strings.TrimSpace(string(b)); id != "" {
 			return id, nil
 		}
