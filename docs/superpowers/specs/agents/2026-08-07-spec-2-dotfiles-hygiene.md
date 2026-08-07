@@ -17,9 +17,15 @@ branches in `snapshot.sh` and `super-install-dep.sh`, and the zsh references in
 `tools/*.sh` all go with it.
 
 **Rationalize the link machinery.** `softlinks.sh` and the `Makefile` `dotfiles`
-target overlap and have drifted. Spec 1 §8.4 already fixes the one live landmine
-(`ln -sfn $(CURDIR)/claude $(HOME)/.claude`, which now creates `~/.claude/claude`
-inside the harness-owned directory); the rest is consolidation.
+target overlap and have drifted. The two live landmines are already fixed
+(2026-08-07, `37f00a0` — see spec 1 §8.4); what remains is consolidation of the two
+overlapping mechanisms into one.
+
+Also rename `git/gitconfig.symlink`. The name is now wrong: as of `37f00a0` it is
+*included* by a machine-local `~/.gitconfig` rather than symlinked to it. Same for
+`git/gitignore_global.symlink`, which is still genuinely symlinked — so the two
+files now need different names for different reasons, and the `.symlink` suffix has
+stopped carrying information.
 
 **Remove the dead `claude/` scripts** left over once spec 1 §8 lands:
 `claude/commit-msg` (GNU `sed -i`, broken on macOS, referenced by nothing),

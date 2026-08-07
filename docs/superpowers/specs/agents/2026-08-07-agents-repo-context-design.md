@@ -448,13 +448,31 @@ config beating global is correct git behaviour and should not be fought.
 
 ### 8.4 Also in scope
 
+**Still to do:**
+
 - Add `git/gitattributes` and link it to `~/.gitattributes`.
   `core.attributesfile = ~/.gitattributes` currently points at a file that does not
   exist, and this design depends on gitattributes semantics.
-- Fix the `Makefile` landmine: `ln -sfn $(CURDIR)/claude $(HOME)/.claude` is stale.
-  `~/.claude` is now a real harness-owned directory (`plugins/`, `projects/`,
-  `sessions/`, `settings.json`), with only `~/.claude/skills` symlinked into
-  dotfiles. Running `make dotfiles` today creates `~/.claude/claude` inside it.
+
+**Already done (2026-08-07, commit `37f00a0`)** — recorded so it is not attempted
+twice. Both were the same defect: a `$HOME` path the system *writes to* was aimed at
+content this repo *publishes*.
+
+- `~/.gitconfig` was a symlink to `git/gitconfig.symlink`, so every
+  `git config --global …` wrote into tracked public content — which is how identity
+  (`user.name`, `user.email`) and 1Password's `gpg.format = ssh` came to be
+  committed there. It is now a machine-local regular file that only `[include]`s the
+  shared config; global writes land after the include, so they stay local *and*
+  correctly override. Identity now lives solely in `~/etc/extras.secret/gitconfig`.
+- `ln -sfn $(CURDIR)/claude $(HOME)/.claude` was stale: `~/.claude` is a
+  harness-owned directory (`plugins/`, `projects/`, `sessions/`, `settings.json`)
+  and only `skills/` comes from dotfiles, so the link created a stray
+  `~/.claude/claude` *inside* it. Now only `claude/skills` is linked.
+
+The second one is worth carrying as a general caution for this design: **`~/.claude`
+and `~/.codex` are harness-owned and must never be symlinked wholesale from
+dotfiles.** Link individual subdirectories only. §2's per-repo wiring follows the
+same rule.
 
 ## 9. Bootstrap and trust
 
