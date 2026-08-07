@@ -238,12 +238,20 @@
 	process = git-lfs filter-process
 	required = true
 
+[gpg]
+	format = ssh
+
+# Defaults. These sit BEFORE the include on purpose: git applies later values last,
+# so ~/etc/extras.secret/gitconfig can override identity and signing per machine
+# (it supplies user.name, user.email, user.signingkey and gpg.ssh.program for the
+# 1Password signer). Placed after the include, this public file would silently win.
+[user]
+	name = Ersi Ni
+	email = ersi.ni@nilbot.net
+
 [include]
 
 	path = ~/etc/extras.secret/gitconfig
-[gpg]
-	format = ssh
-[user]
-	signingkey = /home/nilbot/.ssh/nilbot.m1.2021-09-01.ed25519.pub
+
 [init]
 	templatedir = ~/dotfiles/git/templates
