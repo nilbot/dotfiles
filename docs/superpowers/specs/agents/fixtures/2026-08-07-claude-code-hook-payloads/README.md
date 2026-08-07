@@ -62,7 +62,33 @@ retained field is pointer or label data: ids, paths, event names, effort level,
 permission mode, cwd, and two empty arrays (`background_tasks`, `session_crons`).
 Each file was read in full before being committed.
 
+## These files are test input, not documentation
+
+`agents/internal/harness/claudecode_test.go` **reads these four files directly**
+at `../../../docs/superpowers/specs/agents/fixtures/2026-08-07-claude-code-hook-payloads/`.
+They are not a pasted-in copy of something asserted elsewhere: edit a value here
+and the suite fails.
+
+That is deliberate, and it is what makes the next paragraph true. Verified by
+mutation: changing `prompt_id` and `agent_id` in `cc-subagent-stop.json` fails
+`TestClaudeCodeBuildsVerifiedSubagentTrace` and
+`TestClaudeCodeFixturesDecodeToMeasuredShape/SubagentStop`; deleting any file
+fails whichever test loads it; replacing a redaction marker with real text fails
+`TestClaudeCodeFixturesStayRedacted`.
+
+Two things the fixtures deliberately do **not** cover, because they cannot:
+
+- The redaction canary. These files are redacted, so no forbidden content is left
+  in them to leak. `TestClaudeCodeForbiddenContentCannotReachTrace` keeps a small
+  inline payload carrying `SECRET-LEAK` and a `gAAAAAB…` blob for that assertion.
+- `agent_transcript_path` in `TestClaudeCodeBuildsVerifiedSubagentTrace`. The
+  captured path names a machine-bound file that does not exist on another
+  machine, so that one field is overwritten *after* decoding, with a temp path.
+  Every other field in that test comes from the committed bytes.
+
 ## Reproducing
 
-Re-capture on any Claude Code minor-version bump; the adapter's golden tests are
-the thing that will notice if the contract moved.
+Re-capture on any Claude Code minor-version bump and overwrite these files; the
+tests above are what will notice if the contract moved. If you do re-capture,
+re-apply the redaction before committing — `TestClaudeCodeFixturesStayRedacted`
+enforces it, but it is easier to redact than to rewrite history.

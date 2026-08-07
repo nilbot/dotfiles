@@ -37,11 +37,31 @@ func TestDecodeDiscardsForbiddenFields(t *testing.T) {
 	}
 }
 
+// fmtPayloadFields is the number of fields fmtPayload renders. Kept beside it
+// so TestFmtPayloadRendersEveryField can catch the two drifting apart.
+const fmtPayloadFields = 10
+
 func fmtPayload(p Payload) string {
 	return strings.Join([]string{
-		p.HookEventName, p.SessionID, p.TurnID, p.AgentID, p.AgentType,
+		p.HookEventName, p.SessionID, p.TurnID, p.PromptID, p.AgentID, p.AgentType,
 		p.Cwd, p.TranscriptPath, p.AgentTranscriptPath, p.Source,
 	}, "|")
+}
+
+// fmtPayload is hand-written, so adding a field to Payload without adding it
+// here silently shrinks the scan above into a weaker test. That already
+// happened once, when PromptID was added. This makes it impossible to repeat
+// quietly: the reflection test proves no forbidden *destination* exists, and
+// this proves the string scan still covers the whole type.
+func TestFmtPayloadRendersEveryField(t *testing.T) {
+	if n := reflect.TypeOf(Payload{}).NumField(); n != fmtPayloadFields {
+		t.Fatalf("Payload has %d fields but fmtPayload renders %d; add the new field to fmtPayload and update the count", n, fmtPayloadFields)
+	}
+	// And every rendered field must actually be distinguishable, so a copy-paste
+	// that renders the same field twice does not pass on count alone.
+	if got := strings.Count(fmtPayload(Payload{}), "|"); got != fmtPayloadFields-1 {
+		t.Fatalf("fmtPayload produced %d separators, want %d", got, fmtPayloadFields-1)
+	}
 }
 
 // fmtPayload only renders fields it already knows about, so it cannot notice a
