@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -335,6 +336,127 @@ func TestTraceCacheCopiesLocalAndNamesTheMachineHoldingTheRest(t *testing.T) {
 	}
 	if !strings.HasPrefix(filepath.Base(cached[0]), "rollout-local-") {
 		t.Errorf("cached file %q must still be recognisable as %q", filepath.Base(cached[0]), "rollout-local.jsonl")
+	}
+}
+
+// git reports on the repo, so the check has to be git's.
+func git(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+// The premise of this tool is that it records where transcripts live and never
+// what they say. The cache is transcript content in the working tree, and the
+// only thing that used to keep it out of a commit was an entry in
+// .git/info/exclude written by `agents init` -- a file that is per-clone and is
+// never cloned. This repo is a plain `git init` where init has never run, which
+// is the state of every fresh clone and every CI checkout: measured before the
+// fix, `git status` offered `.agents/.trace-cache/` and `git add -A` staged the
+// transcript, content and all.
+func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
+	mid := thisMachine(t)
+	const secret = `{"line":"secret api key sk-live-abc"}` + "\n"
+	here := filepath.Join(t.TempDir(), "rollout-secret.jsonl")
+	if err := os.WriteFile(here, []byte(secret), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, Transcript: here, PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
+	}
+	// Without this the rest of the test passes on a cache that was never
+	// written, which is the wrong reason to see nothing in git.
+	cached, err := filepath.Glob(filepath.Join(repo.AgentsDir(root), ".trace-cache", "codex", "*"))
+	if err != nil || len(cached) != 1 {
+		t.Fatalf("the cache must hold the transcript for this test to mean anything; got %v (%v)", cached, err)
+	}
+	if b, err := os.ReadFile(cached[0]); err != nil || string(b) != secret {
+		t.Fatalf("cached content = %q (%v), want the transcript", b, err)
+	}
+
+	// --untracked-files=all, because the default collapses an untracked
+	// directory to one entry and would hide the file inside it.
+	status := git(t, root, "status", "--porcelain", "--untracked-files=all")
+	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
+		if strings.Contains(line, ".trace-cache") {
+			t.Errorf("git offers the cache: %q\nfull status:\n%s", line, status)
+		}
+	}
+	// The harm was not that git mentioned it, but that `git add -A` took it.
+	git(t, root, "add", "-A")
+	for _, line := range strings.Split(strings.TrimSpace(git(t, root, "ls-files", "--cached")), "\n") {
+		if strings.Contains(line, ".trace-cache") {
+			t.Errorf("transcript content is staged for commit: %q", line)
+		}
+	}
+}
+
+// A transcript this machine cannot read is one transcript. Returning on the
+// first copy failure printed the error and exited NoRecord, so the summary line
+// never appeared at all: the caller could not tell whether zero or fifty
+// transcripts had been cached before the run gave up.
+func TestTraceCacheStillReportsWhenOneTranscriptCannotBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: mode bits do not deny anything")
+	}
+	mid := thisMachine(t)
+	good := localTranscript(t, "rollout-good.jsonl")
+	locked := localTranscript(t, "rollout-locked.jsonl")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(locked, 0o644) })
+
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, Transcript: locked, PointerVerified: true},
+		record.Record{Harness: "codex", Machine: mid, Transcript: good, PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	body := out.String()
+	for _, want := range []string{"copied 1", "unreachable here 1", locked} {
+		if !strings.Contains(body, want) {
+			t.Errorf("output must contain %q; got:\n%s", want, body)
+		}
+	}
+}
+
+// An unverified pointer is a normal state, so this is the largest class of
+// transcript that is on this disk and not in the cache. Left uncounted, the run
+// printed all-zeroes at exit 0 -- the same thing a repo with no records prints.
+func TestTraceCacheNamesUnverifiedPointers(t *testing.T) {
+	mid := thisMachine(t)
+	unverified := localTranscript(t, "rollout-unverified.jsonl")
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, Transcript: unverified},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory (%d): a transcript that is here and not cached is news; output:\n%s",
+			code, exitcode.Advisory, out.String())
+	}
+	body := out.String()
+	for _, want := range []string{"unverified pointer 1", unverified} {
+		if !strings.Contains(body, want) {
+			t.Errorf("output must contain %q; got:\n%s", want, body)
+		}
 	}
 }
 

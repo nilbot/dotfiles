@@ -132,11 +132,13 @@ func tableCell(s string) string {
 
 // runTraceCache materialises the transcripts this machine can still reach.
 //
-// The two ways a transcript fails to arrive are reported apart, because they
-// ask for different things: unreachable means it was here and is gone, while
-// another machine's name is the only route left to what it holds. Either one
-// raises the exit code, since the whole point of running this is to find out
-// what is not here.
+// The ways a transcript fails to arrive are reported apart, because they ask for
+// different things: unreachable means it was here and is gone or cannot be read,
+// another machine's name is the only route left to what it holds, and an
+// unverified pointer means the file may well be right here under a path no
+// record can tie to a session. Each of them raises the exit code, since the
+// whole point of running this is to find out what is not here -- a class that is
+// counted but exits 0 is one a script will never look at.
 func runTraceCache(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("trace cache", flag.ContinueOnError)
 	fs.SetOutput(stdout)
@@ -172,12 +174,12 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		return exitcode.NoRecord
 	}
 
-	fmt.Fprintf(stdout, "copied %d, already cached %d, unreachable here %d, on another machine %d\n",
-		rep.Copied, rep.Skipped, rep.Unreachable, rep.Elsewhere)
+	fmt.Fprintf(stdout, "copied %d, already cached %d, unreachable here %d, on another machine %d, unverified pointer %d\n",
+		rep.Copied, rep.Skipped, rep.Unreachable, rep.Elsewhere, rep.Unverified)
 	for _, d := range rep.Details {
 		fmt.Fprintln(stdout, "  "+tableCell(d))
 	}
-	if rep.Unreachable > 0 || rep.Elsewhere > 0 {
+	if rep.Unreachable > 0 || rep.Elsewhere > 0 || rep.Unverified > 0 {
 		return exitcode.Advisory
 	}
 	return exitcode.OK
