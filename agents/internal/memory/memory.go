@@ -55,14 +55,16 @@ const indexName = "INDEX.md"
 // A YAML block scalar makes `description:` multi-line, and every line after the
 // first lands in the index as a row the author never wrote -- forged entries and
 // forged `##` sections, deterministically, so the pre-commit guard waves them
-// through. Flattening the value instead would put text in the generated index
-// that differs from what the entry says, which is the silent normalisation this
-// project keeps getting bitten by. The author is told to move the prose into the
-// body, where prose belongs.
+// through. `metadata.type` is the same hole one level up: it is interpolated
+// into the `## ` heading, so a newline there forges the section itself along
+// with every row filed under it. Flattening the value instead would put text in
+// the generated index that differs from what the entry says, which is the silent
+// normalisation this project keeps getting bitten by. The author is told to keep
+// the field to one line and put prose where prose belongs, in the body.
 func checkSingleLine(base, field, value string) error {
 	for _, r := range value {
 		if unicode.IsControl(r) {
-			return fmt.Errorf("%s: %s contains a control character (%q): %s is a single-line summary rendered as one row of the index -- move the prose into the body", base, field, r, field)
+			return fmt.Errorf("%s: %s contains a control character (%q): %s is rendered as a single line of the index -- keep it to one line and move any prose into the body", base, field, r, field)
 		}
 	}
 	return nil
@@ -97,6 +99,11 @@ func Parse(path string) (Frontmatter, error) {
 		return Frontmatter{}, err
 	}
 	if err := checkSingleLine(filepath.Base(path), "description", fm.Description); err != nil {
+		return Frontmatter{}, err
+	}
+	// Before the fallback below, not after: an entry whose type is hostile has to
+	// be refused, never quietly filed somewhere else.
+	if err := checkSingleLine(filepath.Base(path), "metadata.type", fm.Metadata.Type); err != nil {
 		return Frontmatter{}, err
 	}
 	fm.Type = fm.Metadata.Type
@@ -227,6 +234,13 @@ func linkDest(s string) string {
 // "INDEX.md" into a directory holding "index.md" truncates the entry while the
 // directory keeps the lowercase name. They cannot coexist, and the tool has no
 // business picking which one survives.
+//
+// The remedy has to cover both files that can be sitting there. If it is a
+// curated entry, renaming it is right. But this refusal also fires on the
+// wreckage of the bug it exists to prevent -- where an older build already wrote
+// the generated index over the entry -- and renaming *that* only produces
+// "old-index.md: no frontmatter" on the next run, still wedged. So the message
+// names deletion too, for the case where the file is a generated index.
 func checkIndexCollision(dir string) error {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -237,7 +251,7 @@ func checkIndexCollision(dir string) error {
 	}
 	for _, e := range ents {
 		if n := e.Name(); n != indexName && strings.EqualFold(n, indexName) {
-			return fmt.Errorf("%s: a memory entry cannot be named this, because on a case-insensitive filesystem it is the same file as the generated %s and writing the index would destroy it -- rename %s to something else", n, indexName, n)
+			return fmt.Errorf("%s: a memory entry cannot be named this, because on a case-insensitive filesystem it is the same file as the generated %s and writing the index would destroy it -- rename %s to something else if it is your entry, or delete it if it holds a generated index (which means an older build already overwrote your entry with one)", n, indexName, n)
 		}
 	}
 	return nil
