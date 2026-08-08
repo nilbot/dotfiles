@@ -946,7 +946,16 @@ which covers pre-existing repos for free.
   generated once into machine-local state is more durable but needs bootstrapping,
   and must not be the hostname if hostnames repeat across machines. Decide during
   implementation; the record field is `machine` either way.
-- **Secret-pattern set for `guard`.** Start with high-confidence patterns (AWS keys,
-  PEM blocks, `Authorization:` headers, long high-entropy strings) and tune against
-  false positives on real `.agents/` content.
+- **Secret detection for `guard`.** ~~Open~~ **Settled 2026-08-08:** delegated to
+  [gitleaks](https://github.com/gitleaks/gitleaks), invoked as a subprocess over each
+  staged `.agents/` blob (`gitleaks stdin --redact`), not hand-rolled. A bespoke
+  pattern list is a maintenance treadmill against an adversary that changes
+  quarterly, and the tuning burden this question anticipated is itself the argument
+  against owning one. Importing gitleaks as a Go library was rejected: 14 direct
+  dependencies into a module that has one. trufflehog was rejected: it verifies
+  candidates by calling the issuing service, so a pre-commit gate would send
+  candidate credentials off-machine. One domain rule -- the Fernet-style
+  `gAAAAAB…` task blob observed in real Codex payloads -- ships as `[extend]`
+  configuration rather than code. Missing scanner blocks the commit, but only when
+  `.agents/` content is actually staged.
 - **Lane-health thresholds** (§4.1). Defaults need real data before they mean anything.

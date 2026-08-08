@@ -4904,7 +4904,25 @@ Ends with: every commit in every repo on this machine — new or pre-existing �
 
 **This is the one command that fails closed.** Exit 2 stops the commit.
 
-**Secret patterns for v1** (settling the spec's open question): high-confidence patterns only. Generic high-entropy detection is deliberately excluded from v1 — a guard that cries wolf on `.agents/` prose gets disabled, and a disabled guard protects nothing. Tune against real content before adding more.
+#### Secret detection is delegated to gitleaks, not hand-rolled
+
+**Revised 2026-08-08.** An earlier draft of this task carried six hand-written regexes (AWS keys, PEM blocks, `Authorization:` headers, GitHub tokens, `sk-` API keys, Codex task blobs) and the spec's open questions conceded they would need "tuning against false positives." That concession is the tell: a bespoke pattern list is a maintenance treadmill against an adversary that changes quarterly, and every credential format this project does *not* know about is a silent miss. Detection is delegated.
+
+**The tool: [gitleaks](https://github.com/gitleaks/gitleaks) 8.30.1**, available from Homebrew. Local, fast, no network, ~170 maintained rules, and `[extend] useDefault = true` lets us add domain rules as *configuration* rather than code.
+
+**Integration: subprocess, not library.** `gitleaks` as a Go import declares **14 direct dependencies** — cobra, viper, lipgloss, zerolog, sprig, archives among them — into a module that currently has exactly one (`gopkg.in/yaml.v3`). That trades a small auditable binary for a large transitive tree and couples our build to their API. As a subprocess we keep the module clean, the user upgrades rules with `brew upgrade` without rebuilding `agents`, and gitleaks' own config mechanism carries our additions.
+
+Use `gitleaks stdin`, one invocation per staged `.agents/` path, feeding it the **staged blob** (`git show :<path>`) rather than the working tree. That scopes detection precisely to what this guard is responsible for, needs no gitleaks understanding of the repository, and keeps file attribution for the finding report. Pass `--redact` so a matched secret never reaches a terminal or scrollback. Exit 1 from gitleaks means findings; treat anything else non-zero as a failure to scan.
+
+**Rejected: trufflehog.** It *verifies* candidate secrets by calling the issuing service. In a pre-commit hook that means latency, a network dependency, and sending candidate credentials off-machine — precisely wrong for a gate whose whole purpose is that secrets do not leave.
+
+**One domain rule we must add, as config:** the Fernet-style encrypted task blob (`gAAAAAB…`) observed in real Codex `PreToolUse` payloads on 2026-08-07. gitleaks has no rule for it because it is specific to agent tooling. It ships in our `.gitleaks.toml` under `[extend] useDefault = true`, not in Go.
+
+**Missing-tool policy: fail closed, bounded.** If nothing under `.agents/` is staged, the scan has nothing to do and the guard returns without needing gitleaks at all. If `.agents/` content *is* staged and `gitleaks` is not on `PATH`, **block the commit** with an install instruction. A security gate that silently degrades to a weaker check is the exact failure this project keeps finding; bounding the block to "you are actually committing agent content" keeps it proportionate. `agents doctor` (Task 20) reports its absence before you hit it, and `gitleaks` becomes a declared dependency of the dotfiles bootstrap.
+
+**The config ships with dotfiles, not per-repo.** Put it at `git/gitleaks.toml`, linked or passed by absolute path via `--config`. A per-repo `.gitleaks.toml` would be editable by the same agent whose output the guard exists to check, which defeats it. Contents: `[extend] useDefault = true`, plus the one `encrypted-task-blob` rule for `gAAAAAB[A-Za-z0-9_-]{24,}`.
+
+**Verify the rule coverage; do not assume it.** Before writing test expectations, confirm empirically which of the sample secrets gitleaks' default rules actually catch — pipe each through `gitleaks stdin` and look. This project has repeatedly shipped conclusions drawn from an unverified search. An AWS key and a PEM block are near-certain; an `Authorization: Bearer` header is not, and if the default set misses something this guard must catch, that gap belongs in our `[extend]` block with the evidence recorded beside it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -5153,25 +5171,32 @@ type Finding struct {
 	Detail   string
 }
 
-// secretRules are high-confidence patterns only.
+// Secret detection is delegated to gitleaks. See the task's "Secret detection is
+// delegated to gitleaks, not hand-rolled" section for why, and for the rejected
+// alternatives (importing it as a library; trufflehog).
 //
-// Generic high-entropy detection is deliberately absent from v1: it fires on
-// hashes, ids, and base64 in ordinary .agents/ prose, and a guard that cries
-// wolf gets switched off. Add patterns after tuning against real content.
-var secretRules = []struct {
-	name string
-	re   *regexp.Regexp
-}{
-	{"aws-access-key", regexp.MustCompile(`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`)},
-	{"private-key-block", regexp.MustCompile(`-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----`)},
-	{"authorization-header", regexp.MustCompile(`(?i)authorization:\s*(?:bearer|basic)\s+\S{8,}`)},
-	{"github-token", regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{30,}\b`)},
-	{"api-key", regexp.MustCompile(`\bsk-(?:ant-)?[A-Za-z0-9_-]{20,}\b`)},
-	// Observed for real in Codex PreToolUse payloads on 2026-08-07. This is the
-	// pattern that proved the redaction rule was necessary rather than
-	// theoretical, so it is in the guard by name.
-	{"encrypted-task-blob", regexp.MustCompile(`\bgAAAAAB[A-Za-z0-9_-]{24,}`)},
-}
+// This file owns three things only: deciding WHICH staged blobs are in scope,
+// feeding them to the scanner, and turning its output into Findings. It owns no
+// patterns. The one domain rule this project needs -- the Fernet-style encrypted
+// task blob observed in real Codex payloads on 2026-08-07 -- lives in the
+// shipped .gitleaks.toml under [extend], as configuration.
+const (
+	scannerBin  = "gitleaks"
+	agentsPrefix = ".agents/"
+)
+
+// scanStaged runs the scanner over one staged blob and returns its findings.
+//
+// It feeds the blob on stdin rather than pointing the scanner at the working
+// tree: the guard is responsible for what the COMMIT will contain, and the
+// working tree can differ from the index. --redact keeps a matched secret out of
+// the terminal and out of scrollback.
+//
+// Exit 0 means clean, exit 1 means findings. Any other outcome -- including the
+// binary being absent -- is a failure to scan, never a pass. Callers must
+// surface that as blocking; a security gate that quietly degrades to a weaker
+// check is the failure this guard exists to prevent.
+func scanStaged(repoRoot, path string, blob []byte, configPath string) ([]Finding, error)
 
 const agentsPrefix = ".agents/"
 
@@ -5222,22 +5247,17 @@ func Staged(repoRoot string) ([]Finding, error) {
 	return findings, nil
 }
 
-func scanSecrets(path string, content []byte) []Finding {
-	var out []Finding
-	for i, line := range strings.Split(string(content), "\n") {
-		for _, rule := range secretRules {
-			if loc := rule.re.FindStringIndex(line); loc != nil {
-				out = append(out, Finding{
-					Path: path, Line: i + 1, Rule: rule.name, Blocking: true,
-					// The matched text is never echoed: printing the secret to
-					// a terminal and a scrollback buffer is not a remedy.
-					Detail: "matched " + rule.name + "; the value is not printed here on purpose",
-				})
-			}
-		}
-	}
-	return out
-}
+// scanSecrets turns one blob into Findings by delegating to the scanner.
+//
+// Implement it over `gitleaks stdin --redact --report-format json`, mapping each
+// reported finding to a blocking Finding carrying the scanner's RuleID and
+// StartLine. The matched value is never echoed even though --redact already
+// masks it -- defence in depth costs nothing here, and printing a secret to a
+// terminal and its scrollback is not a remedy.
+//
+// The scanner not being installed is NOT a clean result. Return an error the
+// caller renders as blocking, with the install instruction.
+func scanSecrets(path string, content []byte, configPath string) ([]Finding, error)
 
 // checkGenerated regenerates the indexes and compares byte for byte against
 // what is staged.
@@ -6955,7 +6975,7 @@ Run against the spec after writing, before executing.
 
 **One spec item is deliberately not implemented.** §7's middle layer, a narrow `PreToolUse` guard, is advisory-only by the spec's own account and duplicates a check that Task 16 performs authoritatively at the commit boundary. Building it would add a per-tool-call subprocess to every session for a check that cannot be relied upon. If early warning turns out to be wanted in practice, it is a small addition on top of `guard.Staged`.
 
-**Two open questions are settled here rather than left open**, and both should be reviewed as decisions rather than accepted as detail: machine identity (Task 1 — a generated stable id, not the live hostname) and the secret-pattern set (Task 16 — high-confidence patterns only, no entropy heuristic). Lane-health thresholds (Task 20) are set to provisional values and exposed as flags, exactly as the spec asked.
+**Two open questions are settled here rather than left open**, and both should be reviewed as decisions rather than accepted as detail: machine identity (Task 1 — a generated stable id, not the live hostname) and secret detection (Task 16 — delegated to gitleaks as a subprocess, with one domain rule shipped as config; revised 2026-08-08 from an earlier hand-rolled pattern list). Lane-health thresholds (Task 20) are set to provisional values and exposed as flags, exactly as the spec asked.
 
 **One documented deviation from the spec's letter:** §9 asks `doctor` to check harness trust state directly. Task 20 checks whether each harness has actually recorded anything instead, because the trust stores are private and undocumented, and a check built on guesswork would be confidently wrong about the one thing the user needs to be right. The empirical check subsumes both trust questions.
 
