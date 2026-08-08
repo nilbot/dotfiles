@@ -27,6 +27,8 @@ func run(args []string) int {
 		return runWire(args[1:], os.Stdout)
 	case "trace":
 		return runTrace(args[1:], os.Stdout)
+	case "index":
+		return runIndex(args[1:], os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
 		usage()
