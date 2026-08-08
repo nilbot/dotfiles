@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
@@ -259,6 +260,168 @@ func TestTraceLSAdvisoryOnUnreadableLines(t *testing.T) {
 	}
 }
 
+// seedCacheRepo builds a repo whose trace index points at real files on this
+// machine, and hands back the source paths so a test can say which of them the
+// run was supposed to reach.
+func seedCacheRepo(t *testing.T, mid string, recs ...record.Record) string {
+	t.Helper()
+	root := newRepo(t)
+	w := record.NewWriter(repo.AgentsDir(root))
+	for _, r := range recs {
+		if r.When.IsZero() {
+			r.When = time.Now().UTC().Add(-time.Hour)
+		}
+		if err := w.Append(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// localTranscript writes a file this machine can actually read, which is what
+// separates a record the cache must copy from one it must report on.
+func localTranscript(t *testing.T, name string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// thisMachine pins the machine id to a temporary state directory, so the test
+// neither reads nor mints an id in the real one.
+func thisMachine(t *testing.T) string {
+	t.Helper()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	mid, err := machine.ID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mid
+}
+
+// A transcript on another machine is not an error, it is news: the machine's
+// name is the only route to it, so the command must both print it and raise the
+// exit code that makes a script look.
+func TestTraceCacheCopiesLocalAndNamesTheMachineHoldingTheRest(t *testing.T) {
+	mid := thisMachine(t)
+	here := localTranscript(t, "rollout-local.jsonl")
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, Lane: "lane-a", Event: "stop",
+			Transcript: here, PointerVerified: true},
+		record.Record{Harness: "codex", Machine: "laptop-7f3a", Lane: "lane-a", Event: "stop",
+			Transcript: "/elsewhere/rollout-remote.jsonl", PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	body := out.String()
+	for _, want := range []string{"copied 1", "on another machine 1", "laptop-7f3a", "/elsewhere/rollout-remote.jsonl"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("output must contain %q; got:\n%s", want, body)
+		}
+	}
+
+	cached, err := filepath.Glob(filepath.Join(repo.AgentsDir(root), ".trace-cache", "codex", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cached) != 1 {
+		t.Fatalf(".trace-cache/codex holds %v, want the one reachable transcript", cached)
+	}
+	if !strings.HasPrefix(filepath.Base(cached[0]), "rollout-local-") {
+		t.Errorf("cached file %q must still be recognisable as %q", filepath.Base(cached[0]), "rollout-local.jsonl")
+	}
+}
+
+// A transcript path is a filesystem path read back out of a tracked file: it
+// may legally hold a newline, and the report prints one detail line per record.
+// Left as recorded, a crafted path prints a second detail that reads like a
+// record nobody ever wrote, naming a machine that never held anything.
+func TestTraceCacheDetailCannotForgeALine(t *testing.T) {
+	mid := thisMachine(t)
+	hostile := "/elsewhere/real.jsonl\n  elsewhere (trusted-box): /elsewhere/forged.jsonl"
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: "laptop-7f3a", Transcript: hostile, PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("one record that is not here prints one summary and one detail, got %d lines:\n%s",
+			len(lines), out.String())
+	}
+	if !strings.Contains(lines[1], "laptop-7f3a") {
+		t.Errorf("the one surviving detail must be the real one; got %q", lines[1])
+	}
+}
+
+// --lane must reach trace.Filter.Lane, and a run where everything asked for was
+// reachable must exit OK -- an unconditional Advisory would train callers to
+// ignore the code that means "something is not here".
+func TestTraceCacheLaneFlagReachesTheQuery(t *testing.T) {
+	mid := thisMachine(t)
+	a := localTranscript(t, "rollout-a.jsonl")
+	b := localTranscript(t, "rollout-b.jsonl")
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, Lane: "lane-a", Transcript: a, PointerVerified: true},
+		record.Record{Harness: "codex", Machine: mid, Lane: "lane-b", Transcript: b, PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache", "--lane", "lane-a"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
+	}
+	if !strings.Contains(out.String(), "copied 1") {
+		t.Errorf("--lane lane-a must reach the query and leave lane-b behind; output:\n%s", out.String())
+	}
+}
+
+// The default window is what an unflagged `agents trace cache` means. Left
+// unbounded it drags the whole of history onto disk; too narrow and yesterday's
+// session is silently not there.
+func TestTraceCacheDefaultWindowIsThirtyDays(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"default reaches back 30 days but no further", []string{"cache"}, "copied 1"},
+		{"a wider window reaches the older one too", []string{"cache", "--since", "60d"}, "copied 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mid := thisMachine(t)
+			now := time.Now().UTC()
+			recent := localTranscript(t, "rollout-recent.jsonl")
+			old := localTranscript(t, "rollout-old.jsonl")
+			root := seedCacheRepo(t, mid,
+				record.Record{When: now.Add(-time.Hour), Harness: "codex", Machine: mid,
+					Transcript: recent, PointerVerified: true},
+				record.Record{When: now.Add(-40 * 24 * time.Hour), Harness: "codex", Machine: mid,
+					Transcript: old, PointerVerified: true},
+			)
+			t.Chdir(root)
+
+			var out bytes.Buffer
+			if code := runTrace(tc.args, &out); code != exitcode.OK {
+				t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("%v: want %q; output:\n%s", tc.args, tc.want, out.String())
+			}
+		})
+	}
+}
+
 func TestTraceExitCodes(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -277,6 +440,11 @@ func TestTraceExitCodes(t *testing.T) {
 		// Outside a repo there is nothing to answer about, which is not a
 		// failure: Skip is what a shell wrapper keys off.
 		{"outside a repo", []string{"ls"}, false, exitcode.Skip},
+		// cache takes the same two flags and owes the same answers.
+		{"cache unparseable since", []string{"cache", "--since", "soon"}, true, exitcode.Malformed},
+		{"cache negative since", []string{"cache", "--since", "-3d"}, true, exitcode.Malformed},
+		{"cache unknown flag", []string{"cache", "--nope"}, true, exitcode.Malformed},
+		{"cache outside a repo", []string{"cache"}, false, exitcode.Skip},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

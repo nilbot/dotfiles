@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
@@ -129,9 +130,55 @@ func tableCell(s string) string {
 	}, s)
 }
 
-// runTraceCache is replaced in the task that builds the cache; it exists so the
-// subcommand switch above compiles against a name that is already spoken for.
+// runTraceCache materialises the transcripts this machine can still reach.
+//
+// The two ways a transcript fails to arrive are reported apart, because they
+// ask for different things: unreachable means it was here and is gone, while
+// another machine's name is the only route left to what it holds. Either one
+// raises the exit code, since the whole point of running this is to find out
+// what is not here.
 func runTraceCache(args []string, stdout io.Writer) int {
-	fmt.Fprintln(stdout, "agents trace cache: not implemented")
-	return exitcode.Skip
+	fs := flag.NewFlagSet("trace cache", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	lane := fs.String("lane", "", "only this lane")
+	since := fs.String("since", "30d", "time window, e.g. 3d, 12h, 2w")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Malformed
+	}
+	d, err := trace.ParseSince(*since)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: --since %q: %v\n", *since, err)
+		return exitcode.Malformed
+	}
+
+	dir, code := agentsDirHere(stdout)
+	if code != exitcode.OK {
+		return code
+	}
+	mid, err := machine.ID()
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	res, err := trace.Query(dir, trace.Filter{Lane: *lane, Since: d}, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
+		return exitcode.NoRecord
+	}
+	rep, err := trace.Cache(dir, mid, res.Records)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	fmt.Fprintf(stdout, "copied %d, already cached %d, unreachable here %d, on another machine %d\n",
+		rep.Copied, rep.Skipped, rep.Unreachable, rep.Elsewhere)
+	for _, d := range rep.Details {
+		fmt.Fprintln(stdout, "  "+tableCell(d))
+	}
+	if rep.Unreachable > 0 || rep.Elsewhere > 0 {
+		return exitcode.Advisory
+	}
+	return exitcode.OK
 }
