@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -43,6 +44,30 @@ type Frontmatter struct {
 
 const delim = "---"
 
+// indexName is the single spelling of the generated file this package writes.
+// Compared with strings.EqualFold everywhere it is matched, never with ==: on a
+// case-insensitive filesystem the name on disk may be any casing of it.
+const indexName = "INDEX.md"
+
+// checkSingleLine rejects a control character in a field that is rendered as one
+// line of the index.
+//
+// A YAML block scalar makes `description:` multi-line, and every line after the
+// first lands in the index as a row the author never wrote -- forged entries and
+// forged `##` sections, deterministically, so the pre-commit guard waves them
+// through. Flattening the value instead would put text in the generated index
+// that differs from what the entry says, which is the silent normalisation this
+// project keeps getting bitten by. The author is told to move the prose into the
+// body, where prose belongs.
+func checkSingleLine(base, field, value string) error {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%s: %s contains a control character (%q): %s is a single-line summary rendered as one row of the index -- move the prose into the body", base, field, r, field)
+		}
+	}
+	return nil
+}
+
 func Parse(path string) (Frontmatter, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -68,6 +93,12 @@ func Parse(path string) (Frontmatter, error) {
 	if fm.Name == "" || fm.Description == "" {
 		return Frontmatter{}, fmt.Errorf("%s: name and description are both required", filepath.Base(path))
 	}
+	if err := checkSingleLine(filepath.Base(path), "name", fm.Name); err != nil {
+		return Frontmatter{}, err
+	}
+	if err := checkSingleLine(filepath.Base(path), "description", fm.Description); err != nil {
+		return Frontmatter{}, err
+	}
 	fm.Type = fm.Metadata.Type
 	if fm.Type == "" {
 		fm.Type = "uncategorized"
@@ -90,7 +121,12 @@ func List(dir string) ([]Frontmatter, error) {
 
 	var out []Frontmatter
 	for _, p := range matches {
-		if filepath.Base(p) == "INDEX.md" {
+		// EqualFold, not ==. On a case-insensitive filesystem -- macOS's
+		// default -- os.WriteFile("INDEX.md") lands on an existing "index.md"
+		// and the directory entry keeps its original casing, so an exact
+		// comparison then reads the generated index back as an entry and fails
+		// on it forever. The skip has to be about the name, not its spelling.
+		if strings.EqualFold(filepath.Base(p), indexName) {
 			continue
 		}
 		fm, err := Parse(p)
@@ -139,7 +175,7 @@ func RenderIndex(entries []Frontmatter) []byte {
 
 		fmt.Fprintf(&b, "\n## %s\n\n", typ)
 		for _, e := range group {
-			fmt.Fprintf(&b, "- [%s](%s) — %s", e.Name, e.Path, e.Description)
+			fmt.Fprintf(&b, "- [%s](%s) — %s", linkText(e.Name), linkDest(e.Path), e.Description)
 			if n := len(e.Sources); n > 0 {
 				// Surfaced here because it is the one thing about an entry
 				// that a reader on a different machine needs to know before
@@ -152,7 +188,65 @@ func RenderIndex(entries []Frontmatter) []byte {
 	return b.Bytes()
 }
 
+// linkTextEscaper escapes the characters that let entry text close the link text
+// early or open a second link inside it. `name: "br]ack(et"` otherwise renders
+// `- [br]ack(et](brk.md)`, which is not a link to anything.
+//
+// The backslash is escaped too, and first, so the escape itself cannot be
+// escaped away by a name that already ends in one. strings.Replacer makes a
+// single left-to-right pass, so no replacement is rescanned.
+var linkTextEscaper = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`)
+
+func linkText(s string) string { return linkTextEscaper.Replace(s) }
+
+// linkDest percent-encodes what would end a markdown link destination early or
+// split it in two: a ")" closes it, and a space starts the optional title. The
+// "%" itself is encoded first-class so the encoding stays unambiguous, and
+// everything below "!" covers space and the C0 controls in one rule.
+//
+// Path is a basename by construction, so this never has to preserve a "/".
+func linkDest(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c <= ' ', c == 0x7f, c == '%', c == '(', c == ')',
+			c == '<', c == '>', c == '"', c == '\'', c == '\\', c == '#', c == '?':
+			fmt.Fprintf(&b, "%%%02X", c)
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+// checkIndexCollision refuses to write over a curated entry that differs from
+// the generated file only in case.
+//
+// On a case-insensitive filesystem the two names are one file: writing
+// "INDEX.md" into a directory holding "index.md" truncates the entry while the
+// directory keeps the lowercase name. They cannot coexist, and the tool has no
+// business picking which one survives.
+func checkIndexCollision(dir string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range ents {
+		if n := e.Name(); n != indexName && strings.EqualFold(n, indexName) {
+			return fmt.Errorf("%s: a memory entry cannot be named this, because on a case-insensitive filesystem it is the same file as the generated %s and writing the index would destroy it -- rename %s to something else", n, indexName, n)
+		}
+	}
+	return nil
+}
+
 func WriteIndex(dir string) error {
+	if err := checkIndexCollision(dir); err != nil {
+		return err
+	}
 	entries, err := List(dir)
 	if err != nil {
 		return err
@@ -160,5 +254,5 @@ func WriteIndex(dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "INDEX.md"), RenderIndex(entries), 0o644)
+	return os.WriteFile(filepath.Join(dir, indexName), RenderIndex(entries), 0o644)
 }

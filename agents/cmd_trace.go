@@ -43,7 +43,20 @@ func agentsDirHere(stdout io.Writer) (string, int) {
 		fmt.Fprintln(stdout, "agents: not inside a git repository")
 		return "", exitcode.Skip
 	}
-	return repo.AgentsDir(rc.Root), exitcode.OK
+	dir := repo.AgentsDir(rc.Root)
+	// Being in a git repo is not the same as being in a repo that opted into
+	// this tool, and every caller of this function goes on to read or write
+	// inside .agents/. Left unchecked, `agents index` MkdirAll'd the tree and
+	// `agents trace cache` wrote a .gitignore into a repo where init had never
+	// run -- at exit 0, so nothing said a word about it. exitcode.Skip already
+	// documents "no .agents/" as one of the things it means; the check belongs
+	// here rather than in each command, because the next command to need a
+	// .agents/ path would otherwise have to remember to repeat it.
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		fmt.Fprintf(stdout, "agents: no .agents/ directory in %s; run `agents init` there first\n", rc.Root)
+		return "", exitcode.Skip
+	}
+	return dir, exitcode.OK
 }
 
 func runTraceLS(args []string, stdout io.Writer) int {

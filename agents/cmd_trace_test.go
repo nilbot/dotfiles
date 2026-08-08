@@ -597,3 +597,100 @@ func TestMainRegistersTrace(t *testing.T) {
 		t.Fatalf("run(trace ls) = %d, want Skip (%d); stdout:\n%s", code, exitcode.Skip, out)
 	}
 }
+
+// bareRepo is a plain `git init` where `agents init` has never run: the state of
+// a repo that has not opted into this tool, and of any clone before setup.
+// newRepo cannot stand in for it -- newRepo creates .agents/reports/traces.
+func bareRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	resolved, _ := filepath.EvalSymlinks(dir)
+	return resolved
+}
+
+// Being inside a git repository is not the same as being inside a repository
+// that opted into this tool, and agentsDirHere used to conflate the two: it
+// called repo.Discover and stat'd nothing. Measured in a fresh `git init` with
+// no `agents init`, all three exited 0, and two of them scaffolded a tree:
+// `agents index` created .agents/memory/INDEX.md, `agents trace cache` created
+// .agents/.trace-cache/.gitignore. exitcode.Skip already documents "no .agents/"
+// as one of the things it means.
+//
+// The assertion that no directory was created is the one that matters: an exit
+// code alone does not say whether the side effect happened before the code was
+// chosen.
+//
+// Kills: agentsDirHere returning repo.AgentsDir(rc.Root) without stat'ing it.
+// The positive control kills the other half -- a check on the wrong path, or one
+// that can never pass, which would refuse everywhere and still satisfy the
+// bare-repo case on its own.
+func TestCommandsThatNeedAgentsDirSkipWhereInitNeverRan(t *testing.T) {
+	commands := []struct {
+		name  string
+		setup func(*testing.T, string)
+		run   func(io.Writer) int
+	}{
+		{"index", func(*testing.T, string) {}, func(w io.Writer) int { return runIndex(nil, w) }},
+		{"trace ls", seedTraces, func(w io.Writer) int { return runTrace([]string{"ls"}, w) }},
+		// No records: seeded ones point at another machine, which is Advisory
+		// rather than OK and would say nothing extra about the directory check.
+		{"trace cache", func(*testing.T, string) {}, func(w io.Writer) int { return runTrace([]string{"cache"}, w) }},
+	}
+
+	for _, c := range commands {
+		t.Run(c.name+"/no .agents", func(t *testing.T) {
+			thisMachine(t)
+			root := bareRepo(t)
+			t.Chdir(root)
+
+			var out bytes.Buffer
+			if code := c.run(&out); code != exitcode.Skip {
+				t.Fatalf("exit = %d, want Skip (%d); output:\n%s", code, exitcode.Skip, out.String())
+			}
+			if !strings.Contains(out.String(), "agents init") {
+				t.Errorf("the refusal must name the command that fixes it; got:\n%s", out.String())
+			}
+			if _, err := os.Lstat(filepath.Join(root, ".agents")); !os.IsNotExist(err) {
+				found, _ := filepath.Glob(filepath.Join(root, ".agents", "*"))
+				t.Errorf(".agents/ was scaffolded into a repo that never opted in (Lstat: %v); it holds %v", err, found)
+			}
+		})
+
+		t.Run(c.name+"/initialized", func(t *testing.T) {
+			thisMachine(t)
+			root := newRepo(t)
+			c.setup(t, root)
+			t.Chdir(root)
+
+			var out bytes.Buffer
+			if code := c.run(&out); code != exitcode.OK {
+				t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
+			}
+		})
+	}
+}
+
+// runInit is the one command that must still work in a repo with no .agents/ --
+// it owns creating it. It reaches repo.Discover directly rather than through
+// agentsDirHere, and this pins that: routing it through the shared helper would
+// make `agents init` refuse to initialize anything.
+//
+// Kills: moving runInit onto agentsDirHere, which reads as a tidy-up.
+func TestInitStillScaffoldsWhereThereIsNoAgentsDir(t *testing.T) {
+	root := bareRepo(t)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	// Advisory, not OK: init reports that the trust steps are still outstanding.
+	if code := runInit(nil, &out); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	if fi, err := os.Stat(filepath.Join(root, ".agents", "memory")); err != nil || !fi.IsDir() {
+		t.Fatalf(".agents/memory/ must exist after init: %v; output:\n%s", err, out.String())
+	}
+}
