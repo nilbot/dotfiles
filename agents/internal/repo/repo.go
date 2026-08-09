@@ -141,8 +141,8 @@ func Git(dir string, args ...string) (string, error) {
 }
 
 // InProgress names the multi-step git operation the worktree is in the middle
-// of -- "merge", "cherry-pick", "revert" or "rebase" -- and returns "" when
-// there is none.
+// of -- "merge", "cherry-pick", "revert", "rebase", "am" or "bisect" -- and
+// returns "" when there is none.
 //
 // It exists because `git commit -- <pathspec>` is not safe in any of them and
 // git only refuses two. Measured against git 2.50.1:
@@ -150,11 +150,26 @@ func Git(dir string, args ...string) (string, error) {
 //	merge, cherry-pick  git refuses: "cannot do a partial commit during a ..."
 //	revert              git makes the commit, and committing clears REVERT_HEAD
 //	                    -- the in-progress revert is gone with no message
-//	rebase              git makes the commit, inserting it into the rebase's
+//	rebase, am          git makes the commit, inserting it into the operation's
 //	                    detached HEAD
+//	bisect              git makes the commit on the bisect's detached HEAD and
+//	                    prints "[detached HEAD 63344ea] ...", so the caller is
+//	                    told the record was written; `git bisect reset` then
+//	                    leaves it reachable from nothing (`git branch --contains`
+//	                    comes back empty)
 //
 // So a caller that only handled git's own refusal would be silently destructive
-// in exactly the two cases where git says nothing.
+// in exactly the cases where git says nothing.
+//
+// Deliberately NOT in the table: a plain detached HEAD. The hazard has the same
+// shape -- a commit made there is reachable from HEAD alone -- but it is a state
+// people work in on purpose (`git checkout <sha>` to look at something, a CI
+// checkout, a worktree pinned to a tag), losing the commit takes a later choice
+// of the user's, and there is no operation to finish or abandon, so there is
+// nothing a refusal could tell them to do. A bisect differs in kind rather than
+// degree: the next `git bisect good`/`bad` moves HEAD by itself and the closing
+// `git bisect reset` always discards whatever was committed there, so the
+// operation throws the record away without the user ever deciding to.
 //
 // The markers are read from --git-dir rather than --git-common-dir because all
 // of them are per-worktree: a merge in one linked worktree must not stop a save
@@ -172,10 +187,25 @@ func InProgress(dir string) (string, error) {
 		// neither leaves a *_HEAD marker of its own.
 		{"rebase", "rebase-merge"},
 		{"rebase", "rebase-apply"},
+		// Written by `git bisect start`, before it has even detached HEAD.
+		{"bisect", "BISECT_START"},
 	} {
-		if _, err := os.Lstat(filepath.Join(gitDir, m.marker)); err == nil {
-			return m.op, nil
+		if _, err := os.Lstat(filepath.Join(gitDir, m.marker)); err != nil {
+			continue
 		}
+		// `git am` keeps its state in .git/rebase-apply too -- the same
+		// directory the rebase apply backend uses -- and is told apart the way
+		// git itself tells them apart: an am writes an `applying` file there, a
+		// rebase writes `rebasing`. Calling it a rebase is not a cosmetic slip,
+		// because the remedies do not carry over: `git rebase --continue` and
+		// `git rebase --abort` during an am both fail with "fatal: It looks like
+		// 'git am' is in progress. Cannot rebase."
+		if m.marker == "rebase-apply" {
+			if _, err := os.Lstat(filepath.Join(gitDir, m.marker, "applying")); err == nil {
+				return "am", nil
+			}
+		}
+		return m.op, nil
 	}
 	return "", nil
 }

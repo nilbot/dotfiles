@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -35,20 +36,41 @@ func runSave(args []string, stdout io.Writer) int {
 		return code
 	}
 
-	// Before anything is written or staged. A path-scoped commit is unsafe in
-	// the middle of a merge, a cherry-pick, a revert or a rebase, and git only
-	// refuses the first two -- see repo.InProgress. Bailing out after staging
-	// would leave the caller's index rearranged by a command that then did
-	// nothing.
+	// repoHere's os.Stat follows symlinks, and for every other caller that is the
+	// right answer: a command that only reads and writes inside .agents/ works
+	// perfectly well when the directory lives elsewhere and is linked in. This is
+	// the one command that COMMITS it, and there the link is not a detail.
+	// Measured: `git add -- .agents` stages the link itself, so the commit is a
+	// single `120000 blob` holding an absolute path on this machine, none of the
+	// entries are in it, and the two indexes regenerated below land outside the
+	// repository -- at exit 0.
+	fi, err := os.Lstat(agentsDir)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents save: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(stdout, "agents save: %s is a symlink. Committing it would record the link — an absolute"+
+			" path on this machine — instead of the files under it, and the regenerated indexes would be"+
+			" written outside the repository. Replace it with a real directory to save from here.\n", agentsDir)
+		return exitcode.NoRecord
+	}
+
+	// Before anything is written or staged. A path-scoped commit is unsafe in the
+	// middle of every operation repo.InProgress names, and git only refuses two
+	// of them. Bailing out after staging would be worse than doing nothing:
+	// mid-merge it leaves .agents/ staged into the conflicted merge, and the
+	// caller's next `git merge --continue` sweeps it into the merge commit --
+	// exactly the accident this command exists to prevent.
 	op, err := repo.InProgress(rc.Root)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents save: %v\n", err)
 		return exitcode.NoRecord
 	}
 	if op != "" {
-		fmt.Fprintf(stdout, "agents save: a %s is in progress, and a commit scoped to .agents/ is not safe during one"+
-			" — git either refuses it or makes it and loses the %s. Finish it with `git %s --continue`"+
-			" or abandon it with `git %s --abort`, then run `agents save` again.\n", op, op, op, op)
+		fmt.Fprintf(stdout, "agents save: a `git %s` is in progress, and a commit scoped to .agents/ is not safe"+
+			" during one — git either refuses it, or makes it and then loses either the operation or the commit."+
+			" %s, then run `agents save` again.\n", op, inProgressRemedy(op))
 		return exitcode.NoRecord
 	}
 
@@ -88,7 +110,29 @@ func runSave(args []string, stdout io.Writer) int {
 	out, err := repo.Git(rc.Root, "commit", "-m", *msg, "--", ".agents")
 	fmt.Fprint(stdout, out)
 	if err != nil {
-		return exitcode.Block
+		// NoRecord, not Block. Block is documented as the only code that stops
+		// work, and it belongs to the pre-commit guard; `save` is not a guard,
+		// and a commit git refused is precisely "wanted to record and could not"
+		// -- the same thing every other failure in this function reports. The
+		// path is ordinary rather than exotic: an empty `-m` reaches it, and so
+		// does any pre-commit hook that says no.
+		return exitcode.NoRecord
 	}
 	return exitcode.OK
+}
+
+// inProgressRemedy is the way out of an in-progress git operation, which is not
+// uniformly `git <op> --continue` / `git <op> --abort`.
+//
+// A bisect has no --continue at all: `git bisect reset` is the only way back,
+// and it is also the step that discards anything committed on the bisect's
+// detached HEAD. `git am` does have both, and offering it the rebase spellings
+// -- which sharing .git/rebase-apply with the rebase apply backend makes easy to
+// do by accident -- offers two commands that both fail with "fatal: It looks
+// like 'git am' is in progress. Cannot rebase."
+func inProgressRemedy(op string) string {
+	if op == "bisect" {
+		return "End it with `git bisect reset`"
+	}
+	return fmt.Sprintf("Finish it with `git %s --continue` or abandon it with `git %s --abort`", op, op)
 }
