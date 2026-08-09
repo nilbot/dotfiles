@@ -8,7 +8,9 @@ package handoff
 
 import (
 	"bytes"
+	"crypto/rand"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,6 +37,104 @@ type Entry struct {
 }
 
 func root(agentsDir string) string { return filepath.Join(agentsDir, "reports", "handoff") }
+
+// openDir opens one repository-controlled directory component without trusting
+// the path spelling after the check. Lstat rejects a symlink that is already
+// present; SameFile proves OpenRoot obtained the directory that was checked if
+// the component changed between those operations. The returned Root is a
+// directory handle, so later renames cannot be redirected by changing a parent
+// pathname.
+func openDir(parent *os.Root, parentPath, name string) (*os.Root, error) {
+	p := filepath.Join(parentPath, name)
+	for {
+		fi, err := parent.Lstat(name)
+		if os.IsNotExist(err) {
+			if err := parent.Mkdir(name, 0o755); err != nil && !os.IsExist(err) {
+				return nil, err
+			}
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%s is a symlink: handoff writes only use real directories below .agents so repository content cannot redirect them", p)
+		}
+		if !fi.IsDir() {
+			return nil, fmt.Errorf("%s is not a directory: move it aside so handoffs can be written there", p)
+		}
+
+		child, err := parent.OpenRoot(name)
+		if err != nil {
+			return nil, err
+		}
+		opened, err := child.Stat(".")
+		if err != nil {
+			child.Close()
+			return nil, err
+		}
+		if !os.SameFile(fi, opened) {
+			child.Close()
+			return nil, fmt.Errorf("%s changed while it was being opened: retry after ensuring it is a real directory, not a symlink", p)
+		}
+		return child, nil
+	}
+}
+
+// openHandoffRoot deliberately opens agentsDir itself as the trust anchor and
+// starts symlink refusal below it. `agents init --local` may keep a shared
+// .agents directory elsewhere and link it into a worktree; that local setup is
+// legitimate. reports/handoff and everything beneath it are repository content
+// and therefore are not trusted to redirect a write.
+func openHandoffRoot(agentsDir string) (*os.Root, error) {
+	agentsRoot, err := os.OpenRoot(agentsDir)
+	if err != nil {
+		return nil, err
+	}
+	reports, err := openDir(agentsRoot, agentsDir, "reports")
+	agentsRoot.Close()
+	if err != nil {
+		return nil, err
+	}
+	handoffRoot, err := openDir(reports, filepath.Join(agentsDir, "reports"), "handoff")
+	reports.Close()
+	return handoffRoot, err
+}
+
+// atomicWrite refuses an existing symlink but permits an intentional rewrite
+// of a regular file. The final operation is a handle-relative rename: if the
+// destination is swapped for a symlink after Lstat, rename replaces the link
+// itself instead of following it, leaving its target untouched.
+func atomicWrite(dir *os.Root, dirPath, name string, data []byte, perm os.FileMode) error {
+	dst := filepath.Join(dirPath, name)
+	if fi, err := dir.Lstat(name); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symlink: refusing to replace it; remove the link and retry", dst)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	tmpName := ".handoff-write-" + rand.Text()
+	f, err := dir.OpenFile(tmpName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		f.Close()
+		dir.Remove(tmpName)
+	}()
+	if _, err := io.Copy(f, bytes.NewReader(data)); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := dir.Rename(tmpName, name); err != nil {
+		return err
+	}
+	return nil
+}
 
 // CheckSession reports whether a session id can be used as one. Exported so the
 // command can refuse a bad --session as malformed input rather than discovering
@@ -174,9 +274,16 @@ func Write(agentsDir, laneName, session, status, body string, when time.Time) (s
 		return "", err
 	}
 	dir := filepath.Join(root(agentsDir), laneName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	handoffRoot, err := openHandoffRoot(agentsDir)
+	if err != nil {
 		return "", err
 	}
+	defer handoffRoot.Close()
+	laneRoot, err := openDir(handoffRoot, root(agentsDir), laneName)
+	if err != nil {
+		return "", err
+	}
+	defer laneRoot.Close()
 	name := fmt.Sprintf("%s-%s.md", when.UTC().Format("2006-01-02"), session)
 	if err := checkCaseCollision(dir, name, "file"); err != nil {
 		return "", err
@@ -204,7 +311,7 @@ func Write(agentsDir, laneName, session, status, body string, when time.Time) (s
 	b.WriteString(strings.TrimRight(body, "\n"))
 	b.WriteString("\n")
 
-	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+	if err := atomicWrite(laneRoot, dir, name, b.Bytes(), 0o644); err != nil {
 		return "", err
 	}
 	if err := WriteIndex(agentsDir); err != nil {
@@ -285,6 +392,9 @@ func parse(p string) (Entry, error) {
 		if err := safetext.CheckSingleLine(filepath.Base(p), f.name, f.value); err != nil {
 			return Entry{}, err
 		}
+	}
+	if e.Status != StatusReviewed && e.Status != StatusDraft {
+		return Entry{}, fmt.Errorf("%s: handoff status %q is not recognised: status must be exactly %q or %q", filepath.Base(p), e.Status, StatusReviewed, StatusDraft)
 	}
 	return e, nil
 }
@@ -404,8 +514,10 @@ func WriteIndex(agentsDir string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(root(agentsDir), 0o755); err != nil {
+	handoffRoot, err := openHandoffRoot(agentsDir)
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(root(agentsDir), "INDEX.md"), RenderIndex(entries), 0o644)
+	defer handoffRoot.Close()
+	return atomicWrite(handoffRoot, root(agentsDir), "INDEX.md", RenderIndex(entries), 0o644)
 }

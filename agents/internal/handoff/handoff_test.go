@@ -1,7 +1,9 @@
 package handoff
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
@@ -146,6 +148,77 @@ func TestWritePlacesFilePerLaneAndSession(t *testing.T) {
 	}
 }
 
+// New notes and deliberate rewrites of the same regular handoff are both
+// supported. This is the positive control for symlink refusal: the boundary is
+// about what kind of filesystem object would be replaced, not a blanket
+// no-overwrite policy.
+func TestWriteCreatesAndRewritesARegularHandoff(t *testing.T) {
+	dir := t.TempDir()
+	when := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+
+	first, err := Write(dir, "lane-a", "s1", StatusReviewed, "first body", when)
+	if err != nil {
+		t.Fatalf("new Write: %v", err)
+	}
+	second, err := Write(dir, "lane-a", "s1", StatusReviewed, "replacement body", when)
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if second != first {
+		t.Fatalf("rewrite path = %q, want existing regular handoff %q", second, first)
+	}
+	b, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "first body") || !strings.Contains(string(b), "replacement body") {
+		t.Errorf("regular handoff was not intentionally replaced:\n%s", b)
+	}
+}
+
+// INDEX.md is another repository-controlled destination written as a side
+// effect of Write. Protecting only the requested handoff leaf would still let a
+// tracked index symlink redirect that side effect to an arbitrary file.
+//
+// Kills: making only the handoff note atomic while WriteIndex still uses
+// os.WriteFile on its final path.
+func TestWriteDoesNotFollowASymlinkedIndex(t *testing.T) {
+	dir := t.TempDir()
+	index := filepath.Join(dir, "reports", "handoff", "INDEX.md")
+	if err := os.MkdirAll(filepath.Dir(index), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "outside.txt")
+	want := []byte("outside index target\n")
+	if err := os.WriteFile(external, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, index); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := Write(dir, "lane-a", "s1", StatusReviewed, "body", time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+	if p == "" {
+		t.Fatalf("the handoff itself should reach disk before index refresh fails: %v", err)
+	}
+	var stale *IndexError
+	if !errors.As(err, &stale) {
+		t.Fatalf("err = %v (%T), want IndexError", err, err)
+	}
+	for _, s := range []string{"INDEX.md", "symlink"} {
+		if !strings.Contains(err.Error(), s) {
+			t.Errorf("the refusal must name %q; got: %v", s, err)
+		}
+	}
+	got, readErr := os.ReadFile(external)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("external target changed:\n got %q\nwant %q", got, want)
+	}
+}
+
 // Two agents on one branch must not be able to clobber each other. Distinct
 // sessions means distinct files, which is the entire reason for this scheme.
 func TestConcurrentSessionsGetSeparateFiles(t *testing.T) {
@@ -199,6 +272,65 @@ func TestListReturnsEveryFieldTheEntryWasWrittenWith(t *testing.T) {
 	}
 	if e.Path != "lane-x/2026-08-10-sess-y.md" {
 		t.Errorf("Path = %q, want it relative to reports/handoff", e.Path)
+	}
+}
+
+// Status is provenance, not an open-ended workflow state. Raw files arrive via
+// hand edits and merges, bypassing Write's normalization, so the parser itself
+// must reject both an absent claim and an invented stronger-sounding one.
+//
+// Kills: validating only Write input, accepting every single-line status, or
+// treating a missing status as the zero-value equivalent of draft.
+func TestListRefusesMissingOrUnrecognisedStatus(t *testing.T) {
+	for _, tc := range []struct {
+		label  string
+		status string
+	}{
+		{"missing", ""},
+		{"unrecognised", "status: approved\n"},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			dir := t.TempDir()
+			name := "2026-08-10-s1.md"
+			writeRaw(t, dir, "lane-a", name,
+				"---\nlane: lane-a\nsession: s1\n"+tc.status+"when: 2026-08-10T09:00:00Z\n---\n\nbody\n")
+
+			_, err := List(dir)
+			if err == nil {
+				t.Fatal("List accepted a handoff without canonical provenance")
+			}
+			for _, want := range []string{name, "status"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the refusal must name %q; got: %v", want, err)
+				}
+			}
+			if err := WriteIndex(dir); err == nil {
+				t.Fatal("WriteIndex rendered a handoff without canonical provenance")
+			}
+		})
+	}
+}
+
+// Both and only both canonical provenance values survive the same raw parsing
+// route used for hand edits and merges, then appear in the generated index.
+func TestListAndRenderAcceptBothCanonicalStatuses(t *testing.T) {
+	dir := t.TempDir()
+	for i, status := range []string{StatusReviewed, StatusDraft} {
+		name := fmt.Sprintf("2026-08-%02d-s%d.md", 10+i, i)
+		writeRaw(t, dir, "lane-a", name, fmt.Sprintf(
+			"---\nlane: lane-a\nsession: s%d\nstatus: %s\nwhen: 2026-08-%02dT09:00:00Z\n---\n\nbody\n",
+			i, status, 10+i))
+	}
+
+	entries, err := List(dir)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	idx := string(RenderIndex(entries))
+	for _, status := range []string{StatusReviewed, StatusDraft} {
+		if strings.Count(idx, "| "+status+" |") != 1 {
+			t.Errorf("want exactly one %q provenance row:\n%s", status, idx)
+		}
 	}
 }
 

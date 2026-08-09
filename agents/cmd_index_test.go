@@ -108,6 +108,39 @@ func TestIndexRegeneratesTheHandoffIndexInPlace(t *testing.T) {
 	}
 }
 
+// Raw handoffs can be hand-edited or merge-produced, so status validation has
+// to sit in the parser reached by the real index command. Otherwise an invented
+// provenance word is rendered at exit 0 and looks like a supported trust level.
+//
+// Kills: validating only handoff.Write, or reporting a parse rejection as a
+// successful index regeneration.
+func TestIndexRefusesAnUnrecognisedHandoffStatus(t *testing.T) {
+	root := newRepo(t)
+	dir := filepath.Join(root, ".agents", "reports", "handoff", "lane-a")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "2026-08-10-s1.md"
+	if err := os.WriteFile(filepath.Join(dir, name),
+		[]byte("---\nlane: lane-a\nsession: s1\nstatus: approved\nwhen: 2026-08-10T09:00:00Z\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runIndex(nil, &out); code != exitcode.NoRecord {
+		t.Fatalf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+	}
+	for _, want := range []string{name, "status"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the refusal must name %q; output:\n%s", want, out.String())
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(root, ".agents", "reports", "handoff", "INDEX.md")); err == nil {
+		t.Fatal("the command wrote an index containing unsupported provenance")
+	}
+}
+
 // A subcommand that is not registered in main.go is unreachable however well it
 // works. Skip is only reachable through runIndex; an unregistered command
 // returns Malformed.

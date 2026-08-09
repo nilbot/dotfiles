@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 )
@@ -56,6 +57,131 @@ func TestHandoffWriteFilesUnderTheResolvedLane(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), got[0][strings.Index(got[0], "/")+1:]) {
 		t.Errorf("the command must print where it wrote:\n%s", out.String())
+	}
+}
+
+// A tracked handoff path is untrusted input. os.WriteFile follows a symlink at
+// the exact destination, so without a write-boundary guard a repository can aim
+// this command at an arbitrary writable file and replace its contents at exit
+// 0. The target is outside .agents/ and sampled byte-for-byte on both sides.
+//
+// Kills: writing the handoff with os.WriteFile, or checking only parent path
+// components while leaving the destination leaf unchecked.
+func TestHandoffWriteRefusesASymlinkedDestination(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+
+	laneDir := filepath.Join(handoffRoot(root), "lane-a")
+	if err := os.MkdirAll(laneDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "do-not-overwrite.txt")
+	want := []byte("outside bytes must survive\n")
+	if err := os.WriteFile(external, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := time.Now().UTC().Format("2006-01-02") + "-s1.md"
+	destination := filepath.Join(laneDir, name)
+	if err := os.Symlink(external, destination); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code := runHandoffWrite([]string{"--lane", "lane-a", "--session", "s1"}, strings.NewReader("body\n"), &out)
+	if code != exitcode.NoRecord {
+		t.Fatalf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+	}
+	for _, s := range []string{"symlink", name} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("the refusal must name %q; output:\n%s", s, out.String())
+		}
+	}
+	got, err := os.ReadFile(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("external target changed:\n got %q\nwant %q", got, want)
+	}
+	fi, err := os.Lstat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the refused destination was replaced instead of left for the user to fix: mode %v", fi.Mode())
+	}
+}
+
+// The leaf guard is not enough: MkdirAll and every later pathname operation
+// follow a symlinked lane component. A tracked lane link can therefore redirect
+// both the temporary/write path and the final destination outside the handoff
+// tree unless the directory is opened as a verified component.
+//
+// Kills: guarding only the final filename, or resolving the lane path and then
+// treating the resolved external directory as a legitimate handoff lane.
+func TestHandoffWriteRefusesASymlinkedLane(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+
+	outside := t.TempDir()
+	name := time.Now().UTC().Format("2006-01-02") + "-s1.md"
+	external := filepath.Join(outside, name)
+	want := []byte("another handoff must not be clobbered\n")
+	if err := os.WriteFile(external, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(handoffRoot(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lane := filepath.Join(handoffRoot(root), "lane-a")
+	if err := os.Symlink(outside, lane); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code := runHandoffWrite([]string{"--lane", "lane-a", "--session", "s1"}, strings.NewReader("body\n"), &out)
+	if code != exitcode.NoRecord {
+		t.Fatalf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+	}
+	for _, s := range []string{"symlink", "lane-a"} {
+		if !strings.Contains(out.String(), s) {
+			t.Errorf("the refusal must name %q; output:\n%s", s, out.String())
+		}
+	}
+	got, err := os.ReadFile(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("external target changed:\n got %q\nwant %q", got, want)
+	}
+}
+
+// The trust boundary starts below .agents, not at it. `init --local` users may
+// deliberately share one out-of-repository context directory through a local
+// .agents symlink; handoff writes remain valid there so long as the tracked
+// components beneath that root are real directories.
+func TestHandoffWriteStillUsesAnIntentionalSymlinkedAgentsDir(t *testing.T) {
+	root := newRepo(t)
+	outside := filepath.Join(t.TempDir(), "shared-context")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(root, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runHandoffWrite([]string{"--lane", "lane-a", "--session", "s1"}, strings.NewReader("body\n"), &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
+	}
+	name := time.Now().UTC().Format("2006-01-02") + "-s1.md"
+	if _, err := os.Stat(filepath.Join(outside, "reports", "handoff", "lane-a", name)); err != nil {
+		t.Errorf("handoff was not written through the intentional .agents link: %v", err)
 	}
 }
 
