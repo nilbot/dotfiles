@@ -1,14 +1,46 @@
 package handoff
 
 import (
+	"errors"
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+// caseInsensitiveFS reports whether dir aliases names that differ only in case,
+// by asking the filesystem rather than by guessing from runtime.GOOS -- a
+// case-sensitive volume on macOS and a case-insensitive one on Linux both exist.
+// Same probe as internal/memory's, for the same hazard.
+func caseInsensitiveFS(t *testing.T, dir string) bool {
+	t.Helper()
+	p := filepath.Join(dir, "casefold-probe")
+	if err := os.WriteFile(p, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(p)
+	_, err := os.Stat(filepath.Join(dir, "CASEFOLD-PROBE"))
+	return err == nil
+}
+
+// makeUndeletable pins one file so os.Remove on it fails while its neighbours in
+// the same writable directory still go. Mode bits cannot do this -- on POSIX
+// unlink is a permission on the directory, not on the file -- so it uses BSD's
+// user-immutable flag and reports false where there is no chflags to run.
+func makeUndeletable(t *testing.T, p string) bool {
+	t.Helper()
+	if err := exec.Command("chflags", "uchg", p).Run(); err != nil {
+		return false
+	}
+	// Registered after t.TempDir's own cleanup and therefore run before it: an
+	// immutable file left behind stops the temp directory being removed.
+	t.Cleanup(func() { _ = exec.Command("chflags", "nouchg", p).Run() })
+	return true
+}
 
 // naivePath is where an implementation that interpolates its arguments straight
 // into a path would put the file. It is built here, without calling anything in
@@ -239,6 +271,68 @@ func TestListAndRenderIndex(t *testing.T) {
 	}
 }
 
+// Ordering between lanes, which TestListAndRenderIndex above cannot
+// discriminate: its newest lane, lane-b, is also the alphabetically last one, so
+// reverse-alphabetical-by-name and ranked-by-oldest-entry both agree with the
+// right answer there and pass it.
+//
+// Here every lane name sorts against its recency and every lane holds two
+// entries, so the four candidate rules give four different answers:
+//
+//	newest entry first (correct) -> zeta, alpha, mid
+//	ascending by name            -> alpha, mid, zeta
+//	descending by name           -> zeta, mid, alpha
+//	ranked by oldest entry       -> alpha, mid, zeta
+//
+// The entries are handed over in two orders, neither of them the answer, so a
+// comparator that returns a constant cannot pass by leaving the input alone.
+//
+// Kills: lanes[i] < lanes[j] and lanes[i] > lanes[j] (name only, time ignored
+// entirely), and ranking a lane by byLane[l][len-1] -- its oldest entry --
+// instead of byLane[l][0].
+func TestRenderIndexOrdersLanesByTheirNewestEntry(t *testing.T) {
+	base := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+	at := func(lane, session string, d time.Duration) Entry {
+		return Entry{Lane: lane, Session: session, Status: StatusDraft, When: base.Add(d),
+			Path: lane + "/2026-08-10-" + session + ".md"}
+	}
+	// zeta is newest overall and also holds the oldest entry of all; alpha's
+	// oldest is the newest "oldest"; mid sits between them either way.
+	entries := []Entry{
+		at("mid", "m-old", 30*time.Minute),
+		at("alpha", "a-new", 5*time.Hour),
+		at("zeta", "z-old", 0),
+		at("mid", "m-new", 1*time.Hour),
+		at("alpha", "a-old", 4*time.Hour),
+		at("zeta", "z-new", 10*time.Hour),
+	}
+	reversed := make([]Entry, len(entries))
+	for i, e := range entries {
+		reversed[len(entries)-1-i] = e
+	}
+
+	for _, tc := range []struct {
+		label string
+		in    []Entry
+	}{
+		{"interleaved", entries},
+		{"interleaved backwards", reversed},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			idx := string(RenderIndex(tc.in))
+			z := strings.Index(idx, "## zeta")
+			a := strings.Index(idx, "## alpha")
+			m := strings.Index(idx, "## mid")
+			if z < 0 || a < 0 || m < 0 {
+				t.Fatalf("a lane heading is missing:\n%s", idx)
+			}
+			if !(z < a && a < m) {
+				t.Errorf("lanes must be ranked by their newest entry (zeta, alpha, mid); got zeta=%d alpha=%d mid=%d in:\n%s", z, a, m, idx)
+			}
+		})
+	}
+}
+
 // Ordering within a lane, which the lane-ordering assertion above does not
 // reach. The fixture puts every entry on one date so the order List returns
 // them in -- by path, and the path leads with the date -- is the exact reverse
@@ -349,6 +443,51 @@ func TestPruneKeepsNewestPerLane(t *testing.T) {
 	}
 }
 
+// Prune removes files one at a time and INDEX.md is the durable record of what
+// is left, so a partial failure must not leave the index naming files that are
+// gone. The coin flip is only *between* lanes: within one lane sortNewestFirst
+// fixes the order, so one lane, five entries and keep=2 makes the second removal
+// target deterministic.
+//
+// Kills: `return removed, err` from inside the loop, which skips WriteIndex and
+// leaves the index listing the entry that was already deleted.
+func TestPruneLeavesTheIndexMatchingWhatItActuallyRemoved(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	// Newest first is a, b, c, d, e; keep=2 keeps a and b and removes c, then d,
+	// then e.
+	for i, s := range []string{"e", "d", "c", "b", "a"} {
+		if _, err := Write(dir, "busy", s, "draft", "x", base.Add(time.Duration(i)*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	blocked := filepath.Join(dir, "reports", "handoff", "busy", "2026-08-01-d.md")
+	if !makeUndeletable(t, blocked) {
+		t.Skip("no chflags here: cannot pin one file against os.Remove while its neighbours stay removable")
+	}
+
+	removed, err := Prune(dir, 2)
+	if err == nil {
+		t.Skipf("fixture did not land: %q was pinned but removal still succeeded", blocked)
+	}
+	if strings.Join(removed, ",") != "busy/2026-08-01-c.md" {
+		t.Fatalf("removed = %v, want just busy/2026-08-01-c.md (the removal before the blocked one)", removed)
+	}
+
+	idx, readErr := os.ReadFile(filepath.Join(dir, "reports", "handoff", "INDEX.md"))
+	if readErr != nil {
+		t.Fatalf("Prune must leave an index behind even when a removal failed: %v", readErr)
+	}
+	if strings.Contains(string(idx), "2026-08-01-c.md") {
+		t.Errorf("the index still lists 2026-08-01-c.md, which Prune deleted; error was %v:\n%s", err, idx)
+	}
+	for _, want := range []string{"2026-08-01-d.md", "2026-08-01-e.md", "2026-08-01-a.md", "2026-08-01-b.md"} {
+		if !strings.Contains(string(idx), want) {
+			t.Errorf("the index dropped %s, which is still on disk:\n%s", want, idx)
+		}
+	}
+}
+
 func TestWriteRegeneratesTheIndex(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := Write(dir, "lane-a", "s1", "draft", "x", time.Now().UTC()); err != nil {
@@ -360,6 +499,42 @@ func TestWriteRegeneratesTheIndex(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "lane-a") {
 		t.Errorf("index does not list the entry just written:\n%s", b)
+	}
+}
+
+// WriteIndex re-parses every handoff in the tree, so one hand-broken or
+// merge-conflicted file anywhere makes it fail -- and handoffs are explicitly
+// designed to be merged across branches, which makes that a steady state. The
+// handoff that was just written is on disk regardless, and the caller has to be
+// able to tell that from "wanted to record and could not": exit 5 sends a
+// session-end hook looking for a handoff that is sitting in the tree.
+//
+// Kills: `return path, WriteIndex(agentsDir)`, which reports the other file's
+// failure as this write's; and swallowing the index error, which would leave a
+// stale index with nothing said about it.
+func TestWriteReportsThePathWhenOnlyTheIndexRefreshFails(t *testing.T) {
+	dir := t.TempDir()
+	writeRaw(t, dir, "lane-a", "2026-08-09-bad.md", "<<<<<<< HEAD\nnot a handoff\n")
+
+	p, err := Write(dir, "lane-a", "s1", "reviewed", "body", time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+	if p == "" {
+		t.Fatalf("Write must report the path of a handoff that reached disk; err = %v", err)
+	}
+	b, readErr := os.ReadFile(p)
+	if readErr != nil {
+		t.Fatalf("Write reported %q, which is not on disk: %v", p, readErr)
+	}
+	if !strings.Contains(string(b), "body") {
+		t.Errorf("the handoff at %q is not the one that was written:\n%s", p, b)
+	}
+
+	var stale *IndexError
+	if !errors.As(err, &stale) {
+		t.Fatalf("err = %v (%T), want an *IndexError so the caller can tell a stale index from a lost handoff", err, err)
+	}
+	// The cause has to survive, or nobody can find the file to fix.
+	if !strings.Contains(err.Error(), "2026-08-09-bad.md") {
+		t.Errorf("the advisory must name the file that would not parse; got: %v", err)
 	}
 }
 
@@ -462,6 +637,112 @@ func TestWriteRefusesRatherThanFoldingTwoSessionsOntoOneFile(t *testing.T) {
 	}
 	if n := countFiles(t, filepath.Join(dir, "reports", "handoff", "lane-fixed")); n != 1 {
 		t.Errorf("lane holds %d files, want 1", n)
+	}
+}
+
+// A1 again, reached through the filesystem instead of through a slugifier. On a
+// case-insensitive filesystem -- APFS's default -- "2026-08-10-ABC.md" and
+// "2026-08-10-abc.md" are one file. Measured before the guard: the second Write
+// returned nil, the lane held one file carrying the SECOND agent's note, and
+// List reported session "abc" at path "lane/2026-08-10-ABC.md" -- the first
+// agent's handoff destroyed at exit 0, and an index row whose link text
+// disagrees with its own session cell.
+//
+// The refusal is asserted unconditionally because it does not depend on the
+// filesystem: the tree is committed and merged across machines, so a pair of
+// names that cannot coexist on APFS is a hazard wherever it was authored. The
+// probe gates only the half that needs it -- that the two names really do
+// resolve to one file here, which is what makes the refusal a rescue rather
+// than a nicety.
+//
+// Kills: no collision check at all, and one written with == instead of
+// strings.EqualFold so it never fires.
+func TestWriteRefusesASessionThatCollidesWithAnExistingHandoffByCase(t *testing.T) {
+	dir := t.TempDir()
+	when := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+	laneDir := filepath.Join(dir, "reports", "handoff", "lane")
+
+	first, err := Write(dir, "lane", "ABC", "reviewed", "the FIRST agent's note", when)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := Write(dir, "lane", "abc", "reviewed", "the SECOND agent's note", when)
+	if err == nil {
+		t.Fatalf("Write accepted a session that differs from an existing one only in case and put it at %q", p)
+	}
+	if p != "" {
+		t.Errorf("a refused write must not report a path; got %q", p)
+	}
+	// Both spellings, or the author cannot see what it collided with.
+	for _, want := range []string{"2026-08-10-ABC.md", "2026-08-10-abc.md"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name %q so both spellings are visible; got: %v", want, err)
+		}
+	}
+
+	b, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatalf("the first session's handoff is gone: %v", err)
+	}
+	if !strings.Contains(string(b), "the FIRST agent's note") {
+		t.Errorf("the first session's handoff was overwritten:\n%s", b)
+	}
+	if n := countFiles(t, laneDir); n != 1 {
+		t.Errorf("lane holds %d files, want 1", n)
+	}
+
+	if !caseInsensitiveFS(t, dir) {
+		t.Log("case-sensitive filesystem: the two names are two files here, so the refusal is the conservative half only")
+		return
+	}
+	// The half that needs the probe: the lowercase name resolves onto the
+	// uppercase file, so an unguarded Write would have truncated it.
+	b, err = os.ReadFile(filepath.Join(laneDir, "2026-08-10-abc.md"))
+	if err != nil {
+		t.Fatalf("the probe says this filesystem folds case but the two names are not one file: %v", err)
+	}
+	if !strings.Contains(string(b), "the FIRST agent's note") {
+		t.Errorf("the two names are one file and it no longer holds the first agent's note:\n%s", b)
+	}
+}
+
+// The lane variant, which the same directory scan covers. It is milder than the
+// session one -- nothing is lost, but the index grows two "## " sections whose
+// rows all link into one directory -- and it is refused for the same reason.
+//
+// lane.Resolve lowercases, so this cannot arrive through the CLI's branch
+// resolution; it arrives through --lane, through a direct Write, or through a
+// directory somebody made by hand.
+//
+// Kills: checking only the filename and not the lane directory.
+func TestWriteRefusesALaneThatCollidesWithAnExistingLaneByCase(t *testing.T) {
+	dir := t.TempDir()
+	when := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+
+	if _, err := Write(dir, "Lane", "s1", "reviewed", "x", when); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Write(dir, "lane", "s2", "reviewed", "x", when)
+	if err == nil {
+		t.Fatalf("Write accepted a lane that differs from an existing one only in case and put it at %q", p)
+	}
+	for _, want := range []string{"Lane", "lane"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name %q so both spellings are visible; got: %v", want, err)
+		}
+	}
+	ents, err := os.ReadDir(filepath.Join(dir, "reports", "handoff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lanes []string
+	for _, e := range ents {
+		if e.IsDir() {
+			lanes = append(lanes, e.Name())
+		}
+	}
+	if strings.Join(lanes, ",") != "Lane" {
+		t.Errorf("lane directories = %v, want just [Lane]", lanes)
 	}
 }
 

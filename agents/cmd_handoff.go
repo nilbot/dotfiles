@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -84,7 +85,20 @@ func runHandoffWrite(args []string, stdin io.Reader, stdout io.Writer) int {
 	}
 	path, err := handoff.Write(dir, lane.Resolve(*laneFlag, rc),
 		*session, status, string(body), time.Now().UTC())
-	if err != nil {
+	// "The handoff is on disk and the index is stale" is not "wanted to record
+	// and could not". WriteIndex re-parses the whole tree, so one conflicted or
+	// hand-broken handoff anywhere -- a steady state for files designed to be
+	// merged across branches -- would otherwise make every later write report
+	// NoRecord and suppress the path, telling a session-end hook a handoff was
+	// lost while it is sitting in the tree. The path goes out first either way,
+	// so a caller reading the first line gets it.
+	var stale *handoff.IndexError
+	switch {
+	case errors.As(err, &stale):
+		fmt.Fprintln(stdout, path)
+		fmt.Fprintf(stdout, "agents handoff write: %v; fix that file and run `agents index`\n", err)
+		return exitcode.Advisory
+	case err != nil:
 		fmt.Fprintf(stdout, "agents handoff write: %v\n", err)
 		return exitcode.NoRecord
 	}

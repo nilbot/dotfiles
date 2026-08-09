@@ -86,8 +86,62 @@ func checkComponent(field, value string) error {
 	return nil
 }
 
+// IndexError reports that the handoff itself reached disk and only the index
+// refresh afterwards failed. The two are different outcomes and must not share
+// an exit code.
+//
+// WriteIndex re-parses every handoff in the tree, so one hand-broken or
+// merge-conflicted file anywhere makes it fail. Handoffs are explicitly designed
+// to be merged across branches, which makes a conflicted file a steady state
+// rather than an exotic one -- and reporting that as "wanted to record and could
+// not" tells a session-end hook a handoff was lost while it is sitting in the
+// tree. The path is returned alongside this error, and the caller must print it.
+type IndexError struct{ Err error }
+
+func (e *IndexError) Error() string {
+	return "the handoff was written but the index could not be regenerated: " + e.Err.Error()
+}
+
+func (e *IndexError) Unwrap() error { return e.Err }
+
+// checkCaseCollision refuses a name that an existing entry of dir differs from
+// only in case.
+//
+// internal/memory.checkIndexCollision exists for the same reason and the
+// reasoning carries over: on a case-insensitive filesystem -- APFS's default,
+// i.e. the platform this is developed on -- two such names are one file.
+// Measured before this guard: writing session "abc" over an existing "ABC"
+// destroyed the first agent's note at exit 0 and left an index row whose link
+// text and session cell disagreed. That is the failure one file per (lane,
+// session) exists to prevent, reached through the filesystem instead of through
+// a slugifier.
+//
+// It refuses on a case-sensitive filesystem too, where the two names really are
+// two files. The handoff tree is shared -- committed, merged across branches,
+// cloned onto other machines -- so a pair of names that cannot coexist on APFS
+// is a hazard wherever it was authored, and normalising one onto the other would
+// reintroduce the clobber this refuses.
+func checkCaseCollision(dir, name, what string) error {
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range ents {
+		if n := e.Name(); n != name && strings.EqualFold(n, name) {
+			return fmt.Errorf("handoff %s %q collides with the existing %q, which differs from it only in case: on a case-insensitive filesystem the two are one %s, so recording this one would destroy that one -- pick a spelling that differs by more than case", what, name, n, what)
+		}
+	}
+	return nil
+}
+
 // Write creates one handoff and regenerates the index in the same operation, so
 // the normal path can never produce a stale index.
+//
+// A non-nil error with a non-empty path is an *IndexError and means the handoff
+// is on disk; see that type.
 func Write(agentsDir, laneName, session, status, body string, when time.Time) (string, error) {
 	// Absence has one obvious answer and is normalised; a value that says
 	// something specific and wrong is refused. The two are not the same case.
@@ -111,11 +165,23 @@ func Write(agentsDir, laneName, session, status, body string, when time.Time) (s
 		status = StatusDraft
 	}
 
+	// Checked before MkdirAll: on a case-insensitive filesystem MkdirAll("Lane")
+	// silently succeeds onto an existing "lane" and there is nothing left to
+	// notice. The lane variant is milder than the session one -- it renders two
+	// "## " sections whose rows all link into one directory rather than losing a
+	// file -- but the same scan covers it, so it is refused here too.
+	if err := checkCaseCollision(root(agentsDir), laneName, "lane"); err != nil {
+		return "", err
+	}
 	dir := filepath.Join(root(agentsDir), laneName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("%s-%s.md", when.UTC().Format("2006-01-02"), session))
+	name := fmt.Sprintf("%s-%s.md", when.UTC().Format("2006-01-02"), session)
+	if err := checkCaseCollision(dir, name, "file"); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, name)
 
 	// Marshalled rather than interpolated. A session id is an opaque token out
 	// of a harness, and "session: " + token hands YAML a value it reinterprets.
@@ -141,7 +207,10 @@ func Write(agentsDir, laneName, session, status, body string, when time.Time) (s
 	if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
 		return "", err
 	}
-	return path, WriteIndex(agentsDir)
+	if err := WriteIndex(agentsDir); err != nil {
+		return path, &IndexError{Err: err}
+	}
+	return path, nil
 }
 
 // List reads every handoff under a .agents/ directory.
@@ -236,13 +305,21 @@ func Prune(agentsDir string, keep int) ([]string, error) {
 		byLane[e.Lane] = append(byLane[e.Lane], e)
 	}
 
+	// A removal that fails partway leaves the ones before it gone. Returning
+	// there would leave INDEX.md listing files that are no longer on disk, and
+	// the index is the durable record -- the error message is not. Within a lane
+	// the removal order is fixed by sortNewestFirst, so this is reachable
+	// deterministically, not only by an unlucky map iteration.
 	var removed []string
+	var rmErr error
+removals:
 	for _, group := range byLane {
 		sortNewestFirst(group)
 		for _, e := range group[min(keep, len(group)):] {
 			p := filepath.Join(root(agentsDir), filepath.FromSlash(e.Path))
 			if err := os.Remove(p); err != nil {
-				return removed, err
+				rmErr = err
+				break removals
 			}
 			removed = append(removed, e.Path)
 		}
@@ -250,7 +327,13 @@ func Prune(agentsDir string, keep int) ([]string, error) {
 	// Map iteration is unordered and this list is printed to the user and
 	// compared by tests.
 	sort.Strings(removed)
-	return removed, WriteIndex(agentsDir)
+	err = WriteIndex(agentsDir)
+	// The removal failure is the more useful of the two: it names the file that
+	// would not go, and the index has just been brought back in line regardless.
+	if rmErr != nil {
+		return removed, rmErr
+	}
+	return removed, err
 }
 
 // sortNewestFirst puts the live end of a lane first, which is what a reader

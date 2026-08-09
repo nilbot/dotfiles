@@ -92,6 +92,52 @@ func TestHandoffWriteRefusesASessionThatEscapesTheHandoffTree(t *testing.T) {
 	}
 }
 
+// Exit 5 is "wanted to record and could not". A handoff that is on disk while
+// only the index refresh failed is not that, and the two must not share a code:
+// handoff.WriteIndex re-parses the whole tree, so one conflicted file -- a
+// steady state for files designed to be merged across branches -- would
+// otherwise make every later write report a lost handoff that is sitting right
+// there. The path is printed first so a caller reading the first line still gets
+// it.
+//
+// Kills: reporting NoRecord for an *IndexError, and suppressing the path when
+// the index refresh fails.
+func TestHandoffWriteReportsTheIndexRefreshSeparatelyFromALostHandoff(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+
+	broken := filepath.Join(handoffRoot(root), "other-lane")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "2026-08-09-bad.md"), []byte("<<<<<<< HEAD\nnot a handoff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code := runHandoffWrite([]string{"--session", "019fdcab"}, strings.NewReader("body\n"), &out)
+	if code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+
+	var written string
+	for _, f := range handoffFiles(t, root) {
+		if strings.HasSuffix(f, "-019fdcab.md") {
+			written = f
+		}
+	}
+	if written == "" {
+		t.Fatalf("the handoff never reached disk; output:\n%s", out.String())
+	}
+	first := strings.SplitN(strings.TrimSpace(out.String()), "\n", 2)[0]
+	if first != filepath.Join(handoffRoot(root), filepath.FromSlash(written)) {
+		t.Errorf("the first line must be the path of the handoff that reached disk (%s):\n%s", written, out.String())
+	}
+	if !strings.Contains(out.String(), "2026-08-09-bad.md") {
+		t.Errorf("the advisory must name the file that would not parse:\n%s", out.String())
+	}
+}
+
 // Kills: dropping the --session requirement, or the empty-body refusal, either
 // of which produces a handoff that says nothing under a name that cannot be
 // told apart from another agent's.
