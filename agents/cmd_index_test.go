@@ -141,6 +141,59 @@ func TestIndexRefusesAnUnrecognisedHandoffStatus(t *testing.T) {
 	}
 }
 
+// The command prints List's error as a diagnostic. A repository-controlled
+// newline in the relative path must stay escaped there even when malformed
+// status would otherwise make parse interpolate that path first.
+//
+// Kills: checking a handoff path only after parse succeeds.
+func TestIndexDiagnosticDoesNotPrintRawControlCharactersFromHandoffPaths(t *testing.T) {
+	for _, tc := range []struct {
+		label, lane, name, rawPath string
+	}{
+		{
+			label:   "lane name",
+			lane:    "lane-a\nFORGED-OUTPUT",
+			name:    "2026-08-10-s1.md",
+			rawPath: "lane-a\nFORGED-OUTPUT/2026-08-10-s1.md",
+		},
+		{
+			label:   "leaf name",
+			lane:    "lane-a",
+			name:    "2026-08-10-s1\nFORGED-OUTPUT.md",
+			rawPath: "lane-a/2026-08-10-s1\nFORGED-OUTPUT.md",
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			root := newRepo(t)
+			dir := filepath.Join(root, ".agents", "reports", "handoff", tc.lane)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, tc.name),
+				[]byte("---\nlane: lane-a\nsession: s1\nstatus: approved\nwhen: 2026-08-10T09:00:00Z\n---\n\nbody\n"), 0o644); err != nil {
+				t.Skipf("this filesystem will not hold the hostile path fixture: %v", err)
+			}
+			t.Chdir(root)
+
+			var out bytes.Buffer
+			if code := runIndex(nil, &out); code != exitcode.NoRecord {
+				t.Fatalf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+			}
+			if strings.Contains(out.String(), tc.rawPath) {
+				t.Fatalf("diagnostic contains the raw path and can forge output: %q", out.String())
+			}
+			for _, want := range []string{"FORGED-OUTPUT", `\n`, "control character"} {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("the safely quoted diagnostic must contain %q; got: %q", want, out.String())
+				}
+			}
+			if got := strings.Count(strings.TrimSuffix(out.String(), "\n"), "\n"); got != 1 {
+				t.Errorf("command emitted %d internal newlines, want only the separator between its two diagnostics: %q", got, out.String())
+			}
+		})
+	}
+}
+
 // A subcommand that is not registered in main.go is unreachable however well it
 // works. Skip is only reachable through runIndex; an unregistered command
 // returns Malformed.

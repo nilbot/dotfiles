@@ -380,6 +380,9 @@ func List(agentsDir string) ([]Entry, error) {
 	var out []Entry
 	for _, laneEntry := range lanes {
 		laneName := laneEntry.Name()
+		if err := checkReadPath(laneName, "lane name"); err != nil {
+			return nil, err
+		}
 		laneInfo, err := handoffRoot.Lstat(laneName)
 		if err != nil {
 			return nil, err
@@ -412,6 +415,10 @@ func List(agentsDir string) ([]Entry, error) {
 				continue
 			}
 			rel := path.Join(laneName, name)
+			if err := checkReadPath(rel, "filename"); err != nil {
+				laneRoot.Close()
+				return nil, err
+			}
 			fi, err := laneRoot.Lstat(name)
 			if err != nil {
 				laneRoot.Close()
@@ -455,19 +462,22 @@ func List(agentsDir string) ([]Entry, error) {
 				return nil, err
 			}
 			e.Path = rel
-			// The filename is not authored in YAML -- it comes off the filesystem,
-			// which will hold a newline in a name -- and it becomes the link text of
-			// one row. Quoted in the message so the refusal itself stays on one
-			// line.
-			if r, ok := safetext.ControlRune(e.Path); ok {
-				laneRoot.Close()
-				return nil, fmt.Errorf("%q: a handoff filename contains a control character (%q): it is rendered as a single line of the index -- rename the file", e.Path, r)
-			}
 			out = append(out, e)
 		}
 		laneRoot.Close()
 	}
 	return out, nil
+}
+
+// checkReadPath rejects repository-controlled directory-entry names before any
+// filesystem or parse error can interpolate them. Quoting the whole relative
+// spelling keeps the refusal on one diagnostic line while still identifying
+// the lane or leaf that must be renamed.
+func checkReadPath(displayPath, what string) error {
+	if r, ok := safetext.ControlRune(displayPath); ok {
+		return fmt.Errorf("%q: a handoff %s contains a control character (%q): it is rendered as a single line of the index -- rename it", displayPath, what, r)
+	}
+	return nil
 }
 
 func parse(b []byte, displayPath string) (Entry, error) {

@@ -483,6 +483,52 @@ func TestListRefusesMissingOrUnrecognisedStatus(t *testing.T) {
 	}
 }
 
+// Repository-controlled directory entries can contain control characters even
+// though Write refuses them. Their spelling must be checked before parse gets
+// a chance to interpolate the path into an otherwise unrelated status error.
+//
+// Kills: validating e.Path only after parse returns successfully.
+func TestListSafelyQuotesControlCharactersInFilesystemPathsBeforeParsing(t *testing.T) {
+	for _, tc := range []struct {
+		label, lane, name, rawPath string
+	}{
+		{
+			label:   "lane name",
+			lane:    "lane-a\nFORGED-OUTPUT",
+			name:    "2026-08-10-s1.md",
+			rawPath: "lane-a\nFORGED-OUTPUT/2026-08-10-s1.md",
+		},
+		{
+			label:   "leaf name",
+			lane:    "lane-a",
+			name:    "2026-08-10-s1\nFORGED-OUTPUT.md",
+			rawPath: "lane-a/2026-08-10-s1\nFORGED-OUTPUT.md",
+		},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			dir := t.TempDir()
+			writeRaw(t, dir, tc.lane, tc.name,
+				"---\nlane: lane-a\nsession: s1\nstatus: approved\nwhen: 2026-08-10T09:00:00Z\n---\n\nbody\n")
+
+			_, err := List(dir)
+			if err == nil {
+				t.Fatal("List accepted a repository-controlled path containing a control character")
+			}
+			if strings.Contains(err.Error(), tc.rawPath) {
+				t.Fatalf("error contains the raw path and can forge another diagnostic line: %q", err)
+			}
+			for _, want := range []string{"FORGED-OUTPUT", `\n`, "control character"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("the safely quoted refusal must contain %q; got: %q", want, err)
+				}
+			}
+			if strings.ContainsAny(err.Error(), "\n\r\t") {
+				t.Errorf("returned error contains a raw line-breaking control character: %q", err)
+			}
+		})
+	}
+}
+
 // Both and only both canonical provenance values survive the same raw parsing
 // route used for hand edits and merges, then appear in the generated index.
 func TestListAndRenderAcceptBothCanonicalStatuses(t *testing.T) {
