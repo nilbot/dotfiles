@@ -122,6 +122,64 @@ func Discover(cwd string) (*Context, error) {
 	}, nil
 }
 
+// Git runs a git command that changes the repository and returns its combined
+// output, which is where git puts the reason it refused.
+//
+// It exists so that a caller which mutates a repository -- `agents save` runs
+// `git add` and `git commit` -- goes through the same environment sanitizing as
+// every question this package asks. git exports GIT_DIR into every hook it runs,
+// and an inherited GIT_DIR aims the command at the repository that fired the
+// hook while the working tree stays the caller's. Answering the wrong question
+// is a wrong answer; committing into the wrong repository is someone else's
+// history.
+func Git(dir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = sanitizeEnv(os.Environ())
+	b, err := cmd.CombinedOutput()
+	return string(b), err
+}
+
+// InProgress names the multi-step git operation the worktree is in the middle
+// of -- "merge", "cherry-pick", "revert" or "rebase" -- and returns "" when
+// there is none.
+//
+// It exists because `git commit -- <pathspec>` is not safe in any of them and
+// git only refuses two. Measured against git 2.50.1:
+//
+//	merge, cherry-pick  git refuses: "cannot do a partial commit during a ..."
+//	revert              git makes the commit, and committing clears REVERT_HEAD
+//	                    -- the in-progress revert is gone with no message
+//	rebase              git makes the commit, inserting it into the rebase's
+//	                    detached HEAD
+//
+// So a caller that only handled git's own refusal would be silently destructive
+// in exactly the two cases where git says nothing.
+//
+// The markers are read from --git-dir rather than --git-common-dir because all
+// of them are per-worktree: a merge in one linked worktree must not stop a save
+// in another.
+func InProgress(dir string) (string, error) {
+	gitDir, err := gitPath(dir, "--git-dir")
+	if err != nil {
+		return "", ErrNotARepo
+	}
+	for _, m := range []struct{ op, marker string }{
+		{"merge", "MERGE_HEAD"},
+		{"cherry-pick", "CHERRY_PICK_HEAD"},
+		{"revert", "REVERT_HEAD"},
+		// The two rebase backends keep their state under different names, and
+		// neither leaves a *_HEAD marker of its own.
+		{"rebase", "rebase-merge"},
+		{"rebase", "rebase-apply"},
+	} {
+		if _, err := os.Lstat(filepath.Join(gitDir, m.marker)); err == nil {
+			return m.op, nil
+		}
+	}
+	return "", nil
+}
+
 func run(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir

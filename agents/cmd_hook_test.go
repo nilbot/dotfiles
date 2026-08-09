@@ -18,8 +18,16 @@ import (
 func newRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	// --template with an empty directory. Without it `git init` copies this
+	// machine's init.templatedir into .git/hooks, and one of those hooks refuses
+	// any commit made from a directory that does not build -- which every
+	// t.TempDir() is, so every test that commits would fail on the hook rather
+	// than on the code. Emptying the template rather than pointing
+	// core.hooksPath elsewhere keeps .git/hooks/ the live path, so a test that
+	// installs a hook there still sees it fire.
+	empty := t.TempDir()
 	for _, args := range [][]string{
-		{"init", "-b", "sq-123/payments"},
+		{"init", "-b", "sq-123/payments", "--template=" + empty},
 		{"config", "user.email", "t@example.com"},
 		{"config", "user.name", "T"},
 		{"config", "commit.gpgsign", "false"},

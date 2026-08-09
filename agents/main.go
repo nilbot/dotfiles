@@ -31,6 +31,8 @@ func run(args []string) int {
 		return runHandoff(args[1:], os.Stdin, os.Stdout)
 	case "index":
 		return runIndex(args[1:], os.Stdout)
+	case "save":
+		return runSave(args[1:], os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
 		usage()

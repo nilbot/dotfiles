@@ -640,6 +640,10 @@ func TestCommandsThatNeedAgentsDirSkipWhereInitNeverRan(t *testing.T) {
 		// No records: seeded ones point at another machine, which is Advisory
 		// rather than OK and would say nothing extra about the directory check.
 		{"trace cache", func(*testing.T, string) {}, func(w io.Writer) int { return runTrace([]string{"cache"}, w) }},
+		// save reaches the same rule through repoHere, which also hands it the
+		// worktree root. Its positive control needs no setup: an initialized
+		// repo always has the two generated indexes to write and commit.
+		{"save", func(*testing.T, string) {}, func(w io.Writer) int { return runSave(nil, w) }},
 	}
 
 	for _, c := range commands {

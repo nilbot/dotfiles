@@ -32,16 +32,27 @@ func runTrace(args []string, stdout io.Writer) int {
 	}
 }
 
+// agentsDirHere is the whole answer for a command that only needs the directory.
 func agentsDirHere(stdout io.Writer) (string, int) {
+	_, dir, code := repoHere(stdout)
+	return dir, code
+}
+
+// repoHere is the same single rule as agentsDirHere, handing back the repo
+// context alongside the directory for the callers that also need the worktree
+// root -- `agents save` runs git in it. Deriving one from the other at the call
+// site would mean a second answer to "where am I?", which is what this function
+// exists to prevent.
+func repoHere(stdout io.Writer) (*repo.Context, string, int) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stdout, "agents: %v\n", err)
-		return "", exitcode.Malformed
+		return nil, "", exitcode.Malformed
 	}
 	rc, err := repo.Discover(cwd)
 	if err != nil {
 		fmt.Fprintln(stdout, "agents: not inside a git repository")
-		return "", exitcode.Skip
+		return nil, "", exitcode.Skip
 	}
 	dir := repo.AgentsDir(rc.Root)
 	// Being in a git repo is not the same as being in a repo that opted into
@@ -54,9 +65,9 @@ func agentsDirHere(stdout io.Writer) (string, int) {
 	// .agents/ path would otherwise have to remember to repeat it.
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		fmt.Fprintf(stdout, "agents: no .agents/ directory in %s; run `agents init` there first\n", rc.Root)
-		return "", exitcode.Skip
+		return nil, "", exitcode.Skip
 	}
-	return dir, exitcode.OK
+	return rc, dir, exitcode.OK
 }
 
 func runTraceLS(args []string, stdout io.Writer) int {
