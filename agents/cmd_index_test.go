@@ -68,6 +68,46 @@ func TestIndexRefusesToWriteAnIndexThatWouldBeIncomplete(t *testing.T) {
 	}
 }
 
+// The handoff index is regenerated in the same operation that writes a handoff,
+// so this command matters only for hand-edits and out-of-band writes -- which is
+// exactly the case where a stale index is most believable. The location is the
+// discriminating part: handoff.WriteIndex takes the .agents/ directory and finds
+// reports/handoff under it itself, so passing it the handoff root instead
+// produces a perfectly good index at reports/handoff/reports/handoff/INDEX.md
+// that nothing reads, at exit 0.
+//
+// Kills: leaving handoff.WriteIndex out of runIndex, and passing it any path
+// other than .agents/.
+func TestIndexRegeneratesTheHandoffIndexInPlace(t *testing.T) {
+	root := newRepo(t)
+	dir := filepath.Join(root, ".agents", "reports", "handoff", "lane-a")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "2026-08-10-s1.md"),
+		[]byte("---\nlane: lane-a\nsession: s1\nstatus: reviewed\nwhen: 2026-08-10T09:00:00Z\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runIndex(nil, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, out.String())
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".agents", "reports", "handoff", "INDEX.md"))
+	if err != nil {
+		t.Fatalf("index was not written to .agents/reports/handoff/: %v", err)
+	}
+	for _, want := range []string{"lane-a", "s1", "reviewed"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("index does not carry %q:\n%s", want, b)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", "reports", "handoff", "reports")); err == nil {
+		t.Error("the index was written through a doubled path")
+	}
+}
+
 // A subcommand that is not registered in main.go is unreachable however well it
 // works. Skip is only reachable through runIndex; an unregistered command
 // returns Malformed.

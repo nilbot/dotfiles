@@ -8,11 +8,11 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
-	"unicode"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/safetext"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
@@ -128,20 +128,10 @@ func runTraceLS(args []string, stdout io.Writer) int {
 }
 
 // tableCell flattens the control characters that would let text this tool did
-// not author rewrite the table around it. Description is free text out of a
-// harness payload and survives the JSON round trip byte for byte: a newline in
-// it prints a second line that reads like a record nobody ever wrote, and a tab
-// opens a column that shifts every row after it. Cwd comes from a filesystem
-// path, which may legally hold either. The listing is an index, so a cell may
-// only ever describe one record on one line.
-func tableCell(s string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) { // \n, \r and \t among them
-			return ' '
-		}
-		return r
-	}, s)
-}
+// not author rewrite the terminal table around it. The rule lives in
+// internal/safetext alongside the markdown escapers the two generated indexes
+// use, so the three cannot drift apart.
+func tableCell(s string) string { return safetext.Flatten(s) }
 
 // runTraceCache materialises the transcripts this machine can still reach.
 //

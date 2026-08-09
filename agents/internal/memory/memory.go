@@ -12,9 +12,10 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/nilbot/dotfiles/agents/internal/safetext"
 )
 
 // Source points at material that does not travel with the repository.
@@ -50,24 +51,12 @@ const delim = "---"
 const indexName = "INDEX.md"
 
 // checkSingleLine rejects a control character in a field that is rendered as one
-// line of the index.
-//
-// A YAML block scalar makes `description:` multi-line, and every line after the
-// first lands in the index as a row the author never wrote -- forged entries and
-// forged `##` sections, deterministically, so the pre-commit guard waves them
-// through. `metadata.type` is the same hole one level up: it is interpolated
-// into the `## ` heading, so a newline there forges the section itself along
-// with every row filed under it. Flattening the value instead would put text in
-// the generated index that differs from what the entry says, which is the silent
-// normalisation this project keeps getting bitten by. The author is told to keep
-// the field to one line and put prose where prose belongs, in the body.
+// line of the index. The rule and its wording live in internal/safetext, which
+// the handoff index and the trace listing share; `metadata.type` is the same
+// hole one level up, since it is interpolated into the `## ` heading, so a
+// newline there forges the section itself along with every row filed under it.
 func checkSingleLine(base, field, value string) error {
-	for _, r := range value {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("%s: %s contains a control character (%q): %s is rendered as a single line of the index -- keep it to one line and move any prose into the body", base, field, r, field)
-		}
-	}
-	return nil
+	return safetext.CheckSingleLine(base, field, value)
 }
 
 func Parse(path string) (Frontmatter, error) {
@@ -195,37 +184,13 @@ func RenderIndex(entries []Frontmatter) []byte {
 	return b.Bytes()
 }
 
-// linkTextEscaper escapes the characters that let entry text close the link text
-// early or open a second link inside it. `name: "br]ack(et"` otherwise renders
-// `- [br]ack(et](brk.md)`, which is not a link to anything.
-//
-// The backslash is escaped too, and first, so the escape itself cannot be
-// escaped away by a name that already ends in one. strings.Replacer makes a
-// single left-to-right pass, so no replacement is rescanned.
-var linkTextEscaper = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`)
+// linkText and linkDest keep a memory entry's name and path from closing the
+// markdown link that carries them. Both live in internal/safetext: the handoff
+// index links the same way, and an escaper fixed in one index and not the other
+// is how the hole reopens.
+func linkText(s string) string { return safetext.MarkdownLinkText(s) }
 
-func linkText(s string) string { return linkTextEscaper.Replace(s) }
-
-// linkDest percent-encodes what would end a markdown link destination early or
-// split it in two: a ")" closes it, and a space starts the optional title. The
-// "%" itself is encoded first-class so the encoding stays unambiguous, and
-// everything below "!" covers space and the C0 controls in one rule.
-//
-// Path is a basename by construction, so this never has to preserve a "/".
-func linkDest(s string) string {
-	var b strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c <= ' ', c == 0x7f, c == '%', c == '(', c == ')',
-			c == '<', c == '>', c == '"', c == '\'', c == '\\', c == '#', c == '?':
-			fmt.Fprintf(&b, "%%%02X", c)
-		default:
-			b.WriteByte(c)
-		}
-	}
-	return b.String()
-}
+func linkDest(s string) string { return safetext.MarkdownLinkDest(s) }
 
 // checkIndexCollision refuses to write over a curated entry that differs from
 // the generated file only in case.

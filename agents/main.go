@@ -27,6 +27,8 @@ func run(args []string) int {
 		return runWire(args[1:], os.Stdout)
 	case "trace":
 		return runTrace(args[1:], os.Stdout)
+	case "handoff":
+		return runHandoff(args[1:], os.Stdin, os.Stdout)
 	case "index":
 		return runIndex(args[1:], os.Stdout)
 	default:
