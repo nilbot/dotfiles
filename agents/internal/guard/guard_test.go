@@ -858,6 +858,58 @@ func TestScratchRejectsRootGeneratedIndexAliasFromCraftedIndex(t *testing.T) {
 	}
 }
 
+func TestScratchReservesHandoffGeneratedIndexIdentity(t *testing.T) {
+	withShippedConfig(t)
+	fakeCleanScanner(t)
+
+	t.Run("noncolliding lane passes", func(t *testing.T) {
+		root := newGuardRepo(t)
+		writeRepoFile(t, root, ".agents/reports/handoff/lane-a/2026-08-10T09-00-00Z-s1.md", handoffEntry, 0o644)
+		writeRepoFile(t, root, ".agents/reports/handoff/INDEX.md", handoffIndex, 0o644)
+		stageFiles(t, root)
+
+		before := snapshotRepo(t, root)
+		findings, err := Staged(root)
+		if err != nil || len(findings) != 0 {
+			t.Fatalf("noncolliding handoff lane did not pass: findings=%v err=%v", findings, err)
+		}
+		if after := snapshotRepo(t, root); !reflect.DeepEqual(before, after) {
+			t.Fatal("clean generated-index validation mutated the repository")
+		}
+	})
+
+	t.Run("lane aliases generated index", func(t *testing.T) {
+		probe := t.TempDir()
+		if err := os.WriteFile(filepath.Join(probe, "INDEX.md"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(probe, "index.md")); err != nil {
+			t.Skip("test filesystem does not alias INDEX.md and index.md")
+		}
+
+		root := newGuardRepo(t)
+		source := strings.Replace(handoffEntry, "lane: lane-a", "lane: index.md", 1)
+		index := strings.ReplaceAll(handoffIndex, "lane-a", "index.md")
+		sourceOID := strings.TrimSpace(string(gitCommand(t, root, []byte(source), "hash-object", "-w", "--stdin")))
+		indexOID := strings.TrimSpace(string(gitCommand(t, root, []byte(index), "hash-object", "-w", "--stdin")))
+		indexInfo := fmt.Sprintf(
+			"100644 %s\t.agents/reports/handoff/INDEX.md\n100644 %s\t.agents/reports/handoff/index.md/2026-08-10T09-00-00Z-s1.md\n",
+			indexOID, sourceOID,
+		)
+		gitCommand(t, root, []byte(indexInfo), "update-index", "--index-info")
+
+		before := snapshotRepo(t, root)
+		if _, err := Staged(root); err == nil {
+			t.Fatal("a handoff lane aliasing the generated index target was accepted")
+		} else if strings.ContainsAny(err.Error(), "\r\n") {
+			t.Fatalf("generated-index alias diagnostic contains a raw line control: %q", err)
+		}
+		if after := snapshotRepo(t, root); !reflect.DeepEqual(before, after) {
+			t.Fatal("generated-index alias refusal mutated the repository")
+		}
+	})
+}
+
 func TestControlCharacterPathIsBlockedWithoutTerminalInjection(t *testing.T) {
 	withShippedConfig(t)
 	fakeCleanScanner(t)

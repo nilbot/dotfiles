@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -494,6 +493,14 @@ func renderStagedIndex(repoRoot string, target generatedTarget, entries []indexE
 	defer os.RemoveAll(scratch)
 
 	created := map[string]bool{scratch: true}
+	// The renderer never consumes the staged generated file, but its destination
+	// still owns a filesystem identity in the tree we are modelling. Reserve it
+	// before materialising sources so a Git-distinct source component that this
+	// host aliases to the destination cannot occupy that identity first.
+	generatedDestination := filepath.Join(scratch, filepath.FromSlash(target.index))
+	if err := writeScratchFile(scratch, generatedDestination, nil, created); err != nil {
+		return nil, fmt.Errorf("cannot reserve generated target %s in the scratch filesystem", quoteASCII(target.index))
+	}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Path, target.trigger) || entry.Path == target.index {
 			continue
@@ -507,12 +514,11 @@ func renderStagedIndex(repoRoot string, target generatedTarget, entries []indexE
 		if _, unsafe := safetext.ControlRune(entry.Path); unsafe {
 			return nil, fmt.Errorf("source path %q contains a control character", entry.Path)
 		}
-		// memory.WriteIndex refuses this case before rendering because writing
-		// INDEX.md would destroy the entry on a case-insensitive filesystem.
-		if target.index == ".agents/memory/INDEX.md" &&
-			path.Dir(entry.Path) == path.Dir(target.index) &&
-			strings.EqualFold(filepath.Base(entry.Path), "INDEX.md") {
-			return nil, fmt.Errorf("memory source %q collides with the generated index name", entry.Path)
+		// Preserve the cross-platform collision policy even when this checkout is
+		// on a case-sensitive filesystem. The scratch reservation above covers
+		// every additional alias relation implemented by the current host.
+		if aliasesGeneratedTarget(entry.Path, target.index) {
+			return nil, fmt.Errorf("source path %s aliases the generated target %s", quoteASCII(entry.Path), quoteASCII(target.index))
 		}
 		blob, err := stagedBlob(repoRoot, entry.OID)
 		if err != nil {
@@ -531,6 +537,15 @@ func renderStagedIndex(repoRoot string, target generatedTarget, entries []indexE
 		}
 	}
 	return target.render(scratch)
+}
+
+func aliasesGeneratedTarget(source, generated string) bool {
+	if strings.EqualFold(source, generated) {
+		return true
+	}
+	return len(source) > len(generated) &&
+		source[len(generated)] == '/' &&
+		strings.EqualFold(source[:len(generated)], generated)
 }
 
 func writeScratchFile(scratch, destination string, blob []byte, created map[string]bool) error {
