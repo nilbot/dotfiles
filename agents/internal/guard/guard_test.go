@@ -2,6 +2,7 @@ package guard
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -60,6 +61,19 @@ func gitCommand(t *testing.T, dir string, stdin []byte, args ...string) []byte {
 	return out
 }
 
+func gitCommandEnv(t *testing.T, dir string, env []string, stdin []byte, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	cmd.Stdin = bytes.NewReader(stdin)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return out
+}
+
 func writeRepoFile(t *testing.T, root, rel, content string, mode fs.FileMode) {
 	t.Helper()
 	p := filepath.Join(root, filepath.FromSlash(rel))
@@ -85,9 +99,9 @@ func withShippedConfig(t *testing.T) {
 		t.Fatal("cannot locate guard test source")
 	}
 	config := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../git/gitleaks.toml"))
-	old := gitleaksConfigPath
-	gitleaksConfigPath = func() (string, error) { return config, nil }
-	t.Cleanup(func() { gitleaksConfigPath = old })
+	old := gitleaksConfigBytes
+	gitleaksConfigBytes = func() ([]byte, error) { return os.ReadFile(config) }
+	t.Cleanup(func() { gitleaksConfigBytes = old })
 }
 
 func fakeScanner(t *testing.T, scriptBody string) {
@@ -179,9 +193,10 @@ func TestSecretScanConsumesTheStagedBlob(t *testing.T) {
 	})
 }
 
-// Git exports these variables while running hooks. Inheriting them makes
-// cmd.Dir cosmetic: the guard can inspect a different repository's index.
-func TestStagedIgnoresInheritedGitRepositorySelectors(t *testing.T) {
+// Git exports repository selectors while running hooks. The repository/object
+// selectors must not redirect reads, while GIT_INDEX_FILE is deliberately
+// covered separately because it names the exact index a partial commit uses.
+func TestStagedIgnoresInheritedGitRepositoryAndObjectSelectors(t *testing.T) {
 	if _, err := exec.LookPath("gitleaks"); err != nil {
 		t.Skip("gitleaks is not installed")
 	}
@@ -196,7 +211,7 @@ func TestStagedIgnoresInheritedGitRepositorySelectors(t *testing.T) {
 	stageFiles(t, decoy)
 	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
 	t.Setenv("GIT_WORK_TREE", decoy)
-	t.Setenv("GIT_INDEX_FILE", filepath.Join(decoy, ".git", "index"))
+	t.Setenv("GIT_OBJECT_DIRECTORY", filepath.Join(decoy, ".git", "objects"))
 
 	findings, err := Staged(target)
 	if err != nil {
@@ -204,6 +219,57 @@ func TestStagedIgnoresInheritedGitRepositorySelectors(t *testing.T) {
 	}
 	if !blockingRule(findings, "github-pat") {
 		t.Fatal("inherited Git selectors redirected the guard away from its target repository")
+	}
+}
+
+func TestStagedUsesTheActiveAlternateIndex(t *testing.T) {
+	if _, err := exec.LookPath("gitleaks"); err != nil {
+		t.Skip("gitleaks is not installed")
+	}
+	withShippedConfig(t)
+	root := newGuardRepo(t)
+	writeRepoFile(t, root, "main.go", "package main\n", 0o644)
+	stageFiles(t, root)
+
+	alternate := filepath.Join(t.TempDir(), "partial-commit.index")
+	env := []string{"GIT_INDEX_FILE=" + alternate}
+	gitCommandEnv(t, root, env, nil, "read-tree", "--empty")
+	privateFixtureValue := "ghp_" + strings.Repeat("0123456789", 3) + "012345"
+	writeRepoFile(t, root, ".agents/note.md", privateFixtureValue+"\n", 0o644)
+	gitCommandEnv(t, root, env, nil, "add", ".agents/note.md")
+	t.Setenv("GIT_INDEX_FILE", alternate)
+
+	findings, err := Staged(root)
+	if err != nil {
+		t.Fatalf("Staged failed for the active alternate index: %v", err)
+	}
+	if !blockingRule(findings, "github-pat") {
+		t.Fatal("the candidate blob in the active alternate index was not blocked")
+	}
+}
+
+func TestStagedGitReadsDisableReplaceObjects(t *testing.T) {
+	if _, err := exec.LookPath("gitleaks"); err != nil {
+		t.Skip("gitleaks is not installed")
+	}
+	withShippedConfig(t)
+	root := newGuardRepo(t)
+	privateFixtureValue := "ghp_" + strings.Repeat("0123456789", 3) + "012345"
+	writeRepoFile(t, root, ".agents/note.md", privateFixtureValue+"\n", 0o644)
+	stageFiles(t, root)
+	secretOID := strings.TrimSpace(string(gitCommand(t, root, nil, "rev-parse", ":.agents/note.md")))
+	cleanOID := strings.TrimSpace(string(gitCommand(t, root, []byte("ordinary replacement\n"), "hash-object", "-w", "--stdin")))
+	gitCommand(t, root, nil, "replace", secretOID, cleanOID)
+	if got := string(gitCommand(t, root, nil, "cat-file", "blob", secretOID)); got != "ordinary replacement\n" {
+		t.Fatal("replace-ref control did not substitute the staged blob")
+	}
+
+	findings, err := Staged(root)
+	if err != nil {
+		t.Fatalf("Staged: %v", err)
+	}
+	if !blockingRule(findings, "github-pat") {
+		t.Fatal("a replace ref concealed a secret in the staged object")
 	}
 }
 
@@ -269,6 +335,47 @@ func TestScannerMappingWhitelistsSafeFields(t *testing.T) {
 			t.Fatalf("unsafe scanner field was not rejected safely: %v", err)
 		}
 	})
+
+	for _, tc := range []struct {
+		name string
+		id   string
+	}{
+		{"bidirectional formatting", "safe\\u202erule"},
+		{"printable delimiters", "safe][BLOCK"},
+		{"oversized", strings.Repeat("a", 256)},
+	} {
+		t.Run(tc.name+" in rule id fails safely", func(t *testing.T) {
+			fakeScanner(t, fmt.Sprintf("printf '%%s' '[{\"RuleID\":\"%s\",\"StartLine\":1}]'; exit 1", tc.id))
+			_, err := Staged(root)
+			if err == nil {
+				t.Fatal("unsafe scanner rule identifier was accepted")
+			}
+			if strings.Contains(err.Error(), tc.id) {
+				t.Fatal("unsafe scanner rule identifier leaked into the error")
+			}
+		})
+	}
+}
+
+func TestBlockingScannerFindingSkipsGeneratedContentParsing(t *testing.T) {
+	withShippedConfig(t)
+	privateFixtureValue := "MATCHED-VALUE-MUST-STAY-PRIVATE"
+	root := newGuardRepo(t)
+	writeRepoFile(t, root, ".agents/memory/a.md", "---\nname: ["+privateFixtureValue+"\n---\n", 0o644)
+	writeRepoFile(t, root, ".agents/memory/INDEX.md", memoryIndex, 0o644)
+	stageFiles(t, root)
+	fakeScanner(t, `printf '%s' '[{"RuleID":"test-rule","StartLine":1}]'; exit 1`)
+
+	findings, err := Staged(root)
+	if err != nil {
+		t.Fatal("a blocking scanner finding should end content parsing with a finding, not an error")
+	}
+	if !blockingRule(findings, "test-rule") {
+		t.Fatal("blocking scanner finding was lost")
+	}
+	if strings.Contains(fmt.Sprint(findings), privateFixtureValue) {
+		t.Fatal("matched staged content crossed the public finding boundary")
+	}
 }
 
 // Kills treating exit 1 as an execution error, accepting non-1 failures, or
@@ -325,7 +432,7 @@ while [ "$#" -gt 0 ]; do
     --redact) redact=1 ;;
     --config)
       shift
-      case "$1" in /*/git/gitleaks.toml) config=1 ;; esac
+      case "$1" in /*) config=1 ;; esac
       ;;
     --report-format)
       shift
@@ -344,6 +451,70 @@ exit 0`)
 	if err != nil || len(findings) != 0 {
 		t.Fatalf("scanner security arguments were incomplete: findings=%v err=%v", findings, err)
 	}
+}
+
+func TestTrustedConfigIsPrivateSnapshotIndependentOfHomeAndCleaned(t *testing.T) {
+	t.Run("embedded bytes exactly match shipped canonical config", func(t *testing.T) {
+		_, file, _, ok := runtime.Caller(0)
+		if !ok {
+			t.Fatal("cannot locate guard test source")
+		}
+		canonical := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../git/gitleaks.toml"))
+		want, err := os.ReadFile(canonical)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(embeddedGitleaksConfig, want) {
+			t.Fatal("embedded scanner config drifted from git/gitleaks.toml")
+		}
+	})
+
+	t.Run("embedded production source ignores HOME", func(t *testing.T) {
+		oldSource := gitleaksConfigBytes
+		gitleaksConfigBytes = defaultGitleaksConfigBytes
+		t.Cleanup(func() { gitleaksConfigBytes = oldSource })
+		t.Setenv("HOME", ".")
+		fakeCleanScanner(t)
+		root := newGuardRepo(t)
+		writeRepoFile(t, root, ".agents/note.md", "ordinary text\n", 0o644)
+		stageFiles(t, root)
+		if findings, err := Staged(root); err != nil || len(findings) != 0 {
+			t.Fatalf("embedded config source depended on HOME: findings=%v err=%v", findings, err)
+		}
+	})
+
+	t.Run("scanner receives a private snapshot that is removed", func(t *testing.T) {
+		old := gitleaksConfigBytes
+		gitleaksConfigBytes = func() ([]byte, error) { return []byte("ORIGINAL-CONFIG\n"), nil }
+		t.Cleanup(func() { gitleaksConfigBytes = old })
+		observed := filepath.Join(t.TempDir(), "scanner-config-path")
+		t.Setenv("OBSERVED_CONFIG", observed)
+		fakeScanner(t, `
+config=
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --config ]; then shift; config=$1; fi
+  shift
+done
+[ -n "$config" ] || exit 8
+printf '%s\n' "$config" > "$OBSERVED_CONFIG"
+[ "$(stat -f '%Lp' "$config")" = 600 ] || exit 9
+grep -q '^ORIGINAL-CONFIG$' "$config" || exit 10
+exit 0`)
+		root := newGuardRepo(t)
+		writeRepoFile(t, root, ".agents/note.md", "ordinary text\n", 0o644)
+		stageFiles(t, root)
+		if findings, err := Staged(root); err != nil || len(findings) != 0 {
+			t.Fatalf("private config snapshot was not used: findings=%v err=%v", findings, err)
+		}
+		b, err := os.ReadFile(observed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		snapshot := strings.TrimSpace(string(b))
+		if _, err := os.Lstat(snapshot); !os.IsNotExist(err) {
+			t.Fatalf("private config snapshot survived the scan batch: %v", err)
+		}
+	})
 }
 
 func TestMissingScannerAndConfigAreBoundedFailures(t *testing.T) {
@@ -376,9 +547,9 @@ func TestMissingScannerAndConfigAreBoundedFailures(t *testing.T) {
 		writeRepoFile(t, root, ".agents/note.md", "clean\n", 0o644)
 		stageFiles(t, root)
 		fakeCleanScanner(t)
-		old := gitleaksConfigPath
-		gitleaksConfigPath = func() (string, error) { return filepath.Join(t.TempDir(), "missing.toml"), nil }
-		t.Cleanup(func() { gitleaksConfigPath = old })
+		old := gitleaksConfigBytes
+		gitleaksConfigBytes = func() ([]byte, error) { return nil, errors.New("unavailable") }
+		t.Cleanup(func() { gitleaksConfigBytes = old })
 		before := snapshotRepo(t, root)
 		if _, err := Staged(root); err == nil {
 			t.Fatal("missing dotfiles config was treated as a clean scan")
@@ -388,15 +559,14 @@ func TestMissingScannerAndConfigAreBoundedFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("an unreadable config path is not delegated as clean", func(t *testing.T) {
+	t.Run("an empty embedded config is not delegated as clean", func(t *testing.T) {
 		root := newGuardRepo(t)
 		writeRepoFile(t, root, ".agents/note.md", "clean\n", 0o644)
 		stageFiles(t, root)
 		fakeCleanScanner(t)
-		old := gitleaksConfigPath
-		directory := t.TempDir()
-		gitleaksConfigPath = func() (string, error) { return directory, nil }
-		t.Cleanup(func() { gitleaksConfigPath = old })
+		old := gitleaksConfigBytes
+		gitleaksConfigBytes = func() ([]byte, error) { return nil, nil }
+		t.Cleanup(func() { gitleaksConfigBytes = old })
 		if _, err := Staged(root); err == nil {
 			t.Fatal("non-file dotfiles config was treated as a clean scan")
 		}
@@ -605,6 +775,89 @@ func TestConflictedIndexFailsClosed(t *testing.T) {
 	}
 }
 
+func TestStagedTypeChangesCannotBeHiddenByDiffConfiguration(t *testing.T) {
+	withShippedConfig(t)
+	fakeCleanScanner(t)
+
+	t.Run("regular file to symlink", func(t *testing.T) {
+		root := newGuardRepo(t)
+		writeRepoFile(t, root, ".agents/note.md", "regular\n", 0o644)
+		stageFiles(t, root)
+		commitFiles(t, root)
+		if err := os.Remove(filepath.Join(root, ".agents", "note.md")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("elsewhere", filepath.Join(root, ".agents", "note.md")); err != nil {
+			t.Fatal(err)
+		}
+		stageFiles(t, root)
+		if _, err := Staged(root); err == nil {
+			t.Fatal("a staged regular-to-symlink type change was omitted")
+		}
+	})
+
+	t.Run("gitlink despite repository and inherited ignore config", func(t *testing.T) {
+		root := newGuardRepo(t)
+		writeRepoFile(t, root, "main.go", "package main\n", 0o644)
+		stageFiles(t, root)
+		commitFiles(t, root)
+		head := strings.TrimSpace(string(gitCommand(t, root, nil, "rev-parse", "HEAD")))
+		gitCommand(t, root, nil, "config", "diff.ignoreSubmodules", "all")
+		gitCommand(t, root, nil, "update-index", "--add", "--cacheinfo", "160000,"+head+",.agents/submodule")
+		t.Setenv("GIT_CONFIG_COUNT", "1")
+		t.Setenv("GIT_CONFIG_KEY_0", "diff.ignoreSubmodules")
+		t.Setenv("GIT_CONFIG_VALUE_0", "all")
+		if _, err := Staged(root); err == nil {
+			t.Fatal("a staged gitlink was hidden by diff configuration")
+		}
+	})
+}
+
+func TestScratchRejectsFilesystemAliasedGitPaths(t *testing.T) {
+	withShippedConfig(t)
+	fakeCleanScanner(t)
+	assertAliases := func(t *testing.T, first, second string) {
+		t.Helper()
+		probe := t.TempDir()
+		firstProbe := filepath.Join(probe, filepath.FromSlash(first))
+		if err := os.MkdirAll(filepath.Dir(firstProbe), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(firstProbe, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(filepath.Join(probe, filepath.FromSlash(second))); err != nil {
+			t.Skip("test filesystem does not alias these names")
+		}
+
+		root := newGuardRepo(t)
+		upper := strings.TrimSpace(string(gitCommand(t, root, []byte(strings.Replace(memoryEntry, "name: a", "name: A", 1)), "hash-object", "-w", "--stdin")))
+		lower := strings.TrimSpace(string(gitCommand(t, root, []byte(memoryEntry), "hash-object", "-w", "--stdin")))
+		indexInfo := fmt.Sprintf("100644 %s\t.agents/memory/%s\n100644 %s\t.agents/memory/%s\n", upper, first, lower, second)
+		gitCommand(t, root, []byte(indexInfo), "update-index", "--index-info")
+		if _, err := Staged(root); err == nil {
+			t.Fatal("Git-distinct paths that alias in the scratch filesystem were accepted")
+		}
+	}
+
+	t.Run("case-folded filename", func(t *testing.T) { assertAliases(t, "A.md", "a.md") })
+	t.Run("case-folded parent", func(t *testing.T) { assertAliases(t, "A/note.md", "a/note.md") })
+	t.Run("normalization-equivalent filename", func(t *testing.T) {
+		assertAliases(t, "\u00e9.md", "e\u0301.md")
+	})
+}
+
+func TestScratchRejectsRootGeneratedIndexAliasFromCraftedIndex(t *testing.T) {
+	withShippedConfig(t)
+	fakeCleanScanner(t)
+	root := newGuardRepo(t)
+	oid := strings.TrimSpace(string(gitCommand(t, root, []byte(memoryEntry), "hash-object", "-w", "--stdin")))
+	gitCommand(t, root, []byte(fmt.Sprintf("100644 %s\t.agents/memory/index.md\n", oid)), "update-index", "--index-info")
+	if _, err := Staged(root); err == nil {
+		t.Fatal("a crafted one-entry index aliasing the generated output was accepted")
+	}
+}
+
 func TestControlCharacterPathIsBlockedWithoutTerminalInjection(t *testing.T) {
 	withShippedConfig(t)
 	fakeCleanScanner(t)
@@ -716,6 +969,40 @@ func TestEveryStagedOutcomeIsObservational(t *testing.T) {
 			after := snapshotRepo(t, root)
 			if !reflect.DeepEqual(before, after) {
 				t.Fatalf("Staged mutated repository state\nbefore: %#v\nafter:  %#v", before, after)
+			}
+		})
+	}
+}
+
+func TestGuardPrivateTemporaryTreesAreCleanedOnEveryOutcome(t *testing.T) {
+	withShippedConfig(t)
+	cases := []struct {
+		name    string
+		files   map[string]string
+		scanner string
+	}{
+		{"scanner clean", map[string]string{".agents/note.md": "note\n"}, "exit 0"},
+		{"scanner finding", map[string]string{".agents/note.md": "note\n"}, `printf '%s' '[{"RuleID":"test-rule","StartLine":1}]'; exit 1`},
+		{"scanner failure", map[string]string{".agents/note.md": "note\n"}, "exit 7"},
+		{"generated parse failure", map[string]string{".agents/memory/a.md": "broken\n", ".agents/memory/INDEX.md": memoryIndex}, "exit 0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			privateTemp := t.TempDir()
+			t.Setenv("TMPDIR", privateTemp)
+			root := newGuardRepo(t)
+			for rel, content := range tc.files {
+				writeRepoFile(t, root, rel, content, 0o644)
+			}
+			stageFiles(t, root)
+			fakeScanner(t, tc.scanner)
+			_, _ = Staged(root)
+			entries, err := os.ReadDir(privateTemp)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatal("guard left a private config snapshot or scratch tree behind")
 			}
 		})
 	}

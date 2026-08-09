@@ -39,7 +39,7 @@ func TestGuardCommandExitClasses(t *testing.T) {
 		{"generated block", func(t *testing.T, root string) {
 			writeGuardFile(t, filepath.Join(root, ".agents", "memory", "a.md"), memoryEntryForCommand)
 			git(t, root, "add", "-A")
-		}, exitcode.Block, "BLOCKED .agents/memory/INDEX.md:0 [generated-file]"},
+		}, exitcode.Block, `BLOCKED ".agents/memory/INDEX.md":0 [generated-file]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,6 +108,44 @@ func TestGuardCommandQuotesAControlCharacterPath(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `FORGED\nBLOCK.md`) {
 		t.Fatalf("quoted path is not actionable: %q", out.String())
+	}
+}
+
+func TestGuardCommandASCIIQuotesPrintableHostilePath(t *testing.T) {
+	root := newRepo(t)
+	raw := ".agents/close] \u202e tail.md"
+	privateFixtureValue := "ghp_" + strings.Repeat("0123456789", 3) + "012345"
+	writeGuardFile(t, filepath.Join(root, raw), privateFixtureValue+"\n")
+	git(t, root, "add", "-A")
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runGuard([]string{"--staged"}, &out); code != exitcode.Block {
+		t.Fatalf("exit = %d, want Block", code)
+	}
+	if strings.Contains(out.String(), raw) {
+		t.Fatal("repository path crossed the CLI boundary without ASCII quoting")
+	}
+	if !strings.Contains(out.String(), `\u202e`) || !strings.Contains(out.String(), `".agents/close]`) {
+		t.Fatalf("quoted path is not actionable: %q", out.String())
+	}
+}
+
+func TestGuardCommandDoesNotRenderMatchedMalformedContent(t *testing.T) {
+	root := newRepo(t)
+	privateFixtureValue := "ghp_" + strings.Repeat("0123456789", 3) + "012345"
+	writeGuardFile(t, filepath.Join(root, ".agents", "memory", "a.md"), "---\nname: ["+privateFixtureValue+"\n---\n")
+	writeGuardFile(t, filepath.Join(root, ".agents", "memory", "INDEX.md"), "hand edited\n")
+	git(t, root, "add", "-A")
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runGuard([]string{"--staged"}, &out); code != exitcode.Block {
+		t.Fatalf("exit = %d, want Block", code)
+	}
+	if strings.Contains(out.String(), privateFixtureValue) {
+		t.Fatal("matched malformed staged content leaked into command output")
+	}
+	if !strings.Contains(out.String(), "[github-pat]") {
+		t.Fatalf("safe scanner attribution missing: %q", out.String())
 	}
 }
 

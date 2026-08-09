@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/guard"
@@ -52,7 +53,7 @@ func runGuard(args []string, stdout io.Writer) int {
 			continue
 		}
 		fmt.Fprintf(stdout, "%s %s:%d [%s] %s\n",
-			label, finding.Path, finding.Line, finding.Rule, finding.Detail)
+			label, strconv.QuoteToASCII(finding.Path), finding.Line, finding.Rule, finding.Detail)
 	}
 
 	switch {

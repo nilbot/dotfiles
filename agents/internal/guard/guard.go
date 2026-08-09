@@ -6,6 +6,7 @@ package guard
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,18 +37,20 @@ type Finding struct {
 	Detail   string
 }
 
-// gitleaksConfigPath is indirect only so tests can point the subprocess at the
-// checked-in config without depending on the test runner's home directory.
-// Production always resolves the config from dotfiles, never from the repo
-// being scanned.
-var gitleaksConfigPath = defaultGitleaksConfigPath
+// The scanner consumes configuration embedded at build time, never a file from
+// the repository being checked or the caller's HOME. A test pins these bytes
+// exactly to git/gitleaks.toml so the shipped canonical file cannot drift.
+//
+//go:embed gitleaks.toml
+var embeddedGitleaksConfig []byte
 
-func defaultGitleaksConfigPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate home directory for gitleaks config: %w", err)
+var gitleaksConfigBytes = defaultGitleaksConfigBytes
+
+func defaultGitleaksConfigBytes() ([]byte, error) {
+	if len(embeddedGitleaksConfig) == 0 {
+		return nil, errors.New("embedded gitleaks config is unavailable; rebuild agents")
 	}
-	return filepath.Join(home, "dotfiles", "git", "gitleaks.toml"), nil
+	return append([]byte(nil), embeddedGitleaksConfig...), nil
 }
 
 type indexEntry struct {
@@ -83,7 +86,7 @@ func Staged(repoRoot string) ([]Finding, error) {
 				findings = append(findings, Finding{
 					Rule:     "unsafe-path",
 					Blocking: true,
-					Detail:   fmt.Sprintf("staged path %q contains a control character (%q); rename it before committing", path, r),
+					Detail:   fmt.Sprintf("staged path %s contains a control character (%s); rename it before committing", quoteASCII(path), quoteASCII(string(r))),
 				})
 			}
 		} else {
@@ -92,6 +95,8 @@ func Staged(repoRoot string) ([]Finding, error) {
 	}
 
 	config := ""
+	cleanupConfig := func() {}
+	defer func() { cleanupConfig() }()
 	for _, path := range agentPaths {
 		if _, unsafe := safetext.ControlRune(path); unsafe {
 			continue
@@ -102,18 +107,18 @@ func Staged(repoRoot string) ([]Finding, error) {
 			continue
 		}
 		if len(pathEntries) != 1 || pathEntries[0].Stage != 0 {
-			return nil, fmt.Errorf("cannot inspect conflicted staged agent path %q; resolve the index and retry", path)
+			return nil, fmt.Errorf("cannot inspect conflicted staged agent path %s; resolve the index and retry", quoteASCII(path))
 		}
 		entry := pathEntries[0]
 		if entry.Mode != "100644" && entry.Mode != "100755" {
-			return nil, fmt.Errorf("cannot inspect staged agent path %q with non-regular Git mode %s", path, entry.Mode)
+			return nil, fmt.Errorf("cannot inspect staged agent path %s with non-regular Git mode %s", quoteASCII(path), entry.Mode)
 		}
 		blob, err := stagedBlob(repoRoot, entry.OID)
 		if err != nil {
-			return nil, fmt.Errorf("cannot read staged agent blob for %q", path)
+			return nil, fmt.Errorf("cannot read staged agent blob for %s", quoteASCII(path))
 		}
 		if config == "" {
-			config, err = trustedConfig()
+			config, cleanupConfig, err = snapshotTrustedConfig()
 			if err != nil {
 				return nil, err
 			}
@@ -124,41 +129,78 @@ func Staged(repoRoot string) ([]Finding, error) {
 		}
 		findings = append(findings, scanned...)
 	}
+	if hasBlockingFinding(findings) {
+		findings = appendMixedCommitFinding(findings, agentPaths, otherPaths)
+		sortFindings(findings)
+		return findings, nil
+	}
 
 	generated, err := checkGenerated(repoRoot, agentPaths, entries)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("cannot validate staged generated indexes; inspect the quoted staged paths and run `agents index`")
 	}
 	findings = append(findings, generated...)
 
-	if len(agentPaths) > 0 && len(otherPaths) > 0 {
-		findings = append(findings, Finding{
-			Rule:     "mixed-commit",
-			Blocking: false,
-			Detail: fmt.Sprintf("this commit touches %d agent path(s) and %d other path(s); "+
-				"`agents save` commits .agents/ on its own", len(agentPaths), len(otherPaths)),
-		})
-	}
+	findings = appendMixedCommitFinding(findings, agentPaths, otherPaths)
 	sortFindings(findings)
 	return findings, nil
 }
 
-func trustedConfig() (string, error) {
-	path, err := gitleaksConfigPath()
+func hasBlockingFinding(findings []Finding) bool {
+	for _, finding := range findings {
+		if finding.Blocking {
+			return true
+		}
+	}
+	return false
+}
+
+func appendMixedCommitFinding(findings []Finding, agentPaths, otherPaths []string) []Finding {
+	if len(agentPaths) == 0 || len(otherPaths) == 0 {
+		return findings
+	}
+	return append(findings, Finding{
+		Rule:     "mixed-commit",
+		Blocking: false,
+		Detail: fmt.Sprintf("this commit touches %d agent path(s) and %d other path(s); "+
+			"`agents save` commits .agents/ on its own", len(agentPaths), len(otherPaths)),
+	})
+}
+
+func snapshotTrustedConfig() (snapshot string, cleanup func(), err error) {
+	data, err := gitleaksConfigBytes()
 	if err != nil {
-		return "", err
+		return "", func() {}, errors.New("trusted embedded gitleaks config is unavailable; rebuild agents")
 	}
-	f, err := os.Open(path)
+	if len(data) == 0 {
+		return "", func() {}, errors.New("trusted embedded gitleaks config is empty; rebuild agents")
+	}
+
+	dir, err := os.MkdirTemp("", "agents-gitleaks-config-")
 	if err != nil {
-		return "", fmt.Errorf("trusted gitleaks config is unavailable; restore %q", path)
+		return "", func() {}, errors.New("could not create a private gitleaks config snapshot")
 	}
-	info, statErr := f.Stat()
-	_, readErr := io.Copy(io.Discard, f)
-	closeErr := f.Close()
-	if statErr != nil || readErr != nil || closeErr != nil || !info.Mode().IsRegular() {
-		return "", fmt.Errorf("trusted gitleaks config is not a readable regular file; restore %q", path)
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	if err := os.Chmod(dir, 0o700); err != nil {
+		cleanup()
+		return "", func() {}, errors.New("could not secure the private gitleaks config snapshot")
 	}
-	return path, nil
+	snapshot = filepath.Join(dir, "gitleaks.toml")
+	out, err := os.OpenFile(snapshot, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		cleanup()
+		return "", func() {}, errors.New("could not create the private gitleaks config snapshot")
+	}
+	if _, err := out.Write(data); err != nil {
+		_ = out.Close()
+		cleanup()
+		return "", func() {}, errors.New("could not write the private gitleaks config snapshot")
+	}
+	if err := out.Close(); err != nil {
+		cleanup()
+		return "", func() {}, errors.New("could not finish the private gitleaks config snapshot")
+	}
+	return snapshot, cleanup, nil
 }
 
 type scannerFinding struct {
@@ -221,11 +263,8 @@ func scanBlob(path string, blob []byte, config string) ([]Finding, error) {
 
 	findings := make([]Finding, 0, len(raw))
 	for _, result := range raw {
-		if result.RuleID == "" || result.StartLine < 1 {
+		if !validRuleID(result.RuleID) || result.StartLine < 1 {
 			return nil, errors.New("gitleaks returned an incomplete finding report")
-		}
-		if _, unsafe := safetext.ControlRune(result.RuleID); unsafe {
-			return nil, errors.New("gitleaks returned an unsafe rule identifier")
 		}
 		findings = append(findings, Finding{
 			Path:     path,
@@ -238,10 +277,30 @@ func scanBlob(path string, blob []byte, config string) ([]Finding, error) {
 	return findings, nil
 }
 
+func validRuleID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
+			continue
+		}
+		if i > 0 && (c == '-' || c == '_' || c == '.') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func stagedPaths(repoRoot string) ([]string, error) {
-	// Include U explicitly. An unmerged path can otherwise disappear from this
-	// list even though ls-files correctly exposes its stage 1/2/3 entries.
-	out, err := gitOutput(repoRoot, "diff", "--cached", "--name-only", "--diff-filter=ACMRDU", "-z")
+	// Do not filter statuses: type changes, unmerged entries, and any Git status
+	// added in the future all need to reach the index-mode checks below.
+	out, err := gitOutput(repoRoot,
+		"-c", "diff.ignoreSubmodules=none",
+		"diff", "--cached", "--name-only",
+		"--no-renames", "--no-ext-diff", "--no-textconv", "--ignore-submodules=none", "-z")
 	if err != nil {
 		return nil, errors.New("cannot read staged path list")
 	}
@@ -283,22 +342,24 @@ func gitOutput(repoRoot string, args ...string) ([]byte, error) {
 
 func sanitizeGitEnv(env []string) []string {
 	forbidden := map[string]bool{
-		"GIT_DIR":              true,
-		"GIT_WORK_TREE":        true,
-		"GIT_INDEX_FILE":       true,
-		"GIT_OBJECT_DIRECTORY": true,
-		"GIT_COMMON_DIR":       true,
-		"GIT_NAMESPACE":        true,
+		"GIT_DIR":                          true,
+		"GIT_WORK_TREE":                    true,
+		"GIT_OBJECT_DIRECTORY":             true,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": true,
+		"GIT_QUARANTINE_PATH":              true,
+		"GIT_COMMON_DIR":                   true,
+		"GIT_NAMESPACE":                    true,
+		"GIT_NO_REPLACE_OBJECTS":           true,
 	}
 	result := make([]string, 0, len(env))
 	for _, pair := range env {
 		key, _, ok := strings.Cut(pair, "=")
-		if ok && forbidden[key] {
+		if ok && (forbidden[key] || strings.HasPrefix(key, "GIT_CONFIG_")) {
 			continue
 		}
 		result = append(result, pair)
 	}
-	return result
+	return append(result, "GIT_NO_REPLACE_OBJECTS=1")
 }
 
 func splitNUL(b []byte) []string {
@@ -432,6 +493,7 @@ func renderStagedIndex(repoRoot string, target generatedTarget, entries []indexE
 	}
 	defer os.RemoveAll(scratch)
 
+	created := map[string]bool{scratch: true}
 	for _, entry := range entries {
 		if !strings.HasPrefix(entry.Path, target.trigger) || entry.Path == target.index {
 			continue
@@ -459,14 +521,63 @@ func renderStagedIndex(repoRoot string, target generatedTarget, entries []indexE
 		destination := filepath.Join(scratch, filepath.FromSlash(entry.Path))
 		rel, err := filepath.Rel(scratch, destination)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return nil, fmt.Errorf("source path %q escapes the scratch tree", entry.Path)
+			return nil, fmt.Errorf("source path %s escapes the scratch tree", quoteASCII(entry.Path))
 		}
-		if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
-			return nil, err
+		if filepath.ToSlash(filepath.Clean(filepath.FromSlash(entry.Path))) != entry.Path {
+			return nil, fmt.Errorf("source path %s has a non-canonical filesystem form", quoteASCII(entry.Path))
 		}
-		if err := os.WriteFile(destination, blob, 0o600); err != nil {
-			return nil, err
+		if err := writeScratchFile(scratch, destination, blob, created); err != nil {
+			return nil, fmt.Errorf("source path %s aliases another staged path in the scratch filesystem", quoteASCII(entry.Path))
 		}
 	}
 	return target.render(scratch)
+}
+
+func writeScratchFile(scratch, destination string, blob []byte, created map[string]bool) error {
+	rel, err := filepath.Rel(scratch, destination)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := scratch
+	for _, part := range parts[:len(parts)-1] {
+		current = filepath.Join(current, part)
+		if created[current] {
+			continue
+		}
+		if _, err := os.Lstat(current); err == nil {
+			return errors.New("filesystem alias")
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Mkdir(current, 0o700); err != nil {
+			return err
+		}
+		created[current] = true
+	}
+	if created[destination] {
+		return errors.New("duplicate scratch destination")
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return errors.New("filesystem alias")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	f, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(blob); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	created[destination] = true
+	return nil
+}
+
+func quoteASCII(value string) string {
+	return strconv.QuoteToASCII(value)
 }
