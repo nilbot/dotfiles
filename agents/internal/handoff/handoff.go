@@ -44,11 +44,11 @@ func root(agentsDir string) string { return filepath.Join(agentsDir, "reports", 
 // the component changed between those operations. The returned Root is a
 // directory handle, so later renames cannot be redirected by changing a parent
 // pathname.
-func openDir(parent *os.Root, parentPath, name string) (*os.Root, error) {
+func openDirMode(parent *os.Root, parentPath, name string, create bool) (*os.Root, error) {
 	p := filepath.Join(parentPath, name)
 	for {
 		fi, err := parent.Lstat(name)
-		if os.IsNotExist(err) {
+		if os.IsNotExist(err) && create {
 			if err := parent.Mkdir(name, 0o755); err != nil && !os.IsExist(err) {
 				return nil, err
 			}
@@ -81,36 +81,60 @@ func openDir(parent *os.Root, parentPath, name string) (*os.Root, error) {
 	}
 }
 
+func openDir(parent *os.Root, parentPath, name string) (*os.Root, error) {
+	return openDirMode(parent, parentPath, name, true)
+}
+
+func openExistingDir(parent *os.Root, parentPath, name string) (*os.Root, error) {
+	return openDirMode(parent, parentPath, name, false)
+}
+
 // openHandoffRoot deliberately opens agentsDir itself as the trust anchor and
 // starts symlink refusal below it. `agents init --local` may keep a shared
 // .agents directory elsewhere and link it into a worktree; that local setup is
 // legitimate. reports/handoff and everything beneath it are repository content
 // and therefore are not trusted to redirect a write.
 func openHandoffRoot(agentsDir string) (*os.Root, error) {
+	return openHandoffRootMode(agentsDir, true)
+}
+
+func openExistingHandoffRoot(agentsDir string) (*os.Root, error) {
+	return openHandoffRootMode(agentsDir, false)
+}
+
+func openHandoffRootMode(agentsDir string, create bool) (*os.Root, error) {
 	agentsRoot, err := os.OpenRoot(agentsDir)
 	if err != nil {
 		return nil, err
 	}
-	reports, err := openDir(agentsRoot, agentsDir, "reports")
+	reports, err := openDirMode(agentsRoot, agentsDir, "reports", create)
 	agentsRoot.Close()
 	if err != nil {
 		return nil, err
 	}
-	handoffRoot, err := openDir(reports, filepath.Join(agentsDir, "reports"), "handoff")
+	handoffRoot, err := openDirMode(reports, filepath.Join(agentsDir, "reports"), "handoff", create)
 	reports.Close()
 	return handoffRoot, err
 }
 
-// atomicWrite refuses an existing symlink but permits an intentional rewrite
-// of a regular file. The final operation is a handle-relative rename: if the
-// destination is swapped for a symlink after Lstat, rename replaces the link
-// itself instead of following it, leaving its target untouched.
+// atomicWrite permits an absent leaf or an intentional rewrite of a regular
+// file and refuses every other existing filesystem object. A rewrite inherits
+// the existing permission bits instead of broadening them to the new-file
+// default. The final operation is a handle-relative rename: if the destination
+// changes after Lstat, rename replaces that object rather than following it,
+// leaving any symlink or hardlink target untouched.
 func atomicWrite(dir *os.Root, dirPath, name string, data []byte, perm os.FileMode) error {
 	dst := filepath.Join(dirPath, name)
+	preservePerm := false
 	if fi, err := dir.Lstat(name); err == nil {
-		if fi.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%s is a symlink: refusing to replace it; remove the link and retry", dst)
+		if !fi.Mode().IsRegular() {
+			if fi.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symlink, not a regular file: refusing to replace it; remove the link and retry", dst)
+			}
+			return fmt.Errorf("%s is not a regular file (mode %s): refusing to replace it; move it aside and retry", dst, fi.Mode())
 		}
+		perm = fi.Mode().Perm()
+		preservePerm = true
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -124,6 +148,14 @@ func atomicWrite(dir *os.Root, dirPath, name string, data []byte, perm os.FileMo
 		f.Close()
 		dir.Remove(tmpName)
 	}()
+	if preservePerm {
+		// OpenFile's creation mode is subject to the process umask. Chmod through
+		// the still-private temporary's handle so a rewrite preserves the old
+		// rwx bits exactly without acting on a repository-controlled pathname.
+		if err := f.Chmod(perm); err != nil {
+			return err
+		}
+	}
 	if _, err := io.Copy(f, bytes.NewReader(data)); err != nil {
 		return err
 	}
@@ -261,9 +293,7 @@ func Write(agentsDir, laneName, session, status, body string, when time.Time) (s
 	// unrecognised value is not evidence that anyone checked it, so it degrades
 	// to the weaker claim rather than reaching the index as a word the reader
 	// has no way to weigh.
-	if status != StatusReviewed {
-		status = StatusDraft
-	}
+	status = canonicalStatus(status)
 
 	// Checked before MkdirAll: on a case-insensitive filesystem MkdirAll("Lane")
 	// silently succeeds onto an existing "lane" and there is nothing left to
@@ -327,57 +357,137 @@ func Write(agentsDir, laneName, session, status, body string, when time.Time) (s
 // confidently incomplete.
 func List(agentsDir string) ([]Entry, error) {
 	base := root(agentsDir)
-	matches, err := filepath.Glob(filepath.Join(base, "*", "*.md"))
+	handoffRoot, err := openExistingHandoffRoot(agentsDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(matches)
+	defer handoffRoot.Close()
+
+	rootDir, err := handoffRoot.Open(".")
+	if err != nil {
+		return nil, err
+	}
+	lanes, err := rootDir.ReadDir(-1)
+	rootDir.Close()
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(lanes, func(i, j int) bool { return lanes[i].Name() < lanes[j].Name() })
 
 	var out []Entry
-	for _, p := range matches {
-		e, err := parse(p)
+	for _, laneEntry := range lanes {
+		laneName := laneEntry.Name()
+		laneInfo, err := handoffRoot.Lstat(laneName)
 		if err != nil {
 			return nil, err
 		}
-		rel, err := filepath.Rel(base, p)
+		if laneInfo.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("%s is a symlink: handoff reads only use real directories below .agents so repository content cannot redirect them", filepath.Join(base, laneName))
+		}
+		if !laneInfo.IsDir() {
+			continue
+		}
+		laneRoot, err := openExistingDir(handoffRoot, base, laneName)
 		if err != nil {
 			return nil, err
 		}
-		e.Path = filepath.ToSlash(rel)
-		// The filename is not authored in YAML -- it comes off the filesystem,
-		// which will hold a newline in a name -- and it becomes the link text of
-		// one row. Quoted in the message so the refusal itself stays on one
-		// line.
-		if r, ok := safetext.ControlRune(e.Path); ok {
-			return nil, fmt.Errorf("%q: a handoff filename contains a control character (%q): it is rendered as a single line of the index -- rename the file", e.Path, r)
+		laneDir, err := laneRoot.Open(".")
+		if err != nil {
+			laneRoot.Close()
+			return nil, err
 		}
-		out = append(out, e)
+		files, err := laneDir.ReadDir(-1)
+		laneDir.Close()
+		if err != nil {
+			laneRoot.Close()
+			return nil, err
+		}
+		sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+		for _, fileEntry := range files {
+			name := fileEntry.Name()
+			if !strings.HasSuffix(name, ".md") {
+				continue
+			}
+			rel := path.Join(laneName, name)
+			fi, err := laneRoot.Lstat(name)
+			if err != nil {
+				laneRoot.Close()
+				return nil, err
+			}
+			if !fi.Mode().IsRegular() {
+				laneRoot.Close()
+				return nil, fmt.Errorf("%s is not a regular handoff file (mode %s): move it aside and retry", rel, fi.Mode())
+			}
+			f, err := laneRoot.Open(name)
+			if err != nil {
+				laneRoot.Close()
+				return nil, err
+			}
+			opened, statErr := f.Stat()
+			after, lstatErr := laneRoot.Lstat(name)
+			if statErr != nil || lstatErr != nil || !after.Mode().IsRegular() || !os.SameFile(fi, after) || !os.SameFile(after, opened) {
+				f.Close()
+				laneRoot.Close()
+				if statErr != nil {
+					return nil, statErr
+				}
+				if lstatErr != nil {
+					return nil, lstatErr
+				}
+				return nil, fmt.Errorf("%s changed while it was being opened: retry after ensuring it is a regular file, not a symlink", rel)
+			}
+			b, readErr := io.ReadAll(f)
+			closeErr := f.Close()
+			if readErr != nil {
+				laneRoot.Close()
+				return nil, readErr
+			}
+			if closeErr != nil {
+				laneRoot.Close()
+				return nil, closeErr
+			}
+			e, err := parse(b, rel)
+			if err != nil {
+				laneRoot.Close()
+				return nil, err
+			}
+			e.Path = rel
+			// The filename is not authored in YAML -- it comes off the filesystem,
+			// which will hold a newline in a name -- and it becomes the link text of
+			// one row. Quoted in the message so the refusal itself stays on one
+			// line.
+			if r, ok := safetext.ControlRune(e.Path); ok {
+				laneRoot.Close()
+				return nil, fmt.Errorf("%q: a handoff filename contains a control character (%q): it is rendered as a single line of the index -- rename the file", e.Path, r)
+			}
+			out = append(out, e)
+		}
+		laneRoot.Close()
 	}
 	return out, nil
 }
 
-func parse(p string) (Entry, error) {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return Entry{}, err
-	}
+func parse(b []byte, displayPath string) (Entry, error) {
 	text := strings.ReplaceAll(string(b), "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
-		return Entry{}, fmt.Errorf("%s: no frontmatter", filepath.Base(p))
+		return Entry{}, fmt.Errorf("%s: no frontmatter", displayPath)
 	}
 	rest := text[4:]
 	// The FIRST closing delimiter, not the last: a body may hold a horizontal
 	// rule, and searching from the end would swallow it into the YAML.
 	end := strings.Index(rest, "\n---")
 	if end < 0 {
-		return Entry{}, fmt.Errorf("%s: frontmatter is not closed", filepath.Base(p))
+		return Entry{}, fmt.Errorf("%s: frontmatter is not closed", displayPath)
 	}
 	var e Entry
 	if err := yaml.Unmarshal([]byte(rest[:end]), &e); err != nil {
-		return Entry{}, fmt.Errorf("%s: %w", filepath.Base(p), err)
+		return Entry{}, fmt.Errorf("%s: %w", displayPath, err)
 	}
 	if e.Lane == "" {
-		e.Lane = filepath.Base(filepath.Dir(p))
+		e.Lane = path.Base(path.Dir(displayPath))
 	}
 	// Layer 1 of the index's two: every field below is interpolated into one
 	// line of INDEX.md -- lane into a "## " heading, the other two into a table
@@ -389,12 +499,12 @@ func parse(p string) (Entry, error) {
 		{"session", e.Session},
 		{"status", e.Status},
 	} {
-		if err := safetext.CheckSingleLine(filepath.Base(p), f.name, f.value); err != nil {
+		if err := safetext.CheckSingleLine(displayPath, f.name, f.value); err != nil {
 			return Entry{}, err
 		}
 	}
 	if e.Status != StatusReviewed && e.Status != StatusDraft {
-		return Entry{}, fmt.Errorf("%s: handoff status %q is not recognised: status must be exactly %q or %q", filepath.Base(p), e.Status, StatusReviewed, StatusDraft)
+		return Entry{}, fmt.Errorf("%s: handoff status %q is not recognised: status must be exactly %q or %q", displayPath, e.Status, StatusReviewed, StatusDraft)
 	}
 	return e, nil
 }
@@ -422,13 +532,35 @@ func Prune(agentsDir string, keep int) ([]string, error) {
 	// deterministically, not only by an unlucky map iteration.
 	var removed []string
 	var rmErr error
+	handoffRoot, err := openHandoffRoot(agentsDir)
+	if err != nil {
+		return nil, err
+	}
+	defer handoffRoot.Close()
 removals:
 	for _, group := range byLane {
 		sortNewestFirst(group)
 		for _, e := range group[min(keep, len(group)):] {
-			p := filepath.Join(root(agentsDir), filepath.FromSlash(e.Path))
-			if err := os.Remove(p); err != nil {
-				rmErr = err
+			laneName, name, ok := strings.Cut(e.Path, "/")
+			if !ok {
+				rmErr = fmt.Errorf("%s: handoff path has no lane component", e.Path)
+				break removals
+			}
+			laneRoot, openErr := openExistingDir(handoffRoot, root(agentsDir), laneName)
+			if openErr != nil {
+				rmErr = openErr
+				break removals
+			}
+			fi, lstatErr := laneRoot.Lstat(name)
+			if lstatErr == nil && !fi.Mode().IsRegular() {
+				lstatErr = fmt.Errorf("%s is not a regular handoff file (mode %s): refusing to prune it", e.Path, fi.Mode())
+			}
+			if lstatErr == nil {
+				lstatErr = laneRoot.Remove(name)
+			}
+			laneRoot.Close()
+			if lstatErr != nil {
+				rmErr = lstatErr
 				break removals
 			}
 			removed = append(removed, e.Path)
@@ -460,6 +592,13 @@ func sortNewestFirst(g []Entry) {
 		}
 		return g[i].When.After(g[j].When)
 	})
+}
+
+func canonicalStatus(status string) string {
+	if status == StatusReviewed {
+		return StatusReviewed
+	}
+	return StatusDraft
 }
 
 func RenderIndex(entries []Entry) []byte {
@@ -500,7 +639,7 @@ func RenderIndex(entries []Entry) []byte {
 			// link intact without making the index disagree with the file.
 			fmt.Fprintf(&b, "| %s | %s | %s | [%s](%s) |\n",
 				e.When.UTC().Format("2006-01-02 15:04"),
-				safetext.MarkdownCell(e.Status),
+				safetext.MarkdownCell(canonicalStatus(e.Status)),
 				safetext.MarkdownCell(e.Session),
 				safetext.MarkdownLinkText(path.Base(e.Path)),
 				safetext.MarkdownLinkDest(e.Path))

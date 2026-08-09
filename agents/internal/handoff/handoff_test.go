@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -176,6 +177,174 @@ func TestWriteCreatesAndRewritesARegularHandoff(t *testing.T) {
 	}
 }
 
+// Atomic replacement is only valid for an absent leaf or an existing regular
+// file. A FIFO is repository-controlled filesystem input too; replacing it
+// would silently change the kind of object at a tracked destination.
+//
+// Kills: accepting every existing non-symlink leaf in atomicWrite.
+func TestWriteRefusesANonRegularHandoffLeaf(t *testing.T) {
+	dir := t.TempDir()
+	when := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+	laneDir := filepath.Join(dir, "reports", "handoff", "lane-a")
+	if err := os.MkdirAll(laneDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(laneDir, "2026-08-10-s1.md")
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := Write(dir, "lane-a", "s1", StatusReviewed, "body", when)
+	if err == nil {
+		t.Fatal("Write replaced a FIFO handoff destination")
+	}
+	for _, want := range []string{"2026-08-10-s1.md", "not a regular file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name %q; got: %v", want, err)
+		}
+	}
+	fi, statErr := os.Lstat(p)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the FIFO was replaced: mode %v", fi.Mode())
+	}
+}
+
+// INDEX.md reaches the same atomic primitive as a handoff leaf and therefore
+// has the same absent-or-regular contract.
+//
+// Kills: hardening only the requested handoff leaf while allowing a FIFO index
+// destination to be replaced.
+func TestWriteIndexRefusesANonRegularLeaf(t *testing.T) {
+	dir := t.TempDir()
+	writeRaw(t, dir, "lane-a", "2026-08-10-s1.md",
+		"---\nlane: lane-a\nsession: s1\nstatus: reviewed\nwhen: 2026-08-10T09:00:00Z\n---\n\nbody\n")
+	index := filepath.Join(dir, "reports", "handoff", "INDEX.md")
+	if err := syscall.Mkfifo(index, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := WriteIndex(dir)
+	if err == nil {
+		t.Fatal("WriteIndex replaced a FIFO destination")
+	}
+	for _, want := range []string{"INDEX.md", "not a regular file"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal must name %q; got: %v", want, err)
+		}
+	}
+	fi, statErr := os.Lstat(index)
+	if statErr != nil {
+		t.Fatal(statErr)
+	}
+	if fi.Mode()&os.ModeNamedPipe == 0 {
+		t.Errorf("the FIFO was replaced: mode %v", fi.Mode())
+	}
+}
+
+// Atomic rename must not broaden an existing file's permissions. The default
+// is only for a new leaf; an intentional rewrite inherits the regular leaf's
+// permission bits.
+//
+// Kills: always creating the replacement temporary with 0644.
+func TestRegularRewritesPreserveExistingPermissions(t *testing.T) {
+	t.Run("handoff", func(t *testing.T) {
+		dir := t.TempDir()
+		when := time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+		p, err := Write(dir, "lane-a", "s1", StatusReviewed, "first", when)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Write(dir, "lane-a", "s1", StatusReviewed, "replacement", when); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Errorf("handoff mode = %04o, want 0600", got)
+		}
+	})
+
+	t.Run("index", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := Write(dir, "lane-a", "s1", StatusReviewed, "body", time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatal(err)
+		}
+		index := filepath.Join(dir, "reports", "handoff", "INDEX.md")
+		if err := os.Chmod(index, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteIndex(dir); err != nil {
+			t.Fatal(err)
+		}
+		fi, err := os.Stat(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := fi.Mode().Perm(); got != 0o600 {
+			t.Errorf("index mode = %04o, want 0600", got)
+		}
+	})
+}
+
+// Reading the old mode must not turn the rewrite into an in-place write. A
+// tracked hardlink may share an inode with a file outside .agents; atomic rename
+// must replace only the handoff directory entry and leave the shared inode's
+// bytes untouched.
+func TestRegularRewriteDoesNotWriteThroughAHardlink(t *testing.T) {
+	dir := t.TempDir()
+	laneDir := filepath.Join(dir, "reports", "handoff", "lane-a")
+	if err := os.MkdirAll(laneDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "shared-inode.md")
+	wantExternal := []byte("external bytes must survive\n")
+	if err := os.WriteFile(external, wantExternal, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(laneDir, "2026-08-10-s1.md")
+	if err := os.Link(external, destination); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := Write(dir, "lane-a", "s1", StatusReviewed, "replacement body", time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotExternal, err := os.ReadFile(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(gotExternal, wantExternal) {
+		t.Errorf("hardlink target changed:\n got %q\nwant %q", gotExternal, wantExternal)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "replacement body") {
+		t.Errorf("handoff directory entry was not replaced:\n%s", b)
+	}
+	externalInfo, err := os.Stat(external)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destinationInfo, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(externalInfo, destinationInfo) {
+		t.Error("handoff still shares the external inode after rewrite")
+	}
+}
+
 // INDEX.md is another repository-controlled destination written as a side
 // effect of Write. Protecting only the requested handoff leaf would still let a
 // tracked index symlink redirect that side effect to an arbitrary file.
@@ -299,10 +468,13 @@ func TestListRefusesMissingOrUnrecognisedStatus(t *testing.T) {
 			if err == nil {
 				t.Fatal("List accepted a handoff without canonical provenance")
 			}
-			for _, want := range []string{name, "status"} {
+			for _, want := range []string{filepath.ToSlash(filepath.Join("lane-a", name)), "status"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal must name %q; got: %v", want, err)
 				}
+			}
+			if strings.Contains(err.Error(), dir) {
+				t.Errorf("the refusal leaked the unrelated absolute temp path %q: %v", dir, err)
 			}
 			if err := WriteIndex(dir); err == nil {
 				t.Fatal("WriteIndex rendered a handoff without canonical provenance")
@@ -331,6 +503,26 @@ func TestListAndRenderAcceptBothCanonicalStatuses(t *testing.T) {
 		if strings.Count(idx, "| "+status+" |") != 1 {
 			t.Errorf("want exactly one %q provenance row:\n%s", status, idx)
 		}
+	}
+}
+
+// RenderIndex is exported and Task 16 calls it directly with Entry values, so
+// parser validation cannot be its only provenance boundary. An unsupported
+// value carries no evidence of review and must degrade to draft rather than be
+// presented as a stronger-sounding status.
+//
+// Kills: interpolating Entry.Status directly in the generated row.
+func TestRenderIndexDegradesAnUnrecognisedDirectStatusToDraft(t *testing.T) {
+	idx := string(RenderIndex([]Entry{{
+		Lane: "lane-a", Session: "s1", Status: "approved",
+		When: time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC),
+		Path: "lane-a/2026-08-10-s1.md",
+	}}))
+	if strings.Contains(idx, "| approved |") {
+		t.Fatalf("RenderIndex presented unsupported provenance:\n%s", idx)
+	}
+	if !strings.Contains(idx, "| draft |") {
+		t.Errorf("unsupported direct status must degrade to the weaker claim:\n%s", idx)
 	}
 }
 

@@ -407,6 +407,83 @@ func TestHandoffPruneHonoursKeepPerLane(t *testing.T) {
 	}
 }
 
+// Prune reads and deletes repository-controlled paths. A lane symlink must not
+// let Glob discover external notes and os.Remove delete them through the link.
+// This uses the command boundary so exit 0 cannot mask an external deletion.
+//
+// Kills: List following a lane symlink, or Prune reconstructing deletions with
+// filepath.Join and os.Remove.
+func TestHandoffPruneRefusesASymlinkedLaneWithoutDeletingExternalFiles(t *testing.T) {
+	root := newRepo(t)
+	outside := t.TempDir()
+	for i, name := range []string{"2026-08-09-old.md", "2026-08-10-new.md"} {
+		body := []byte("---\nlane: lane-a\nsession: s" + string(rune('1'+i)) + "\nstatus: reviewed\nwhen: 2026-08-" + []string{"09", "10"}[i] + "T09:00:00Z\n---\n\nexternal body\n")
+		if err := os.WriteFile(filepath.Join(outside, name), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(handoffRoot(root), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(handoffRoot(root), "lane-a")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runHandoffPrune([]string{"--keep", "1"}, &out); code != exitcode.NoRecord {
+		t.Fatalf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+	}
+	for _, want := range []string{"lane-a", "symlink"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the refusal must name %q; output:\n%s", want, out.String())
+		}
+	}
+	ents, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 2 {
+		t.Fatalf("external file count = %d, want 2; prune deleted through the lane link", len(ents))
+	}
+}
+
+// The trust boundary begins below .agents. An intentional local .agents link
+// remains a supported trust anchor for prune just as it is for write.
+func TestHandoffPruneStillUsesAnIntentionalSymlinkedAgentsDir(t *testing.T) {
+	root := newRepo(t)
+	shared := filepath.Join(t.TempDir(), "shared-context")
+	laneDir := filepath.Join(shared, "reports", "handoff", "lane-a")
+	if err := os.MkdirAll(laneDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range []string{"2026-08-09-old.md", "2026-08-10-new.md"} {
+		body := []byte("---\nlane: lane-a\nsession: s" + string(rune('1'+i)) + "\nstatus: reviewed\nwhen: 2026-08-" + []string{"09", "10"}[i] + "T09:00:00Z\n---\n\nshared body\n")
+		if err := os.WriteFile(filepath.Join(laneDir, name), body, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.RemoveAll(filepath.Join(root, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shared, filepath.Join(root, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runHandoffPrune([]string{"--keep", "1"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
+	}
+	ents, err := os.ReadDir(laneDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 1 || ents[0].Name() != "2026-08-10-new.md" {
+		t.Errorf("shared lane after prune = %v, want only newest handoff", ents)
+	}
+}
+
 // A subcommand that is not registered in main.go is unreachable however well it
 // works. Skip is only reachable through runHandoff; an unregistered command
 // returns Malformed.
