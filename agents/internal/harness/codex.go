@@ -37,10 +37,7 @@ func (codex) WireConfigPath(repoRoot string) string {
 }
 
 func (c codex) Wire(repoRoot, binary string) error {
-	if err := writeHooksJSON(c.WireConfigPath(repoRoot), c.Name(), c.Events(), binary); err != nil {
-		return err
-	}
-	return linkSkills(filepath.Join(repoRoot, ".codex", "skills"))
+	return wireRepository(repoRoot, ".codex", "hooks.json", c.Name(), c.Events(), binary)
 }
 
 // TrustSteps names both of Codex's gates, because they are separate and

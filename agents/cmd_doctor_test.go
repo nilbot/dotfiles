@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -29,6 +30,41 @@ func commandDepsForDoctor(t *testing.T, checks []doctor.Check, runErr error) doc
 			return checks, runErr
 		},
 	}
+}
+
+func realDoctorCommandDeps(t *testing.T, root string) doctorCommandDependencies {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "agents")
+	if err := os.WriteFile(binary, []byte("test binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return doctorCommandDependencies{
+		Getwd:      func() (string, error) { return root, nil },
+		Discover:   repo.Discover,
+		ReadID:     func() (string, error) { return "m1", nil },
+		BinaryPath: func() (string, error) { return binary, nil },
+		Now:        func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
+		DoctorDeps: doctor.Dependencies{},
+		Run:        doctor.RunWithDeps,
+	}
+}
+
+// releaseFIFOAfter prevents a deliberately unsafe old reader from becoming a
+// test-process orphan. A safe reader closes stop before the timer fires.
+func releaseFIFOAfter(path string, delay time.Duration, stop <-chan struct{}) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-time.After(delay):
+			f, _ := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+			if f != nil {
+				_ = f.Close()
+			}
+		case <-stop:
+		}
+	}()
+	return done
 }
 
 func TestDoctorCommandExitContract(t *testing.T) {
@@ -56,6 +92,102 @@ func TestDoctorCommandExitContract(t *testing.T) {
 			}
 			if strings.Contains(out.String(), "private failure") {
 				t.Fatalf("core error leaked dependency detail: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestDoctorMapsUnsafeTraceLeavesToContentSafeNoRecord(t *testing.T) {
+	for _, kind := range []string{"symlink", "fifo"} {
+		t.Run(kind, func(t *testing.T) {
+			root := newRepo(t)
+			traceLeaf := filepath.Join(root, ".agents", "reports", "traces", "2026-08-20.jsonl")
+			private := "PRIVATE-doctor-trace-sentinel"
+			var stop chan struct{}
+			var released <-chan struct{}
+			if kind == "symlink" {
+				target := filepath.Join(t.TempDir(), "outside.jsonl")
+				body := `{"when":"2026-08-20T12:00:00Z","agent_id":"` + private + `"}` + "\n"
+				if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, traceLeaf); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := syscall.Mkfifo(traceLeaf, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				stop = make(chan struct{})
+				released = releaseFIFOAfter(traceLeaf, 300*time.Millisecond, stop)
+			}
+
+			var out bytes.Buffer
+			start := time.Now()
+			code := runDoctorWithDependencies(nil, &out, realDoctorCommandDeps(t, root))
+			elapsed := time.Since(start)
+			if stop != nil {
+				close(stop)
+				<-released
+				if elapsed >= 150*time.Millisecond {
+					t.Fatalf("doctor blocked on trace FIFO for %v", elapsed)
+				}
+			}
+			if code != exitcode.NoRecord || !strings.Contains(out.String(), "could not complete the diagnostic") {
+				t.Fatalf("trace %s: exit=%d output=%q, want content-safe NoRecord", kind, code, out.String())
+			}
+			if strings.Contains(out.String(), private) {
+				t.Fatalf("trace %s exposed target content: %q", kind, out.String())
+			}
+		})
+	}
+}
+
+func TestDoctorCompletesWithFailAdvisoryForUnsafeMemoryLeaves(t *testing.T) {
+	for _, kind := range []string{"symlink", "fifo"} {
+		t.Run(kind, func(t *testing.T) {
+			root := newRepo(t)
+			memoryDir := filepath.Join(root, ".agents", "memory")
+			if err := os.MkdirAll(memoryDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			memoryLeaf := filepath.Join(memoryDir, "entry.md")
+			private := "PRIVATE-doctor-memory-sentinel"
+			var stop chan struct{}
+			var released <-chan struct{}
+			if kind == "symlink" {
+				target := filepath.Join(t.TempDir(), "outside.md")
+				body := "---\nname: " + private + "\ndescription: outside\nmetadata:\n  type: project\n---\n\nbody\n"
+				if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, memoryLeaf); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := syscall.Mkfifo(memoryLeaf, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				stop = make(chan struct{})
+				released = releaseFIFOAfter(memoryLeaf, 300*time.Millisecond, stop)
+			}
+
+			var out bytes.Buffer
+			start := time.Now()
+			code := runDoctorWithDependencies(nil, &out, realDoctorCommandDeps(t, root))
+			elapsed := time.Since(start)
+			if stop != nil {
+				close(stop)
+				<-released
+				if elapsed >= 150*time.Millisecond {
+					t.Fatalf("doctor blocked on memory FIFO for %v", elapsed)
+				}
+			}
+			if code != exitcode.Advisory || !strings.Contains(out.String(), "FAIL  memory") {
+				t.Fatalf("memory %s: exit=%d output=%q, want completed fail/advisory", kind, code, out.String())
+			}
+			if strings.Contains(out.String(), private) {
+				t.Fatalf("memory %s exposed target content: %q", kind, out.String())
 			}
 		})
 	}

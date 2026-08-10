@@ -9,6 +9,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/record"
+	"github.com/nilbot/dotfiles/agents/internal/safeio"
 )
 
 // maxDuration is the widest window a time.Duration can hold. A request wider
@@ -86,11 +88,31 @@ func scaleWindow(s string, n int, unit time.Duration) (time.Duration, error) {
 }
 
 func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
-	paths, err := filepath.Glob(filepath.Join(agentsDir, "reports", "traces", "*.jsonl"))
+	agentsRoot, err := os.OpenRoot(agentsDir)
 	if err != nil {
 		return Result{}, err
 	}
-	sort.Strings(paths)
+	defer agentsRoot.Close()
+	reportsRoot, err := safeio.OpenDirAt(agentsRoot, "reports")
+	if os.IsNotExist(err) {
+		return Result{}, nil
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	defer reportsRoot.Close()
+	tracesRoot, err := safeio.OpenDirAt(reportsRoot, "traces")
+	if os.IsNotExist(err) {
+		return Result{}, nil
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	defer tracesRoot.Close()
+	entries, err := fs.ReadDir(tracesRoot.FS(), ".")
+	if err != nil {
+		return Result{}, err
+	}
 
 	var res Result
 	var cutoff time.Time
@@ -98,8 +120,13 @@ func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
 		cutoff = now.Add(-f.Since)
 	}
 
-	for _, p := range paths {
-		file, err := os.Open(p)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		p := filepath.Join(agentsDir, "reports", "traces", name)
+		file, _, err := safeio.OpenRegularAt(tracesRoot, name)
 		if err != nil {
 			// Loud, never skipped. A daily file we cannot open is history we
 			// cannot see, and continuing past it would answer with a smaller
@@ -129,7 +156,7 @@ func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
 				res.Records = append(res.Records, r)
 			}
 		}
-		file.Close()
+		_ = file.Close()
 		if err := sc.Err(); err != nil {
 			// The scanner stops at the first line it cannot hold, and every
 			// later daily file then goes unread -- so the bare "token too

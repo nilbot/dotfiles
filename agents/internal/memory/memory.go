@@ -8,6 +8,7 @@ package memory
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +16,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nilbot/dotfiles/agents/internal/safeio"
 	"github.com/nilbot/dotfiles/agents/internal/safetext"
 )
 
@@ -60,10 +62,14 @@ func checkSingleLine(base, field, value string) error {
 }
 
 func Parse(path string) (Frontmatter, error) {
-	b, err := os.ReadFile(path)
+	b, err := safeio.ReadRegular(path)
 	if err != nil {
 		return Frontmatter{}, err
 	}
+	return parseBytes(path, b)
+}
+
+func parseBytes(path string, b []byte) (Frontmatter, error) {
 	text := strings.ReplaceAll(string(b), "\r\n", "\n")
 	if !strings.HasPrefix(text, delim+"\n") {
 		return Frontmatter{}, fmt.Errorf("%s: no frontmatter", filepath.Base(path))
@@ -109,23 +115,38 @@ func Parse(path string) (Frontmatter, error) {
 // that silently drops out of the index is invisible, and the index would then
 // be confidently incomplete.
 func List(dir string) ([]Frontmatter, error) {
-	matches, err := filepath.Glob(filepath.Join(dir, "*.md"))
+	root, err := safeio.OpenDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(matches)
+	defer root.Close()
+	entries, err := fs.ReadDir(root.FS(), ".")
+	if err != nil {
+		return nil, err
+	}
 
 	var out []Frontmatter
-	for _, p := range matches {
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
 		// EqualFold, not ==. On a case-insensitive filesystem -- macOS's
 		// default -- os.WriteFile("INDEX.md") lands on an existing "index.md"
 		// and the directory entry keeps its original casing, so an exact
 		// comparison then reads the generated index back as an entry and fails
 		// on it forever. The skip has to be about the name, not its spelling.
-		if strings.EqualFold(filepath.Base(p), indexName) {
+		if strings.EqualFold(name, indexName) {
 			continue
 		}
-		fm, err := Parse(p)
+		b, _, err := safeio.ReadRegularAt(root, name)
+		if err != nil {
+			return nil, err
+		}
+		fm, err := parseBytes(name, b)
 		if err != nil {
 			return nil, err
 		}

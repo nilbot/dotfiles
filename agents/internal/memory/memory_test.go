@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 const entry = `---
@@ -141,6 +143,85 @@ func TestListReportsUnparseableEntries(t *testing.T) {
 		t.Fatal("want an error naming the unparseable entry")
 	} else if !strings.Contains(err.Error(), "broken.md") {
 		t.Fatalf("error must name the file: %v", err)
+	}
+}
+
+// A memory leaf is repository-controlled, while its symlink target need not
+// be. A valid target makes following the link observable as a successful entry
+// instead of letting the parser's ordinary validation hide the unsafe read.
+func TestListRejectsAnExistingMemorySymlinkWithoutConsumingItsTarget(t *testing.T) {
+	dir := t.TempDir()
+	private := "PRIVATE-external-memory-sentinel"
+	target := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(target, []byte(doc(private, "outside", "project")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "entry.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := List(dir)
+	if err == nil || len(entries) != 0 {
+		t.Fatalf("List followed an external memory leaf: entries=%+v err=%v", entries, err)
+	}
+	if strings.Contains(err.Error(), private) {
+		t.Fatalf("memory leaf failure exposed target content: %v", err)
+	}
+}
+
+func TestListRejectsARedirectedMemoryDirectoryWithoutConsumingExternalEntries(t *testing.T) {
+	root := t.TempDir()
+	external := t.TempDir()
+	private := "PRIVATE-redirected-memory-directory"
+	if err := os.WriteFile(filepath.Join(external, "entry.md"), []byte(doc(private, "outside", "project")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	memoryDir := filepath.Join(root, "memory")
+	if err := os.Symlink(external, memoryDir); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, err := List(memoryDir)
+	if err == nil || len(entries) != 0 {
+		t.Fatalf("List followed a redirected memory directory: entries=%+v err=%v", entries, err)
+	}
+	if strings.Contains(err.Error(), private) {
+		t.Fatalf("redirected memory failure exposed entry content: %v", err)
+	}
+}
+
+func TestListRejectsAMemoryFIFOPromptly(t *testing.T) {
+	dir := t.TempDir()
+	fifo := filepath.Join(dir, "entry.md")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const releaseAfter = 300 * time.Millisecond
+	released := make(chan struct{})
+	stop := make(chan struct{})
+	go func() {
+		defer close(released)
+		select {
+		case <-time.After(releaseAfter):
+			f, _ := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+			if f != nil {
+				_ = f.Close()
+			}
+		case <-stop:
+		}
+	}()
+	start := time.Now()
+	_, err := List(dir)
+	elapsed := time.Since(start)
+	close(stop)
+	<-released
+
+	if elapsed >= releaseAfter/2 {
+		t.Fatalf("List blocked on a memory FIFO for %v", elapsed)
+	}
+	if err == nil {
+		t.Fatal("List accepted a memory FIFO")
 	}
 }
 

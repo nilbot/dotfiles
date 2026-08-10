@@ -10,12 +10,14 @@
 package harness
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/nilbot/dotfiles/agents/internal/pointer"
 )
@@ -282,29 +284,193 @@ func splitShellWords(command string) ([]string, bool) {
 	return words, true
 }
 
-// writeHooksJSON merges our hook entries into a config file both harnesses
-// share the schema of, preserving every key and every foreign hook.
-//
-// Merging rather than owning matters: this file also carries settings that have
-// nothing to do with us (permissions, effort level, a project's own hooks), and
-// silently dropping someone's audit hook would be a serious misbehaviour.
-func writeHooksJSON(path, harnessName string, events []Event, binary string) error {
-	settings := map[string]any{}
-	if b, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(b, &settings); err != nil {
-			return fmt.Errorf("%s is not valid JSON; fix or remove it: %w", path, err)
+type configSnapshot struct {
+	exists bool
+	info   os.FileInfo
+	perm   os.FileMode
+}
+
+type skillsSnapshot struct {
+	exists bool
+	info   os.FileInfo
+}
+
+var beforeWirePublish = func() {}
+
+// openHarnessDir opens one repository-controlled child below the repository
+// root without allowing that child to redirect writes through a symlink. The
+// returned Root remains bound to the checked directory if a pathname above it
+// is renamed after this function returns.
+func openHarnessDir(repoRoot, name string) (*os.Root, string, error) {
+	root, err := os.OpenRoot(repoRoot)
+	if err != nil {
+		return nil, "", err
+	}
+	defer root.Close()
+
+	path := filepath.Join(repoRoot, name)
+	for {
+		info, err := root.Lstat(name)
+		if os.IsNotExist(err) {
+			if err := root.Mkdir(name, 0o755); err != nil && !os.IsExist(err) {
+				return nil, "", err
+			}
+			continue
 		}
-	} else if !os.IsNotExist(err) {
-		return err
+		if err != nil {
+			return nil, "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil, "", fmt.Errorf("%s is a symlink: refusing to wire outside the repository", path)
+		}
+		if !info.IsDir() {
+			return nil, "", fmt.Errorf("%s is not a directory: move it aside before wiring", path)
+		}
+
+		child, err := root.OpenRoot(name)
+		if err != nil {
+			return nil, "", err
+		}
+		opened, err := child.Stat(".")
+		if err != nil {
+			child.Close()
+			return nil, "", err
+		}
+		if !os.SameFile(info, opened) {
+			child.Close()
+			return nil, "", fmt.Errorf("%s changed while it was being opened: retry after ensuring it is a real directory", path)
+		}
+		return child, path, nil
+	}
+}
+
+func isSingleLinkRegular(info os.FileInfo) bool {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return info.Mode().IsRegular() && ok && stat.Nlink == 1
+}
+
+// acquireWireLock serializes this tool's writers without ever deleting a
+// repository-controlled lock pathname. The small persistent inode is harmless;
+// keeping it avoids a check-then-remove cleanup race that could delete a
+// replacement object.
+func acquireWireLock(dir *os.Root, dirPath string) (*os.File, error) {
+	const name = ".agents-wire.lock"
+	path := filepath.Join(dirPath, name)
+	for {
+		info, err := dir.Lstat(name)
+		if os.IsNotExist(err) {
+			file, err := dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
+			if os.IsExist(err) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			opened, err := file.Stat()
+			if err != nil || !isSingleLinkRegular(opened) {
+				_ = file.Close()
+				return nil, fmt.Errorf("%s is not a safe wire lock", path)
+			}
+			if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+				_ = file.Close()
+				return nil, fmt.Errorf("another wire operation owns %s: %w", path, err)
+			}
+			return file, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !isSingleLinkRegular(info) {
+			return nil, fmt.Errorf("%s is not a single-link regular lock file", path)
+		}
+		file, err := dir.OpenFile(name, os.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			return nil, err
+		}
+		opened, err := file.Stat()
+		if err != nil || !isSingleLinkRegular(opened) || !os.SameFile(info, opened) {
+			_ = file.Close()
+			return nil, fmt.Errorf("%s changed while it was being opened", path)
+		}
+		if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			_ = file.Close()
+			return nil, fmt.Errorf("another wire operation owns %s: %w", path, err)
+		}
+		return file, nil
+	}
+}
+
+func releaseWireLock(file *os.File) {
+	_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+	_ = file.Close()
+}
+
+// readHooksJSON reads only a verified, single-link regular config leaf. The
+// nonblocking, no-follow open makes FIFOs and last-component symlinks errors
+// instead of hangs or reads from another inode.
+func readHooksJSON(dir *os.Root, dirPath, name string) (map[string]any, configSnapshot, error) {
+	settings := map[string]any{}
+	path := filepath.Join(dirPath, name)
+	info, err := dir.Lstat(name)
+	if os.IsNotExist(err) {
+		return settings, configSnapshot{perm: 0o644}, nil
+	}
+	if err != nil {
+		return nil, configSnapshot{}, err
+	}
+	if !isSingleLinkRegular(info) {
+		return nil, configSnapshot{}, fmt.Errorf("%s is not a single-link regular file: refusing to read or replace it", path)
 	}
 
-	hooks, _ := settings["hooks"].(map[string]any)
-	if hooks == nil {
+	file, err := dir.OpenFile(name, os.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, configSnapshot{}, err
+	}
+	opened, err := file.Stat()
+	if err != nil || !isSingleLinkRegular(opened) || !os.SameFile(info, opened) {
+		_ = file.Close()
+		return nil, configSnapshot{}, fmt.Errorf("%s changed while it was being opened: refusing to wire it", path)
+	}
+	b, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return nil, configSnapshot{}, readErr
+	}
+	if closeErr != nil {
+		return nil, configSnapshot{}, closeErr
+	}
+	if err := json.Unmarshal(b, &settings); err != nil {
+		return nil, configSnapshot{}, fmt.Errorf("%s is not valid JSON; fix or remove it: %w", path, err)
+	}
+	return settings, configSnapshot{exists: true, info: opened, perm: opened.Mode().Perm()}, nil
+}
+
+// renderHooksJSON merges our entries while preserving every unrelated key and
+// foreign hook. Silently dropping an audit hook would be serious misbehaviour.
+func renderHooksJSON(settings map[string]any, harnessName string, events []Event, binary string) ([]byte, error) {
+	if settings == nil {
+		return nil, fmt.Errorf("generated hook config root must be a JSON object, not null")
+	}
+	var hooks map[string]any
+	if raw, present := settings["hooks"]; present {
+		var ok bool
+		hooks, ok = raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("generated hook config hooks must be a JSON object")
+		}
+	} else {
 		hooks = map[string]any{}
 	}
 
 	for _, ev := range events {
-		groups, _ := hooks[ev.Vendor].([]any)
+		var groups []any
+		if raw, present := hooks[ev.Vendor]; present {
+			var ok bool
+			groups, ok = raw.([]any)
+			if !ok {
+				return nil, fmt.Errorf("generated hook config event %s must be a JSON array", ev.Vendor)
+			}
+		}
 		kept := stripOurs(groups)
 
 		entry := map[string]any{
@@ -319,15 +485,146 @@ func writeHooksJSON(path, harnessName string, events []Event, binary string) err
 		hooks[ev.Vendor] = append(kept, entry)
 	}
 	settings["hooks"] = hooks
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	return append(out, '\n'), nil
+}
+
+// atomicWriteHooks publishes through the verified directory handle. The final
+// rename replaces a racing leaf rather than following it; a pre-existing config
+// must still be the exact verified inode and metadata observed while reading.
+func atomicWriteHooks(dir *os.Root, dirPath, name string, data []byte, snapshot configSnapshot, validateSkills func() error) error {
+	tmpName := ".agents-wire-tmp-" + rand.Text()
+	file, err := dir.OpenFile(tmpName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(out, '\n'), 0o644)
+	defer func() {
+		_ = file.Close()
+		_ = dir.Remove(tmpName)
+	}()
+	if _, err := file.Write(data); err != nil {
+		return err
+	}
+	if err := file.Chmod(snapshot.perm); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+
+	beforeWirePublish()
+	current, err := dir.Lstat(name)
+	if snapshot.exists {
+		if err != nil || !isSingleLinkRegular(current) || !os.SameFile(snapshot.info, current) ||
+			current.Mode() != snapshot.info.Mode() || current.Size() != snapshot.info.Size() ||
+			!current.ModTime().Equal(snapshot.info.ModTime()) {
+			return fmt.Errorf("%s changed while wiring: refusing to replace it", filepath.Join(dirPath, name))
+		}
+	} else if !os.IsNotExist(err) {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%s appeared while wiring: refusing to replace it", filepath.Join(dirPath, name))
+	}
+	if err := validateSkills(); err != nil {
+		return err
+	}
+	if !snapshot.exists {
+		// Link is an atomic create-if-absent publish. Rename would silently
+		// overwrite a config that appeared after the absence check.
+		return dir.Link(tmpName, name)
+	}
+	// A non-cooperating writer can still change an existing destination after
+	// the final identity check. The per-harness lock closes that race between all
+	// agents writers; portable os.Root has no compare-and-rename primitive for a
+	// foreign process that ignores the lock.
+	return dir.Rename(tmpName, name)
+}
+
+func preflightSkills(dir *os.Root, dirPath string) (skillsSnapshot, error) {
+	const name = "skills"
+	target := filepath.Join("..", ".agents", "skills")
+	info, err := dir.Lstat(name)
+	if os.IsNotExist(err) {
+		return skillsSnapshot{}, nil
+	}
+	if err != nil {
+		return skillsSnapshot{}, err
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return skillsSnapshot{}, fmt.Errorf("%s exists and is not the managed skills symlink; move it aside before wiring", filepath.Join(dirPath, name))
+	}
+	got, err := dir.Readlink(name)
+	if err != nil {
+		return skillsSnapshot{}, err
+	}
+	if got != target {
+		return skillsSnapshot{}, fmt.Errorf("%s points to %s, not the managed skills target; move it aside before wiring", filepath.Join(dirPath, name), got)
+	}
+	return skillsSnapshot{exists: true, info: info}, nil
+}
+
+func validateSkills(dir *os.Root, dirPath string, snapshot skillsSnapshot) error {
+	const name = "skills"
+	target := filepath.Join("..", ".agents", "skills")
+	info, err := dir.Lstat(name)
+	if err != nil || !snapshot.exists || info.Mode()&os.ModeSymlink == 0 || !os.SameFile(snapshot.info, info) {
+		return fmt.Errorf("%s changed while wiring: refusing to publish hooks", filepath.Join(dirPath, name))
+	}
+	if got, err := dir.Readlink(name); err != nil || got != target {
+		return fmt.Errorf("%s changed while wiring: refusing to publish hooks", filepath.Join(dirPath, name))
+	}
+	return nil
+}
+
+// wireRepository keeps every mutation below a verified harness directory and
+// validates config and skills ownership before publishing either one.
+func wireRepository(repoRoot, harnessDir, configName, harnessName string, events []Event, binary string) error {
+	dir, dirPath, err := openHarnessDir(repoRoot, harnessDir)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	lock, err := acquireWireLock(dir, dirPath)
+	if err != nil {
+		return err
+	}
+	defer releaseWireLock(lock)
+
+	skills, err := preflightSkills(dir, dirPath)
+	if err != nil {
+		return err
+	}
+	settings, snapshot, err := readHooksJSON(dir, dirPath, configName)
+	if err != nil {
+		return err
+	}
+	out, err := renderHooksJSON(settings, harnessName, events, binary)
+	if err != nil {
+		return err
+	}
+
+	if !skills.exists {
+		if err := dir.Symlink(filepath.Join("..", ".agents", "skills"), "skills"); err != nil {
+			return err
+		}
+		skills, err = preflightSkills(dir, dirPath)
+		if err != nil {
+			return err
+		}
+	}
+	if err := atomicWriteHooks(dir, dirPath, configName, out, snapshot, func() error {
+		return validateSkills(dir, dirPath, skills)
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // stripOurs removes previously generated entries, at the level of individual
@@ -341,7 +638,13 @@ func stripOurs(groups []any) []any {
 			kept = append(kept, g)
 			continue
 		}
-		inner, _ := gm["hooks"].([]any)
+		rawInner, present := gm["hooks"]
+		inner, ok := rawInner.([]any)
+		if !present || !ok {
+			// An unknown foreign shape is not ours to normalize or discard.
+			kept = append(kept, g)
+			continue
+		}
 		var innerKept []any
 		for _, h := range inner {
 			hm, _ := h.(map[string]any)
@@ -357,23 +660,4 @@ func stripOurs(groups []any) []any {
 		kept = append(kept, gm)
 	}
 	return kept
-}
-
-// linkSkills points a harness's skills directory at the tracked one. It never
-// replaces a real directory -- only a stale symlink -- because a real directory
-// there is somebody's content.
-func linkSkills(link string) error {
-	target := filepath.Join("..", ".agents", "skills")
-	if fi, err := os.Lstat(link); err == nil {
-		if fi.Mode()&os.ModeSymlink == 0 {
-			return fmt.Errorf("%s exists and is not a symlink; move it aside to wire skills", link)
-		}
-		if err := os.Remove(link); err != nil {
-			return err
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
-		return err
-	}
-	return os.Symlink(target, link)
 }

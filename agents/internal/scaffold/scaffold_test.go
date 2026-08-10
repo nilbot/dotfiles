@@ -181,7 +181,9 @@ func TestCreateWorksInALinkedWorktree(t *testing.T) {
 	}
 	// git is the arbiter: ask it, rather than trusting our own path arithmetic.
 	assertIgnored(t, linked, ".claude/settings.json")
+	assertIgnored(t, linked, ".claude/.agents-wire.lock")
 	assertIgnored(t, linked, ".codex/hooks.json")
+	assertIgnored(t, linked, ".codex/.agents-wire.lock")
 
 	if _, err := os.Stat(filepath.Join(linked, ".agents", "memory")); err != nil {
 		t.Errorf("layout missing in the worktree: %v", err)
@@ -352,9 +354,16 @@ func TestCreateAlwaysExcludesGeneratedHarnessConfigs(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	exclude := readExclude(t, root)
-	for _, want := range []string{"/.claude/settings.json", "/.codex/hooks.json", "/.agents/.trace-cache/"} {
+	for _, want := range []string{
+		"/.claude/settings.json",
+		"/.claude/.agents-wire.lock",
+		"/.codex/hooks.json",
+		"/.codex/.agents-wire.lock",
+		"/.agents/.trace-cache/",
+	} {
 		if !strings.Contains(exclude, want) {
 			t.Errorf("exclude missing %q:\n%s", want, exclude)
 		}
+		assertIgnored(t, root, strings.TrimPrefix(want, "/"))
 	}
 }

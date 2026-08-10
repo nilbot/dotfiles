@@ -54,12 +54,9 @@ func (claudeCode) WireConfigPath(repoRoot string) string {
 }
 
 func (c claudeCode) Wire(repoRoot, binary string) error {
-	if err := writeHooksJSON(c.WireConfigPath(repoRoot), c.Name(), c.Events(), binary); err != nil {
-		return err
-	}
 	// Neither harness discovers .agents/skills on its own: Claude Code reads
 	// .claude/skills, Codex reads .codex/skills. One directory, two names.
-	return linkSkills(filepath.Join(repoRoot, ".claude", "skills"))
+	return wireRepository(repoRoot, ".claude", "settings.json", c.Name(), c.Events(), binary)
 }
 
 func (claudeCode) TrustSteps(repoRoot string) []string {

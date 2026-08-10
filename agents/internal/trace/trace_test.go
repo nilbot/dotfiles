@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -328,6 +329,115 @@ func TestQueryFailsLoudlyOnAnUnopenableFile(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "2026-08-09.jsonl") {
 		t.Errorf("error must name the file it could not open, got: %v", err)
+	}
+}
+
+// Following a matched leaf lets a repository make the observer consume bytes
+// from anywhere the user can read. The record in the target is deliberately
+// valid: an unsafe os.Open implementation returns it instead of failing.
+func TestQueryRejectsAnExistingTraceSymlinkWithoutConsumingItsTarget(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	traceDir := filepath.Join(dir, "reports", "traces")
+	if err := os.MkdirAll(traceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	private := "PRIVATE-external-trace-sentinel"
+	target := filepath.Join(t.TempDir(), "outside.jsonl")
+	if err := os.WriteFile(target, []byte(jsonLine(t, record.Record{When: now, AgentID: private})), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(traceDir, "2026-08-10.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Query(dir, Filter{}, now)
+	if err == nil || len(res.Records) != 0 {
+		t.Fatalf("Query followed an external trace leaf: records=%+v err=%v", res.Records, err)
+	}
+	if strings.Contains(err.Error(), private) {
+		t.Fatalf("trace leaf failure exposed target content: %v", err)
+	}
+}
+
+func TestQueryRejectsRedirectedTraceDirectoriesWithoutConsumingExternalRecords(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	for _, redirected := range []string{"reports", "traces"} {
+		t.Run(redirected, func(t *testing.T) {
+			agentsDir := t.TempDir()
+			external := t.TempDir()
+			externalTraces := filepath.Join(external, "traces")
+			if redirected == "reports" {
+				if err := os.MkdirAll(externalTraces, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(external, filepath.Join(agentsDir, "reports")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Join(agentsDir, "reports"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(external, filepath.Join(agentsDir, "reports", "traces")); err != nil {
+					t.Fatal(err)
+				}
+				externalTraces = external
+			}
+			private := "PRIVATE-redirected-trace-directory"
+			if err := os.WriteFile(filepath.Join(externalTraces, "2026-08-10.jsonl"), []byte(jsonLine(t, record.Record{When: now, AgentID: private})), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			res, err := Query(agentsDir, Filter{}, now)
+			if err == nil || len(res.Records) != 0 {
+				t.Fatalf("Query followed redirected %s directory: records=%+v err=%v", redirected, res.Records, err)
+			}
+			if strings.Contains(err.Error(), private) {
+				t.Fatalf("redirected directory failure exposed record content: %v", err)
+			}
+		})
+	}
+}
+
+// A plain os.Open blocks on a FIFO before it can learn that the leaf is not a
+// trace file. The bounded writer only releases that buggy implementation; the
+// required implementation returns before the release point with an error.
+func TestQueryRejectsATraceFIFOPromptly(t *testing.T) {
+	dir := t.TempDir()
+	traceDir := filepath.Join(dir, "reports", "traces")
+	if err := os.MkdirAll(traceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fifo := filepath.Join(traceDir, "2026-08-10.jsonl")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const releaseAfter = 300 * time.Millisecond
+	released := make(chan struct{})
+	stop := make(chan struct{})
+	go func() {
+		defer close(released)
+		select {
+		case <-time.After(releaseAfter):
+			f, _ := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+			if f != nil {
+				_ = f.Close()
+			}
+		case <-stop:
+		}
+	}()
+	start := time.Now()
+	_, err := Query(dir, Filter{}, time.Now())
+	elapsed := time.Since(start)
+	close(stop)
+	<-released
+
+	if elapsed >= releaseAfter/2 {
+		t.Fatalf("Query blocked on a trace FIFO for %v", elapsed)
+	}
+	if err == nil {
+		t.Fatal("Query accepted a trace FIFO")
 	}
 }
 

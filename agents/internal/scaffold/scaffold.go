@@ -66,8 +66,10 @@ var gitattributesLines = []string{
 // belongs to the repository's maintainers, not to this tool.
 var excludeLines = []string{
 	"/.claude/settings.json",
+	"/.claude/.agents-wire.lock",
 	"/.claude/skills",
 	"/.codex/hooks.json",
+	"/.codex/.agents-wire.lock",
 	"/.codex/skills",
 	"/.agents/.trace-cache/",
 }
