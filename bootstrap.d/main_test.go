@@ -502,6 +502,131 @@ func TestCheckIsHealthyAfterApply(t *testing.T) {
 	}
 }
 
+// oldMachine builds a COPY of the repository and a home in the shape every
+// machine provisioned before Tasks 7 and 8 is in: ~/.config/fish symlinked into
+// the checkout with fisher's untracked state inside it, ~/.gitignore pointing at
+// the pre-rename target, and a ~/.gitconfig including the pre-rename path.
+//
+// The copy is not an optimisation. The fish migration REMOVES files from the
+// checkout it is given, and none of what it moves is in git -- running one of
+// these cases against the real repository would take fisher's state with it.
+func oldMachine(t *testing.T) (checkout, home string) {
+	t.Helper()
+	checkout = filepath.Join(t.TempDir(), "dotfiles")
+	copyInto(t, checkout, trackedEntries(t)...)
+	home = tempHome(t)
+
+	fish := filepath.Join(checkout, "fish")
+	for name, data := range map[string]string{
+		"fish_variables":                       "SETUVAR fish_color_normal:normal\n",
+		"fish_plugins":                         "jorgebucaran/fisher\n",
+		filepath.Join("functions", "f.fish"):   "function f\nend\n",
+		filepath.Join("completions", "f.fish"): "complete -c f\n",
+		filepath.Join("conf.d", "z.fish"):      "set -g z 1\n",
+	} {
+		path := filepath.Join(fish, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(fish, filepath.Join(home, ".config", "fish")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(checkout, "git", "gitignore_global.symlink"),
+		filepath.Join(home, ".gitignore")); err != nil {
+		t.Fatal(err)
+	}
+	gitconfig := "[include]\n\tpath = " +
+		filepath.Join(checkout, "git", "gitconfig.symlink") + "\n\n[user]\n\tname = A Real Person\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return checkout, home
+}
+
+// The whole point of the verb, end to end: a machine in the old shape is
+// refused, migrate reconciles it, and apply then converges it to a healthy
+// machine. Each step is asserted, because migrate exiting 0 while changing
+// nothing would still let the last one fail for an unrelated reason.
+func TestMigrateThenApplyConvergesAnOldMachine(t *testing.T) {
+	checkout, home := oldMachine(t)
+	shim := filepath.Join(checkout, "bootstrap")
+
+	_, stderr, code := runShimEnv(t, shim, home, nil, "apply", "dotfiles")
+	if code != 2 {
+		t.Fatalf("apply on an unmigrated machine exit %d, want 2 (block): %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "migrate") {
+		t.Errorf("the refusal must name the remedy: %s", stderr)
+	}
+
+	stdout, stderr, code := runShimEnv(t, shim, home, nil, "migrate")
+	if code != 0 {
+		t.Fatalf("migrate exit %d:\n%s%s", code, stdout, stderr)
+	}
+
+	// fisher's state moved out of the checkout and into a real directory.
+	config := filepath.Join(home, ".config", "fish")
+	info, err := os.Lstat(config)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("~/.config/fish is %v (%v), want a real directory", info, err)
+	}
+	if _, err := os.Stat(filepath.Join(config, "fish_variables")); err != nil {
+		t.Errorf("fish_variables did not move: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(checkout, "fish", "fish_variables")); !os.IsNotExist(err) {
+		t.Errorf("fish_variables is still in the checkout: %v", err)
+	}
+
+	if _, stderr, code := runShimEnv(t, shim, home, nil, "apply", "dotfiles"); code != 0 {
+		t.Fatalf("apply after migrate exit %d: %s", code, stderr)
+	}
+	stdout, stderr, code = runShimEnv(t, shim, home, nil, "check", "dotfiles")
+	if code != 0 {
+		t.Fatalf("check exit %d after migrate and apply, want 0:\n%s%s", code, stdout, stderr)
+	}
+}
+
+// Idempotent: a second migrate on a reconciled machine is a no-op that succeeds.
+// Exit 4 here would make `./bootstrap migrate && ./bootstrap apply` fail on
+// every healthy machine.
+func TestMigrateIsIdempotent(t *testing.T) {
+	checkout, home := oldMachine(t)
+	shim := filepath.Join(checkout, "bootstrap")
+	if _, stderr, code := runShimEnv(t, shim, home, nil, "migrate"); code != 0 {
+		t.Fatalf("first migrate exit %d: %s", code, stderr)
+	}
+	stdout, stderr, code := runShimEnv(t, shim, home, nil, "migrate")
+	if code != 0 {
+		t.Fatalf("second migrate exit %d, want 0:\n%s%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "nothing to migrate") {
+		t.Errorf("a second migrate must say there is nothing to do:\n%s", stdout)
+	}
+}
+
+// An unknown migration name is bad INPUT, and answers 3 like every other
+// malformed argument. Reporting it as 2 would say this machine is in a state
+// bootstrap will not touch, which is not what happened.
+func TestUnknownMigrationIsMalformedInput(t *testing.T) {
+	_, stderr, code := runShim(t, tempHome(t), "migrate", "mambaforgee")
+	if code != 3 {
+		t.Fatalf("exit %d, want 3 (malformed input): %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "mambaforgee") {
+		t.Errorf("the error should name what was asked for: %s", stderr)
+	}
+	if !strings.Contains(stderr, "fish") {
+		t.Errorf("the error should list what is available: %s", stderr)
+	}
+}
+
 // The shim must not rebuild when nothing changed. Both halves are asserted:
 // without the positive one the case passes when the cache is never exercised.
 func TestShimCachesTheBuild(t *testing.T) {

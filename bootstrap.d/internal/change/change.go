@@ -44,6 +44,17 @@ type FileInfo struct {
 	IsRegular bool
 }
 
+// Interface is everything the rest of bootstrap may do to a machine.
+//
+// The last four exist only for internal/migrate, and they are the only
+// operations here that can destroy something. That is not a hole in §5's
+// "refuse, never clobber": §5 constrains APPLY, and the phases converge a
+// machine using Dir, Link and Seed, each of which refuses rather than
+// overwrite. Migrations are the quarantined code that knows about the past --
+// declared, named, and run by their own verb. They are also the reason the
+// capability cannot be kept out of the type system entirely: a phase could
+// already destroy anything it liked through Run, so withholding RemoveAll would
+// buy an appearance of safety rather than safety.
 type Interface interface {
 	Lstat(path string) (FileInfo, error)
 	Readlink(path string) (string, error)
@@ -55,6 +66,11 @@ type Interface interface {
 	Seed(source, target string) error
 	Run(name string, args ...string) error
 	Sudo(name string, args ...string) error
+
+	Copy(source, target string) error
+	Rename(source, target string) error
+	RemoveAll(path string) error
+	WriteFile(path string, data []byte) error
 }
 
 // Refusal is "refuse, never clobber": the operation was not performed and
@@ -197,6 +213,58 @@ func dirVerdict(info FileInfo, target string) (verdict, error) {
 			"run './bootstrap migrate', or "+moveAside)
 	}
 	return verdictProceed, nil
+}
+
+// copyVerdict and renameVerdict are one rule stated twice, because the two
+// operations differ only in what happens to the source. Both refuse a target
+// that is already there: a migration moving data that is not in git must never
+// merge into something it did not create, and "the destination already exists"
+// is either a half-finished earlier run or a path this migration has no claim
+// to. Both are worth stopping for rather than writing through.
+func copyVerdict(srcInfo, dstInfo FileInfo, source, target string) error {
+	if !srcInfo.Exists {
+		return refuse(source, "copy source does not exist",
+			"restore it, or correct the migration that names it")
+	}
+	if dstInfo.Exists {
+		return refuse(target, "copy target already exists", moveAside)
+	}
+	return nil
+}
+
+func renameVerdict(srcInfo, dstInfo FileInfo, source, target string) error {
+	if !srcInfo.Exists {
+		return refuse(source, "rename source does not exist",
+			"restore it, or correct the migration that names it")
+	}
+	if dstInfo.Exists {
+		return refuse(target, "rename target already exists", moveAside)
+	}
+	return nil
+}
+
+// removeVerdict makes an absent path a silent no-op rather than a reported
+// removal. os.RemoveAll returns nil either way, so without this an Applier
+// announces "removed" for something that was never there -- and a Planner,
+// which cannot tell the difference, would announce it too.
+func removeVerdict(info FileInfo) verdict {
+	if !info.Exists {
+		return verdictSatisfied
+	}
+	return verdictProceed
+}
+
+// writeVerdict guards the one clobbering write in this package. It exists for
+// the gitconfig migration, which rewrites a machine-local file in place; a
+// symlink there means the pre-37f00a0 layout, where the write would land in the
+// checkout and be published. That is the exact fault §1's rule was written
+// about, so it is refused rather than performed.
+func writeVerdict(info FileInfo, target string) error {
+	if info.Exists && !info.IsRegular {
+		return refuse(target, "must be a machine-local regular file to be rewritten",
+			"run './bootstrap migrate', or "+moveAside)
+	}
+	return nil
 }
 
 func report(out io.Writer, format string, args ...any) {

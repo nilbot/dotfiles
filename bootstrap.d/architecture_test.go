@@ -64,9 +64,15 @@ func nonTestImports(t *testing.T, dir string) map[string][]string {
 // the walk stops -- it is the one package permitted to touch the machine, and
 // phase reaching it is the design.
 //
-// Both roots are seeded into one walk. internal/phase imports internal/check
-// for the verify phase, so checking phase alone would already cover it today;
-// naming check explicitly means the guard survives that import going away.
+// All three roots are seeded into one walk. internal/phase imports both
+// internal/check and internal/migrate today, so checking phase alone would
+// already cover them; naming each explicitly means the guard survives those
+// imports going away.
+//
+// internal/migrate is the one that most needs it. It is the only package that
+// destroys anything, so it is the only one where a stray os.RemoveAll would
+// reach a real filesystem outside change.Interface -- unlogged, unrefusable, and
+// invisible to every behavioural test that goes through an Applier.
 func TestPhasePackageCannotPerformIO(t *testing.T) {
 	forbidden := map[string]bool{
 		"os": true, "os/exec": true, "os/signal": true, "os/user": true,
@@ -83,6 +89,7 @@ func TestPhasePackageCannotPerformIO(t *testing.T) {
 	queue := []string{
 		filepath.Join("internal", "phase"),
 		filepath.Join("internal", "check"),
+		filepath.Join("internal", "migrate"),
 	}
 	for len(queue) > 0 {
 		dir := queue[0]
@@ -101,8 +108,8 @@ func TestPhasePackageCannotPerformIO(t *testing.T) {
 					continue
 				}
 				if forbidden[path] {
-					t.Errorf("%s imports %q; phases and checks must reach the "+
-						"machine only through change.Interface", file, path)
+					t.Errorf("%s imports %q; phases, checks and migrations must reach "+
+						"the machine only through change.Interface", file, path)
 				}
 			}
 		}
@@ -115,6 +122,7 @@ func TestOnlyChangeImportsOSExec(t *testing.T) {
 		filepath.Join("internal", "manifest"),
 		filepath.Join("internal", "phase"),
 		filepath.Join("internal", "check"),
+		filepath.Join("internal", "migrate"),
 	} {
 		for file, paths := range nonTestImports(t, dir) {
 			for _, path := range paths {

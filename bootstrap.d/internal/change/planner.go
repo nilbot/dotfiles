@@ -171,6 +171,90 @@ func (p *Planner) Seed(source, target string) error {
 	return nil
 }
 
+// The four migration operations. No verb plans a migration today -- `migrate`
+// always carries an Applier -- so these record rather than predict anything
+// clever. They exist because the alternative is a second interface and a type
+// assertion at the one call site that needs them, and an assertion is a runtime
+// failure where this is a compile-time one.
+//
+// Each consults the same verdict its Applier counterpart does, so the two cannot
+// disagree about what is refused. That is the rule five defects in this design
+// came from breaking.
+
+func (p *Planner) Copy(source, target string) error {
+	srcInfo, err := p.Lstat(source)
+	if err != nil {
+		return err
+	}
+	dstInfo, err := p.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if err := copyVerdict(srcInfo, dstInfo, source, target); err != nil {
+		return err
+	}
+	// The copy has the source's shape, so a later step reading the target sees
+	// a directory where a directory was copied.
+	p.pending[target] = srcInfo
+	if dest, ok := p.links[source]; ok {
+		p.links[target] = dest
+	}
+	report(p.out, "plan  copy %s -> %s", source, target)
+	return nil
+}
+
+func (p *Planner) Rename(source, target string) error {
+	srcInfo, err := p.Lstat(source)
+	if err != nil {
+		return err
+	}
+	dstInfo, err := p.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if err := renameVerdict(srcInfo, dstInfo, source, target); err != nil {
+		return err
+	}
+	p.pending[target] = srcInfo
+	p.pending[source] = FileInfo{}
+	if dest, ok := p.links[source]; ok {
+		p.links[target] = dest
+		delete(p.links, source)
+	}
+	report(p.out, "plan  rename %s -> %s", source, target)
+	return nil
+}
+
+func (p *Planner) RemoveAll(path string) error {
+	info, err := p.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if removeVerdict(info) == verdictSatisfied {
+		return nil
+	}
+	p.pending[path] = FileInfo{}
+	delete(p.links, path)
+	report(p.out, "plan  remove %s", path)
+	return nil
+}
+
+// The bytes are DISCARDED, exactly as Seed discards what it reads: writing is
+// the mutation, and there is nothing here a plan could get wrong by not
+// performing it.
+func (p *Planner) WriteFile(path string, _ []byte) error {
+	info, err := p.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if err := writeVerdict(info, path); err != nil {
+		return err
+	}
+	p.pending[path] = FileInfo{Exists: true, IsRegular: true}
+	report(p.out, "plan  rewrite %s", path)
+	return nil
+}
+
 func (p *Planner) Run(name string, args ...string) error {
 	report(p.out, "plan  run: %s %s", name, strings.Join(args, " "))
 	return nil

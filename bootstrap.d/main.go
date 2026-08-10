@@ -13,6 +13,7 @@ import (
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 	"github.com/nilbot/dotfiles/bootstrap/internal/check"
 	"github.com/nilbot/dotfiles/bootstrap/internal/manifest"
+	"github.com/nilbot/dotfiles/bootstrap/internal/migrate"
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
 
@@ -204,6 +205,54 @@ func runCheck(profile string, stdout, stderr io.Writer) int {
 	return check.ExitCode(results)
 }
 
-// runMigrate arrives in a later task; until then every invocation is honestly
-// "not applicable" rather than a false success.
-func runMigrate(string, io.Writer, io.Writer) int { return exitNotApplicable }
+// runMigrate reconciles a machine provisioned by an older layout. With no name
+// it runs every pending reconciling migration and lists the reclaiming ones it
+// is eligible to run; with one, it runs that migration alone.
+//
+// An Applier, never a Planner, for the same reason internal/check gives: there
+// is no `plan migrate`, and a Planner here would report a machine reconciled
+// without having moved a byte.
+//
+// Nothing pending answers 0, not 4. A migration that has already run is not
+// "not applicable" -- the machine is in the state that was wanted -- and
+// `./bootstrap migrate && ./bootstrap apply` must not fail on a healthy box.
+func runMigrate(name string, stdout, stderr io.Writer) int {
+	repoRoot, err := root()
+	if err != nil {
+		fmt.Fprintf(stderr, "bootstrap: %v\n", err)
+		return exitBlock
+	}
+	home := os.Getenv("HOME")
+	// The same guard preflight and check apply. A migration resolved against ""
+	// would move data out of a checkout and into "/", which is the one mistake
+	// here that cannot be undone.
+	if home == "" {
+		fmt.Fprintln(stderr, "bootstrap: migrate: HOME is empty; "+
+			"every managed path is resolved against it")
+		return exitBlock
+	}
+
+	err = migrate.Run(migrate.Context{
+		Change: change.NewApplier(stdout, repoRoot),
+		Root:   repoRoot, Home: home, Out: stdout,
+	}, name)
+	if err == nil {
+		return exitOK
+	}
+
+	// A name that matches no migration is bad INPUT, exactly like an unknown
+	// verb or an unknown profile, and answers 3 as they do.
+	var unknown *migrate.UnknownError
+	if errors.As(err, &unknown) {
+		fmt.Fprintf(stderr, "bootstrap: migrate: %v\n", err)
+		return exitMalformed
+	}
+	var refusal *change.Refusal
+	if errors.As(err, &refusal) {
+		fmt.Fprintf(stderr, "bootstrap: migrate: refusing: %s\n  problem: %s\n  remedy:  %s\n",
+			refusal.Path, refusal.Problem, refusal.Remediation)
+		return exitBlock
+	}
+	fmt.Fprintf(stderr, "bootstrap: migrate: %v\n", err)
+	return exitBlock
+}
