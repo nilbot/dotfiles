@@ -725,6 +725,35 @@ Defect 4 is the one worth carrying: a design whose stated purpose is preventing
 a class of failure reproduced that exact failure in the first shell file it
 allowed itself.
 
+**A sixth followed, of the same shape.** With `dirname` off `PATH`, the
+substitution yields an empty string, `cd -- ""` succeeds, and the root silently
+becomes the caller's working directory. That is a third independent route to
+"wrong tree, silently" in a sixty-line file. The fix validates the *outcome*
+rather than each input: the resolved root must contain `bootstrap.d/`, which
+catches every route including ones not yet found.
+
+**And a seventh, in the fix for the third.** `exec "$binary" "$@" || die …` is
+dead code: a failed `execve` terminates the shell before the `||` arm can run —
+measured as exit 1 on bash 3.2.57 and 126/127 on 5.3.15, with and without
+`execfail`. The guard has to precede the `exec`, not follow it.
+
+### An ancestor that is a symlink is refused (2026-08-10)
+
+Recorded because it is a deliberate behaviour choice, not a consequence.
+
+`bootstrap` refuses to create a directory when any ancestor is a symlink, even
+one pointing at a perfectly good directory that `MkdirAll` would have followed.
+A machine with `~/.config` symlinked elsewhere is therefore refused rather than
+silently provisioned through the link.
+
+This is consistent with the placement rule: `dirVerdict` already refuses a
+symlink at a `dir` target, and this design's whole premise is that a path's
+*kind* is declared and checked rather than discovered. Distinguishing a
+symlink-to-directory from a dangling one needs a following `Stat` on
+`change.Interface`, which is not worth adding for a case with no live instance
+on any machine here — and the refusal names its own remediation, so the cost of
+being wrong is one clear message rather than a silent surprise.
+
 ---
 
 ## Rejected alternatives

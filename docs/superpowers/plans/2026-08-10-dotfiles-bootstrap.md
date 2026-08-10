@@ -1114,6 +1114,22 @@ type Row struct {
 	Platform string // "darwin", "linux", or "*"
 }
 
+// SyntaxError is a malformed manifest, which is exit code 3 -- not 2. The
+// distinction is the whole reason both codes exist: a refusal says the machine
+// is in a state bootstrap will not touch, while this says the input is wrong
+// and touching nothing was never in question.
+type SyntaxError struct {
+	Line    int // 0 when the fault is not attributable to one line
+	Problem string
+}
+
+func (e *SyntaxError) Error() string {
+	if e.Line == 0 {
+		return "manifest: " + e.Problem
+	}
+	return fmt.Sprintf("manifest line %d: %s", e.Line, e.Problem)
+}
+
 func Parse(data []byte) ([]Row, error) {
 	var rows []Row
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -1124,18 +1140,18 @@ func Parse(data []byte) ([]Row, error) {
 		}
 		fields := strings.Fields(text)
 		if len(fields) != 4 {
-			return nil, fmt.Errorf("manifest line %d: %d columns, want 4", line, len(fields))
+			return nil, &SyntaxError{line, fmt.Sprintf("%d columns, want 4", len(fields))}
 		}
 		kind := Kind(fields[0])
 		switch kind {
 		case KindLink, KindSeed, KindDir:
 		default:
-			return nil, fmt.Errorf("manifest line %d: unknown kind %q", line, fields[0])
+			return nil, &SyntaxError{line, fmt.Sprintf("unknown kind %q", fields[0])}
 		}
 		switch fields[3] {
 		case "*", "darwin", "linux":
 		default:
-			return nil, fmt.Errorf("manifest line %d: unknown platform %q", line, fields[3])
+			return nil, &SyntaxError{line, fmt.Sprintf("unknown platform %q", fields[3])}
 		}
 		rows = append(rows, Row{kind, fields[1], fields[2], fields[3]})
 	}
@@ -1201,12 +1217,17 @@ dir     -                                 .config/fish                      *
 seed    git/gitconfig.local.template      .gitconfig                        *
 ```
 
-**A row and the file it names ship in the same commit.** An earlier draft
-listed `git/gitignore_global` and `fish/config.fish.template` here, which Tasks
-7 and 8 create — so from Task 4 onward `plan` correctly refused and three
-Task 3 tests went red. Task 7 adds the fish seed row with the template; Task 8
-adds the gitignore link row with the rename. Declaring a path this repository
-does not yet contain is simply false, and the tool is right to say so.
+**A row and the file it names ship in the same commit.** Declaring a path this
+repository does not contain is simply false, and the tool is right to refuse it.
+The manifest's own header comment must state that invariant **without naming
+plan task numbers** — the manifest ships permanently and a sentence saying "this
+row arrives with Task 7" becomes false the moment Task 7 lands, with nothing
+scheduled to remove it.
+
+An earlier draft listed `git/gitignore_global` and `fish/config.fish.template`
+here, which Tasks 7 and 8 create — so from Task 4 onward `plan` correctly
+refused and three Task 3 tests went red. Task 7 adds the fish seed row with the
+template; Task 8 adds the gitignore link row with the rename.
 
 - [ ] **Step 5: Run to verify it passes**
 
@@ -1762,8 +1783,15 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 			if errors.As(err, &refusal) {
 				fmt.Fprintf(stderr, "bootstrap: %s: refusing: %s\n  problem: %s\n  remedy:  %s\n",
 					p.Name, refusal.Path, refusal.Problem, refusal.Remediation)
-			} else {
-				fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
+				return exitBlock
+			}
+			fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
+			// A malformed manifest is bad INPUT, not a refused machine. A
+			// wrapping script must be able to tell "fix your typo" from
+			// "bootstrap declined to touch this box".
+			var syntax *manifest.SyntaxError
+			if errors.As(err, &syntax) {
+				return exitMalformed
 			}
 			return exitBlock
 		}
@@ -1814,6 +1842,24 @@ BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd) ||
 export BOOTSTRAP_ROOT
 
 src=$BOOTSTRAP_ROOT/bootstrap.d
+
+# Validate the OUTCOME, not each input to it. With `dirname` off PATH the
+# substitution yields "", and `cd -- ""` SUCCEEDS on bash 3.2.57 -- so
+# BOOTSTRAP_ROOT silently becomes the caller's cwd. (5.x rejects a null
+# directory, so the existing || die catches it there.) The hole is therefore
+# live precisely on the macOS system bash, which is the only bash on an
+# unprovisioned machine -- the machine this shim exists for.
+#
+# Both conditions are needed and neither is redundant:
+#   -d  catches an incomplete checkout: right tree, sources missing.
+#   -ef catches a DIFFERENT checkout: -d passes, and without this the shim
+#       builds and runs the other tree with exit 0 and no symptom at all.
+# The second is the shim's half of "never exec a binary you cannot attribute
+# to the current checkout".
+[ -d "$src" ] ||
+	die "'$BOOTSTRAP_ROOT' does not look like a dotfiles checkout: $src is missing"
+[ "$BOOTSTRAP_ROOT/bootstrap" -ef "$0" ] ||
+	die "'$BOOTSTRAP_ROOT' is not the checkout this script belongs to"
 
 # The cache is keyed on the checkout. Without the key, a main clone and a git
 # worktree share one binary, and whichever built first wins -- old code against
@@ -1870,10 +1916,11 @@ if [ "$needs_build" -eq 1 ]; then
 		die "the build failed; the compiler output is above"
 fi
 
-# If exec succeeds it replaces this process, so the || arm runs only on
-# failure -- a corrupt or truncated cached binary, which would otherwise exit
-# 126 or 127.
-exec "$binary" "$@" || die "cannot execute the built binary at $binary"
+# `exec cmd || die` does NOT work: a failed execve terminates the shell before
+# the || arm can run -- measured as exit 1 on bash 3.2.57 and 126/127 on 5.3.15,
+# with and without `execfail`. Check before exec instead.
+[ -x "$binary" ] || die "the built binary at $binary is missing or not executable"
+exec "$binary" "$@"
 ```
 
 - [ ] **Step 7: Run to verify it passes**
@@ -2062,7 +2109,11 @@ func Config(c Context) error {
 	rows = manifest.For(rows, c.Platform)
 
 	if dupes := manifest.DuplicateTargets(rows); len(dupes) > 0 {
-		return fmt.Errorf("the manifest claims these targets more than once: %v", dupes)
+		// A SyntaxError, not a plain one: two owners for one path is malformed
+		// input (exit 3), not a refusal to touch the machine (exit 2).
+		return &manifest.SyntaxError{
+			Problem: fmt.Sprintf("these targets are claimed more than once: %v", dupes),
+		}
 	}
 
 	for _, row := range rows {
@@ -2121,13 +2172,27 @@ and because none is large enough to gate on its own.
 - Consumes: the packages built so far.
 - Produces: `ancestorConflict(m Interface, path string) error` in `change`.
 
-**Fix 4 — the last plan/apply asymmetry: `ancestorConflict`.** `Dir("a/b/c")`
-where `a/b` is a regular file: `Planner` plans one line and returns nil, while
-`Applier`'s `MkdirAll` fails `ENOTDIR` with a raw `*fs.PathError`. Same class as
-the seed-source divergences, one level up the tree. The shared function is
-specified in Task 1's `change.go` section; call it from **both** `Applier.Dir`
+**Fix 4 — the last plan/apply asymmetry: `ancestorConflict`.** Call the shared
+function specified in Task 1's `change.go` section from **both** `Applier.Dir`
 and `Planner.Dir`, after the verdict and before acting. `change.go` gains
 `path/filepath`.
+
+*Corrected diagnosis, from implementation.* An earlier draft of this paragraph
+named a **regular-file** ancestor as the diverging case. That was wrong: there,
+both paths fail identically at `Lstat` with `ENOTDIR`, so they already agree and
+`ancestorConflict` never runs. **The real asymmetry is a dangling-symlink
+ancestor**, and closing it also requires `Applier.Lstat` to report `ENOTDIR` as
+not-exists — a change which, shipped alone, would introduce a *new* asymmetry.
+Both halves are needed together.
+
+*Deliberate behaviour change.* `ancestorConflict` also refuses an ancestor that
+is a symlink to a directory, which `MkdirAll` would have followed — so a machine
+with, say, `~/.config` symlinked elsewhere is now refused rather than silently
+provisioned through the link. This is consistent with `dirVerdict`, which
+already refuses a symlink at a `dir` target, and it fails loudly with a
+remediation rather than quietly. Distinguishing a symlink-to-directory from a
+dangling one would require a following `Stat` on `Interface`; that is not worth
+adding for a case with no live instance, and the refusal names the fix.
 
 **Fix 5 — the shim's last three escapes.** `die` moves to the top of the file
 so it exists before anything can fail; then the root resolution, the `cksum`
