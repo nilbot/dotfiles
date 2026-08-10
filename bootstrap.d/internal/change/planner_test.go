@@ -115,6 +115,33 @@ func TestPlannerOverlaysItsOwnChanges(t *testing.T) {
 	}
 }
 
+// Applier.Seed reads the source, so a plan that does not check it reports
+// success where apply fails -- the exact divergence this package exists to
+// prevent.
+func TestPlannerSeedRefusesMissingTemplate(t *testing.T) {
+	home := tempHome(t)
+	missing := filepath.Join(home, "no such template")
+	before := treeOf(t, home)
+
+	var out bytes.Buffer
+	p := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &out)
+	err := p.Seed(missing, filepath.Join(home, "config dir", "dst"))
+
+	var refusal *change.Refusal
+	if !errorsAs(err, &refusal) {
+		t.Fatalf("want *change.Refusal for a missing template, got %T: %v", err, err)
+	}
+	if refusal.Remediation == "" {
+		t.Error("a refusal must name its remediation")
+	}
+	if after := treeOf(t, home); after != before {
+		t.Errorf("plan mutated the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if strings.Contains(out.String(), "seed") {
+		t.Errorf("a refused seed must not be reported as planned:\n%s", out.String())
+	}
+}
+
 func TestPlannerStillRefuses(t *testing.T) {
 	home := tempHome(t)
 	src := filepath.Join(home, "src")

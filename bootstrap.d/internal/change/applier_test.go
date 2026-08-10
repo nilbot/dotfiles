@@ -135,6 +135,22 @@ func TestApplierSeedRefusesSymlinkTarget(t *testing.T) {
 	}
 }
 
+// Seed reads the source before creating the parent, so a missing template
+// fails without leaving a stray directory behind.
+func TestApplierSeedLeavesNoStrayDirOnMissingTemplate(t *testing.T) {
+	home := tempHome(t)
+	missing := filepath.Join(home, "no such template")
+	parent := filepath.Join(home, "config dir")
+
+	err := change.NewApplier(&bytes.Buffer{}).Seed(missing, filepath.Join(parent, "dst"))
+	if err == nil {
+		t.Fatal("Seed from a missing template must fail")
+	}
+	if _, statErr := os.Lstat(parent); !os.IsNotExist(statErr) {
+		t.Errorf("Seed left a stray parent directory behind: %v", statErr)
+	}
+}
+
 func TestApplierDirRefusesSymlink(t *testing.T) {
 	home := tempHome(t)
 	real := filepath.Join(home, "real")
