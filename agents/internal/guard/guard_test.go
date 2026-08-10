@@ -775,6 +775,58 @@ func TestConflictedIndexFailsClosed(t *testing.T) {
 	}
 }
 
+func TestStagedReturnsAccumulatedFindingsWithModeError(t *testing.T) {
+	withShippedConfig(t)
+	fakeScanner(t, `printf '%s' '[{"RuleID":"test-rule","StartLine":1}]'; exit 1`)
+	root := newGuardRepo(t)
+	secretPath := ".agents/reports/analysis/a-secret.md"
+	writeRepoFile(t, root, secretPath, "scanner fixture\n", 0o644)
+	linkPath := filepath.Join(root, ".agents", "reports", "analysis", "z-link.md")
+	if err := os.Symlink("outside", linkPath); err != nil {
+		t.Fatal(err)
+	}
+	stageFiles(t, root)
+
+	findings, err := Staged(root)
+	if err == nil || !strings.Contains(err.Error(), "non-regular Git mode 120000") {
+		t.Fatalf("Staged error = %v, want non-regular mode refusal", err)
+	}
+	got := ruleFindings(findings, "test-rule")
+	if len(got) != 1 || got[0].Path != secretPath || !got[0].Blocking {
+		t.Fatalf("accumulated blocking finding was lost: %v", findings)
+	}
+}
+
+func TestStagedReturnsAccumulatedFindingsWithConflictError(t *testing.T) {
+	withShippedConfig(t)
+	fakeScanner(t, `printf '%s' '[{"RuleID":"test-rule","StartLine":1}]'; exit 1`)
+	root := newGuardRepo(t)
+	conflictPath := ".agents/reports/analysis/z-conflict.md"
+	writeRepoFile(t, root, conflictPath, "base\n", 0o644)
+	stageFiles(t, root)
+	commitFiles(t, root)
+
+	secretPath := ".agents/reports/analysis/a-secret.md"
+	writeRepoFile(t, root, secretPath, "scanner fixture\n", 0o644)
+	stageFiles(t, root)
+	base := strings.TrimSpace(string(gitCommand(t, root, []byte("base\n"), "hash-object", "-w", "--stdin")))
+	ours := strings.TrimSpace(string(gitCommand(t, root, []byte("ours\n"), "hash-object", "-w", "--stdin")))
+	theirs := strings.TrimSpace(string(gitCommand(t, root, []byte("theirs\n"), "hash-object", "-w", "--stdin")))
+	gitCommand(t, root, []byte(fmt.Sprintf(
+		"0 0000000000000000000000000000000000000000\t%s\n100644 %s 1\t%s\n100644 %s 2\t%s\n100644 %s 3\t%s\n",
+		conflictPath, base, conflictPath, ours, conflictPath, theirs, conflictPath,
+	)), "update-index", "--index-info")
+
+	findings, err := Staged(root)
+	if err == nil || !strings.Contains(err.Error(), "conflicted staged agent path") {
+		t.Fatalf("Staged error = %v, want conflict refusal", err)
+	}
+	got := ruleFindings(findings, "test-rule")
+	if len(got) != 1 || got[0].Path != secretPath || !got[0].Blocking {
+		t.Fatalf("accumulated blocking finding was lost: %v", findings)
+	}
+}
+
 func TestStagedTypeChangesCannotBeHiddenByDiffConfiguration(t *testing.T) {
 	withShippedConfig(t)
 	fakeCleanScanner(t)

@@ -149,6 +149,39 @@ func TestGuardCommandDoesNotRenderMatchedMalformedContent(t *testing.T) {
 	}
 }
 
+func TestGuardCommandPrintsAccumulatedFindingBeforeModeError(t *testing.T) {
+	scannerDir := t.TempDir()
+	scanner := filepath.Join(scannerDir, "gitleaks")
+	if err := os.WriteFile(scanner, []byte("#!/bin/sh\nprintf '%s' '[{\"RuleID\":\"test-rule\",\"StartLine\":1}]'\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", scannerDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	root := newRepo(t)
+	secretPath := filepath.Join(root, ".agents", "reports", "analysis", "a-secret.md")
+	writeGuardFile(t, secretPath, "scanner fixture\n")
+	linkPath := filepath.Join(root, ".agents", "reports", "analysis", "z-link.md")
+	if err := os.Symlink("outside", linkPath); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "add", "-A")
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runGuard([]string{"--staged"}, &out); code != exitcode.Block {
+		t.Fatalf("exit = %d, want Block; output:\n%s", code, out.String())
+	}
+	output := out.String()
+	finding := `BLOCKED ".agents/reports/analysis/a-secret.md":1 [test-rule]`
+	modeError := `non-regular Git mode 120000`
+	if !strings.Contains(output, finding) || !strings.Contains(output, modeError) {
+		t.Fatalf("output lost finding or mode error:\n%s", output)
+	}
+	if strings.Index(output, finding) > strings.Index(output, modeError) {
+		t.Fatalf("blocking finding was not printed before the mode error:\n%s", output)
+	}
+}
+
 // A well-implemented but unregistered command is unreachable from the binary.
 func TestMainRegistersGuard(t *testing.T) {
 	dir := t.TempDir()

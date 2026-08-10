@@ -36,11 +36,6 @@ func runGuard(args []string, stdout io.Writer) int {
 	}
 
 	findings, err := guard.Staged(rc.Root)
-	if err != nil {
-		fmt.Fprintf(stdout, "agents guard: could not complete operation: %v\n", err)
-		return exitcode.Block
-	}
-
 	blocked := false
 	for _, finding := range findings {
 		label := "warning"
@@ -54,6 +49,10 @@ func runGuard(args []string, stdout io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%s %s:%d [%s] %s\n",
 			label, strconv.QuoteToASCII(finding.Path), finding.Line, finding.Rule, finding.Detail)
+	}
+	if err != nil {
+		fmt.Fprintf(stdout, "agents guard: could not complete operation: %v\n", err)
+		return exitcode.Block
 	}
 
 	switch {

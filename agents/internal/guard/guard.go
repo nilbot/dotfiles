@@ -106,11 +106,11 @@ func Staged(repoRoot string) ([]Finding, error) {
 			continue
 		}
 		if len(pathEntries) != 1 || pathEntries[0].Stage != 0 {
-			return nil, fmt.Errorf("cannot inspect conflicted staged agent path %s; resolve the index and retry", quoteASCII(path))
+			return findings, fmt.Errorf("cannot inspect conflicted staged agent path %s; resolve the index and retry", quoteASCII(path))
 		}
 		entry := pathEntries[0]
 		if entry.Mode != "100644" && entry.Mode != "100755" {
-			return nil, fmt.Errorf("cannot inspect staged agent path %s with non-regular Git mode %s", quoteASCII(path), entry.Mode)
+			return findings, fmt.Errorf("cannot inspect staged agent path %s with non-regular Git mode %s", quoteASCII(path), entry.Mode)
 		}
 		blob, err := stagedBlob(repoRoot, entry.OID)
 		if err != nil {
