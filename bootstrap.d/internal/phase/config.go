@@ -23,7 +23,11 @@ func Config(c Context) error {
 	rows = manifest.For(rows, c.Platform)
 
 	if dupes := manifest.DuplicateTargets(rows); len(dupes) > 0 {
-		return fmt.Errorf("the manifest claims these targets more than once: %v", dupes)
+		// A SyntaxError, not a plain one: two owners for one path is malformed
+		// input (exit 3), not a refusal to touch the machine (exit 2).
+		return &manifest.SyntaxError{
+			Problem: fmt.Sprintf("these targets are claimed more than once: %v", dupes),
+		}
 	}
 
 	for _, row := range rows {

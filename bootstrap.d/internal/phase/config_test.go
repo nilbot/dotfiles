@@ -2,11 +2,13 @@ package phase_test
 
 import (
 	"bytes"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
+	"github.com/nilbot/dotfiles/bootstrap/internal/manifest"
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
 
@@ -68,10 +70,38 @@ func TestConfigRefusesDuplicateTargets(t *testing.T) {
 	}
 }
 
+// Asserting only err != nil would pass if Config failed for an unrelated
+// reason, so this pins the type and the attribution: a bad kind is MALFORMED
+// INPUT (exit 3), attributable to a line, not a refusal to touch the machine.
 func TestConfigRejectsUnparseableManifest(t *testing.T) {
-	_, ctx, _ := configCtx(t, "hardlink  a  b  *\n")
-	if err := phase.Config(ctx); err == nil {
+	_, ctx, _ := configCtx(t, "link  a  b  *\nhardlink  c  d  *\n")
+	err := phase.Config(ctx)
+	if err == nil {
 		t.Fatal("an unknown kind must be rejected")
+	}
+	var syntax *manifest.SyntaxError
+	if !errors.As(err, &syntax) {
+		t.Fatalf("want *manifest.SyntaxError so main can exit 3, got %T: %v", err, err)
+	}
+	if syntax.Line != 2 {
+		t.Errorf("the error should name the offending line, got %d", syntax.Line)
+	}
+	if !strings.Contains(err.Error(), "hardlink") {
+		t.Errorf("the error should name the kind: %v", err)
+	}
+}
+
+// Two owners for one path is malformed input too, not a refusal -- and it is
+// the one manifest fault not attributable to a single line.
+func TestConfigRefusesDuplicateTargetsAsMalformedInput(t *testing.T) {
+	_, ctx, _ := configCtx(t,
+		"link  one  .config/x  *\nlink  two  .config/x  *\n")
+	var syntax *manifest.SyntaxError
+	if err := phase.Config(ctx); !errors.As(err, &syntax) {
+		t.Fatalf("want *manifest.SyntaxError so main can exit 3, got %T: %v", err, err)
+	}
+	if syntax.Line != 0 {
+		t.Errorf("a duplicate spans two lines, so Line must be 0, got %d", syntax.Line)
 	}
 }
 

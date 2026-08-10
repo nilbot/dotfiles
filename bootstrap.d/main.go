@@ -11,6 +11,7 @@ import (
 	"runtime"
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
+	"github.com/nilbot/dotfiles/bootstrap/internal/manifest"
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
 
@@ -133,8 +134,15 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 			if errors.As(err, &refusal) {
 				fmt.Fprintf(stderr, "bootstrap: %s: refusing: %s\n  problem: %s\n  remedy:  %s\n",
 					p.Name, refusal.Path, refusal.Problem, refusal.Remediation)
-			} else {
-				fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
+				return exitBlock
+			}
+			fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
+			// A malformed manifest is bad INPUT, not a refused machine. A
+			// wrapping script must be able to tell "fix your typo" from
+			// "bootstrap declined to touch this box".
+			var syntax *manifest.SyntaxError
+			if errors.As(err, &syntax) {
+				return exitMalformed
 			}
 			return exitBlock
 		}

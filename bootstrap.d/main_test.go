@@ -217,6 +217,60 @@ func TestCacheIsKeyedOnTheCheckout(t *testing.T) {
 	}
 }
 
+// A typo in the manifest is bad INPUT (3), not a refused machine (2). Both
+// codes exist precisely so a wrapping script can tell "fix your typo" from
+// "bootstrap declined to touch this box"; collapsing them to 2 tells it the
+// machine is in a state it is not in. Exit 3 was unreachable from a phase
+// until config became real, so nothing covered this path before.
+//
+// Driven end to end rather than through phase.Config, because the mapping
+// under test lives in main's phase loop, not in the phase.
+func TestMalformedManifestIsMalformedInput(t *testing.T) {
+	alt := altCheckout(t)
+	manifest := filepath.Join(alt, "bootstrap.d", "links.manifest")
+	if err := os.WriteFile(manifest, []byte("hardlink  a  b  *\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, code := runShimEnv(t, filepath.Join(alt, "bootstrap"), tempHome(t), nil,
+		"plan", "dotfiles")
+	if code != 3 {
+		t.Fatalf("exit %d, want 3 (malformed input): %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "hardlink") {
+		t.Errorf("the error should name the offending kind: %s", stderr)
+	}
+	if !strings.Contains(stderr, "config") {
+		t.Errorf("the error should name the phase that found it: %s", stderr)
+	}
+}
+
+// The other half of the exit-3 mapping, and the half that regresses silently:
+// a Refusal must still block (2), and must still print its remediation. Adding
+// the syntax arm split one branch into two returns, so nothing but a test keeps
+// them from drifting onto the same code.
+func TestRefusalFromAPhaseBlocks(t *testing.T) {
+	alt := altCheckout(t)
+	manifest := filepath.Join(alt, "bootstrap.d", "links.manifest")
+	// One space-free column per field: strings.Fields splits on whitespace, so
+	// a source with spaces would be a column-count SyntaxError (exit 3) and
+	// this case would silently stop testing refusals at all.
+	if err := os.WriteFile(manifest, []byte("link  nosuchsource  dst  *\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, code := runShimEnv(t, filepath.Join(alt, "bootstrap"), tempHome(t), nil,
+		"plan", "dotfiles")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block): %s", code, stderr)
+	}
+	// The remediation line is the entire reason Refusal carries that field;
+	// %v would bury it inside Error().
+	if !strings.Contains(stderr, "remedy:") {
+		t.Errorf("a refusal must surface its remediation: %s", stderr)
+	}
+}
+
 // A failure inside the shim must block (2). Never 1, which a CI job reads as
 // advisory, and never 127, which is whatever the shell happened to return.
 func TestShimBuildFailureIsBlock(t *testing.T) {

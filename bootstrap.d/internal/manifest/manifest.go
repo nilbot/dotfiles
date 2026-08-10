@@ -11,6 +11,22 @@ import (
 	"strings"
 )
 
+// SyntaxError is a malformed manifest, which is exit code 3 -- not 2. The
+// distinction is the whole reason both codes exist: a refusal says the machine
+// is in a state bootstrap will not touch, while this says the input is wrong
+// and touching nothing was never in question.
+type SyntaxError struct {
+	Line    int // 0 when the fault is not attributable to one line
+	Problem string
+}
+
+func (e *SyntaxError) Error() string {
+	if e.Line == 0 {
+		return "manifest: " + e.Problem
+	}
+	return fmt.Sprintf("manifest line %d: %s", e.Line, e.Problem)
+}
+
 type Kind string
 
 const (
@@ -36,18 +52,18 @@ func Parse(data []byte) ([]Row, error) {
 		}
 		fields := strings.Fields(text)
 		if len(fields) != 4 {
-			return nil, fmt.Errorf("manifest line %d: %d columns, want 4", line, len(fields))
+			return nil, &SyntaxError{line, fmt.Sprintf("%d columns, want 4", len(fields))}
 		}
 		kind := Kind(fields[0])
 		switch kind {
 		case KindLink, KindSeed, KindDir:
 		default:
-			return nil, fmt.Errorf("manifest line %d: unknown kind %q", line, fields[0])
+			return nil, &SyntaxError{line, fmt.Sprintf("unknown kind %q", fields[0])}
 		}
 		switch fields[3] {
 		case "*", "darwin", "linux":
 		default:
-			return nil, fmt.Errorf("manifest line %d: unknown platform %q", line, fields[3])
+			return nil, &SyntaxError{line, fmt.Sprintf("unknown platform %q", fields[3])}
 		}
 		rows = append(rows, Row{kind, fields[1], fields[2], fields[3]})
 	}
