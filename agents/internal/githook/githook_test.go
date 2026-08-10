@@ -466,6 +466,33 @@ func TestStripFootersRemovesOnlyTrailingAIAttributionLines(t *testing.T) {
 	}
 }
 
+func TestCommitMsgPreservesBodyAttributionWithTrackedExtrasPresent(t *testing.T) {
+	extras := filepath.Clean(filepath.Join("..", "..", "..", "git", "hooks"))
+	if info, err := os.Stat(extras); err != nil || !info.IsDir() {
+		t.Fatalf("tracked extras directory is unavailable: info=%v err=%v", info, err)
+	}
+	message := []byte("feat: x\n\n" +
+		"Discussing Co-Authored-By: Claude <noreply@anthropic.com> in prose.\n\n" +
+		"real body after\n")
+	path := filepath.Join(t.TempDir(), "COMMIT_EDITMSG")
+	if err := os.WriteFile(path, message, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := Run(Chain{RepoHooksDir: t.TempDir(), ExtrasDir: extras}, "commit-msg", []string{path},
+		strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("Run exit=%d stderr=%q", code, stderr.String())
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, message) {
+		t.Fatalf("tracked extras removed body attribution:\n got %q\nwant %q", got, message)
+	}
+}
+
 func TestStripFootersStopsBeforeProseSeparatedFromActualTrailerSuffix(t *testing.T) {
 	in := []byte("docs: explain trailer examples\n\n" +
 		"Co-Authored-By: Claude <noreply@anthropic.com>\n" +
