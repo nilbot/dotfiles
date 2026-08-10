@@ -1,6 +1,6 @@
-.PHONY: all dep links editors tmux extra omz bins dotfiles fish agents githooks
+.PHONY: all dep links editors tmux extra omz bins dotfiles agents githooks
 
-all: dep links editors tmux extra fish
+all: dep links editors tmux extra
 
 dep:
 	sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi
@@ -36,7 +36,7 @@ dotfiles:
 	mkdir -p $(HOME)/.config $(HOME)/.local
 	./softlinks.sh
 	ln -sf $(CURDIR)/spacemacs/dotspacemacs $(HOME)/.spacemacs;
-	ln -sf $(CURDIR)/git/gitignore_global.symlink $(HOME)/.gitignore;
+	ln -sf $(CURDIR)/git/gitignore_global $(HOME)/.gitignore;
 	ln -sf $(CURDIR)/tmux/tmux.conf $(HOME)/.tmux.conf;
 # ~/.gitconfig is a machine-local FILE, not a symlink into this repo. It only
 # includes the shared config, so that `git config --global ...` -- run by you, by
@@ -46,9 +46,12 @@ dotfiles:
 		echo "removing legacy ~/.gitconfig symlink into this repo"; \
 		rm -f $(HOME)/.gitconfig; \
 	fi
+# The template names the checkout with @DOTFILES_ROOT@; substituting it is what
+# makes the include resolve from a checkout that is not ~/dotfiles. A plain cp
+# would seed a path git cannot open, and git ignores a missing include in silence.
 	@if [ ! -e $(HOME)/.gitconfig ]; then \
-		cp $(CURDIR)/git/gitconfig.local.template $(HOME)/.gitconfig; \
-		echo "created ~/.gitconfig (machine-local; includes $(CURDIR)/git/gitconfig.symlink)"; \
+		sed 's|@DOTFILES_ROOT@|$(CURDIR)|g' $(CURDIR)/git/gitconfig.local.template > $(HOME)/.gitconfig; \
+		echo "created ~/.gitconfig (machine-local; includes $(CURDIR)/git/gitconfig.shared)"; \
 	else \
 		echo "~/.gitconfig exists and is a regular file; leaving it alone"; \
 	fi
@@ -86,12 +89,8 @@ omz:
 	ln -sfn $(CURDIR)/zsh/zprofile $(HOME)/.zprofile
 	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which zsh) $(shell whoami); fi
 
-fish: starship fishshell
-
-starship:
-	rm -f $(HOME)/.config/starship.toml
-	ln -s $(CURDIR)/starship.toml $(HOME)/.config/starship.toml
-fishshell:
-	rm -rf $(HOME)/.config/fish
-	ln -s $(CURDIR)/fish $(HOME)/.config/fish
-	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which fish) $(shell whoami); fi
+# The fish, fishshell and starship targets are gone; ./bootstrap owns those
+# paths now. `rm -rf $(HOME)/.config/fish` used to delete a symlink and relink
+# it, which was idempotent. Since ~/.config/fish became a real directory it
+# would instead destroy the seeded stub and fisher's functions/, completions/,
+# conf.d/, fish_plugins and fish_variables -- none of which is in git.

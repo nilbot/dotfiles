@@ -12,12 +12,16 @@
 # to the bottom of THIS file therefore overrides both -- which is exactly what a
 # per-machine override should do.
 #
-# Put machine-specific settings here.  Put anything worth sharing in
-# ~/dotfiles/git/gitconfig.symlink.  Put identity and secrets in
+# Put machine-specific settings here.  Put anything worth sharing in the
+# checkout's git/gitconfig.shared.  Put identity and secrets in
 # ~/etc/extras.secret/gitconfig.
+#
+# The include below names this machine's checkout because bootstrap substituted
+# the resolved path as it seeded this file.  That is the one fact that varies
+# per machine, and this machine-local file is the right place for it.
 
 [include]
 
-	path = ~/dotfiles/git/gitconfig.symlink
+	path = @DOTFILES_ROOT@/git/gitconfig.shared
 
 # --- `git config --global ...` writes appear below this line ---

@@ -486,12 +486,12 @@ func fishSourceOperand(t *testing.T, stub string) string {
 	return ""
 }
 
-// A converged machine is healthy. Skipped until Task 8: gitconfig.local.template
-// still names the pre-rename gitconfig.symlink path, so what apply seeds is
-// exactly what gitconfig-include is built to reject.
+// A converged machine is healthy. This is the end-to-end statement the two
+// resolving guards exist for: apply seeds the templates with the checkout
+// substituted for @DOTFILES_ROOT@, and check then resolves every path they
+// name rather than merely matching it, so a green run here means fish and git
+// can actually open what they were told to read.
 func TestCheckIsHealthyAfterApply(t *testing.T) {
-	t.Skip("unskip in Task 8")
-
 	home := tempHome(t)
 	if _, stderr, code := runShim(t, home, "apply", "dotfiles"); code != 0 {
 		t.Fatalf("apply exit %d: %s", code, stderr)

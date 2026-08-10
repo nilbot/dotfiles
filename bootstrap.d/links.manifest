@@ -19,6 +19,7 @@ link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
 link    claude/skills                     .claude/skills                    *
 link    gemini/skills                     .gemini/skills                    *
+link    git/gitignore_global              .gitignore                        *
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
