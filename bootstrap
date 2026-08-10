@@ -98,6 +98,6 @@ fi
 # What remains uncoverable is a file that is executable but not a loadable
 # image: execve returns ENOEXEC and bash re-runs it as a shell script, so the
 # exit code is whatever that produces. Nothing in a shim can intercept that.
-[ -x "$binary" ] || die "no executable binary at $binary; remove that directory and retry"
+[ -x "$binary" ] || die "no executable binary at $binary; remove $cache and retry"
 
 exec "$binary" "$@"

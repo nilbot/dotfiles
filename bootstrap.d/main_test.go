@@ -454,10 +454,10 @@ func reportedRoot(t *testing.T, stdout string) string {
 // open-ended set of statements across a package that will keep growing, so a
 // scan can only approximate it -- the shell version's scan for mutating command
 // names was written wrong twice -- and the invariant is stated over the import
-// graph instead, where it is exact. Here the subject is one file of ninety
-// lines, fixed in shape, with exactly two intended ways out. Enumerating them
-// reads every line of the thing it constrains, so it is exhaustive rather than
-// approximate.
+// graph instead, where it is exact. Here the subject is one file of a hundred
+// lines, half of it comment, fixed in shape, with exactly two intended ways
+// out. Enumerating them reads every line of the thing it constrains, so it is
+// exhaustive rather than approximate.
 //
 // ${var:?} is checked because it is the obvious way to write the cache-location
 // check and it exits 1 -- "advisory" in the shared table -- so a container with
@@ -500,13 +500,13 @@ func TestShimHasExactlyTwoWaysOut(t *testing.T) {
 			t.Errorf("%s:%d: ${var:?} exits 1, which is advisory, where a hard stop needs die: %s",
 				path, n, strings.TrimSpace(line))
 		}
-		if word("exit").MatchString(line) {
+		if exitWord.MatchString(line) {
 			exits++
 			if n < dieStart || n > dieEnd {
 				t.Errorf("%s:%d: exit outside die(): %s", path, n, strings.TrimSpace(line))
 			}
 		}
-		if word("exec").MatchString(line) {
+		if execWord.MatchString(line) {
 			execs++
 		}
 	}
@@ -519,9 +519,13 @@ func TestShimHasExactlyTwoWaysOut(t *testing.T) {
 }
 
 // errIfUnset matches a ${VAR:?...} expansion, and deliberately not ${VAR:-...}.
-var errIfUnset = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z_0-9]*:\?`)
-
-func word(s string) *regexp.Regexp { return regexp.MustCompile(`\b` + s + `\b`) }
+// The word forms match neither "execfail" nor "execve", which is why the shim
+// may name them in prose.
+var (
+	errIfUnset = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z_0-9]*:\?`)
+	exitWord   = regexp.MustCompile(`\bexit\b`)
+	execWord   = regexp.MustCompile(`\bexec\b`)
+)
 
 // HOME unset with XDG_CACHE_HOME set is a normal container shape, and
 // containers are why the dotfiles profile exists. Preflight must block rather
