@@ -327,7 +327,7 @@ func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalP
 
 func TestHookInstallerRefusesRedirectedGlobalConfigBeforeAnyMutation(t *testing.T) {
 	fixture := newHookInstallFixture(t)
-	trackedSource := filepath.Join(task18RepoRoot(t), "git", "gitconfig.symlink")
+	trackedSource := filepath.Join(task18RepoRoot(t), "git", "gitconfig.shared")
 	trackedContents, err := os.ReadFile(trackedSource)
 	if err != nil {
 		t.Fatal(err)
@@ -809,7 +809,7 @@ func TestMakeGitHooksForeignPreflightRunsBeforeBuildOrLinks(t *testing.T) {
 
 func TestHookInstallerSecondRunPreservesExactInstalledObjectsAndTrackedConfig(t *testing.T) {
 	fixture := newHookInstallFixture(t)
-	trackedConfig := filepath.Join(fixture.repoRoot, "git", "gitconfig.symlink")
+	trackedConfig := filepath.Join(fixture.repoRoot, "git", "gitconfig.shared")
 	trackedBytes := []byte("[core]\n\tattributesfile = ~/.gitattributes\n")
 	if err := os.WriteFile(trackedConfig, trackedBytes, 0o644); err != nil {
 		t.Fatal(err)
@@ -1152,7 +1152,7 @@ func TestTask18RetiresTemplateAndClaudeHookInstallers(t *testing.T) {
 			t.Errorf("retired artifact still exists: %s (%v)", relative, err)
 		}
 	}
-	for _, relative := range []string{"git/gitconfig.symlink", "claude/CLAUDE.md"} {
+	for _, relative := range []string{"git/gitconfig.shared", "claude/CLAUDE.md"} {
 		contents, err := os.ReadFile(filepath.Join(root, relative))
 		if err != nil {
 			t.Fatal(err)

@@ -323,7 +323,7 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 	hooksDir := filepath.Join(root, "hooks.d")
 	legacyDir := filepath.Join(root, "legacy")
 	globalConfig := filepath.Join(root, "home", ".gitconfig")
-	sharedConfig := filepath.Join(root, "dotfiles", "git", "gitconfig.symlink")
+	sharedConfig := filepath.Join(root, "dotfiles", "git", "gitconfig.shared")
 	attrsSource := filepath.Join(root, "global-attributes")
 	attrsLink := filepath.Join(root, "home-attributes")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
