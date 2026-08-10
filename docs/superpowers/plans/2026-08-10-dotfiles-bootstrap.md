@@ -2326,7 +2326,154 @@ guarantee."
 
 ---
 
-### Tasks 6 through 16
+### Task 6: The `check` package, the `check` verb, and the verify phase
+
+**Files:**
+- Create: `bootstrap.d/internal/check/check.go`, `checks.go`
+- Modify: `bootstrap.d/main.go` (`runCheck`), `bootstrap.d/internal/phase/verify.go`
+- Test: `bootstrap.d/internal/check/check_test.go`, `bootstrap.d/main_test.go`
+
+**Interfaces:**
+- Consumes: `change.Interface`, `manifest.Parse`/`For`/`DuplicateTargets`.
+- Produces:
+
+```go
+package check
+
+type Status string
+const (
+	OK   Status = "ok"
+	Warn Status = "warn"
+	Fail Status = "fail"
+	NA   Status = "n/a"
+)
+
+type Result struct {
+	Status Status
+	Name   string // stable identifier; tests assert on these
+	Detail string
+}
+
+// Context mirrors phase.Context but is declared here: phase imports check for
+// the verify phase, so the dependency must run one way only.
+type Context struct {
+	Change   change.Interface
+	Root     string
+	Home     string
+	Platform string
+	Profile  string
+}
+
+func All(c Context) []Result
+func ExitCode(results []Result) int // 0 ok, 1 any Warn, 2 any Fail
+func Write(w io.Writer, results []Result)
+```
+
+`internal/check` is subject to the same import restriction as `internal/phase`:
+no I/O package. Extend Task 5's architecture test to cover it.
+
+**The eight checks**, with the exact `Name` values tests assert on:
+
+| Name | Checks | Profile |
+|---|---|---|
+| `platform` | reports the detected platform | both |
+| `manifest-owners` | no target claimed twice | both |
+| `manifest-kinds` | every row's target present and of the declared kind | both |
+| `fish-source` | `~/.config/fish/config.fish` contains a line matching `^source .*/fish/config\.fish$` | both |
+| `gitconfig-include` | `~/.gitconfig` contains `git/gitconfig.shared` | both |
+| `login-shell` | `$SHELL` ends in `fish` and that path is in `/etc/shells` | workstation |
+| `agents` | `agents` resolves on `PATH` | workstation |
+| `packages` | every `Brewfile` entry installed | workstation |
+
+Three rules the tests must pin:
+
+1. **Under the `dotfiles` profile, `login-shell`, `agents` and `packages`
+   report `NA`, not `Fail`.** They cover state that profile deliberately does
+   not manage; treating them as failures makes every container run report three
+   false problems.
+2. **`packages` reports `Fail` with "the packages phase has not run" when
+   `bootstrap.d/Brewfile` is absent** — Task 12 creates it, so between here and
+   there the file genuinely does not exist and handing a missing path to
+   `brew bundle check` would produce a confusing error instead of a clear one.
+3. **`fish-source` and `gitconfig-include` are the two silent-total-failure
+   guards.** If the fish stub loses its `source` line the entire shared config
+   goes dark with no error; if `~/.gitconfig` stops including the shared file
+   every shared git setting vanishes. Both exist *because* this design
+   introduces those failure modes.
+
+**`ExitCode` maps to the shared table**: any `Fail` → `2`, else any `Warn` →
+`1`, else `0`. `NA` never affects the code.
+
+**`phase.Verify` reports but does not exit.** It runs the same `check.All` and
+writes the results, then returns `nil` even on `Fail` — an advisory finding at
+the end of an `apply` must not look like a failed `apply`. `runCheck` is the one
+that exits.
+
+- [ ] **Step 1: Write `check_test.go` against a fake `change.Interface`**
+
+Reuse the `fakeChange` shape from `internal/phase/preflight_test.go` — copy it
+into the check package's test file rather than exporting it; forty lines of
+duplicated test fixture across two packages is cheaper than a shared testing
+package that production code would have to carry.
+
+Cover, at minimum: each of the three `NA` results under `dotfiles`; each of the
+same three producing a real verdict under `workstation`; `manifest-kinds`
+failing when a `link` target is a regular file and when a `seed` target is a
+symlink; `fish-source` failing on a stub without the line; `gitconfig-include`
+failing on the pre-rename path; `packages` failing with the Brewfile absent;
+and `ExitCode` returning 2/1/0 for the three shapes.
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd bootstrap.d && go test ./internal/check/...`
+Expected: FAIL — package does not exist.
+
+- [ ] **Step 3: Implement `check.go` and `checks.go`, then wire `runCheck` and `Verify`**
+
+`runCheck` builds a `check.Context` from the environment exactly as
+`runProfile` builds a `phase.Context`, calls `check.All`, `check.Write`s to
+stdout, and returns `check.ExitCode`.
+
+- [ ] **Step 4: Add the end-to-end cases to `main_test.go`**
+
+`./bootstrap check dotfiles` on a bare `$HOME` exits 1 or 2 and names the
+missing rows; after `apply dotfiles` it exits 0. **Add
+`t.Skip("unskip in Task 8")` to the cases covering `fish-source` and
+`gitconfig-include`** — the manifest has no fish seed row until Task 7 and
+`gitconfig.local.template` still names the pre-rename path until Task 8, so
+both genuinely fail until then. Task 8 removes the skips.
+
+- [ ] **Step 5: Extend the architecture test**
+
+Add `internal/check` to the packages whose import closure must contain no I/O
+package.
+
+- [ ] **Step 6: Verify and commit**
+
+Run: `cd bootstrap.d && go test -count=1 ./... && go vet ./...`, `gofmt -l`.
+
+```bash
+git add bootstrap.d/internal/check bootstrap.d/main.go bootstrap.d/main_test.go \
+        bootstrap.d/internal/phase/verify.go bootstrap.d/architecture_test.go
+git commit -m "feat(bootstrap): add the check verb and verify phase
+
+Three checks report n/a under the dotfiles profile rather than failing:
+they cover state that profile deliberately does not manage, so treating
+them as failures would make every container run report three false
+problems.
+
+fish-source and gitconfig-include exist because this design introduces
+two silent total-failure modes -- a fish stub that lost its source line,
+and a ~/.gitconfig that stopped including the shared file. A design that
+creates a silent failure owes a check for it.
+
+Verify reports and returns nil; only the check verb exits. An advisory
+finding at the end of an apply must not look like a failed apply."
+```
+
+---
+
+### Tasks 7 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
