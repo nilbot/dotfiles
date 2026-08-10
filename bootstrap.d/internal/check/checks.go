@@ -171,9 +171,10 @@ func fishSource(c Context) Result {
 // Both silent-failure guards need this and neither is complete without it.
 // Matching the text only asks whether the file SAYS the right thing; the failure
 // they exist to catch is the file saying it about somewhere that is not there.
-// Seed copies these templates verbatim -- no substitution -- so a template
-// hardcoding ~/dotfiles is simply wrong on a checkout anywhere else, and both
-// git and fish pass over an unreadable include or source without stopping.
+// Templates name the checkout with change.RootToken and change.Seed substitutes
+// the resolved root as it writes, so a seeded path should be right -- but
+// "should be" is not a check, and both git and fish pass over an include or
+// source they cannot open without stopping.
 func resolves(c Context, data []byte, pattern *regexp.Regexp) (found, dangling string) {
 	for _, line := range strings.Split(string(data), "\n") {
 		m := pattern.FindStringSubmatch(strings.TrimSpace(line))

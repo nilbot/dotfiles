@@ -53,7 +53,7 @@ func TestPlannerMutatesNothing(t *testing.T) {
 	before := treeOf(t, home)
 
 	var out bytes.Buffer
-	p := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &out)
+	p := change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), &out, unusedRoot)
 	if err := p.Dir(filepath.Join(home, "newdir")); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestPlannerOverlaysItsOwnChanges(t *testing.T) {
 	parent := filepath.Join(home, "config")
 
 	var out bytes.Buffer
-	p := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &out)
+	p := change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), &out, unusedRoot)
 	if err := p.Dir(parent); err != nil {
 		t.Fatal(err)
 	}
@@ -142,9 +142,9 @@ func TestSeedRefusesUnusableSourceOnBothPaths(t *testing.T) {
 		name string
 		make func(out io.Writer) change.Interface
 	}{
-		{"applier", func(out io.Writer) change.Interface { return change.NewApplier(out) }},
+		{"applier", func(out io.Writer) change.Interface { return change.NewApplier(out, unusedRoot) }},
 		{"planner", func(out io.Writer) change.Interface {
-			return change.NewPlanner(change.NewApplier(&bytes.Buffer{}), out)
+			return change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), out, unusedRoot)
 		}},
 	}
 
@@ -241,9 +241,9 @@ func impls() []struct {
 		name string
 		make func(out io.Writer) change.Interface
 	}{
-		{"applier", func(out io.Writer) change.Interface { return change.NewApplier(out) }},
+		{"applier", func(out io.Writer) change.Interface { return change.NewApplier(out, unusedRoot) }},
 		{"planner", func(out io.Writer) change.Interface {
-			return change.NewPlanner(change.NewApplier(&bytes.Buffer{}), out)
+			return change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), out, unusedRoot)
 		}},
 	}
 }
@@ -288,8 +288,8 @@ func TestSeedPredictsReadFailuresExactly(t *testing.T) {
 			before := treeOf(t, home)
 
 			var planOut, applyOut bytes.Buffer
-			planErr := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &planOut).Seed(source, target)
-			applyErr := change.NewApplier(&applyOut).Seed(source, target)
+			planErr := change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), &planOut, unusedRoot).Seed(source, target)
+			applyErr := change.NewApplier(&applyOut, unusedRoot).Seed(source, target)
 
 			if planErr == nil || applyErr == nil {
 				t.Fatalf("both paths must fail; plan = %v, apply = %v", planErr, applyErr)
@@ -337,8 +337,8 @@ func TestPlanAndApplyAgreeOnCreatedDirectories(t *testing.T) {
 	}
 
 	var planOut, applyOut bytes.Buffer
-	manifest(t, change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &planOut), tempHome(t))
-	manifest(t, change.NewApplier(&applyOut), tempHome(t))
+	manifest(t, change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), &planOut, unusedRoot), tempHome(t))
+	manifest(t, change.NewApplier(&applyOut, unusedRoot), tempHome(t))
 
 	// "create directory" is not a substring of "created directory", so the two
 	// counts cannot contaminate each other.
@@ -461,7 +461,7 @@ func TestPlannerStillRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &bytes.Buffer{}).Link(src, target)
+	err := change.NewPlanner(change.NewApplier(&bytes.Buffer{}, unusedRoot), &bytes.Buffer{}, unusedRoot).Link(src, target)
 	var refusal *change.Refusal
 	if !errorsAs(err, &refusal) {
 		t.Fatalf("plan must surface refusals, not hide them until apply; got %T", err)

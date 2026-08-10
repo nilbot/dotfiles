@@ -19,7 +19,14 @@ type Planner struct {
 	links   map[string]string
 }
 
-func NewPlanner(reader Interface, out io.Writer) *Planner {
+// NewPlanner mirrors NewApplier's signature, root included, so the two are
+// constructed identically at every call site and neither can be built without
+// naming the checkout it serves.
+//
+// The root is deliberately not kept. Seed writes nothing here, so there is
+// nothing to substitute into -- and that is NOT a plan/apply asymmetry: see
+// Planner.Seed, where a future reader is most likely to try to "fix" it.
+func NewPlanner(reader Interface, out io.Writer, root string) *Planner {
 	return &Planner{
 		reader:  reader,
 		out:     out,
@@ -151,6 +158,11 @@ func (p *Planner) Seed(source, target string) error {
 	if _, err := p.ReadFile(source); err != nil {
 		return err
 	}
+	// The bytes are read and DISCARDED, so no root is substituted into them.
+	// That is deliberate and is not a plan/apply asymmetry: substitution is a
+	// pure rewrite that cannot fail, so there is no outcome here for a plan to
+	// get wrong. Substituting anyway would be work whose result is thrown away,
+	// and it would need a root this type has no reason to hold.
 	if err := p.Dir(filepath.Dir(target)); err != nil {
 		return err
 	}

@@ -398,12 +398,14 @@ func TestPlanAndCheckAgreeOnThePackagesVerdict(t *testing.T) {
 	}
 }
 
-// The fish stub's source line, end to end. Skipped until Task 7 adds the
-// manifest's fish seed row and the template it names -- until then there is no
-// stub for apply to seed, so this fails for a reason that is not a defect.
+// The fish stub's source line, end to end, and the one case that proves
+// substitution reaches a real machine rather than only a unit test.
+//
+// The check RESOLVES the path the stub names, so a template hardcoding
+// ~/dotfiles would fail here on any checkout that is not there -- which this one
+// is not, since the suite runs from wherever the repository happens to be.
+// Nothing but substitution makes this pass.
 func TestCheckFindsTheFishSourceLineAfterApply(t *testing.T) {
-	t.Skip("unskip in Task 8")
-
 	home := tempHome(t)
 	if _, stderr, code := runShim(t, home, "apply", "dotfiles"); code != 0 {
 		t.Fatalf("apply exit %d: %s", code, stderr)
@@ -412,6 +414,76 @@ func TestCheckFindsTheFishSourceLineAfterApply(t *testing.T) {
 	if got := checkStatus(stdout, "fish-source"); got != "ok" {
 		t.Errorf("fish-source = %q after apply, want ok:\n%s", got, stdout)
 	}
+}
+
+// A checkout whose path contains a space must still produce a WORKING stub.
+//
+// fish splits an unquoted `source` operand on whitespace, so a stub reading
+// `source /Users/a b/dotfiles/fish/config.fish` sources "/Users/a". Measured on
+// fish 4.8.1: it prints to stderr and EXITS 0, so the shell starts and every
+// shared setting is simply absent.
+//
+// The fish-source check does not catch it either. Its pattern captures the rest
+// of the line, and that whole path does exist, so it reports ok -- a false ok in
+// the guard whose entire job is catching silent total failure. That is why the
+// template quotes the path, and why the check's own pattern already tolerates
+// quotes.
+//
+// Asserted without invoking fish, so the suite does not start requiring fish to
+// be installed: the stub's source line is split the way fish would split it, and
+// the operand that survives must be the file itself.
+func TestSeededFishStubSurvivesASpaceInTheCheckoutPath(t *testing.T) {
+	checkout := filepath.Join(t.TempDir(), "check out")
+	copyInto(t, checkout, trackedEntries(t)...)
+
+	home := tempHome(t)
+	stdout, stderr, code := runShimEnv(t, filepath.Join(checkout, "bootstrap"), home, nil,
+		"apply", "dotfiles")
+	if code != 0 {
+		t.Fatalf("apply exit %d from a checkout whose path has a space:\n%s%s", code, stdout, stderr)
+	}
+
+	stub := filepath.Join(home, ".config", "fish", "config.fish")
+	data, err := os.ReadFile(stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operand := fishSourceOperand(t, string(data))
+	if !strings.HasPrefix(operand, checkout) {
+		t.Errorf("the stub sources %q, which is outside the checkout %q:\n%s",
+			operand, checkout, data)
+	}
+	if _, err := os.Stat(operand); err != nil {
+		t.Errorf("fish would source %q, which it cannot read (%v), so every shared "+
+			"fish setting is silently inactive:\n%s", operand, err, data)
+	}
+}
+
+// fishSourceOperand returns the file fish would actually source from the stub's
+// source line: the quoted string when the operand is quoted, and otherwise the
+// first whitespace-delimited word. That is the whole of the splitting rule this
+// case turns on.
+func fishSourceOperand(t *testing.T, stub string) string {
+	t.Helper()
+	for _, line := range strings.Split(stub, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "source ")
+		if !ok {
+			continue
+		}
+		rest = strings.TrimSpace(rest)
+		for _, quote := range []string{`"`, "'"} {
+			if inner, quoted := strings.CutPrefix(rest, quote); quoted {
+				if end := strings.Index(inner, quote); end >= 0 {
+					return inner[:end]
+				}
+			}
+		}
+		if words := strings.Fields(rest); len(words) > 0 {
+			return words[0]
+		}
+	}
+	t.Fatalf("the seeded stub has no source line at all:\n%s", stub)
+	return ""
 }
 
 // A converged machine is healthy. Skipped until Task 8: gitconfig.local.template

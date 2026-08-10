@@ -10,9 +10,18 @@ import (
 )
 
 // Applier performs operations for real.
-type Applier struct{ out io.Writer }
+//
+// root is the checkout this executor serves, and it is held here rather than
+// passed to Seed because an executor operating on a machine must know which
+// checkout it serves. Threading it through each call would let two call sites
+// disagree about it, and the whole point of substitution is that exactly one
+// answer is right per machine.
+type Applier struct {
+	out  io.Writer
+	root string
+}
 
-func NewApplier(out io.Writer) *Applier { return &Applier{out: out} }
+func NewApplier(out io.Writer, root string) *Applier { return &Applier{out: out, root: root} }
 
 func (a *Applier) Lstat(path string) (FileInfo, error) {
 	info, err := os.Lstat(path)
@@ -113,6 +122,10 @@ func (a *Applier) Seed(source, target string) error {
 	if err != nil {
 		return err
 	}
+	// The one transformation a seed applies. Between the read and the write, so
+	// a template is never rewritten in place and a failed read still leaves the
+	// tree untouched.
+	data = substituteRoot(data, a.root)
 	if err := a.Dir(filepath.Dir(target)); err != nil {
 		return err
 	}

@@ -5,10 +5,34 @@
 package change
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"path/filepath"
 )
+
+// RootToken is what a seeded template writes where the checkout's location
+// belongs; Seed replaces it with the root as it writes.
+//
+// Spec §7 already claims a seeded stub "necessarily names the clone location,
+// and that is correct: it is machine-local and seeded once, so it is the right
+// place for the one fact that varies per machine." A template copied
+// byte-for-byte cannot carry a per-machine fact, and substitution is what closes
+// that gap -- the checkout can be anywhere, because root() resolves it from the
+// executable rather than assuming ~/dotfiles.
+//
+// Both consumers name a file that is passed over IN SILENCE when it is not
+// there: git ignores an include it cannot open, fish ignores a source it cannot
+// read. So a template hardcoding one machine's path does not fail loudly
+// elsewhere; every shared setting simply stops applying.
+const RootToken = "@DOTFILES_ROOT@"
+
+// substituteRoot is the whole of the transformation Seed applies as it writes.
+// It is a pure rewrite of bytes that cannot fail, which is why Planner -- which
+// writes nothing -- has no outcome here to mispredict.
+func substituteRoot(data []byte, root string) []byte {
+	return bytes.ReplaceAll(data, []byte(RootToken), []byte(root))
+}
 
 // FileInfo is the deliberately small view phases get of a path. It answers the
 // three questions the placement rule asks -- is it a real directory, a symlink,

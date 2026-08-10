@@ -4,8 +4,13 @@ function reload
 end
 
 # >>> fisher plugin manager >>>
+# The plugin list is read from this file's own directory, so it is found through
+# the checkout wherever that is -- $HOME/dotfiles was one machine's answer, not
+# a fact. Inside a function, (status dirname) is the directory of the file the
+# function was DEFINED in, which is what makes this work when it is called from
+# an interactive shell.
 function install_fisher
-    set --local plugins (read --null <$HOME/dotfiles/fish/fishfile)
+    set --local plugins (read --null <(status dirname)/fishfile)
     curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher $plugins
 end
 # <<< fisher plugin manager <<<
@@ -184,11 +189,15 @@ end
 # remove fish-variables
 # it turns out that fish-variables resides in local,
 # and it's not cross-platform compatible (eg. macOS vs linux)
+#
+# Everything this clears is fisher's GENERATED state, which now lives in
+# $__fish_config_dir -- fish's own answer for where its configuration directory
+# is. It used to point inside the checkout, because ~/.config/fish was a symlink
+# to it; that is what this reset exists to stop being true.
 function fish_reset_all
-    set --local fish_path_prefix $HOME/dotfiles/fish
-    echo '' >$fish_path_prefix/fish_plugins
-    echo '' >$fish_path_prefix/fish_variables
-    rm -rf $fish_path_prefix/{functions,completions,conf.d}/
+    echo '' >$__fish_config_dir/fish_plugins
+    echo '' >$__fish_config_dir/fish_variables
+    rm -rf $__fish_config_dir/{functions,completions,conf.d}/
     install_fisher
     reload
 end

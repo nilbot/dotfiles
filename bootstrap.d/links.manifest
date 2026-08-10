@@ -22,4 +22,5 @@ link    gemini/skills                     .gemini/skills                    *
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
+seed    fish/config.fish.template         .config/fish/config.fish          *
 seed    git/gitconfig.local.template      .gitconfig                        *

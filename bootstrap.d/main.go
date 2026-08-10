@@ -116,10 +116,10 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 		return exitBlock
 	}
 
-	applier := change.NewApplier(stdout)
+	applier := change.NewApplier(stdout, repoRoot)
 	var machine change.Interface = applier
 	if verb == "plan" {
-		machine = change.NewPlanner(applier, stdout)
+		machine = change.NewPlanner(applier, stdout, repoRoot)
 	}
 
 	ctx := phase.Context{
@@ -186,7 +186,7 @@ func runCheck(profile string, stdout, stderr io.Writer) int {
 	// command would read a Planner's recorded nil as success. See
 	// internal/check's package comment.
 	results, err := check.All(check.Context{
-		Change: change.NewApplier(stdout), Root: repoRoot, Home: home,
+		Change: change.NewApplier(stdout, repoRoot), Root: repoRoot, Home: home,
 		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"),
 	})
 	fmt.Fprintln(stdout, "== check")

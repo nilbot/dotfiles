@@ -24,7 +24,7 @@ func Verify(c Context) error {
 		// This does not weaken the dry-run invariant. Every check reads, and
 		// `brew bundle check` is a query; there is no mutation here for a
 		// Planner to hold back. See internal/check's package comment.
-		Change: change.NewApplier(c.Out),
+		Change: change.NewApplier(c.Out, c.Root),
 
 		Root: c.Root, Home: c.Home,
 		Platform: c.Platform, Profile: c.Profile, Shell: c.Shell,
