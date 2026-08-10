@@ -93,6 +93,62 @@ func TestFleetLSPruneReloadsUnderLockBeforeMutation(t *testing.T) {
 	}
 }
 
+// Kills: printing the pre-lock classification while pruning a different,
+// freshly locked classification of the same entry.
+func TestFleetLSPruneDisplaysAndPrunesTheSameFreshSnapshot(t *testing.T) {
+	repo := fleetRepo(t, false)
+	saveFleetRegistry(t, registry.Entry{Path: repo, Added: time.Unix(1, 0).UTC()})
+
+	var out bytes.Buffer
+	code := runFleetLSWithBeforePrune([]string{"--prune"}, &out, func() {
+		if err := os.MkdirAll(filepath.Join(repo, ".agents"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK; output:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), strconv.QuoteToASCII(repo)) || strings.Contains(out.String(), "no .agents/") || !strings.Contains(out.String(), "pruned 0") {
+		t.Fatalf("prune output did not use its fresh classification: %q", out.String())
+	}
+	r, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Repos) != 1 || r.Repos[0].Path != repo {
+		t.Fatalf("freshly present repo was pruned: %+v", r.Repos)
+	}
+}
+
+// Kills: treating an indeterminate .agents stat failure as confirmed absence,
+// pruning it, or allowing a hostile path to forge advisory output.
+func TestFleetLSPruneRetainsAndReportsUnknownEntry(t *testing.T) {
+	unknown := filepath.Join(t.TempDir(), "unknown\nforged")
+	if err := os.MkdirAll(unknown, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".agents", filepath.Join(unknown, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	saveFleetRegistry(t, registry.Entry{Path: unknown, Added: time.Unix(1, 0).UTC()})
+
+	var out bytes.Buffer
+	code := runFleetLS([]string{"--prune"}, &out)
+	if code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory; output:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), strconv.QuoteToASCII(unknown)) || !strings.Contains(out.String(), "could not inspect") || !strings.Contains(out.String(), "pruned 0") || strings.Contains(out.String(), unknown) {
+		t.Fatalf("unknown entry was not reported safely: %q", out.String())
+	}
+	r, err := registry.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.Repos) != 1 || r.Repos[0].Path != unknown {
+		t.Fatalf("unknown entry was pruned: %+v", r.Repos)
+	}
+}
+
 // Kills: a dry run invoking rewiring, rewriting the cache, omitting a missing
 // entry, or incorrectly returning success for a command that applied nothing.
 func TestFleetUpdateDryRunChangesNothing(t *testing.T) {
@@ -178,6 +234,26 @@ func TestFleetUpdateApplySuccess(t *testing.T) {
 	})
 	if code != exitcode.OK || len(called) != 1 || called[0] != present {
 		t.Fatalf("exit=%d calls=%q output=%q", code, called, out.String())
+	}
+}
+
+func TestFleetUpdateApplySkipsAndReportsUnknownEntry(t *testing.T) {
+	unknown := fleetRepo(t, false)
+	if err := os.Symlink(".agents", filepath.Join(unknown, ".agents")); err != nil {
+		t.Fatal(err)
+	}
+	saveFleetRegistry(t, registry.Entry{Path: unknown, Added: time.Unix(1, 0).UTC()})
+	calls := 0
+	var out bytes.Buffer
+	code := runFleetUpdateWithWire([]string{"--all", "--apply"}, &out, func(string, io.Writer) int {
+		calls++
+		return exitcode.OK
+	})
+	if code != exitcode.Advisory || calls != 0 {
+		t.Fatalf("exit=%d calls=%d, want Advisory and no wire; output=%q", code, calls, out.String())
+	}
+	if !strings.Contains(out.String(), strconv.QuoteToASCII(unknown)) || !strings.Contains(out.String(), "could not inspect") {
+		t.Fatalf("unknown entry not reported: %q", out.String())
 	}
 }
 

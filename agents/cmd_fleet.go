@@ -30,29 +30,13 @@ func runFleetLSWithBeforePrune(args []string, stdout io.Writer, beforePrune func
 		return exitcode.Malformed
 	}
 
-	r, err := registry.Load()
-	if err != nil {
-		fmt.Fprintf(stdout, "agents ls: %v\n", err)
-		return exitcode.NoRecord
-	}
-	present, missing := r.Reconcile()
-	for _, e := range present {
-		marker := ""
-		if e.Local {
-			marker = "  (local)"
-		}
-		fmt.Fprintf(stdout, "%s%s\n", fleetPath(e.Path), marker)
-	}
-	for _, e := range missing {
-		fmt.Fprintf(stdout, "%s  -- no .agents/ here any more\n", fleetPath(e.Path))
-	}
-
 	if *prune {
 		beforePrune()
 		pruned := 0
+		var present, missing, unknown []registry.Entry
 		_, err := registry.Update(func(fresh *registry.Registry) (bool, error) {
-			_, nowMissing := fresh.Reconcile()
-			for _, e := range nowMissing {
+			present, missing, unknown = fresh.ReconcileDetailed()
+			for _, e := range missing {
 				if fresh.Remove(e.Path) {
 					pruned++
 				}
@@ -63,14 +47,43 @@ func runFleetLSWithBeforePrune(args []string, stdout io.Writer, beforePrune func
 			fmt.Fprintf(stdout, "agents ls: could not prune registry: %v\n", err)
 			return exitcode.NoRecord
 		}
+		printFleetEntries(stdout, present, missing, unknown)
 		fmt.Fprintf(stdout, "pruned %d registered repo(s)\n", pruned)
+		if len(unknown) > 0 {
+			fmt.Fprintf(stdout, "%d registered repo(s) could not be inspected and were left unchanged\n", len(unknown))
+			return exitcode.Advisory
+		}
 		return exitcode.OK
 	}
-	if len(missing) > 0 {
-		fmt.Fprintf(stdout, "%d registered repo(s) no longer have .agents/; `agents ls --prune` forgets them\n", len(missing))
+
+	r, err := registry.Load()
+	if err != nil {
+		fmt.Fprintf(stdout, "agents ls: %v\n", err)
+		return exitcode.NoRecord
+	}
+	present, missing, unknown := r.ReconcileDetailed()
+	printFleetEntries(stdout, present, missing, unknown)
+	if len(missing) > 0 || len(unknown) > 0 {
+		fmt.Fprintf(stdout, "%d registered repo(s) missing; %d could not be inspected; `agents ls --prune` forgets only confirmed missing entries\n", len(missing), len(unknown))
 		return exitcode.Advisory
 	}
 	return exitcode.OK
+}
+
+func printFleetEntries(stdout io.Writer, present, missing, unknown []registry.Entry) {
+	for _, e := range present {
+		marker := ""
+		if e.Local {
+			marker = "  (local)"
+		}
+		fmt.Fprintf(stdout, "%s%s\n", fleetPath(e.Path), marker)
+	}
+	for _, e := range missing {
+		fmt.Fprintf(stdout, "%s  -- no .agents/ here any more\n", fleetPath(e.Path))
+	}
+	for _, e := range unknown {
+		fmt.Fprintf(stdout, "%s  -- could not inspect .agents/; left unchanged\n", fleetPath(e.Path))
+	}
 }
 
 func runFleetUpdate(args []string, stdout io.Writer) int {
@@ -98,7 +111,7 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 		fmt.Fprintf(stdout, "agents update: %v\n", err)
 		return exitcode.NoRecord
 	}
-	present, missing := r.Reconcile()
+	present, missing, unknown := r.ReconcileDetailed()
 	if !*apply {
 		fmt.Fprintf(stdout, "would rewire %d registered repo(s); re-run with --apply\n", len(present))
 		for _, e := range present {
@@ -107,11 +120,17 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 		for _, e := range missing {
 			fmt.Fprintf(stdout, "  skip (missing): %s\n", fleetPath(e.Path))
 		}
+		for _, e := range unknown {
+			fmt.Fprintf(stdout, "  skip (unknown): %s -- could not inspect .agents/\n", fleetPath(e.Path))
+		}
 		return exitcode.Advisory
 	}
 
 	for _, e := range missing {
 		fmt.Fprintf(stdout, "skip (missing): %s -- no .agents/ here any more\n", fleetPath(e.Path))
+	}
+	for _, e := range unknown {
+		fmt.Fprintf(stdout, "skip (unknown): %s -- could not inspect .agents/; left unchanged\n", fleetPath(e.Path))
 	}
 	failed := 0
 	for _, e := range present {
@@ -128,8 +147,8 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 		fmt.Fprintf(stdout, "rewired %s\n", fleetPath(e.Path))
 	}
 
-	if failed > 0 || len(missing) > 0 {
-		fmt.Fprintf(stdout, "%d repo(s) failed; %d registered repo(s) missing\n", failed, len(missing))
+	if failed > 0 || len(missing) > 0 || len(unknown) > 0 {
+		fmt.Fprintf(stdout, "%d repo(s) failed; %d registered repo(s) missing; %d could not be inspected\n", failed, len(missing), len(unknown))
 		return exitcode.Advisory
 	}
 	fmt.Fprintf(stdout, "rewired %d registered repo(s)\n", len(present))

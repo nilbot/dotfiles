@@ -39,6 +39,13 @@ func lockPath() string { return filepath.Join(machine.StateDir(), "registry.lock
 func Load() (*Registry, error) { return load(Path()) }
 
 func load(path string) (*Registry, error) {
+	missingState, err := verifyStateDir(false)
+	if err != nil {
+		return nil, err
+	}
+	if missingState {
+		return &Registry{}, nil
+	}
 	b, missing, err := readRegular(path)
 	if err != nil {
 		return nil, err
@@ -48,7 +55,10 @@ func load(path string) (*Registry, error) {
 	}
 	var r Registry
 	if err := json.Unmarshal(b, &r); err != nil {
-		return nil, fmt.Errorf("registry %s is not valid JSON (safe to delete; it is a cache): %w", safePath(path), err)
+		return nil, invalidRegistry(path)
+	}
+	if !validRegistry(&r) {
+		return nil, invalidRegistry(path)
 	}
 	return &r, nil
 }
@@ -57,6 +67,9 @@ func load(path string) (*Registry, error) {
 // lock. Callers doing read-modify-write must use Update instead: Save's snapshot
 // replacement semantics intentionally cannot merge a concurrently read value.
 func (r *Registry) Save() error {
+	if !validRegistry(r) {
+		return invalidRegistry(Path())
+	}
 	lock, err := acquireLock()
 	if err != nil {
 		return err
@@ -92,6 +105,9 @@ func Update(fn func(*Registry) (bool, error)) (bool, error) {
 // Register records a repository without exposing an unsafe Load/Add/Save
 // sequence to command callers.
 func Register(path string, local bool) (bool, error) {
+	if !validEntryPath(path) {
+		return false, fmt.Errorf("registry repository path must be absolute and cleaned")
+	}
 	return Update(func(r *Registry) (bool, error) { return r.Add(path, local), nil })
 }
 
@@ -122,27 +138,42 @@ func (r *Registry) Remove(path string) bool {
 	return false
 }
 
-// Reconcile is deliberately one-way: it classifies registered entries. It
-// does not scan for unregistered repositories.
+// Reconcile preserves the original two-slice API while returning only
+// confirmed classifications. An entry whose .agents marker cannot be
+// inspected is in neither slice; callers that report or mutate drift should
+// use ReconcileDetailed so they can retain and surface it.
 func (r *Registry) Reconcile() (present, missing []Entry) {
+	present, missing, _ = r.ReconcileDetailed()
+	return present, missing
+}
+
+// ReconcileDetailed is deliberately one-way: it classifies registered
+// entries and does not scan for unregistered repositories. Unknown entries are
+// kept separate so a permission or I/O failure can never authorize pruning.
+func (r *Registry) ReconcileDetailed() (present, missing, unknown []Entry) {
 	for _, e := range r.Repos {
-		if fi, err := os.Stat(filepath.Join(e.Path, ".agents")); err == nil && fi.IsDir() {
+		fi, err := os.Stat(filepath.Join(e.Path, ".agents"))
+		if err == nil && fi.IsDir() {
 			present = append(present, e)
-		} else {
+		} else if err == nil || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 			missing = append(missing, e)
+		} else {
+			unknown = append(unknown, e)
 		}
 	}
-	return present, missing
+	return present, missing, unknown
 }
 
 type fileLock struct{ file *os.File }
 
 func acquireLock() (*fileLock, error) {
-	dir := machine.StateDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("create registry state directory %s: %s", safePath(dir), safeError(err))
+	if _, err := verifyStateDir(true); err != nil {
+		return nil, err
 	}
 	path := lockPath()
+	if err := requireSingleRegularOrMissing(path, "registry lock"); err != nil {
+		return nil, err
+	}
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open registry lock %s: %s", safePath(path), safeError(err))
@@ -157,9 +188,9 @@ func acquireLock() (*fileLock, error) {
 		f.Close()
 		return nil, fmt.Errorf("inspect registry lock %s: %s", safePath(path), safeError(err))
 	}
-	if st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Nlink != 1 {
 		f.Close()
-		return nil, fmt.Errorf("registry lock %s must be a regular file", safePath(path))
+		return nil, fmt.Errorf("registry lock %s must be a singly linked regular file", safePath(path))
 	}
 	if err := f.Chmod(0o600); err != nil {
 		f.Close()
@@ -178,6 +209,9 @@ func (l *fileLock) close() {
 }
 
 func saveUnlocked(r *Registry, rename func(string, string) error) error {
+	if !validRegistry(r) {
+		return invalidRegistry(Path())
+	}
 	copyRepos := append([]Entry(nil), r.Repos...)
 	sort.Slice(copyRepos, func(i, j int) bool { return copyRepos[i].Path < copyRepos[j].Path })
 	b, err := json.MarshalIndent(&Registry{Repos: copyRepos}, "", "  ")
@@ -187,10 +221,32 @@ func saveUnlocked(r *Registry, rename func(string, string) error) error {
 	return atomicWrite(Path(), append(b, '\n'), rename)
 }
 
+func validRegistry(r *Registry) bool {
+	seen := make(map[string]struct{}, len(r.Repos))
+	for _, entry := range r.Repos {
+		if !validEntryPath(entry.Path) || entry.Added.IsZero() {
+			return false
+		}
+		if _, duplicate := seen[entry.Path]; duplicate {
+			return false
+		}
+		seen[entry.Path] = struct{}{}
+	}
+	return true
+}
+
+func validEntryPath(path string) bool {
+	return filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+
+func invalidRegistry(path string) error {
+	return fmt.Errorf("registry %s has invalid JSON or schema (safe to delete; it is a cache)", safePath(path))
+}
+
 func atomicWrite(path string, data []byte, rename func(string, string) error) (retErr error) {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create registry state directory %s: %s", safePath(dir), safeError(err))
+	if _, err := verifyStateDir(true); err != nil {
+		return err
 	}
 	if err := requireRegularOrMissing(path); err != nil {
 		return err
@@ -228,6 +284,30 @@ func atomicWrite(path string, data []byte, rename func(string, string) error) (r
 	return nil
 }
 
+// verifyStateDir protects the final agents directory as the boundary for every
+// registry read and write. The configured XDG root may itself resolve through
+// a symlink, but the final directory must be a real directory entry.
+func verifyStateDir(create bool) (missing bool, retErr error) {
+	dir := machine.StateDir()
+	fi, err := os.Lstat(dir)
+	if os.IsNotExist(err) && !create {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return false, fmt.Errorf("create registry state directory %s: %s", safePath(dir), safeError(err))
+		}
+		fi, err = os.Lstat(dir)
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect registry state directory %s: %s", safePath(dir), safeError(err))
+	}
+	if !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
+		return false, fmt.Errorf("registry state directory %s must be a real directory", safePath(dir))
+	}
+	return false, nil
+}
+
 func readRegular(path string) ([]byte, bool, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ENOENT) {
@@ -246,7 +326,7 @@ func readRegular(path string) ([]byte, bool, error) {
 	if err := syscall.Fstat(fd, &st); err != nil {
 		return nil, false, fmt.Errorf("inspect registry %s: %s", safePath(path), safeError(err))
 	}
-	if st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Nlink != 1 {
 		return nil, false, fmt.Errorf("registry %s must be a regular file", safePath(path))
 	}
 	b, err := io.ReadAll(f)
@@ -257,15 +337,20 @@ func readRegular(path string) ([]byte, bool, error) {
 }
 
 func requireRegularOrMissing(path string) error {
+	return requireSingleRegularOrMissing(path, "registry")
+}
+
+func requireSingleRegularOrMissing(path, description string) error {
 	fi, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("inspect registry %s: %s", safePath(path), safeError(err))
+		return fmt.Errorf("inspect %s %s: %s", description, safePath(path), safeError(err))
 	}
-	if !fi.Mode().IsRegular() {
-		return fmt.Errorf("registry %s must be a regular file", safePath(path))
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() || !ok || st.Nlink != 1 {
+		return fmt.Errorf("%s %s must be a singly linked regular file", description, safePath(path))
 	}
 	return nil
 }
