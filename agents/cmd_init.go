@@ -8,6 +8,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/registry"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
@@ -36,6 +37,12 @@ func runInit(args []string, stdout io.Writer) int {
 		return exitcode.NoRecord
 	}
 	fmt.Fprintf(stdout, "initialized %s\n", repo.AgentsDir(rc.Root))
+	if _, err := registry.Register(rc.Root, *local); err != nil {
+		// The repository has already been initialized. The registry is a
+		// disposable fleet cache, so its failure is a warning, never a rollback
+		// or a reason to skip wiring this repository.
+		fmt.Fprintf(stdout, "agents init: registry unavailable (%v); continuing\n", err)
+	}
 
 	if code := wireAll(rc.Root, stdout); code != exitcode.OK {
 		return code

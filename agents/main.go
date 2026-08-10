@@ -76,6 +76,10 @@ func run(args []string) int {
 		return runSave(args[1:], os.Stdout)
 	case "guard":
 		return runGuard(args[1:], os.Stdout)
+	case "ls":
+		return runFleetLS(args[1:], os.Stdout)
+	case "update":
+		return runFleetUpdate(args[1:], os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
 		usage()
@@ -86,6 +90,8 @@ func run(args []string) int {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: agents <command> [flags]
 
-commands are registered in this file as they are implemented.
+fleet commands:
+  ls [--prune]             list registered repositories and one-way drift
+  update --all [--apply]   preview or apply wiring to registered repositories
 `)
 }

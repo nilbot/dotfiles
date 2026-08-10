@@ -691,6 +691,7 @@ func TestCommandsThatNeedAgentsDirSkipWhereInitNeverRan(t *testing.T) {
 //
 // Kills: moving runInit onto agentsDirHere, which reads as a tidy-up.
 func TestInitStillScaffoldsWhereThereIsNoAgentsDir(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := bareRepo(t)
 	t.Chdir(root)
 
