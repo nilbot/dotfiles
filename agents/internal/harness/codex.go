@@ -60,6 +60,10 @@ func (c codex) Wire(repoRoot, binary string) error {
 //     required", "Trusted", and "Modified since last trusted - review
 //     required", and the stored key is `trusted_hash`. So it recurs whenever a
 //     generated command changes.
+//   - Individual activation toggles are stored beside trust as the optional
+//     `enabled` field. The config does not record whether the user opened or
+//     reviewed `/hooks`; that command remains the live view of Installed and
+//     Active counts.
 //   - `/hooks` exists, and its own entry in the command list describes it as
 //     "view and manage lifecycle hooks". An earlier binary-strings search
 //     concluded otherwise and was wrong: slash commands are stored without the

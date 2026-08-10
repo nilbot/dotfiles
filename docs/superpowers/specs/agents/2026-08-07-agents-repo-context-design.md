@@ -522,10 +522,16 @@ than a silent failure. Concretely:
 4. Is the hook's current hash trusted? (Codex re-flags a hook after any edit, so
    this recurs whenever the wiring changes — confirmed by control, see below.)
 
-**Q4 is answerable by reading `~/.codex/config.toml`.** It gains a `trusted_hash`
-entry once the TUI's hook-review prompt is accepted; before any grant on a machine,
-the key is absent entirely, which is why an earlier search found no store. Granting
-trust is still TUI-only, so `doctor` can *report* the state but never establish it.
+**Q4 is only partly answerable by reading `~/.codex/config.toml`.** It gains a
+`trusted_hash` entry once the TUI's hook-review prompt is accepted; before any grant
+on a machine, the key is absent entirely, which is why an earlier search found no
+store. Each position may also carry an `enabled` boolean, so `doctor` can report an
+explicitly disabled current hook. Codex does not persist whether `/hooks` itself was
+opened or reviewed, and `doctor` cannot independently reproduce Codex's private hash
+comparison. Complete current trust entries with no explicit disablement are therefore
+reported as `ok` with that limitation in the detail; absent, incomplete, or explicitly
+disabled entries remain warnings. Granting trust and changing activation are still
+TUI-only, so `doctor` observes but never establishes either state.
 
 Q3 is worth keeping only as a diagnostic, not as a gate: project trust gates neither
 harness in non-interactive mode.

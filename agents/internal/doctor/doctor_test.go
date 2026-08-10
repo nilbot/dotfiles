@@ -206,7 +206,9 @@ func TestCodexTrustUsesParsedCurrentHookKeys(t *testing.T) {
 		{"empty", "", Warn, "no persisted trust entry"},
 		{"unrelated substring", "note = 'trusted_hash = fake'\n", Warn, "no persisted trust entry"},
 		{"partial", "[hooks.state.\"/repo/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash='x'\n", Warn, "incomplete"},
-		{"all", "[hooks.state.\"/repo/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash='x'\n[hooks.state.\"/repo/.codex/hooks.json:stop:0:0\"]\ntrusted_hash='y'\n", Warn, "persisted trust entry present; current match unknown"},
+		{"all", "[hooks.state.\"/repo/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash='x'\n[hooks.state.\"/repo/.codex/hooks.json:stop:0:0\"]\ntrusted_hash='y'\n", OK, "persisted trust entries present; no current hook is explicitly disabled; `/hooks` review state is not disclosed"},
+		{"explicitly enabled", "[hooks.state.\"/repo/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash='x'\nenabled=true\n[hooks.state.\"/repo/.codex/hooks.json:stop:0:0\"]\ntrusted_hash='y'\nenabled=true\n", OK, "no current hook is explicitly disabled"},
+		{"one disabled", "[hooks.state.\"/repo/.codex/hooks.json:session_start:0:0\"]\ntrusted_hash='x'\nenabled=false\n[hooks.state.\"/repo/.codex/hooks.json:stop:0:0\"]\ntrusted_hash='y'\n", Warn, "1/2 current hooks explicitly disabled"},
 		{"malformed", "[hooks.state\nprivate-secret", Fail, "malformed"},
 	}
 	for _, tc := range cases {
@@ -221,7 +223,7 @@ func TestCodexTrustUsesParsedCurrentHookKeys(t *testing.T) {
 			if strings.Contains(got.Detail, "private-secret") {
 				t.Fatalf("trust diagnostic leaked TOML content: %+v", got)
 			}
-			if !strings.Contains(got.Remedy, "/hooks") || !strings.Contains(got.Remedy, "Installed") || !strings.Contains(got.Remedy, "Active") {
+			if got.Status != OK && (!strings.Contains(got.Remedy, "/hooks") || !strings.Contains(got.Remedy, "Installed") || !strings.Contains(got.Remedy, "Active")) {
 				t.Fatalf("trust remedy is not the measured human check: %+v", got)
 			}
 		})

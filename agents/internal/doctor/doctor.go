@@ -286,6 +286,7 @@ func checkCodexTrust(configPath string, currentKeys []string) Check {
 		Hooks struct {
 			State map[string]struct {
 				TrustedHash string `toml:"trusted_hash"`
+				Enabled     *bool  `toml:"enabled"`
 			} `toml:"state"`
 		} `toml:"hooks"`
 	}
@@ -303,9 +304,13 @@ func checkCodexTrust(configPath string, currentKeys []string) Check {
 		return Check{Name: "trust:codex", Status: Warn, Detail: "current Codex hook positions are unavailable; trust cannot be correlated", Remedy: remedy}
 	}
 	present := 0
+	disabled := 0
 	for _, key := range currentKeys {
 		if state, ok := cfg.Hooks.State[key]; ok && state.TrustedHash != "" {
 			present++
+			if state.Enabled != nil && !*state.Enabled {
+				disabled++
+			}
 		}
 	}
 	switch {
@@ -313,8 +318,10 @@ func checkCodexTrust(configPath string, currentKeys []string) Check {
 		return Check{Name: "trust:codex", Status: Warn, Detail: "no persisted trust entry for current hook positions", Remedy: remedy}
 	case present != len(currentKeys):
 		return Check{Name: "trust:codex", Status: Warn, Detail: fmt.Sprintf("persisted trust entries incomplete (%d/%d); current match unknown", present, len(currentKeys)), Remedy: remedy}
+	case disabled > 0:
+		return Check{Name: "trust:codex", Status: Warn, Detail: fmt.Sprintf("persisted trust entries present but %d/%d current hooks explicitly disabled", disabled, len(currentKeys)), Remedy: remedy}
 	default:
-		return Check{Name: "trust:codex", Status: Warn, Detail: "persisted trust entry present; current match unknown", Remedy: remedy}
+		return Check{Name: "trust:codex", Status: OK, Detail: "persisted trust entries present; no current hook is explicitly disabled; `/hooks` review state is not disclosed"}
 	}
 }
 
