@@ -54,9 +54,30 @@ func (p *Planner) Dir(path string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	p.recordAncestors(path)
 	p.pending[path] = FileInfo{Exists: true, IsDir: true}
 	report(p.out, "plan  create directory %s", path)
 	return nil
+}
+
+// recordAncestors marks the whole chain a single Applier.Dir would create,
+// because it uses MkdirAll. Without this the plan announces directories apply
+// never reports: a later Dir on an ancestor of one already planned would print
+// its own line where apply stays silent. Still exactly one line per Dir call,
+// which is what Applier prints however many ancestors MkdirAll created.
+func (p *Planner) recordAncestors(path string) {
+	for dir := filepath.Dir(path); ; {
+		info, err := p.Lstat(dir)
+		if err != nil || info.Exists {
+			return
+		}
+		p.pending[dir] = FileInfo{Exists: true, IsDir: true}
+		parent := filepath.Dir(dir)
+		if parent == dir { // reached the filesystem root
+			return
+		}
+		dir = parent
+	}
 }
 
 func (p *Planner) Link(source, target string) error {
@@ -92,16 +113,14 @@ func (p *Planner) Seed(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
-	// Applier reads the source, so Planner must check it exists. Otherwise a
-	// plan reports success where apply fails -- the exact divergence this
-	// package exists to prevent.
+	// Through p.Lstat, not the reader, so a template an earlier step planned
+	// into existence is honoured.
 	srcInfo, err := p.Lstat(source)
 	if err != nil {
 		return err
 	}
-	if !srcInfo.Exists {
-		return refuse(source, "seed template is missing",
-			"restore it, or correct the manifest row that names it")
+	if err := seedSourceVerdict(srcInfo, source); err != nil {
+		return err
 	}
 	if err := p.Dir(filepath.Dir(target)); err != nil {
 		return err

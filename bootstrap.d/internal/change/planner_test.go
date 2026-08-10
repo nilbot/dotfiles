@@ -2,6 +2,7 @@ package change_test
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,30 +116,107 @@ func TestPlannerOverlaysItsOwnChanges(t *testing.T) {
 	}
 }
 
-// Applier.Seed reads the source, so a plan that does not check it reports
-// success where apply fails -- the exact divergence this package exists to
-// prevent.
-func TestPlannerSeedRefusesMissingTemplate(t *testing.T) {
-	home := tempHome(t)
-	missing := filepath.Join(home, "no such template")
-	before := treeOf(t, home)
+// Applier.Seed reads its source and Planner cannot, so both must decide a
+// source's usability from the same shared verdict. Otherwise plan reports
+// success for a source apply cannot read, and the two produce different error
+// types for one condition. Subsumes the earlier planner-only missing-template
+// test, which this covers as the missing/planner case.
+func TestSeedRefusesUnusableSourceOnBothPaths(t *testing.T) {
+	sources := []struct {
+		kind string
+		make func(t *testing.T, home string) string
+	}{
+		{"missing", func(t *testing.T, home string) string {
+			return filepath.Join(home, "no such template")
+		}},
+		{"directory", func(t *testing.T, home string) string {
+			t.Helper()
+			dir := filepath.Join(home, "template dir")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		}},
+	}
+	impls := []struct {
+		name string
+		make func(out io.Writer) change.Interface
+	}{
+		{"applier", func(out io.Writer) change.Interface { return change.NewApplier(out) }},
+		{"planner", func(out io.Writer) change.Interface {
+			return change.NewPlanner(change.NewApplier(&bytes.Buffer{}), out)
+		}},
+	}
 
-	var out bytes.Buffer
-	p := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &out)
-	err := p.Seed(missing, filepath.Join(home, "config dir", "dst"))
+	for _, src := range sources {
+		for _, impl := range impls {
+			t.Run(src.kind+"/"+impl.name, func(t *testing.T) {
+				home := tempHome(t)
+				source := src.make(t, home)
+				before := treeOf(t, home)
 
-	var refusal *change.Refusal
-	if !errorsAs(err, &refusal) {
-		t.Fatalf("want *change.Refusal for a missing template, got %T: %v", err, err)
+				var out bytes.Buffer
+				err := impl.make(&out).Seed(source, filepath.Join(home, "config dir", "dst"))
+
+				var refusal *change.Refusal
+				if !errorsAs(err, &refusal) {
+					t.Fatalf("want *change.Refusal, got %T: %v", err, err)
+				}
+				if refusal.Remediation == "" {
+					t.Error("a refusal must name its remediation")
+				}
+				// Covers the stray parent directory too: treeOf walks everything.
+				if after := treeOf(t, home); after != before {
+					t.Errorf("a refused seed changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+				}
+				if strings.Contains(out.String(), "seed") {
+					t.Errorf("a refused seed must not be reported as done:\n%s", out.String())
+				}
+			})
+		}
 	}
-	if refusal.Remediation == "" {
-		t.Error("a refusal must name its remediation")
+}
+
+// Applier.Dir uses MkdirAll, which creates the whole ancestor chain, so a
+// Planner recording only the exact path announces directories apply never
+// creates. The fixture is the ordinary manifest shape -- two links into a
+// shared chain, deepest first -- which is what makes the extra line appear.
+func TestPlanAndApplyAgreeOnCreatedDirectories(t *testing.T) {
+	manifest := func(t *testing.T, c change.Interface, home string) {
+		t.Helper()
+		src := filepath.Join(home, "src file")
+		if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		fish := filepath.Join(home, "config dir", "fish")
+		if err := c.Dir(filepath.Join(fish, "functions")); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Link(src, filepath.Join(fish, "functions", "a.fish")); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Dir(fish); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Link(src, filepath.Join(fish, "config.fish")); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if after := treeOf(t, home); after != before {
-		t.Errorf("plan mutated the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+
+	var planOut, applyOut bytes.Buffer
+	manifest(t, change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &planOut), tempHome(t))
+	manifest(t, change.NewApplier(&applyOut), tempHome(t))
+
+	// "create directory" is not a substring of "created directory", so the two
+	// counts cannot contaminate each other.
+	planned := strings.Count(planOut.String(), "create directory")
+	created := strings.Count(applyOut.String(), "created directory")
+	if created == 0 {
+		t.Fatal("the fixture created no directories; it no longer covers anything")
 	}
-	if strings.Contains(out.String(), "seed") {
-		t.Errorf("a refused seed must not be reported as planned:\n%s", out.String())
+	if planned != created {
+		t.Errorf("plan announced %d directories, apply created %d:\nplan:\n%sapply:\n%s",
+			planned, created, planOut.String(), applyOut.String())
 	}
 }
 

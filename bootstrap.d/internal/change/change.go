@@ -86,6 +86,26 @@ func seedVerdict(info FileInfo, target string) (verdict, error) {
 	return verdictProceed, nil
 }
 
+// seedSourceVerdict decides whether a seed's SOURCE is usable. Applier reads it
+// with os.ReadFile and Planner cannot, so both consult this rather than each
+// deciding separately -- otherwise plan reports success for a source apply
+// cannot read, and the two produce different error types for one condition.
+//
+// The test is Exists && !IsDir, deliberately not IsRegular: Lstat reports a
+// symlinked template as IsLink, and os.ReadFile follows symlinks happily, so an
+// IsRegular test would diverge in the opposite direction.
+func seedSourceVerdict(info FileInfo, source string) error {
+	if !info.Exists {
+		return refuse(source, "seed template is missing",
+			"restore it, or correct the manifest row that names it")
+	}
+	if info.IsDir {
+		return refuse(source, "seed template is a directory, not a file",
+			"correct the manifest row that names it")
+	}
+	return nil
+}
+
 func dirVerdict(info FileInfo, target string) (verdict, error) {
 	switch {
 	case info.IsDir:

@@ -83,6 +83,15 @@ func (a *Applier) Seed(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	srcInfo, err := a.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if err := seedSourceVerdict(srcInfo, source); err != nil {
+		return err
+	}
+	// Still read before creating the parent: the verdict cannot rule out every
+	// read failure, and a failed read must not leave a stray directory behind.
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
