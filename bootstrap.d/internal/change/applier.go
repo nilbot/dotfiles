@@ -64,6 +64,13 @@ func (a *Applier) Link(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	srcInfo, err := a.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if err := linkSourceVerdict(srcInfo, source); err != nil {
+		return err
+	}
 	if err := a.Dir(filepath.Dir(target)); err != nil {
 		return err
 	}

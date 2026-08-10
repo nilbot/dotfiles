@@ -177,6 +177,74 @@ func TestSeedRefusesUnusableSourceOnBothPaths(t *testing.T) {
 	}
 }
 
+// A link whose source is absent must refuse on both paths. Without the guard
+// Applier happily creates a DANGLING SYMLINK and reports success, so a manifest
+// typo -- or a row naming a file a later commit will create -- leaves the
+// machine broken with nothing reporting it. Plan said nothing either, so the
+// two agreed on the wrong answer.
+func TestLinkRefusesMissingSourceOnBothPaths(t *testing.T) {
+	for _, impl := range linkImpls() {
+		t.Run(impl.name, func(t *testing.T) {
+			home := tempHome(t)
+			source := filepath.Join(home, "no such source")
+			before := treeOf(t, home)
+
+			var out bytes.Buffer
+			err := impl.make(&out).Link(source, filepath.Join(home, "config dir", "dst"))
+
+			var refusal *change.Refusal
+			if !errorsAs(err, &refusal) {
+				t.Fatalf("want *change.Refusal, got %T: %v", err, err)
+			}
+			if refusal.Remediation == "" {
+				t.Error("a refusal must name its remediation")
+			}
+			// Catches the dangling symlink and the stray parent directory both:
+			// treeOf walks everything and records each link's destination.
+			if after := treeOf(t, home); after != before {
+				t.Errorf("a refused link changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+			if strings.Contains(out.String(), "link") {
+				t.Errorf("a refused link must not be reported as done:\n%s", out.String())
+			}
+		})
+	}
+}
+
+// Existence is the whole test for a link source -- deliberately NOT the seed's
+// Exists && !IsDir. links.manifest links directories on purpose (claude/skills,
+// macOS/ghostty), so tightening the guard to match seedSourceVerdict would
+// refuse rows the design requires.
+func TestLinkAcceptsADirectorySource(t *testing.T) {
+	for _, impl := range linkImpls() {
+		t.Run(impl.name, func(t *testing.T) {
+			home := tempHome(t)
+			source := filepath.Join(home, "skills dir")
+			if err := os.MkdirAll(source, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := impl.make(&bytes.Buffer{}).Link(source, filepath.Join(home, "dst")); err != nil {
+				t.Fatalf("linking a directory must be allowed: %v", err)
+			}
+		})
+	}
+}
+
+func linkImpls() []struct {
+	name string
+	make func(out io.Writer) change.Interface
+} {
+	return []struct {
+		name string
+		make func(out io.Writer) change.Interface
+	}{
+		{"applier", func(out io.Writer) change.Interface { return change.NewApplier(out) }},
+		{"planner", func(out io.Writer) change.Interface {
+			return change.NewPlanner(change.NewApplier(&bytes.Buffer{}), out)
+		}},
+	}
+}
+
 // seedSourceVerdict names the two cases worth a remediation. Everything else is
 // predicted by performing the identical read, so these must fail the same way on
 // both paths -- byte-for-byte the same error, since it is the same read.

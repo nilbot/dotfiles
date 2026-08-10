@@ -72,6 +72,21 @@ func linkVerdict(info FileInfo, current, want, target string) (verdict, error) {
 	return verdictProceed, nil
 }
 
+// linkSourceVerdict refuses a link whose source is absent. Without it a
+// manifest typo -- or a row referring to a file a later commit will create --
+// produces a dangling symlink silently, which is worse than a refusal: the
+// machine ends up in a broken state that nothing reports. This masked half of
+// a real plan-ordering defect in Task 4.
+//
+// Unlike a seed, the source is not read, so existence is the whole test.
+func linkSourceVerdict(info FileInfo, source string) error {
+	if !info.Exists {
+		return refuse(source, "link source does not exist",
+			"restore it, or correct the manifest row that names it")
+	}
+	return nil
+}
+
 func seedVerdict(info FileInfo, target string) (verdict, error) {
 	switch {
 	case info.IsLink:

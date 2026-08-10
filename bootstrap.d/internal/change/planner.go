@@ -95,6 +95,15 @@ func (p *Planner) Link(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	// Through p.Lstat, not the reader, so a source an earlier step planned into
+	// existence is honoured -- the same overlay discipline Seed uses.
+	srcInfo, err := p.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if err := linkSourceVerdict(srcInfo, source); err != nil {
+		return err
+	}
 	if err := p.Dir(filepath.Dir(target)); err != nil {
 		return err
 	}
