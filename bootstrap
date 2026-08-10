@@ -13,26 +13,33 @@
 
 set -euo pipefail
 
-# CDPATH= and -- are load-bearing. Without them `cd` searches CDPATH for a
-# relative $0 and echoes the directory it resolved to, so BOOTSTRAP_ROOT can
-# silently become a same-named decoy directory AND arrive as two lines. That is
-# the "wrong tree" failure this whole redesign exists to prevent.
-BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-export BOOTSTRAP_ROOT
-
-# Exit 2 is "block" in the shared table. Never 1 (advisory) and never 127: a
-# broken build must not read as a soft warning to a CI job keying off codes.
+# die and exec are the ONLY ways out of this script, which
+# TestShimHasExactlyTwoWaysOut in bootstrap.d/main_test.go enforces. Exit 2 is
+# "block" in the shared table; 1 is "advisory", which is how a CI job keying off
+# codes would read a hard stop. die is defined first so every later failure has
+# somewhere to go -- an earlier draft defined it below the root resolution,
+# which therefore exited 1.
 die() {
 	printf 'bootstrap: %s\n' "$1" >&2
 	exit 2
 }
+
+# CDPATH= and -- are load-bearing. Without them `cd` searches CDPATH for a
+# relative $0 and echoes the directory it resolved to, so BOOTSTRAP_ROOT can
+# silently become a same-named decoy directory AND arrive as two lines. That is
+# the "wrong tree" failure this whole redesign exists to prevent;
+# TestShimIgnoresAPoisonedCDPATH reproduces it.
+BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd) ||
+	die "cannot resolve the repository root from '$0'"
+export BOOTSTRAP_ROOT
 
 src=$BOOTSTRAP_ROOT/bootstrap.d
 
 # The cache is keyed on the checkout. Without the key, a main clone and a git
 # worktree share one binary, and whichever built first wins -- old code against
 # a new tree, silently.
-key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9')
+key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9') ||
+	die "cannot derive a cache key; cksum and tr must be on PATH"
 
 # An explicit check, not ${HOME:?...}: a :? failure exits 1, measured on bash
 # 3.2.57 and 5.x. Exit 1 is "advisory" in the shared table, so a container with
@@ -82,5 +89,15 @@ if [ "$needs_build" -eq 1 ]; then
 	( cd -- "$src" && "$go_bin" build -trimpath -o "$binary" . ) ||
 		die "the build failed; the compiler output is above"
 fi
+
+# The last check happens BEFORE the handover, because exec cannot report its own
+# failure: `exec cmd || die` is dead code for a path containing a slash. A failed
+# execve terminates the shell before the || arm runs -- measured as exit 1 on
+# bash 3.2.57 and 126/127 on 5.3.15, with and without shopt -s execfail.
+#
+# What remains uncoverable is a file that is executable but not a loadable
+# image: execve returns ENOEXEC and bash re-runs it as a shell script, so the
+# exit code is whatever that produces. Nothing in a shim can intercept that.
+[ -x "$binary" ] || die "no executable binary at $binary; remove that directory and retry"
 
 exec "$binary" "$@"
