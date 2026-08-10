@@ -35,3 +35,11 @@ starship init fish | source
 
 # sourcing the post scripts
 source ~/.config/fish/mypost.fish
+
+# >>> grok installer >>>
+# Guarded: fish_add_path writes to a universal variable, so an unguarded call on a
+# machine without grok would persist a dead path into fish_variables permanently.
+if test -d $HOME/.grok/bin
+    fish_add_path $HOME/.grok/bin
+end
+# <<< grok installer <<<

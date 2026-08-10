@@ -1,0 +1,2 @@
+.agents/reports/traces/*.jsonl merge=union
+.agents/** linguist-generated=true

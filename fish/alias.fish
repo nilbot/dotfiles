@@ -47,7 +47,7 @@ alias lt='ls --tree'
 
 # brew
 alias bubo='brew update && brew outdated'
-alias bubc='brew upgrade && brew cleanup'
+alias bubc='brew upgrade -y && brew cleanup'
 alias bubu='bubo && bubc'
 
 # macOS

@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "encrypted-task-blob"
+description = "Encrypted agent task blob"
+regex = '''gAAAAAB[A-Za-z0-9_-]{24,}'''
+tags = ["agent", "encrypted-task"]

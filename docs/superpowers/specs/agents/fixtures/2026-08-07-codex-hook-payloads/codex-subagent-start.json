@@ -1,0 +1,11 @@
+{
+  "agent_id": "019fdcab-ac94-7502-a322-d01f047c274a",
+  "agent_type": "default",
+  "cwd": "/private/tmp/claude-501/-Users-nilbot-dotfiles/84837ec0-e818-47e1-a08f-7a2f5b264d1e/scratchpad/agentprobe",
+  "hook_event_name": "SubagentStart",
+  "model": "gpt-5.6-sol",
+  "permission_mode": "bypassPermissions",
+  "session_id": "019fdcab-9733-72e3-ba7c-d2e0cc7fb334",
+  "transcript_path": "/Users/nilbot/.codex/sessions/2026/08/07/rollout-2026-08-07T15-41-06-019fdcab-ac94-7502-a322-d01f047c274a.jsonl",
+  "turn_id": "019fdcab-ad07-7f23-bba4-e3261c09eae7"
+}
