@@ -2716,7 +2716,105 @@ is in git."
 
 ---
 
-### Tasks 9 through 16
+### Task 9: `migrate` — the reconciling migrations
+
+**Files:**
+- Create: `bootstrap.d/internal/migrate/migrate.go`, `migrations.go`
+- Modify: `bootstrap.d/main.go` (`runMigrate`), `bootstrap.d/internal/phase/preflight.go`
+- Test: `bootstrap.d/internal/migrate/migrate_test.go`, `bootstrap.d/main_test.go`
+
+**Interfaces:**
+
+```go
+package migrate
+
+type Kind string
+const (
+	Reconciling Kind = "reconciling" // moves or rewrites; runs from a bare `migrate`
+	Reclaiming  Kind = "reclaiming"  // destroys untracked data; must be NAMED
+)
+
+type Migration struct {
+	Name    string
+	Kind    Kind
+	Pending func(Context) (bool, error)
+	Run     func(Context) error
+}
+
+type Context struct {
+	Change change.Interface
+	Root   string
+	Home   string
+	Out    io.Writer
+}
+
+func All() []Migration
+func Pending(c Context) ([]Migration, error)
+func Run(c Context, name string) error // "" runs every reconciling one and lists reclaiming ones
+```
+
+`internal/migrate` imports no I/O package, same rule as `phase` and `check`;
+extend the architecture test.
+
+**Three reconciling migrations.** Task 10 adds the one reclaiming migration.
+
+1. **`fish`** — `~/.config/fish` is a symlink into the checkout. Move fisher's
+   generated state (`fish_variables`, `fish_plugins`, `functions/`,
+   `completions/`, `conf.d/`) out of the checkout into a real
+   `~/.config/fish`, then replace the symlink. **Copy before removing**, so an
+   interrupted run leaves the old state intact — none of it is in git and none
+   of it is recoverable.
+
+   *Carried from Task 7's review:* the migration must **not** leave a copy of
+   the old tracked `config.fish` at `~/.config/fish/config.fish`. `Seed` never
+   overwrites, so it would skip the stub. The failure is guarded rather than
+   silent — that file's `source (status dirname)/alias.fish` does not match
+   `fishSourceLine`, so `fish-source` reports `fail` — but do not create it.
+
+2. **`gitconfig`** — `~/.gitconfig` includes the pre-rename
+   `git/gitconfig.symlink`. Rewrite that one line to the resolved
+   `<root>/git/gitconfig.shared`, preserving every other line: the file
+   accumulates real machine-local settings that `git config --global` wrote.
+
+3. **`gitignore`** — `~/.gitignore` is a symlink to the pre-rename
+   `git/gitignore_global.symlink`. Retarget it to `<root>/git/gitignore_global`.
+   Added because Task 8's rename makes `apply` refuse this path on every
+   existing machine; the refusal is correct but the remedy should not be manual
+   when the other two renames get one.
+
+**Preflight refuses when any migration is pending**, naming
+`./bootstrap migrate`. A bare refusal from deep inside the config phase explains
+nothing; preflight is where the machine's shape is assessed.
+
+**Detection must be precise.** A migration whose `Pending` returns true on an
+already-migrated machine will run twice; one that returns false on a machine
+needing it leaves `apply` refusing forever. Each `Pending` gets a test for both
+directions.
+
+- [ ] **Steps:** tests first, then the package, then wire `runMigrate` and
+  preflight. **Mutation-test every `Pending`** — invert it and confirm a test
+  fails.
+
+```bash
+git add bootstrap.d/internal/migrate bootstrap.d/main.go bootstrap.d/main_test.go \
+        bootstrap.d/internal/phase bootstrap.d/architecture_test.go
+git commit -m "feat(bootstrap): add the reconciling migrations
+
+Three exist: move fisher's state out of the checkout, repoint a
+~/.gitconfig that includes the pre-rename path, and retarget a
+~/.gitignore symlink that names it.
+
+The fish migration copies before it removes, so an interrupted run leaves
+the old state intact -- fish_variables and the installed plugin set are
+not in git and cannot be recovered if lost.
+
+Preflight refuses when a migration is pending and names the remedy,
+rather than letting apply hit a refusal that explains nothing."
+```
+
+---
+
+### Tasks 10 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
