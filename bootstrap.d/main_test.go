@@ -253,11 +253,28 @@ func TestCheckOnABareHomeNamesTheMissingRows(t *testing.T) {
 }
 
 // Verify reports and returns nil: an advisory finding at the end of an apply
-// must not look like a failed apply. On a bare $HOME the two guards genuinely
-// fail even after a successful apply, so this asserts both halves at once --
+// must not look like a failed apply. Both halves are asserted at once --
 // findings printed, exit still 0. Only the check verb exits on the answer.
+//
+// The finding is manufactured rather than borrowed from the machine's condition.
+// Leaning on the two guards failing on a bare $HOME would have worked today and
+// then fired at Task 8: once the template is repointed, apply seeds a matching
+// ~/.gitconfig, the status becomes ok, and the premise below fails -- with no
+// t.Skip for Task 8's "remove Task 6's skips" step to catch. It would also have
+// contradicted TestCheckIsHealthyAfterApply, which asserts the opposite about
+// the same command.
+//
+// A ~/.gitconfig with no include at all is a regular file, so the seed row is
+// already satisfied and apply leaves it untouched: config converges cleanly
+// while gitconfig-include has something real and permanent to report.
 func TestApplyStillSucceedsWhenVerifyFinds(t *testing.T) {
-	stdout, stderr, code := runShim(t, tempHome(t), "apply", "dotfiles")
+	home := tempHome(t)
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"),
+		[]byte("[user]\n\tname = someone\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runShim(t, home, "apply", "dotfiles")
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; a verify finding is not a failed apply:\n%s%s",
 			code, stdout, stderr)

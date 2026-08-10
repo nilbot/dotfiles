@@ -3,6 +3,7 @@ package check_test
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -34,6 +35,11 @@ func healthy() *fakeChange {
 			"/home/.gitconfig":           {Exists: true, IsRegular: true},
 			"/home/.config/fish":         {Exists: true, IsDir: true},
 			"/repo/bootstrap.d/Brewfile": {Exists: true, IsRegular: true},
+			// The two files the stubs below point at. Both guards resolve what
+			// they matched, so a healthy machine is one where those paths are
+			// actually there -- not merely named.
+			"/home/dotfiles/fish/config.fish":     {Exists: true, IsRegular: true},
+			"/home/dotfiles/git/gitconfig.shared": {Exists: true, IsRegular: true},
 		},
 		links: map[string]string{"/home/.tmux.conf": "/repo/tmux/tmux.conf"},
 		files: map[string][]byte{
@@ -347,9 +353,92 @@ func TestGitconfigIncludeAcceptsTheFormsGitAccepts(t *testing.T) {
 		"\tpath = /opt/checkout/git/gitconfig.shared",
 	} {
 		fake := healthy()
+		fake.info["/opt/checkout/git/gitconfig.shared"] =
+			change.FileInfo{Exists: true, IsRegular: true}
 		fake.files["/home/.gitconfig"] = []byte("[include]\n" + line + "\n")
 		if got := find(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include"); got.Status != check.OK {
 			t.Errorf("%q = %s (%s), want ok", line, got.Status, got.Detail)
+		}
+	}
+}
+
+// The dry-run invariant, in the type system rather than in anyone's memory.
+//
+// A check runs during `plan` and holds an Applier, whose method set can create
+// symlinks and elevate. Machine omits those, so a check that reached for one
+// would not compile. The architecture test cannot see this -- it constrains
+// imports, not method calls.
+func TestMachineCannotMutate(t *testing.T) {
+	// change.Interface must satisfy Machine, or every call site would need a
+	// wrapper and the narrowing would not be free.
+	var _ check.Machine = change.Interface(nil)
+
+	machine := reflect.TypeOf((*check.Machine)(nil)).Elem()
+	for _, method := range []string{"Dir", "Link", "Seed", "Sudo"} {
+		if _, found := machine.MethodByName(method); found {
+			t.Errorf("check.Machine exposes %s; a check must not be able to mutate", method)
+		}
+	}
+	if machine.NumMethod() != 5 {
+		t.Errorf("check.Machine has %d methods, want 5 (Lstat, Readlink, ReadFile, "+
+			"LookPath, Run); widening it widens what a check can do during a plan",
+			machine.NumMethod())
+	}
+}
+
+// Matching a path string is not the same as the path being there, and the
+// difference is the whole failure this guard exists for.
+//
+// Seed copies gitconfig.local.template verbatim -- no substitution -- so the
+// hardcoded "~/dotfiles/…" it carries is wrong on every clone that is not at
+// ~/dotfiles, which root() explicitly supports. git ignores a missing include
+// without a word, so every shared setting goes inert while the check, matching
+// only the text, reports ok. The guard defeated by the exact failure it names.
+func TestGitconfigIncludeFailsWhenTheIncludedFileDoesNotExist(t *testing.T) {
+	fake := healthy()
+	fake.files["/home/.gitconfig"] =
+		[]byte("[include]\n\tpath = ~/elsewhere/git/gitconfig.shared\n")
+
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
+	if !strings.Contains(got.Detail, "/home/elsewhere/git/gitconfig.shared") {
+		t.Errorf("the finding must name the path that does not resolve: %s", got.Detail)
+	}
+}
+
+// The same hole in the other guard: a stale absolute source line surviving a
+// clone move leaves fish sourcing nothing. fish reports a missing source, but
+// only into a shell nobody is reading at login time.
+func TestFishSourceFailsWhenTheSourcedFileDoesNotExist(t *testing.T) {
+	fake := healthy()
+	fake.files["/home/.config/fish/config.fish"] =
+		[]byte("source $HOME/elsewhere/fish/config.fish\n")
+
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "fish-source", check.Fail)
+	if !strings.Contains(got.Detail, "/home/elsewhere/fish/config.fish") {
+		t.Errorf("the finding must name the path that does not resolve: %s", got.Detail)
+	}
+}
+
+// The spellings of $HOME these two files actually use, all of which must resolve
+// rather than be reported as missing.
+func TestTheGuardsExpandTheHomeSpellingsTheseFilesUse(t *testing.T) {
+	for _, tc := range []struct{ name, line, resolves string }{
+		{"fish-source", "source $HOME/dotfiles/fish/config.fish", "/home/dotfiles/fish/config.fish"},
+		{"fish-source", "source ${HOME}/dotfiles/fish/config.fish", "/home/dotfiles/fish/config.fish"},
+		{"fish-source", "source /abs/checkout/fish/config.fish", "/abs/checkout/fish/config.fish"},
+		{"gitconfig-include", "\tpath = ~/dotfiles/git/gitconfig.shared", "/home/dotfiles/git/gitconfig.shared"},
+		{"gitconfig-include", "\tpath = /abs/checkout/git/gitconfig.shared", "/abs/checkout/git/gitconfig.shared"},
+	} {
+		fake := healthy()
+		fake.info[tc.resolves] = change.FileInfo{Exists: true, IsRegular: true}
+		switch tc.name {
+		case "fish-source":
+			fake.files["/home/.config/fish/config.fish"] = []byte(tc.line + "\n")
+		default:
+			fake.files["/home/.gitconfig"] = []byte("[include]\n" + tc.line + "\n")
+		}
+		if got := find(t, all(t, ctx(fake, "dotfiles")), tc.name); got.Status != check.OK {
+			t.Errorf("%q = %s (%s), want ok", tc.line, got.Status, got.Detail)
 		}
 	}
 }

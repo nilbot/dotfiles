@@ -24,6 +24,8 @@
 // they do not need the Planner's protection in the first place. phase.Verify
 // therefore builds its own Applier rather than passing its Context's Change
 // along.
+//
+// That is enforced by Machine, below, not by anyone remembering it.
 package check
 
 import (
@@ -33,6 +35,29 @@ import (
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 )
+
+// Machine is the part of change.Interface a check is allowed to reach, and it
+// deliberately omits Dir, Link, Seed and Sudo.
+//
+// Ruling 1 removed the Planner from this layer, which left it holding an
+// Applier -- a type whose method set can create symlinks and elevate. The
+// architecture test constrains imports, not method calls, so nothing would have
+// caught a future check that reached for Link, and the dry-run invariant would
+// have rested on every check happening to only read. Stating the interface puts
+// it back in the type system, where the rest of this design keeps its
+// invariants: a check that tried to mutate would not compile.
+//
+// Run stays because `brew bundle check` is how the packages check asks its
+// question. It is a query, and there is no narrower way to ask it.
+//
+// change.Interface satisfies this implicitly, so nothing at a call site changes.
+type Machine interface {
+	Lstat(path string) (change.FileInfo, error)
+	Readlink(path string) (string, error)
+	ReadFile(path string) ([]byte, error)
+	LookPath(name string) (string, error)
+	Run(name string, args ...string) error
+}
 
 type Status string
 
@@ -52,7 +77,7 @@ type Result struct {
 }
 
 type Context struct {
-	Change   change.Interface
+	Change   Machine
 	Root     string
 	Home     string
 	Platform string

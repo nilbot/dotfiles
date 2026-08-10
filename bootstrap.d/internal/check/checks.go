@@ -130,14 +130,15 @@ func describe(info change.FileInfo) string {
 	return "is neither a file, a directory nor a symlink"
 }
 
-// fishSourceLine matches the one line the seeded stub exists to carry.
+// fishSourceLine matches the one line the seeded stub exists to carry, and
+// captures the path it names.
 //
 // Anchored on both ends: a commented-out line does not start with `source`, a
 // mention inside a comment does not either, and `config.fish.bak` does not end
-// where the pattern ends. What comes before /fish/ is unconstrained -- the stub
-// necessarily names the clone location, which is the one fact allowed to vary
-// per machine.
-var fishSourceLine = regexp.MustCompile(`^source .*/fish/config\.fish$`)
+// where the pattern ends. What comes before /fish/ is unconstrained, because the
+// stub names the clone location -- but naming it is not the same as it being
+// there, which is what resolves exists to settle.
+var fishSourceLine = regexp.MustCompile(`^source\s+["']?(.*/fish/config\.fish)["']?$`)
 
 // fishSource is the first of the two silent-total-failure guards. Strip the
 // source line from the stub and every shared fish setting stops applying, with
@@ -149,14 +150,67 @@ func fishSource(c Context) Result {
 		return Result{Fail, "fish-source", fmt.Sprintf(
 			"cannot read the fish stub, so every shared fish setting is inactive: %v", err)}
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if fishSourceLine.MatchString(strings.TrimSpace(line)) {
-			return Result{OK, "fish-source", "the stub sources the tracked config"}
-		}
+	named, dangling := resolves(c, data, fishSourceLine)
+	switch {
+	case named != "":
+		return Result{OK, "fish-source", "the stub sources " + named}
+	case dangling != "":
+		return Result{Fail, "fish-source", "the stub sources " + dangling +
+			", which does not exist, so every shared fish setting is silently " +
+			"inactive; point it at this checkout"}
 	}
 	return Result{Fail, "fish-source", path + " does not source the tracked config, " +
 		"so every shared fish setting is silently inactive; restore its " +
 		"'source .../fish/config.fish' line"}
+}
+
+// resolves scans data for the first line matching pattern whose captured path
+// exists, and reports it. When one or more lines matched but none of their paths
+// exist, the first such path is returned as dangling instead.
+//
+// Both silent-failure guards need this and neither is complete without it.
+// Matching the text only asks whether the file SAYS the right thing; the failure
+// they exist to catch is the file saying it about somewhere that is not there.
+// Seed copies these templates verbatim -- no substitution -- so a template
+// hardcoding ~/dotfiles is simply wrong on a checkout anywhere else, and both
+// git and fish pass over an unreadable include or source without stopping.
+func resolves(c Context, data []byte, pattern *regexp.Regexp) (found, dangling string) {
+	for _, line := range strings.Split(string(data), "\n") {
+		m := pattern.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		path := expandHome(m[1], c.Home)
+		info, err := c.Change.Lstat(path)
+		if err == nil && info.Exists {
+			return path, ""
+		}
+		if dangling == "" {
+			dangling = path
+		}
+	}
+	return "", dangling
+}
+
+// expandHome resolves the home-directory spellings these two files use: $HOME
+// and ${HOME}, which fish expands, and a leading ~, which git expands. Nothing
+// else is substituted, so a line naming a variable this does not know reports as
+// unresolvable -- which is the honest answer, since bootstrap cannot confirm it.
+//
+// A relative path is joined to Home: git resolves a relative include against the
+// including file's directory, which is $HOME for ~/.gitconfig.
+func expandHome(path, home string) string {
+	path = strings.NewReplacer("${HOME}", home, "$HOME", home).Replace(path)
+	if path == "~" {
+		return home
+	}
+	if rest, cut := strings.CutPrefix(path, "~/"); cut {
+		path = filepath.Join(home, rest)
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(home, path)
+	}
+	return path
 }
 
 // sharedGitConfig is the path a healthy ~/.gitconfig includes. It is not a
@@ -164,7 +218,8 @@ func fishSource(c Context) Result {
 // this is the only place it is named.
 const sharedGitConfig = "git/gitconfig.shared"
 
-// gitconfigIncludeLine matches an actual include, not a mention.
+// gitconfigIncludeLine matches an actual include, not a mention, and captures
+// the path it names.
 //
 // A plain substring test looked sufficient and is not, measured: §8 renames the
 // path in gitconfig.local.template's own header COMMENT as well as in its
@@ -177,10 +232,11 @@ const sharedGitConfig = "git/gitconfig.shared"
 // and "gitconfig.shared.disabled" are different files. What follows the value
 // may be a quote, whitespace, a trailing comment, or nothing.
 //
-// What comes BEFORE git/ is deliberately unconstrained. The local file names
-// the clone location, which is the one fact allowed to vary per machine.
+// What comes BEFORE git/ is unconstrained, because the local file names the
+// clone location -- but the path is then resolved, because naming a file git
+// cannot open is exactly the failure this guard exists for.
 var gitconfigIncludeLine = regexp.MustCompile(
-	`^path\s*=.*` + regexp.QuoteMeta(sharedGitConfig) + `(["'\s;#]|$)`)
+	`^path\s*=\s*["']?([^"'#;]*` + regexp.QuoteMeta(sharedGitConfig) + `)["']?(\s|[#;]|$)`)
 
 // gitconfigInclude is the second silent-total-failure guard, and the one §8
 // creates deliberately: the rename leaves every existing machine's ~/.gitconfig
@@ -193,10 +249,17 @@ func gitconfigInclude(c Context) Result {
 		return Result{Fail, "gitconfig-include", fmt.Sprintf(
 			"cannot read ~/.gitconfig, so every shared git setting is inactive: %v", err)}
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if gitconfigIncludeLine.MatchString(strings.TrimSpace(line)) {
-			return Result{OK, "gitconfig-include", "includes " + sharedGitConfig}
-		}
+	named, dangling := resolves(c, data, gitconfigIncludeLine)
+	switch {
+	case named != "":
+		return Result{OK, "gitconfig-include", "includes " + named}
+	case dangling != "":
+		// git passes over an include it cannot open without a word, so this
+		// state looks exactly like a healthy one until a shared setting is
+		// missed.
+		return Result{Fail, "gitconfig-include", "~/.gitconfig includes " + dangling +
+			", which does not exist, so every shared git setting is silently " +
+			"inactive; point it at this checkout"}
 	}
 	return Result{Fail, "gitconfig-include", path + " does not include " + sharedGitConfig +
 		", so every shared git setting is silently inactive; run './bootstrap migrate'"}
