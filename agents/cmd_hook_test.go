@@ -19,16 +19,16 @@ func newRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	// --template with an empty directory isolates this test from any Git
-	// templates configured on the machine running it. Emptying the template
-	// rather than pointing
-	// core.hooksPath elsewhere keeps .git/hooks/ the live path, so a test that
-	// installs a hook there still sees it fire.
+	// templates configured on the machine running it. The local relative
+	// core.hooksPath also isolates it from a machine-wide hook chain while
+	// keeping .git/hooks/ live for tests that deliberately install a hook there.
 	empty := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-b", "sq-123/payments", "--template=" + empty},
 		{"config", "user.email", "t@example.com"},
 		{"config", "user.name", "T"},
 		{"config", "commit.gpgsign", "false"},
+		{"config", "core.hooksPath", ".git/hooks"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -41,6 +41,22 @@ func newRepo(t *testing.T) string {
 	}
 	resolved, _ := filepath.EvalSymlinks(dir)
 	return resolved
+}
+
+// Every repository fixture must be independent of the developer machine's
+// global hook installation while keeping .git/hooks available to tests that
+// deliberately install a repository hook there.
+func TestNewRepoKeepsRepositoryHooksLocal(t *testing.T) {
+	root := newRepo(t)
+	cmd := exec.Command("git", "config", "--local", "--get", "core.hooksPath")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("read fixture core.hooksPath: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != ".git/hooks" {
+		t.Fatalf("fixture core.hooksPath = %q, want .git/hooks", got)
+	}
 }
 
 func readOnlyRecord(t *testing.T, root string) map[string]any {
