@@ -6,10 +6,79 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 )
+
+func TestMulticallDispatcherRejectsIndirectSameHookRecursion(t *testing.T) {
+	binary := buildTemporaryAgentsBinary(t)
+	repo := newLiveHookRepo(t, binary)
+	t.Setenv("HOME", repo.home)
+	dispatcherHook := filepath.Join(t.TempDir(), "post-merge")
+	if err := os.Symlink(binary, dispatcherHook); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DISPATCHER_HOOK", dispatcherHook)
+	writeLiveFile(t, repo.root, ".git/hooks/post-merge",
+		"#!/bin/sh\nexec \"$DISPATCHER_HOOK\"\n", 0o755)
+
+	cmd := exec.Command(dispatcherHook)
+	cmd.Dir = repo.root
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		t.Fatal("indirect wrapper recursion did not terminate")
+	}
+	if err == nil {
+		t.Fatal("indirect wrapper recursion was accepted")
+	}
+	if !strings.Contains(stderr.String(), "recursive") || !strings.Contains(stderr.String(), "post-merge") {
+		t.Fatalf("recursion diagnostic is not actionable: %q", stderr.String())
+	}
+}
+
+func TestMulticallDispatcherRunsOrdinaryWrapperWithInheritedEnvironment(t *testing.T) {
+	binary := buildTemporaryAgentsBinary(t)
+	repo := newLiveHookRepo(t, binary)
+	t.Setenv("HOME", repo.home)
+	dispatcherHook := filepath.Join(t.TempDir(), "post-merge")
+	if err := os.Symlink(binary, dispatcherHook); err != nil {
+		t.Fatal(err)
+	}
+	observed := filepath.Join(t.TempDir(), "observed")
+	t.Setenv("HOOK_OBSERVED", observed)
+	t.Setenv("GIT_INDEX_FILE", "/tmp/index with spaces")
+	t.Setenv("ORDINARY_ENV", "ordinary value")
+	// A different active hook is not same-hook recursion. The wrapper sees all
+	// inherited values unchanged plus the dispatcher's documented private stack.
+	t.Setenv("AGENTS_ACTIVE_GIT_HOOKS", "pre-commit")
+	writeLiveFile(t, repo.root, ".git/hooks/post-merge", "#!/bin/sh\n"+
+		"printf '%s\\n%s\\n%s\\n%s\\n' \"$1\" \"$GIT_INDEX_FILE\" \"$ORDINARY_ENV\" \"$AGENTS_ACTIVE_GIT_HOOKS\" > \"$HOOK_OBSERVED\"\n", 0o755)
+
+	cmd := exec.Command(dispatcherHook, "1")
+	cmd.Dir = repo.root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ordinary wrapper failed: %v\n%s", err, out)
+	}
+	want := "1\n/tmp/index with spaces\nordinary value\npre-commit,post-merge\n"
+	if got, err := os.ReadFile(observed); err != nil || string(got) != want {
+		t.Fatalf("wrapper environment/argv = %q, want %q (err=%v)", got, want, err)
+	}
+}
 
 func buildTemporaryAgentsBinary(t *testing.T) string {
 	t.Helper()

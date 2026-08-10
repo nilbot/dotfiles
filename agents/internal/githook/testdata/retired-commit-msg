@@ -1,0 +1,39 @@
+#!/bin/bash
+
+EXIT_CODE=0
+
+hook_type=$( basename "$0" )
+hooks="$HOME/dotfiles/git/hooks"
+
+# Check if hooks directory exists
+if [ ! -d "$hooks" ]; then
+	exit 0
+fi
+
+# Use nullglob to handle case where no files match pattern
+shopt -s nullglob
+hook_files=("$hooks"/*."$hook_type")
+shopt -u nullglob
+
+# Exit if no hooks found
+if [ ${#hook_files[@]} -eq 0 ]; then
+	exit 0
+fi
+
+echo "Executing $hook_type hook(s)"
+
+for hook in "${hook_files[@]}"; do
+	if [ -f "$hook" ] && [ -x "$hook" ]; then
+		echo ""
+		echo "Executing ${hook}"
+		"$hook" "$@"
+		EXIT_CODE=$((EXIT_CODE + $?))
+	fi
+done
+
+if [ $EXIT_CODE -ne 0 ]; then
+	echo ""
+	echo "Commit Failed."
+fi
+
+exit $EXIT_CODE

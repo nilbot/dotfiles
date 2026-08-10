@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -212,6 +211,66 @@ func TestChainPreservesExecutableSymlinksAndSkipsOtherEntries(t *testing.T) {
 	}
 }
 
+func TestChainFailsClosedOnBrokenRepositoryAndPersonalSymlinks(t *testing.T) {
+	t.Run("truly absent repository hook", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		if code := Run(Chain{RepoHooksDir: t.TempDir(), SkipBuiltin: true}, "post-merge", nil,
+			strings.NewReader(""), &stdout, &stderr); code != 0 {
+			t.Fatalf("absent repository hook should be skipped: code=%d stderr=%q", code, stderr.String())
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		configure  func(*testing.T, *Chain) string
+		diagnostic string
+	}{
+		{
+			name: "repository hook",
+			configure: func(t *testing.T, chain *Chain) string {
+				chain.RepoHooksDir = filepath.Join(t.TempDir(), "repo\nhooks")
+				if err := os.MkdirAll(chain.RepoHooksDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(chain.RepoHooksDir, "pre-commit")
+				if err := os.Symlink("missing-target", path); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			diagnostic: "repository hook",
+		},
+		{
+			name: "personal hook",
+			configure: func(t *testing.T, chain *Chain) string {
+				chain.ExtrasDir = filepath.Join(t.TempDir(), "personal\nhooks")
+				if err := os.MkdirAll(chain.ExtrasDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(chain.ExtrasDir, "a.pre-commit")
+				if err := os.Symlink("missing-target", path); err != nil {
+					t.Fatal(err)
+				}
+				return path
+			},
+			diagnostic: "personal hook",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := Chain{SkipBuiltin: true}
+			hostilePath := tc.configure(t, &chain)
+			var stdout, stderr bytes.Buffer
+			if code := Run(chain, "pre-commit", nil, strings.NewReader(""), &stdout, &stderr); code == 0 {
+				t.Fatal("broken symlink was silently skipped")
+			}
+			if strings.Contains(stderr.String(), hostilePath) || !strings.Contains(stderr.String(), `\n`) ||
+				!strings.Contains(stderr.String(), tc.diagnostic) {
+				t.Fatalf("broken-symlink diagnostic is not actionable and ASCII-quoted: %q", stderr.String())
+			}
+		})
+	}
+}
+
 func TestChainRejectsUnknownHookName(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := Run(Chain{SkipBuiltin: true}, "pre-push", nil,
@@ -222,11 +281,7 @@ func TestChainRejectsUnknownHookName(t *testing.T) {
 
 func canonicalTemplateHook(t *testing.T, name string) []byte {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate githook test source")
-	}
-	path := filepath.Clean(filepath.Join(filepath.Dir(file), "../../../git/templates/hooks", name))
+	path := filepath.Join("testdata", "retired-"+name)
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -400,6 +455,68 @@ func TestStripFootersPreservesOtherTrailers(t *testing.T) {
 	}
 }
 
+func TestStripFootersUsesValidTrailerSeparatorAndStopsAtDistinctBlocks(t *testing.T) {
+	for _, input := range [][]byte{
+		[]byte("subject\nCo-Authored-By: Claude <noreply@anthropic.com>\n"),
+		[]byte("subject\r\nCo-Authored-By: Claude <noreply@anthropic.com>"),
+	} {
+		if got := StripFooters(input); !bytes.Equal(got, input) {
+			t.Errorf("no-separator body prose was removed: got %q want %q", got, input)
+		}
+	}
+
+	in := []byte("docs: preserve prior block\n\n" +
+		"Co-Authored-By: Claude <noreply@anthropic.com>\n\n\n" +
+		"Signed-Off-By: A Person <a@example.com>\n" +
+		"Co-Authored-By: Claude <noreply@anthropic.com>\n")
+	want := []byte("docs: preserve prior block\n\n" +
+		"Co-Authored-By: Claude <noreply@anthropic.com>\n\n" +
+		"Signed-Off-By: A Person <a@example.com>\n")
+	if got := StripFooters(in); !bytes.Equal(got, want) {
+		t.Fatalf("StripFooters crossed a distinct prior block: got %q want %q", got, want)
+	}
+}
+
+func TestStripFootersRemovesTrailerBeforeCommentSuffixWithoutTouchingComments(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want []byte
+	}{
+		{
+			name: "editor status comments",
+			in: []byte("feat: comments stay\n\n" +
+				"🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\n" +
+				"Co-Authored-By: Claude <noreply@anthropic.com>\n\n" +
+				"# Please enter the commit message.\n# On branch main\n"),
+			want: []byte("feat: comments stay\n\n# Please enter the commit message.\n# On branch main\n"),
+		},
+		{
+			name: "scissors suffix",
+			in: []byte("fix: scissors stay\n\n" +
+				"Co-Authored-By: Claude <noreply@anthropic.com>\n" +
+				"# ------------------------ >8 ------------------------\n" +
+				"# diff payload remains\n"),
+			want: []byte("fix: scissors stay\n# ------------------------ >8 ------------------------\n# diff payload remains\n"),
+		},
+		{
+			name: "CRLF no final newline",
+			in: []byte("feat: CRLF\r\n\r\n" +
+				"Generated with Claude Code\r\n\r\n" +
+				"Co-Authored-By: Claude Code <noreply@anthropic.com>\r\n\r\n" +
+				"# status comment\r\n# second comment"),
+			want: []byte("feat: CRLF\r\n\r\n# status comment\r\n# second comment"),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := StripFooters(tc.in); !bytes.Equal(got, tc.want) {
+				t.Fatalf("StripFooters = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // Catches a normalizer that rewrites every commit message even when there is
 // no forbidden trailer, including the important zero-byte message boundary.
 func TestStripFootersReturnsUnchangedBytesByteIdentically(t *testing.T) {
@@ -543,6 +660,83 @@ func TestCommitMsgLeavesUnchangedFileIdentityAndBytesAlone(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, original) {
 		t.Fatalf("unchanged message bytes changed: %q, %v", got, err)
+	}
+}
+
+func TestCommitMsgRejectsSameInodeRewriteAtLastPreReplaceBoundary(t *testing.T) {
+	original := []byte("fix: private-a\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+	concurrentSameSize := []byte("fix: private-b\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+	for _, tc := range []struct {
+		name     string
+		mutate   func(string) error
+		want     []byte
+		wantMode os.FileMode
+	}{
+		{
+			name: "content with same size",
+			mutate: func(path string) error {
+				return os.WriteFile(path, concurrentSameSize, 0o640)
+			},
+			want:     concurrentSameSize,
+			wantMode: 0o640,
+		},
+		{
+			name: "size and content",
+			mutate: func(path string) error {
+				return os.WriteFile(path, append(append([]byte(nil), original...), 'x'), 0o640)
+			},
+			want:     append(append([]byte(nil), original...), 'x'),
+			wantMode: 0o640,
+		},
+		{
+			name: "mode",
+			mutate: func(path string) error {
+				return os.Chmod(path, 0o600)
+			},
+			want:     original,
+			wantMode: 0o600,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "message")
+			if err := os.WriteFile(path, original, 0o640); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stderr bytes.Buffer
+			code := stripFootersInFileBeforeReplace(path, &stderr, func() {
+				if err := tc.mutate(path); err != nil {
+					t.Fatal(err)
+				}
+			})
+			if code == 0 {
+				t.Fatal("same-inode concurrent change was overwritten")
+			}
+			after, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !os.SameFile(before, after) {
+				t.Fatal("test seam unexpectedly replaced the message inode")
+			}
+			if after.Mode().Perm() != tc.wantMode {
+				t.Fatalf("concurrent mode = %#o, want %#o", after.Mode().Perm(), tc.wantMode)
+			}
+			if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, tc.want) {
+				t.Fatalf("concurrent bytes were not preserved: got %q err=%v", got, err)
+			}
+			if strings.Contains(stderr.String(), "private-a") || strings.Contains(stderr.String(), "private-b") {
+				t.Fatalf("concurrent-rewrite diagnostic leaked message content: %q", stderr.String())
+			}
+			matches, err := filepath.Glob(filepath.Join(dir, ".agents-commit-msg-*"))
+			if err != nil || len(matches) != 0 {
+				t.Fatalf("atomic rewrite temp leaked: matches=%v err=%v", matches, err)
+			}
+		})
 	}
 }
 

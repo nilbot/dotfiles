@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 var installedHookNames = map[string]struct{}{
@@ -23,6 +24,8 @@ var installedHookNames = map[string]struct{}{
 	"post-merge":    {},
 	"post-checkout": {},
 }
+
+const activeHooksEnvironment = "AGENTS_ACTIVE_GIT_HOOKS"
 
 // IsHookName reports whether name is one of the hook entrypoints installed by
 // this repository. Other Git hook names remain normal CLI basenames.
@@ -47,6 +50,12 @@ func Run(c Chain, name string, args []string, stdin io.Reader, stdout, stderr io
 		fmt.Fprintln(stderr, "agents: unsupported git hook name")
 		return 1
 	}
+	activeHooks := os.Getenv(activeHooksEnvironment)
+	if activeHookContains(activeHooks, name) {
+		fmt.Fprintf(stderr, "%s: refusing recursive git hook dispatch; inspect the repository hook wrapper\n", name)
+		return 1
+	}
+	childEnvironment := hookEnvironment(os.Environ(), activeHooks, name)
 	stages, err := externalStages(c, name)
 	if err != nil {
 		fmt.Fprintf(stderr, "%s: %v\n", name, err)
@@ -57,7 +66,7 @@ func Run(c Chain, name string, args []string, stdin io.Reader, stdout, stderr io
 		cmd.Stdin = stdin
 		cmd.Stdout = stdout
 		cmd.Stderr = stderr
-		cmd.Env = os.Environ()
+		cmd.Env = childEnvironment
 		if err := cmd.Run(); err != nil {
 			if exit, ok := err.(*exec.ExitError); ok {
 				fmt.Fprintf(stderr, "%s: hook %s exited %d\n", name, strconv.QuoteToASCII(stage), exit.ExitCode())
@@ -71,6 +80,29 @@ func Run(c Chain, name string, args []string, stdin io.Reader, stdout, stderr io
 		return 0
 	}
 	return builtin(name, args, stderr)
+}
+
+func activeHookContains(active, name string) bool {
+	for _, item := range strings.Split(active, ",") {
+		if item == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hookEnvironment(environment []string, active, name string) []string {
+	prefix := activeHooksEnvironment + "="
+	out := make([]string, 0, len(environment)+1)
+	for _, item := range environment {
+		if !strings.HasPrefix(item, prefix) {
+			out = append(out, item)
+		}
+	}
+	if active != "" {
+		active += ","
+	}
+	return append(out, prefix+active+name)
 }
 
 func externalStages(c Chain, name string) ([]string, error) {
@@ -120,11 +152,15 @@ var retiredShimFingerprints = map[int64]string{
 }
 
 func repositoryHookStage(path, dispatcherPath string) (bool, error) {
-	info, err := os.Stat(path)
+	_, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
+		return false, fmt.Errorf("cannot inspect repository hook %s", strconv.QuoteToASCII(path))
+	}
+	info, err := os.Stat(path)
+	if err != nil {
 		return false, fmt.Errorf("cannot inspect repository hook %s", strconv.QuoteToASCII(path))
 	}
 	if info.IsDir() || info.Mode()&0o111 == 0 {
@@ -174,50 +210,111 @@ func StripFooters(msg []byte) []byte {
 		return msg
 	}
 	lines := bytes.Split(msg, []byte{'\n'})
-	last := len(lines) - 1
-	for last >= 0 && blankLine(lines[last]) {
-		last--
+	commentStart := trailingCommentStart(lines)
+	lastTrailer := commentStart - 1
+	for lastTrailer >= 0 && blankLine(lines[lastTrailer]) {
+		lastTrailer--
 	}
-	if last < 0 {
+	if lastTrailer < 0 || !trailerLike(lines[lastTrailer]) {
 		return msg
 	}
 
-	start := last
-	for start >= 0 {
-		line := normalizedLine(lines[start])
-		if len(line) == 0 || trailerLine.Match(line) || claudeGeneratedLine.Match(line) {
-			start--
+	start := lastTrailer
+	separatorStart := -1
+	for i := lastTrailer; i >= 0; {
+		if trailerLike(lines[i]) {
+			start = i
+			i--
 			continue
 		}
+		if !blankLine(lines[i]) {
+			return msg
+		}
+		runEnd := i
+		for i >= 0 && blankLine(lines[i]) {
+			i--
+		}
+		runStart := i + 1
+		// The generated marker and co-author trailer convention contains one
+		// blank line between its two attribution lines. Other blank runs are
+		// the required separator before the trailer block, and stop the scan
+		// from crossing into a distinct earlier block.
+		if runEnd == runStart && i >= 0 && claudeGeneratedLine.Match(normalizedLine(lines[i])) {
+			start = runStart
+			continue
+		}
+		separatorStart = runStart
 		break
 	}
-	start++
+	if separatorStart < 0 {
+		return msg
+	}
 
 	removed := false
-	out := make([][]byte, 0, len(lines))
-	for i, line := range lines {
-		if i >= start && aiAttributionLine(line) {
+	keptTrailers := make([][]byte, 0, lastTrailer-start+1)
+	for _, line := range lines[start : lastTrailer+1] {
+		if aiAttributionLine(line) {
 			removed = true
 			continue
 		}
-		if i >= start && blankLine(line) && len(out) > 0 && blankLine(out[len(out)-1]) {
-			continue
+		if !blankLine(line) {
+			keptTrailers = append(keptTrailers, line)
 		}
-		out = append(out, line)
 	}
 	if !removed {
 		return msg
 	}
+
+	out := append([][]byte(nil), lines[:separatorStart]...)
 	for len(out) > 0 && blankLine(out[len(out)-1]) {
 		out = out[:len(out)-1]
 	}
-	if len(out) == 0 {
-		return nil
+	if len(keptTrailers) > 0 {
+		out = append(out, blankForMessage(msg))
+		out = append(out, keptTrailers...)
 	}
-	if bytes.HasSuffix(msg, []byte{'\n'}) {
-		out = append(out, nil)
+	if commentStart < len(lines) {
+		out = append(out, lines[lastTrailer+1:commentStart]...)
+		out = append(out, lines[commentStart:]...)
+	} else if bytes.HasSuffix(msg, []byte{'\n'}) {
+		out = append(out, []byte{})
 	}
 	return bytes.Join(out, []byte{'\n'})
+}
+
+func trailerLike(line []byte) bool {
+	line = normalizedLine(line)
+	return trailerLine.Match(line) || claudeGeneratedLine.Match(line)
+}
+
+func trailingCommentStart(lines [][]byte) int {
+	i := len(lines) - 1
+	for i >= 0 && blankLine(lines[i]) {
+		i--
+	}
+	if i < 0 || !commentLine(lines[i]) {
+		return len(lines)
+	}
+	for i >= 0 && (blankLine(lines[i]) || commentLine(lines[i])) {
+		i--
+	}
+	start := i + 1
+	for start < len(lines) && blankLine(lines[start]) {
+		start++
+	}
+	return start
+}
+
+func commentLine(line []byte) bool {
+	line = bytes.TrimSuffix(line, []byte{'\r'})
+	return bytes.HasPrefix(line, []byte{'#'})
+}
+
+func blankForMessage(msg []byte) []byte {
+	if bytes.Contains(msg, []byte("\r\n")) {
+		return []byte{'\r'}
+	}
+	return []byte{}
 }
 
 func normalizedLine(line []byte) []byte {
@@ -243,6 +340,10 @@ func builtin(name string, args []string, stderr io.Writer) int {
 }
 
 func stripFootersInFile(path string, stderr io.Writer) int {
+	return stripFootersInFileBeforeReplace(path, stderr, nil)
+}
+
+func stripFootersInFileBeforeReplace(path string, stderr io.Writer, beforeReplace func()) int {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return commitMessageFailure(stderr, path, "cannot inspect message file")
@@ -251,7 +352,7 @@ func stripFootersInFile(path string, stderr io.Writer) int {
 		return commitMessageFailure(stderr, path, "message path is not a regular file")
 	}
 
-	file, err := os.Open(path)
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return commitMessageFailure(stderr, path, "cannot read message file")
 	}
@@ -299,8 +400,19 @@ func stripFootersInFile(path string, stderr io.Writer) int {
 		return commitMessageFailure(stderr, path, "cannot finish atomic rewrite")
 	}
 
-	current, err := os.Lstat(path)
-	if err != nil || !current.Mode().IsRegular() || !os.SameFile(info, current) {
+	if beforeReplace != nil {
+		beforeReplace()
+	}
+	currentFile, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return commitMessageFailure(stderr, path, "message file changed before rewrite")
+	}
+	current, statErr := currentFile.Stat()
+	currentMsg, readErr := io.ReadAll(currentFile)
+	closeErr = currentFile.Close()
+	if statErr != nil || readErr != nil || closeErr != nil || !current.Mode().IsRegular() ||
+		!os.SameFile(openedInfo, current) || current.Mode() != openedInfo.Mode() ||
+		current.Size() != int64(len(msg)) || !bytes.Equal(currentMsg, msg) {
 		return commitMessageFailure(stderr, path, "message file changed before rewrite")
 	}
 	if err := os.Rename(tempPath, path); err != nil {
@@ -316,11 +428,15 @@ func commitMessageFailure(stderr io.Writer, path, reason string) int {
 }
 
 func executable(path string) (bool, error) {
-	info, err := os.Stat(path)
+	_, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
+		return false, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
 		return false, err
 	}
 	return !info.IsDir() && info.Mode()&0o111 != 0, nil
