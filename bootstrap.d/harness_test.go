@@ -35,7 +35,9 @@ func newFixture(t *testing.T) fixture {
 // pattern into non-test code.
 func (f fixture) runLib(t *testing.T, body string) (string, string, int) {
 	t.Helper()
-	script := ". \"$BOOTSTRAP_ROOT/bootstrap.d/lib.sh\"\n" + body
+	// set -eu matches how ./bootstrap sources lib.sh. Without it every test
+	// here would validate a shell mode production never runs in.
+	script := "set -eu\n. \"$BOOTSTRAP_ROOT/bootstrap.d/lib.sh\"\n" + body
 	return f.runScript(t, script)
 }
 

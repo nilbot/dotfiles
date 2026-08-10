@@ -147,3 +147,45 @@ func TestPlatformDetection(t *testing.T) {
 		t.Errorf("platform %q is neither darwin nor linux", got)
 	}
 }
+
+func TestDryRunFailsClosedOnUnparseableValue(t *testing.T) {
+	f := newFixture(t)
+	if err := os.WriteFile(filepath.Join(f.home, "src"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before := tree(t, f.home)
+
+	// Test with BOOTSTRAP_DRY_RUN=true (unparseable as a number)
+	stdout, stderr, code := f.runLib(t, `
+BOOTSTRAP_DRY_RUN=true
+do_link "$HOME/src" "$HOME/link"
+`)
+	if code != 0 {
+		t.Fatalf("exit %d (BOOTSTRAP_DRY_RUN=true): %s", code, stderr)
+	}
+	if strings.Contains(stderr, "integer expression expected") {
+		t.Errorf("bash error leaked (BOOTSTRAP_DRY_RUN=true): %s", stderr)
+	}
+	if after := tree(t, f.home); after != before {
+		t.Errorf("dry run with BOOTSTRAP_DRY_RUN=true mutated the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if !strings.Contains(stdout, "link") {
+		t.Errorf("dry run with BOOTSTRAP_DRY_RUN=true should output plan, got: %s", stdout)
+	}
+
+	// Test with BOOTSTRAP_DRY_RUN unset (should behave as 0, not dry run)
+	before = tree(t, f.home)
+	stdout, stderr, code = f.runLib(t, `
+unset BOOTSTRAP_DRY_RUN
+do_link "$HOME/src" "$HOME/link2"
+`)
+	if code != 0 {
+		t.Fatalf("exit %d (BOOTSTRAP_DRY_RUN unset): %s", code, stderr)
+	}
+	if strings.Contains(stderr, "integer expression expected") {
+		t.Errorf("bash error leaked (BOOTSTRAP_DRY_RUN unset): %s", stderr)
+	}
+	if after := tree(t, f.home); after == before {
+		t.Errorf("apply with BOOTSTRAP_DRY_RUN unset should not be a dry run, tree should have changed")
+	}
+}

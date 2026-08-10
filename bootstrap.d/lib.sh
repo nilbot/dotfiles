@@ -16,7 +16,11 @@ warn()   { printf 'warn  %s\n' "$*" >&2; }
 # Exit 2 is "block" in spec 1 §6's shared table.
 refuse() { printf 'bootstrap: refusing: %s\n' "$*" >&2; exit 2; }
 
-dry_run() { [ "$BOOTSTRAP_DRY_RUN" -eq 1 ]; }
+# Fails CLOSED. `-eq` is numeric: on bash 3.2, BOOTSTRAP_DRY_RUN=true and
+# BOOTSTRAP_DRY_RUN= both print "integer expression expected" and then take the
+# MUTATE branch. The one variable whose job is preventing mutation must not
+# treat a value it cannot parse as permission to proceed.
+dry_run() { [ "${BOOTSTRAP_DRY_RUN:-0}" != 0 ]; }
 
 bootstrap_platform() {
 	case "$(uname -s)" in
@@ -46,7 +50,8 @@ do_link() {
 	local link_source=$1
 	local target=$2
 	if [ -L "$target" ]; then
-		local current=$(readlink "$target") || refuse "cannot read the symlink at '$target'"
+		local current
+		current=$(readlink "$target") || refuse "cannot read the symlink at '$target'"
 		if [ "$current" = "$link_source" ]; then
 			return 0
 		fi
