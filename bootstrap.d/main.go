@@ -126,10 +126,15 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 	}
 	for _, p := range phases {
 		if err := p.Run(ctx); err != nil {
-			fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
+			// A Refusal carries a remediation; surfacing it on its own line is
+			// the entire reason the type has that field. Everything else prints
+			// plainly.
 			var refusal *change.Refusal
 			if errors.As(err, &refusal) {
-				return exitBlock
+				fmt.Fprintf(stderr, "bootstrap: %s: refusing: %s\n  problem: %s\n  remedy:  %s\n",
+					p.Name, refusal.Path, refusal.Problem, refusal.Remediation)
+			} else {
+				fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
 			}
 			return exitBlock
 		}
