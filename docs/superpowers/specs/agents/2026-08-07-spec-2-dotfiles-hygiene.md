@@ -72,29 +72,60 @@ For an existing machine the same command converges whatever is missing.
 
 ### 2.1 The shim, and the one manual step
 
-`./bootstrap` is a ~40-line shell shim. It is the only shell in the design, and
+`./bootstrap` is a ~55-line shell shim. It is the only shell in the design, and
 it has exactly one job: get to Go, then hand over.
 
 1. `go` on `PATH` → use it.
-2. Otherwise `brew` on `PATH` → `brew install go`.
-3. Otherwise **refuse**, naming the exact one-liner for the detected platform.
+2. Otherwise **refuse**, naming the exact command for the detected platform.
 
-It then builds `bootstrap.d/` to a cached binary under
-`${XDG_CACHE_HOME:-~/.cache}/dotfiles-bootstrap/`, rebuilding only when a source
-file is newer, and `exec`s it with the original arguments.
+**It installs nothing.** An earlier draft ran `brew install go` for you. That
+branch was removed rather than repaired, because it produced the design's worst
+measured defect: `set -e` does not apply inside `$( )`, so a failed or
+off-`PATH` install was swallowed, leaving an empty path that reached the build
+as `"" build …` — exit 127, or worse, a silent `exec` of a stale cached binary.
+See [the shim defects](#five-shim-defects-measured-2026-08-10). Deleting the
+branch removes the failure mode; patching it would have left the shim carrying
+exactly the bash semantics that disqualified shell everywhere else here.
+
+It then builds `bootstrap.d/` to a binary under
+`${XDG_CACHE_HOME:-~/.cache}/dotfiles-bootstrap/<key>/`, where **`<key>` is
+derived from the repository root** — without that, a main checkout and a git
+worktree share one binary and whichever built first wins, running old code
+against a new tree. It rebuilds when any `.go` file, `go.mod`, or a source
+directory is newer than the binary (directories, so a deletion counts), then
+`exec`s it with the original arguments. Every shim failure exits `2`.
 
 **Building from the checkout, not installing a release.** The binary always
 matches the tree you cloned: no release-version coordination, no drift between
 an installed tool and the configuration it applies, and no dependency on
 [spec 5](2026-08-10-spec-5-ci-release-distribution.md), which is unwritten.
 
-**The honest cost:** a machine with neither Go nor Homebrew needs one manual
-command before `./bootstrap` runs. That is deliberate. The shim could download
-and checksum a Go toolchain, but doing that correctly is more consequential code
-than the step it saves — on a path exercised once per machine, in a script whose
-whole value is being short enough to read before you run it. Spec 1 §9 made the
-same call about Codex hook trust: the design's job is to make a required manual
-step *one obvious step* rather than a silent failure.
+**The honest cost:** a machine without Go needs one manual command before
+`./bootstrap` runs. That is deliberate, and it is the same call spec 1 §9 made
+about Codex hook trust: the design's job is to make a required manual step *one
+obvious step* rather than a silent failure.
+
+### 2.2 The seam where spec 5 removes Go as a dependency
+
+Recorded now because it is the actual answer to §2.1's manual step, and because
+a future reader will otherwise re-litigate the auto-install branch.
+
+**If [spec 5](2026-08-10-spec-5-ci-release-distribution.md) publishes verified
+release binaries, the shim stops needing Go at all.** Its structure becomes:
+
+1. A released binary matching this checkout is cached and verified → `exec` it.
+2. Otherwise, if a release exists for this platform → download, verify checksum,
+   cache, `exec`.
+3. Otherwise `go` is on `PATH` → build from source as today.
+4. Otherwise refuse.
+
+Steps 3 and 4 are exactly today's shim, so this is an extension, not a rewrite,
+and **spec 2 still does not depend on spec 5** — build-from-source remains the
+floor. The design constraint that matters is the one already in place: the shim
+must never `exec` a binary it cannot attribute to the current checkout. Today
+that is the cache key; under spec 5 it becomes the checksum plus a version the
+binary reports back. Whichever mechanism, the property is the same, and it is
+the property finding 2 below was raised against.
 
 ## 3. Phases
 
@@ -653,6 +684,46 @@ bootstrap is a Go program.
 
 Defects 1 and 2 are impossible in Go. Defect 3 is a `bool`. Defect 4 is an early
 `return`. Defect 5 does not exist. Defect 6 becomes an import-set assertion.
+
+### Five shim defects, measured (2026-08-10)
+
+The shim was granted shell's only exception in this design on the grounds that
+its job — find Go, build, exec — is small enough to get right. Review measured
+five defects in that job. Recorded because the premise turned out to be wrong,
+and because anyone proposing to grow the shim should read this first.
+
+1. **`set -e` does not apply inside `$( )`.** Confirmed on bash 3.2.57 and
+   5.3.15. A `find_go` helper called as `go_bin=$(find_go)` swallowed a failed
+   `brew install go` and returned empty; the shim then ran `"" build …`
+   (exit 127) or silently `exec`ed a stale cached binary. The `exit 2` refusal
+   was only reachable when Homebrew was *absent*. **Fixed by deleting the
+   auto-install branch** (§2.1), not by patching it.
+2. **One cache for every checkout.** The cache path had no component derived
+   from the repository root, so a main clone and a git worktree shared one
+   binary. A worktree whose files predate the other's build rebuilt nothing and
+   `exec`ed the wrong binary while exporting the right root: old code, new tree,
+   silently. Fixed by keying the cache on the root. An mtime-only scan also
+   missed deletions; fixed by including directories in the scan.
+3. **Shim exit codes escaped the shared table.** A Go compile error exited `1`
+   — "advisory" — which is the most likely real failure and the one CI would
+   read as non-blocking. `mkdir` failure likewise. Every shim failure now
+   exits `2`.
+4. **`CDPATH` could point the root at the wrong tree.** Reproduced:
+   `cd "$(dirname "$0")"` searches `CDPATH` for a relative `$0` and echoes the
+   resolved path, so the root came back as a same-named decoy directory *and*
+   as two lines. This is precisely the "silently linked the wrong tree" failure
+   the [six bash defects](#the-six-bash-defects-that-decided-1-2026-08-10) say
+   this redesign exists to prevent, reproduced inside the replacement. Fixed
+   with `CDPATH= cd -- …`.
+5. **Preflight validated `PATH` tools but not its two load-bearing inputs.**
+   `HOME` unset with `XDG_CACHE_HOME` set — a normal container shape, and
+   containers are why the `dotfiles` profile exists — yielded an empty `Home`,
+   which would make the config phase resolve every managed path against `/`.
+   Fixed by refusing on an empty `Root` or `Home`.
+
+Defect 4 is the one worth carrying: a design whose stated purpose is preventing
+a class of failure reproduced that exact failure in the first shell file it
+allowed itself.
 
 ---
 

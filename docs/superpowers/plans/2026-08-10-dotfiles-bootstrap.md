@@ -1213,7 +1213,10 @@ func runShim(t *testing.T, home string, args ...string) (string, string, int) {
 	t.Helper()
 	cmd := exec.Command(filepath.Join(repoRoot(t), "bootstrap"), args...)
 	cmd.Dir = t.TempDir()
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	// XDG_CACHE_HOME must be redirected too, or an inherited value sends every
+	// case into the developer's real ~/.cache and the suite stops being
+	// hermetic -- the cache tests would then pass without exercising anything.
+	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CACHE_HOME="+home+"/cache")
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -1499,6 +1502,17 @@ package phase
 import "fmt"
 
 func Preflight(c Context) error {
+	// The two load-bearing inputs, checked in the phase whose entire job is
+	// checking. HOME unset with XDG_CACHE_HOME set is a normal container shape
+	// -- and containers are exactly why the dotfiles profile exists -- which
+	// would otherwise resolve every managed path against "/".
+	if c.Root == "" {
+		return fmt.Errorf("repository root is empty; the shim exports BOOTSTRAP_ROOT")
+	}
+	if c.Home == "" {
+		return fmt.Errorf("HOME is empty; every managed path is resolved against it")
+	}
+
 	c.logf("== preflight")
 	c.logf("   platform    %s", c.Platform)
 	c.logf("   repository  %s", c.Root)
@@ -1662,10 +1676,15 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 	}
 	for _, p := range phases {
 		if err := p.Run(ctx); err != nil {
-			fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
+			// A Refusal carries a remediation; surfacing it on its own line is
+			// the entire reason the type has that field. Everything else prints
+			// plainly.
 			var refusal *change.Refusal
 			if errors.As(err, &refusal) {
-				return exitBlock
+				fmt.Fprintf(stderr, "bootstrap: %s: refusing: %s\n  problem: %s\n  remedy:  %s\n",
+					p.Name, refusal.Path, refusal.Problem, refusal.Remediation)
+			} else {
+				fmt.Fprintf(stderr, "bootstrap: %s: %v\n", p.Name, err)
 			}
 			return exitBlock
 		}
@@ -1696,53 +1715,68 @@ Create `bootstrap` at the repo root, `chmod +x`:
 
 set -euo pipefail
 
-BOOTSTRAP_ROOT=$(cd "$(dirname "$0")" && pwd)
+# CDPATH= and -- are load-bearing. Without them `cd` searches CDPATH for a
+# relative $0 and echoes the directory it resolved to, so BOOTSTRAP_ROOT can
+# silently become a same-named decoy directory AND arrive as two lines. That is
+# the "wrong tree" failure this whole redesign exists to prevent; it was
+# reproduced against the previous version of this file.
+BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 export BOOTSTRAP_ROOT
 
-src=$BOOTSTRAP_ROOT/bootstrap.d
-cache=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles-bootstrap
-binary=$cache/bootstrap
-
-find_go() {
-	if command -v go >/dev/null 2>&1; then
-		command -v go
-		return 0
-	fi
-	if command -v brew >/dev/null 2>&1; then
-		printf 'bootstrap: installing Go via Homebrew\n' >&2
-		brew install go >&2
-		command -v go
-		return 0
-	fi
-	case "$(uname -s)" in
-		Darwin) hint='install Homebrew from https://brew.sh, or Go from https://go.dev/dl/' ;;
-		Linux)  hint='sudo apt-get install -y golang-go  (or: pacman -S go)' ;;
-		*)      hint='install Go from https://go.dev/dl/' ;;
-	esac
-	printf 'bootstrap: Go is required and was not found.\n  %s\nThen re-run this command.\n' "$hint" >&2
+# Exit 2 is "block" in the shared table. Never 1 (advisory) and never 127: a
+# broken build must not read as a soft warning to a CI job keying off codes.
+die() {
+	printf 'bootstrap: %s\n' "$1" >&2
 	exit 2
 }
 
-go_bin=$(find_go)
+src=$BOOTSTRAP_ROOT/bootstrap.d
+
+# The cache is keyed on the checkout. Without the key, a main clone and a git
+# worktree share one binary, and whichever built first wins -- old code against
+# a new tree, silently.
+key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9')
+cache=${XDG_CACHE_HOME:-${HOME:?HOME and XDG_CACHE_HOME are both unset}/.cache}/dotfiles-bootstrap/$key
+binary=$cache/bootstrap
+
+# No auto-install: see spec §2.1. A helper called as go_bin=$(find_go) would
+# swallow the failure, because set -e does not apply inside $( ). A plain
+# assignment in an if-condition does not have that problem.
+if ! go_bin=$(command -v go); then
+	case "$(uname -s)" in
+		Darwin) hint='brew install go   (Homebrew itself: https://brew.sh)' ;;
+		Linux)  hint='sudo apt-get install -y golang-go   (or: sudo pacman -S go)' ;;
+		*)      hint='install Go from https://go.dev/dl/' ;;
+	esac
+	die "Go is required and was not found.
+  $hint
+Then re-run this command."
+fi
 
 needs_build=0
 if [ ! -x "$binary" ]; then
 	needs_build=1
 else
+	# Directories are included so a DELETED source counts: removing a .go file
+	# updates its parent's mtime but leaves every surviving file older.
+	sources=$(find "$src" \( -name '*.go' -o -name 'go.mod' -o -type d \) -print) ||
+		die "cannot scan $src for sources"
 	while IFS= read -r file; do
+		[ -n "$file" ] || continue
 		if [ "$file" -nt "$binary" ]; then
 			needs_build=1
 			break
 		fi
 	done <<EOF
-$(find "$src" -name '*.go' -o -name 'go.mod')
+$sources
 EOF
 fi
 
 if [ "$needs_build" -eq 1 ]; then
 	printf 'bootstrap: building\n' >&2
-	mkdir -p "$cache"
-	(cd "$src" && "$go_bin" build -trimpath -o "$binary" .)
+	mkdir -p "$cache" || die "cannot create the build cache at $cache"
+	( cd -- "$src" && "$go_bin" build -trimpath -o "$binary" . ) ||
+		die "the build failed; the compiler output is above"
 fi
 
 exec "$binary" "$@"
