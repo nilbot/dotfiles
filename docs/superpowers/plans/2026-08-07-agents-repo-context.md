@@ -6994,6 +6994,3 @@ Plan complete and saved to `docs/superpowers/plans/2026-08-07-agents-repo-contex
 **2. Inline Execution** — execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 Which approach?
-
-
-
