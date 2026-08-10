@@ -2617,7 +2617,106 @@ file exists to hold."
 
 ---
 
-### Tasks 8 through 16
+### Task 8: The git renames, and the Makefile's destructive targets
+
+**Files:**
+- Rename: `git/gitconfig.symlink` → `git/gitconfig.shared`;
+  `git/gitignore_global.symlink` → `git/gitignore_global`
+- Modify: `git/gitconfig.local.template`, `git/gitconfig.shared`, `Makefile`,
+  `bootstrap.d/links.manifest`, `bootstrap.d/main_test.go`
+
+**Interfaces:** none. This is repository surgery.
+
+#### Part A — the renames
+
+The `.symlink` suffix stopped carrying information, for two different reasons.
+`git/gitconfig.symlink` is *included* by a machine-local `~/.gitconfig`, not
+symlinked to it, since `37f00a0`; `git/gitignore_global.symlink` is still
+genuinely symlinked, but the manifest's `kind` column now says so.
+
+Use `git mv` for both so the rename is recorded.
+
+**`git/gitconfig.local.template`'s include becomes tokenised**, which is the
+payoff for Task 7's substitution:
+
+```
+[include]
+
+	path = @DOTFILES_ROOT@/git/gitconfig.shared
+```
+
+This is what finally makes the seeded `~/.gitconfig` correct on a checkout that
+is not at `~/dotfiles`. Update the surrounding prose too — it names
+`~/dotfiles/git/gitconfig.symlink` in at least one comment.
+
+`git/gitconfig.shared` contains a comment describing itself as a symlink target
+("if `~/.gitconfig` is a symlink to this file…"). That has been false since
+`37f00a0`. Rewrite it to say `~/.gitconfig` is a machine-local file that
+*includes* this one.
+
+Add the manifest row in this commit, now that the file it names exists:
+
+```
+link    git/gitignore_global              .gitignore                        *
+```
+
+Then confirm `grep -rn 'gitconfig\.symlink\|gitignore_global\.symlink' . --exclude-dir=.git --exclude-dir=docs`
+is empty.
+
+#### Part B — remove the Makefile's newly destructive targets
+
+Task 7 changed `make fishshell` from harmless to destructive and the window is
+open now. `Makefile:94-97` does `rm -rf $(HOME)/.config/fish` then relinks it
+into the repository. `rm -rf` does not follow symlinks, so before Task 7 it
+deleted a symlink and recreated it — idempotent. After Task 7, on a machine
+where that path is a real directory, it destroys the seeded stub, any
+installer-appended blocks, and fisher's `functions/`, `completions/`, `conf.d/`,
+`fish_plugins` and `fish_variables`. **None of that is in git.**
+
+Delete the `fish`, `fishshell` and `starship` targets outright, and drop `fish`
+from `all`'s prerequisites. The config phase owns every path they touched;
+Task 15 was going to remove them anyway, and waiting seven more tasks to close a
+data-loss path is not a trade worth making.
+
+Leave the rest of the Makefile alone — Task 15 reduces it to the `agents`
+target. Update the `dotfiles` target's `gitignore_global.symlink` reference to
+the new name so it does not break in the interim.
+
+#### Part C — remove the last Task 6 skip
+
+`TestCheckIsHealthyAfterApply` carries `t.Skip("unskip in Task 8")`. Parts A and
+B should make it pass: the template now tokenises the include, `Seed`
+substitutes the real checkout, and `gitconfig-include` resolves the result.
+
+**If it does not pass, do not loosen the guard.** Task 6's `resolves` check
+exists because a `~/.gitconfig` naming a nonexistent file is the silent failure
+this design is built to prevent. Report what you measured instead.
+
+- [ ] **Steps:** Part A, then Part B, then Part C. Verify with
+  `cd bootstrap.d && go test -count=1 ./... && go vet ./...` and `gofmt -l`.
+
+```bash
+git add git/ Makefile bootstrap.d/links.manifest bootstrap.d/main_test.go
+git commit -m "refactor(git): rename gitconfig.symlink to gitconfig.shared
+
+The suffix stopped carrying information, for two different reasons. This
+file is included by a machine-local ~/.gitconfig since 37f00a0, not
+symlinked to it; gitignore_global is still genuinely symlinked, but the
+manifest's kind column now says so.
+
+The include is tokenised, so a checkout anywhere gets a ~/.gitconfig that
+actually resolves -- previously it named ~/dotfiles unconditionally and
+git ignores a missing include in silence.
+
+Also removes the fish, fishshell and starship Makefile targets. Their
+rm -rf used to delete a symlink; since the fish inversion it would
+destroy the seeded stub and fisher's machine-local state, none of which
+is in git."
+```
+
+---
+
+### Tasks 9 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
