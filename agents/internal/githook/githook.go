@@ -245,6 +245,11 @@ func StripFooters(msg []byte) []byte {
 			i--
 			continue
 		}
+		if len(lines[i]) > 0 && (lines[i][0] == ' ' || lines[i][0] == '\t') {
+			start = i
+			i--
+			continue
+		}
 		if !blankLine(lines[i]) {
 			return msg
 		}

@@ -518,6 +518,21 @@ func TestStripFootersPreservesOtherTrailers(t *testing.T) {
 	}
 }
 
+func TestStripFootersKeepsFoldedUnrelatedTrailersWhileRemovingAttribution(t *testing.T) {
+	for _, continuation := range []string{"  folded continuation", "\tfolded tab continuation"} {
+		t.Run(fmt.Sprintf("leading-byte-%02x", continuation[0]), func(t *testing.T) {
+			in := []byte("feat: x\n\nB.\n\n" +
+				"Helped-by: A <a@a.com>\n" + continuation + "\n" +
+				"Co-Authored-By: Claude <noreply@anthropic.com>\n")
+			want := []byte("feat: x\n\nB.\n\n" +
+				"Helped-by: A <a@a.com>\n" + continuation + "\n")
+			if got := StripFooters(in); !bytes.Equal(got, want) {
+				t.Fatalf("StripFooters = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestStripFootersUsesValidTrailerSeparatorAndStopsAtDistinctBlocks(t *testing.T) {
 	for _, input := range [][]byte{
 		[]byte("subject\nCo-Authored-By: Claude <noreply@anthropic.com>\n"),
