@@ -35,6 +35,25 @@ export BOOTSTRAP_ROOT
 
 src=$BOOTSTRAP_ROOT/bootstrap.d
 
+# Validate the OUTCOME, not each input to it. With `dirname` off PATH the
+# substitution yields "", and on bash 3.2.57 -- the macOS system bash this file
+# targets, and the only one on a machine that has not been provisioned yet --
+# `cd -- ""` SUCCEEDS as a no-op, so BOOTSTRAP_ROOT silently becomes the
+# caller's working directory. (Measured: bash 5.3.15 rejects it as "null
+# directory", where the || die above already catches it.) That is the third
+# distinct route to "wrong tree, silently" found in this file. Checking the
+# resolved root catches that route and every other one, including any neither
+# of us has found.
+[ -d "$src" ] ||
+	die "'$BOOTSTRAP_ROOT' does not look like a dotfiles checkout: $src is missing"
+
+# ...and that it is THIS checkout. -d alone passes whenever the wrong answer is
+# itself a checkout -- a caller whose working directory is another clone --
+# and measured, the shim then builds and runs that other tree and exits 0, with
+# no symptom at all. Same device and inode is the only test that settles it.
+[ "$BOOTSTRAP_ROOT/bootstrap" -ef "$0" ] ||
+	die "'$BOOTSTRAP_ROOT' is not where this script lives; refusing to provision from another tree"
+
 # The cache is keyed on the checkout. Without the key, a main clone and a git
 # worktree share one binary, and whichever built first wins -- old code against
 # a new tree, silently.

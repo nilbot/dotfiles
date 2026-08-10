@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -445,6 +446,115 @@ func reportedRoot(t *testing.T, stdout string) string {
 	}
 	t.Fatalf("preflight printed no repository line:\n%s", stdout)
 	return ""
+}
+
+// misresolvingPATH shadows dirname with a stub that reports dir, so the shim's
+// root resolution produces a wrong answer while everything else on PATH keeps
+// working.
+//
+// The route this reproduces is `dirname` off PATH, where the substitution
+// yields "" and BOOTSTRAP_ROOT becomes the caller's working directory. Two
+// measurements shaped the fixture rather than reproducing that literally:
+//
+//   - `cd -- ""` succeeds only on bash 3.2.57. bash 5.3.15 rejects it as "null
+//     directory", where the shim's existing || die already catches it, and the
+//     shebang is /usr/bin/env bash -- so pinning a case to the empty string
+//     would be testing which bash answered, not the guard.
+//   - A PATH with dirname simply absent is also a PATH with cksum, tr, find and
+//     the Go toolchain absent, so the run dies a few lines later for an
+//     unrelated reason and the case asserts nothing about the root.
+//
+// An empty root on bash 3.2 resolves to the caller's working directory, which
+// either is or is not a checkout. Those are exactly the two cases below, and
+// they reach the guard through the same code on every bash.
+func misresolvingPATH(t *testing.T, dir string) string {
+	t.Helper()
+	stubDir := t.TempDir()
+	stub := "#!/bin/sh\nprintf '%s\\n' " + strconv.Quote(dir) + "\n"
+	if err := os.WriteFile(filepath.Join(stubDir, "dirname"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return "PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH")
+}
+
+// A resolved root that is not a checkout must block, naming the root.
+//
+// Guarding `dirname` itself would catch one route to a wrong root; validating
+// the outcome catches every route, which is why the check is on the resolved
+// value rather than on the tools that produced it.
+func TestShimRefusesARootThatIsNotACheckout(t *testing.T) {
+	notACheckout := t.TempDir()
+
+	stdout, stderr, code := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"), tempHome(t),
+		[]string{misresolvingPATH(t, notACheckout)}, "--help")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block):\n%s%s", code, stdout, stderr)
+	}
+	// Asserted on the message, not the code alone: without the guard the shim
+	// still exits 2, but from "the build failed" several steps later, having
+	// created a cache directory for a tree that does not exist. The whole point
+	// of the guard is to say which root was wrong, at the point it was decided.
+	if !strings.Contains(stderr, "does not look like a dotfiles checkout") {
+		t.Errorf("the refusal should say the root is not a checkout: %s", stderr)
+	}
+	if !strings.Contains(stderr, notACheckout) {
+		t.Errorf("the refusal must name the root it resolved (%s): %s", notACheckout, stderr)
+	}
+}
+
+// The half of the check the -ef test cannot reach: the root is where this
+// script lives, so -ef is satisfied, but the checkout is incomplete. Without
+// this case `[ -d "$src" ]` would look redundant -- the mutation that removes
+// it is otherwise caught by -ef, which says something true but misleading about
+// a checkout that is simply missing its sources.
+func TestShimRefusesAnIncompleteCheckout(t *testing.T) {
+	dir := t.TempDir()
+	copyInto(t, dir, "bootstrap") // deliberately without bootstrap.d
+
+	stdout, stderr, code := runShimEnv(t, filepath.Join(dir, "bootstrap"), tempHome(t), nil, "--help")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block):\n%s%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "does not look like a dotfiles checkout") {
+		t.Errorf("the refusal should say the checkout is incomplete: %s", stderr)
+	}
+	if !strings.Contains(stderr, "bootstrap.d") {
+		t.Errorf("the refusal must name what is missing: %s", stderr)
+	}
+}
+
+// The dangerous half: a resolved root that IS a checkout, but not this one.
+// `[ -d "$src" ]` passes there, and the shim then builds and runs the other
+// tree and exits 0 -- provisioning from the wrong tree with no symptom at all.
+// The marker is what proves whose code ran; an exit code alone would not.
+func TestShimRefusesAnotherCheckoutAsItsRoot(t *testing.T) {
+	const marker = "OTHER-CHECKOUT-MARKER"
+	other := altCheckout(t)
+	main := filepath.Join(other, "bootstrap.d", "main.go")
+	source, err := os.ReadFile(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patched := strings.Replace(string(source), "usage: bootstrap <verb>", marker+" <verb>", 1)
+	if patched == string(source) {
+		t.Fatal("could not patch the other checkout's usage text; the marker would prove nothing")
+	}
+	if err := os.WriteFile(main, []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"), tempHome(t),
+		[]string{misresolvingPATH(t, other)}, "--help")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block); the shim provisioned from another tree:\n%s%s",
+			code, stdout, stderr)
+	}
+	if strings.Contains(stdout, marker) {
+		t.Errorf("the other checkout's code ran:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "is not where this script lives") {
+		t.Errorf("the refusal should say the root is not this script's directory: %s", stderr)
+	}
 }
 
 // die and exec are the only ways out of the shim, checked lexically.
