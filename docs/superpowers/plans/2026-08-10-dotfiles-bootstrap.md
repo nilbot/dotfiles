@@ -2404,10 +2404,47 @@ Three rules the tests must pin:
 **`ExitCode` maps to the shared table**: any `Fail` → `2`, else any `Warn` →
 `1`, else `0`. `NA` never affects the code.
 
+**A malformed manifest must exit `3` from `check`, exactly as it does from
+`apply`.** `All` therefore returns `([]Result, error)`, and `runCheck` maps a
+`*manifest.SyntaxError` to `exitMalformed` before consulting `ExitCode`. The
+same typo answering `3` to one verb and `2` to another is precisely the
+confusion the shared table exists to prevent.
+
+**A check must never be given a `Planner`.** Checking is reading; a `Planner`'s
+`Run` is a no-op that returns `nil`, which turns "I could not check this" into
+"this is fine" — a silent false pass in the layer whose entire job is catching
+silent failures. So `phase.Verify` constructs its own `change.NewApplier` rather
+than using `c.Change`. `Verify` performs no mutation either way: every check
+reads, and the one subprocess (`brew bundle check`) is a query.
+
+**But `check` must not hold a mutating type either.** Handing checks a live
+`Applier` means the layer that runs during `plan` holds an object with `Sudo` on
+it, and only convention stops a future check from calling it. `check` therefore
+declares its own narrow interface — `Lstat`, `Readlink`, `ReadFile`, `LookPath`,
+`Run` — which `change.Interface` satisfies implicitly, so no call site changes
+and the invariant is a property of the type rather than of everyone's care.
+
+**A guard that matches a path string must also confirm the path resolves.**
+`gitconfig-include` and `fish-source` both read a file and pattern-match a path
+out of it. On a clone that is not at `~/dotfiles`, the seeded `~/.gitconfig`
+includes a file that does not exist, git ignores it silently, every shared
+setting goes inert — and a string-matching guard reports `ok`. That is the exact
+failure the guard exists for. Both must `Lstat` the referenced path (expanding a
+leading `~` against `Home`) and `Fail` when it is absent.
+
+*Note for Task 8:* `git/gitconfig.local.template` hardcodes `~/dotfiles/…` and
+`Seed` copies it verbatim, so a relocated clone seeds a broken include. The
+check above turns that from silent into loud; making it *correct* is Task 8's,
+which owns the template.
+
 **`phase.Verify` reports but does not exit.** It runs the same `check.All` and
 writes the results, then returns `nil` even on `Fail` — an advisory finding at
 the end of an `apply` must not look like a failed `apply`. `runCheck` is the one
 that exits.
+
+**`Context` carries `Shell`.** The login-shell check needs `$SHELL`, which
+nothing else in the context yields; `phase.Context` gains it too, on the
+precedent already set by `Home`.
 
 - [ ] **Step 1: Write `check_test.go` against a fake `change.Interface`**
 
@@ -2473,7 +2510,114 @@ finding at the end of an apply must not look like a failed apply."
 
 ---
 
-### Tasks 7 through 16
+### Task 7: Root substitution in `Seed`, and the fish inversion
+
+**Files:**
+- Modify: `bootstrap.d/internal/change/change.go`, `applier.go`, `planner.go`
+- Modify: every `NewApplier`/`NewPlanner` call site (`main.go`, `internal/phase/verify.go`, tests)
+- Create: `fish/config.fish.template`
+- Modify: `fish/config.fish`, `fish/mypre.fish`, `.gitignore`, `bootstrap.d/links.manifest`
+- Test: `bootstrap.d/internal/change/applier_test.go`, `bootstrap.d/main_test.go`
+
+**Interfaces:**
+- Produces: `change.RootToken = "@DOTFILES_ROOT@"`;
+  `NewApplier(out io.Writer, root string) *Applier` and
+  `NewPlanner(reader Interface, out io.Writer, root string) *Planner`.
+
+#### Part A — substitution
+
+`Applier.Seed` replaces every occurrence of `change.RootToken` in the template
+with the executor's `root` before writing. The executor takes the root at
+construction because an executor operating on a machine must know which checkout
+it serves; threading it through `Seed`'s arguments would let two call sites
+disagree.
+
+`Planner.Seed` performs no substitution — it writes nothing — but must keep
+reading the source exactly as it does now. Substitution cannot fail, so this
+introduces no plan/apply asymmetry; say that in a comment so the next reader does
+not "fix" it.
+
+Tests: a template containing the token seeds a file containing the root and no
+token; a template without the token is byte-identical to its source (the
+substitution must not disturb ordinary templates); and a re-run does not
+re-substitute, because `Seed` never overwrites.
+
+#### Part B — the fish inversion
+
+Create `fish/config.fish.template`:
+
+```fish
+# Machine-local fish configuration. NOT tracked by dotfiles.
+#
+# Shareable settings belong in the tracked config this sources -- edits made
+# HERE are invisible to the repository and will not follow you to another
+# machine.
+#
+# This file exists so that installers which append managed blocks to
+# config.fish write to a machine-local file instead of into published content.
+# fish sources conf.d/*.fish before this file, so anything appended below lands
+# last and therefore wins -- the same ordering argument
+# git/gitconfig.local.template makes for [include].
+
+source @DOTFILES_ROOT@/fish/config.fish
+
+# --- installer-managed blocks appear below this line ---
+```
+
+Rewrite tracked `fish/config.fish` to source its siblings from
+`(status dirname)` — so the clone path appears exactly once on a machine, in the
+seeded stub — and delete the `# >>> grok installer >>>` block, which belongs in
+the machine-local file.
+
+Rewrite the two functions in `fish/mypre.fish` that are built around the old
+layout: `install_fisher` reads `(status dirname)/fishfile`, and `fish_reset_all`
+targets `$__fish_config_dir` instead of `rm -rf`-ing paths inside the repository.
+
+Delete the five now-pointless `.gitignore` lines: `fish/fish_variables`,
+`fish/fish_plugins`, `fish/functions/`, `fish/completions/`, `fish/conf.d/`.
+
+Add the manifest row, in this commit, alongside the template it names:
+
+```
+seed    fish/config.fish.template         .config/fish/config.fish          *
+```
+
+#### Part C — unskip what this unblocks
+
+Task 6 skipped `TestCheckFindsTheFishSourceLineAfterApply` with
+`t.Skip("unskip in Task 8")`. Part B makes it passable **now**: the manifest row
+exists and the seeded stub's `source` line resolves. Remove that one skip and
+confirm it passes. Leave the `gitconfig-include` skip for Task 8.
+
+- [ ] **Steps:** tests first for Part A, then the substitution; then Part B's
+  files; then Part C. Mutation-test the substitution — a `Seed` that silently
+  fails to substitute must fail a test, not produce a stub pointing at a
+  literal `@DOTFILES_ROOT@`.
+
+```bash
+git add bootstrap.d/internal/change bootstrap.d/main.go bootstrap.d/main_test.go \
+        bootstrap.d/internal/phase bootstrap.d/links.manifest \
+        fish/config.fish.template fish/config.fish fish/mypre.fish .gitignore
+git commit -m "refactor(fish): stop installers writing into the repository
+
+~/.config/fish was a symlink to fish/, so fisher wrote functions/,
+completions/, conf.d/, fish_plugins and fish_variables into tracked
+content, and installers appended managed blocks straight into
+config.fish -- the grok block in this diff is one of them.
+
+Per-file symlinks do not fix that: the file that must be tracked is the
+same file installers append to. So ~/.config/fish/config.fish becomes a
+seeded machine-local stub that sources the tracked config, and the five
+.gitignore lines holding back those writes are no longer load-bearing.
+
+Seed now substitutes the checkout path into templates. A template copied
+byte-for-byte cannot carry a per-machine fact, which is what the seeded
+file exists to hold."
+```
+
+---
+
+### Tasks 8 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
@@ -2483,7 +2627,31 @@ test, run it, implement, run it, commit.
 |---|---|---|---|
 | 6 | `check` package, `check` verb, verify phase | `internal/check/`, `main.go` | The eight checks of spec §10. Checks 6–8 report **not applicable** under the `dotfiles` profile, not failure. Exit `0`/`1`/`2` per the shared table. Adds five `t.Skip("unskip in Task 8")` for checks that need files Tasks 7–8 create. **`check_packages` must report `fail` with "the packages phase has not run" when `bootstrap.d/Brewfile` is absent** rather than passing a nonexistent path to `brew bundle check` — Task 12 creates it, so between here and there the file genuinely does not exist |
 | 7 | Fish inversion | `fish/config.fish.template`, `fish/config.fish`, `fish/mypre.fish`, `.gitignore`, `bootstrap.d/links.manifest` | Stub sources the tracked config; tracked config uses `(status dirname)`; rewrite `install_fisher` and `fish_reset_all` to target `$__fish_config_dir`; delete the five `fish/*` `.gitignore` lines. **Add the manifest row `seed fish/config.fish.template .config/fish/config.fish *` in this commit** — the row and the file it names ship together |
-| 8 | Git renames | `git/gitconfig.shared`, `git/gitignore_global`, `git/gitconfig.local.template`, `Makefile`, `bootstrap.d/links.manifest` | Repoint the include; update the self-referential comment; confirm `grep -rn 'gitconfig\.symlink\|gitignore_global\.symlink'` is empty outside docs; remove Task 6's skips. **Add the manifest row `link git/gitignore_global .gitignore *` in this commit**, after the rename creates the file |
+| 8 | Git renames | `git/gitconfig.shared`, `git/gitignore_global`, `git/gitconfig.local.template`, `Makefile`, `bootstrap.d/links.manifest` | Repoint the include; update the self-referential comment; confirm `grep -rn 'gitconfig\.symlink\|gitignore_global\.symlink'` is empty outside docs; remove Task 6's skips. **Add the manifest row `link git/gitignore_global .gitignore *` in this commit**, after the rename creates the file. **See the warning below — repointing alone will not make Task 6's skipped cases pass.** |
+
+#### Seeded templates carry the clone location by substitution
+
+**Decided 2026-08-10 (human).** Templates name the checkout with the token
+`@DOTFILES_ROOT@`; `change.Seed` replaces it with the resolved root as it
+writes. Task 7 implements the mechanism and is its first consumer; Task 8 is the
+second.
+
+This makes spec §7's existing claim true rather than aspirational. §7 already
+says the seeded stub *"necessarily names the clone location, and that is
+correct: it is machine-local and seeded once, so it is the right place for the
+one fact that varies per machine."* A static template copied byte-for-byte
+cannot carry a per-machine fact; substitution is what closes that gap.
+
+**Do not loosen Task 6's `resolves` guard to make tests green.** After
+substitution the seeded paths are correct and the guard passes honestly. If it
+ever fails again, it is reporting a genuinely broken machine — reverting it
+restores a guard that cannot detect its own failure mode.
+
+**Known consequence, accepted:** running bootstrap from a git worktree seeds
+that worktree's path. Deleting the worktree then breaks the include — loudly,
+because the guard resolves the path rather than merely matching it. Provisioning
+from an experimental tree is not a supported workflow; the failure is visible
+rather than silent, which is the standard this design holds itself to.
 | 9 | `migrate`: reconciling | `internal/migrate/`, `main.go`, `preflight.go` | `fish` and `gitconfig` migrations. Fish **copies before removing** so an interrupt leaves the old state intact. Preflight refuses when one is pending and names `bootstrap migrate` |
 | 10 | `migrate`: reclaiming | `internal/migrate/` | `mambaforge`. Never runs from a bare `migrate`; bare `migrate` **lists** it with the exact command. Refuses if `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip` resolves inside it |
 | 11 | Devtools phase | `internal/phase/devtools.go` | `uv`; build `agents`; **delegate** git hooks to `git/install-hooks.sh` with `install <root> <home> <root>/../bin/agents`. Test asserts the invocation, not hook installation |
