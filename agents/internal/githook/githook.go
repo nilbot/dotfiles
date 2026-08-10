@@ -340,10 +340,14 @@ func builtin(name string, args []string, stderr io.Writer) int {
 }
 
 func stripFootersInFile(path string, stderr io.Writer) int {
-	return stripFootersInFileBeforeReplace(path, stderr, nil)
+	return stripFootersInFileAtBoundaries(path, stderr, nil, nil)
 }
 
 func stripFootersInFileBeforeReplace(path string, stderr io.Writer, beforeReplace func()) int {
+	return stripFootersInFileAtBoundaries(path, stderr, nil, beforeReplace)
+}
+
+func stripFootersInFileAtBoundaries(path string, stderr io.Writer, afterInspect, beforeReplace func()) int {
 	info, err := os.Lstat(path)
 	if err != nil {
 		return commitMessageFailure(stderr, path, "cannot inspect message file")
@@ -351,13 +355,15 @@ func stripFootersInFileBeforeReplace(path string, stderr io.Writer, beforeReplac
 	if !info.Mode().IsRegular() {
 		return commitMessageFailure(stderr, path, "message path is not a regular file")
 	}
+	if afterInspect != nil {
+		afterInspect()
+	}
 
-	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	file, openedInfo, err := openRegularCommitMessage(path)
 	if err != nil {
 		return commitMessageFailure(stderr, path, "cannot read message file")
 	}
-	openedInfo, statErr := file.Stat()
-	if statErr != nil || !os.SameFile(info, openedInfo) {
+	if !os.SameFile(info, openedInfo) {
 		_ = file.Close()
 		return commitMessageFailure(stderr, path, "message file changed while opening")
 	}
@@ -403,15 +409,13 @@ func stripFootersInFileBeforeReplace(path string, stderr io.Writer, beforeReplac
 	if beforeReplace != nil {
 		beforeReplace()
 	}
-	currentFile, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	currentFile, current, err := openRegularCommitMessage(path)
 	if err != nil {
 		return commitMessageFailure(stderr, path, "message file changed before rewrite")
 	}
-	current, statErr := currentFile.Stat()
 	currentMsg, readErr := io.ReadAll(currentFile)
 	closeErr = currentFile.Close()
-	if statErr != nil || readErr != nil || closeErr != nil || !current.Mode().IsRegular() ||
-		!os.SameFile(openedInfo, current) || current.Mode() != openedInfo.Mode() ||
+	if readErr != nil || closeErr != nil || !os.SameFile(openedInfo, current) || current.Mode() != openedInfo.Mode() ||
 		current.Size() != int64(len(msg)) || !bytes.Equal(currentMsg, msg) {
 		return commitMessageFailure(stderr, path, "message file changed before rewrite")
 	}
@@ -420,6 +424,22 @@ func stripFootersInFileBeforeReplace(path string, stderr io.Writer, beforeReplac
 	}
 	keepTemp = false
 	return 0
+}
+
+func openRegularCommitMessage(path string) (*os.File, os.FileInfo, error) {
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		if err == nil {
+			err = fmt.Errorf("commit message is not a regular file")
+		}
+		return nil, nil, err
+	}
+	return file, info, nil
 }
 
 func commitMessageFailure(stderr io.Writer, path, reason string) int {

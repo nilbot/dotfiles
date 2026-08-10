@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func writeScript(t *testing.T, path, body string) {
@@ -660,6 +663,115 @@ func TestCommitMsgLeavesUnchangedFileIdentityAndBytesAlone(t *testing.T) {
 	}
 	if got, err := os.ReadFile(path); err != nil || !bytes.Equal(got, original) {
 		t.Fatalf("unchanged message bytes changed: %q, %v", got, err)
+	}
+}
+
+func TestCommitMsgRejectsFIFOReplacementBetweenInitialInspectAndOpenWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "message\nname")
+	original := []byte("fix: private-a\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := make(chan struct{})
+	var replaceErr error
+	assertCommitMsgFIFOReplacementDoesNotBlock(t, path, ready, func(stderr io.Writer) int {
+		return stripFootersInFileAtBoundaries(path, stderr, func() {
+			if err := os.Remove(path); err != nil {
+				replaceErr = err
+				return
+			}
+			if err := syscall.Mkfifo(path, 0o600); err != nil {
+				replaceErr = err
+				return
+			}
+			close(ready)
+		}, nil)
+	}, func() error { return replaceErr })
+}
+
+func TestCommitMsgRejectsFIFOReplacementBeforeFinalReopenWithoutBlocking(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "message\nname")
+	original := []byte("fix: private-a\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n")
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := make(chan struct{})
+	var replaceErr error
+	assertCommitMsgFIFOReplacementDoesNotBlock(t, path, ready, func(stderr io.Writer) int {
+		return stripFootersInFileAtBoundaries(path, stderr, nil, func() {
+			if err := os.Remove(path); err != nil {
+				replaceErr = err
+				return
+			}
+			if err := syscall.Mkfifo(path, 0o600); err != nil {
+				replaceErr = err
+				return
+			}
+			close(ready)
+		})
+	}, func() error { return replaceErr })
+}
+
+func assertCommitMsgFIFOReplacementDoesNotBlock(
+	t *testing.T,
+	path string,
+	ready <-chan struct{},
+	run func(io.Writer) int,
+	replacementError func() error,
+) {
+	t.Helper()
+	type result struct {
+		code   int
+		stderr string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var stderr bytes.Buffer
+		done <- result{code: run(&stderr), stderr: stderr.String()}
+	}()
+
+	select {
+	case <-ready:
+	case got := <-done:
+		if err := replacementError(); err != nil {
+			t.Fatalf("could not install FIFO replacement: %v", err)
+		}
+		t.Fatalf("commit-msg returned before the FIFO replacement was ready: code=%d stderr=%q", got.code, got.stderr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("FIFO replacement seam did not complete")
+	}
+
+	var got result
+	select {
+	case got = <-done:
+	case <-time.After(250 * time.Millisecond):
+		// A blocking read-only FIFO open is released by a writer so the test
+		// can fail without leaking its goroutine or leaving an open FIFO.
+		writer, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		if err != nil {
+			t.Fatalf("commit-msg blocked and rescue writer could not open FIFO: %v", err)
+		}
+		_ = writer.Close()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("commit-msg remained blocked after FIFO rescue writer closed")
+		}
+		t.Fatal("commit-msg blocked while opening a FIFO replacement")
+	}
+
+	if got.code == 0 {
+		t.Fatalf("FIFO replacement was accepted: stderr=%q", got.stderr)
+	}
+	if strings.Contains(got.stderr, "private-a") {
+		t.Fatalf("FIFO replacement diagnostic leaked message content: %q", got.stderr)
+	}
+	if strings.Contains(got.stderr, path) || !strings.Contains(got.stderr, `\n`) {
+		t.Fatalf("FIFO replacement diagnostic did not ASCII-quote the path: %q", got.stderr)
 	}
 }
 
