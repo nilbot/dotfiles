@@ -182,12 +182,25 @@ func runCheck(profile string, stdout, stderr io.Writer) int {
 		return exitBlock
 	}
 
-	results := check.All(check.Context{
+	// An Applier, never a Planner: a check that asks its question by running a
+	// command would read a Planner's recorded nil as success. See
+	// internal/check's package comment.
+	results, err := check.All(check.Context{
 		Change: change.NewApplier(stdout), Root: repoRoot, Home: home,
 		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"),
 	})
 	fmt.Fprintln(stdout, "== check")
 	check.Write(stdout, results)
+
+	// A manifest that does not parse is bad INPUT, and the same typo must answer
+	// 3 to every verb. Reporting it as 2 would say this machine is in a state
+	// bootstrap will not touch, which is not what happened -- and telling those
+	// apart is the whole reason both codes exist.
+	var syntax *manifest.SyntaxError
+	if errors.As(err, &syntax) {
+		fmt.Fprintf(stderr, "bootstrap: check: %v\n", err)
+		return exitMalformed
+	}
 	return check.ExitCode(results)
 }
 

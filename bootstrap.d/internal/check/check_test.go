@@ -8,6 +8,7 @@ import (
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 	"github.com/nilbot/dotfiles/bootstrap/internal/check"
+	"github.com/nilbot/dotfiles/bootstrap/internal/manifest"
 )
 
 // The manifest every case is checked against, unless it supplies its own. One
@@ -51,6 +52,18 @@ func ctx(fake *fakeChange, profile string) check.Context {
 	}
 }
 
+// all runs every check and fails the case on an unexpected error. All's error
+// reports one thing only -- a manifest that does not parse -- so any case that
+// is not about that must not see one. The two that are call check.All directly.
+func all(t *testing.T, c check.Context) []check.Result {
+	t.Helper()
+	results, err := check.All(c)
+	if err != nil {
+		t.Fatalf("unexpected error from All: %v", err)
+	}
+	return results
+}
+
 // find returns the one result with this name. A missing name is fatal: a case
 // that silently checked nothing is worse than one that fails.
 func find(t *testing.T, results []check.Result, name string) check.Result {
@@ -85,7 +98,7 @@ func assertStatus(t *testing.T, results []check.Result, name string, want check.
 }
 
 func TestAllReportsTheEightChecks(t *testing.T) {
-	got := strings.Join(names(check.All(ctx(healthy(), "workstation"))), ",")
+	got := strings.Join(names(all(t, ctx(healthy(), "workstation"))), ",")
 	want := "platform,manifest-owners,manifest-kinds,fish-source,gitconfig-include," +
 		"login-shell,agents,packages"
 	if got != want {
@@ -94,7 +107,7 @@ func TestAllReportsTheEightChecks(t *testing.T) {
 }
 
 func TestAHealthyMachinePassesEveryCheck(t *testing.T) {
-	results := check.All(ctx(healthy(), "workstation"))
+	results := all(t, ctx(healthy(), "workstation"))
 	for _, r := range results {
 		if r.Status != check.OK {
 			t.Errorf("%s = %s (%s), want ok", r.Name, r.Status, r.Detail)
@@ -117,7 +130,7 @@ func TestMachineChecksAreNotApplicableUnderDotfiles(t *testing.T) {
 	c := ctx(fake, "dotfiles")
 	c.Shell = "/bin/zsh"
 
-	results := check.All(c)
+	results := all(t, c)
 	for _, name := range []string{"login-shell", "agents", "packages"} {
 		assertStatus(t, results, name, check.NA)
 	}
@@ -136,7 +149,7 @@ func TestMachineChecksReportRealVerdictsUnderWorkstation(t *testing.T) {
 	c := ctx(fake, "workstation")
 	c.Shell = "/bin/zsh"
 
-	results := check.All(c)
+	results := all(t, c)
 	for _, name := range []string{"login-shell", "agents", "packages"} {
 		assertStatus(t, results, name, check.Fail)
 	}
@@ -149,7 +162,7 @@ func TestManifestKindsFailsWhenALinkTargetIsARegularFile(t *testing.T) {
 	fake := healthy()
 	fake.info["/home/.tmux.conf"] = change.FileInfo{Exists: true, IsRegular: true}
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
 	if !strings.Contains(got.Detail, ".tmux.conf") {
 		t.Errorf("the finding must name the row it is about: %s", got.Detail)
 	}
@@ -159,7 +172,7 @@ func TestManifestKindsFailsWhenASeedTargetIsASymlink(t *testing.T) {
 	fake := healthy()
 	fake.info["/home/.gitconfig"] = change.FileInfo{Exists: true, IsLink: true}
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
 	if !strings.Contains(got.Detail, ".gitconfig") {
 		t.Errorf("the finding must name the row it is about: %s", got.Detail)
 	}
@@ -170,7 +183,7 @@ func TestManifestKindsFailsWhenADirTargetIsASymlink(t *testing.T) {
 	fake := healthy()
 	fake.info["/home/.config/fish"] = change.FileInfo{Exists: true, IsLink: true}
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
 	if !strings.Contains(got.Detail, ".config/fish") {
 		t.Errorf("the finding must name the row it is about: %s", got.Detail)
 	}
@@ -180,7 +193,7 @@ func TestManifestKindsFailsWhenALinkPointsSomewhereElse(t *testing.T) {
 	fake := healthy()
 	fake.links["/home/.tmux.conf"] = "/somewhere/else/tmux.conf"
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
 	if !strings.Contains(got.Detail, "/somewhere/else/tmux.conf") {
 		t.Errorf("the finding must name where the link actually points: %s", got.Detail)
 	}
@@ -190,7 +203,7 @@ func TestManifestKindsFailsWhenATargetIsMissing(t *testing.T) {
 	fake := healthy()
 	delete(fake.info, "/home/.tmux.conf")
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "manifest-kinds", check.Fail)
 	if !strings.Contains(got.Detail, ".tmux.conf") {
 		t.Errorf("the finding must name the missing row: %s", got.Detail)
 	}
@@ -201,22 +214,53 @@ func TestManifestOwnersFailsWhenTwoRowsClaimOnePath(t *testing.T) {
 	fake.files[manifestPath] = []byte(testManifest +
 		"link    starship.toml   .tmux.conf   *\n")
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "manifest-owners", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "manifest-owners", check.Fail)
 	if !strings.Contains(got.Detail, ".tmux.conf") {
 		t.Errorf("the finding must name the contested path: %s", got.Detail)
 	}
 }
 
-func TestManifestChecksFailOnAMalformedManifest(t *testing.T) {
+// A manifest that does not parse is bad INPUT, which is exit 3 everywhere else
+// in this program. All surfaces it as a *manifest.SyntaxError so the check verb
+// can answer 3 too; reporting it only as a Fail would make the same typo answer
+// 3 to apply and 2 to check.
+//
+// The results are still complete and still say so, because a report that goes
+// blank on the one input it cannot parse is no report.
+func TestMalformedManifestIsReportedAsMalformedInput(t *testing.T) {
 	fake := healthy()
 	fake.files[manifestPath] = []byte("hardlink  a  b  *\n")
 
-	results := check.All(ctx(fake, "dotfiles"))
+	results, err := check.All(ctx(fake, "dotfiles"))
+
+	var syntax *manifest.SyntaxError
+	if !errors.As(err, &syntax) {
+		t.Fatalf("All returned %v, want a *manifest.SyntaxError so check can exit 3", err)
+	}
 	for _, name := range []string{"manifest-owners", "manifest-kinds"} {
 		got := assertStatus(t, results, name, check.Fail)
 		if !strings.Contains(got.Detail, "hardlink") {
 			t.Errorf("%s must name the offending kind: %s", name, got.Detail)
 		}
+	}
+}
+
+// A manifest that cannot be READ is not malformed input -- the machine is in a
+// state bootstrap cannot work from, which is a Fail and exit 2. Without this
+// case the arm above could be widened to any error and nothing would notice.
+func TestAnUnreadableManifestIsNotMalformedInput(t *testing.T) {
+	fake := healthy()
+	fake.readErr = map[string]bool{manifestPath: true}
+
+	results, err := check.All(ctx(fake, "dotfiles"))
+
+	var syntax *manifest.SyntaxError
+	if errors.As(err, &syntax) {
+		t.Errorf("an unreadable manifest is not a syntax error: %v", err)
+	}
+	assertStatus(t, results, "manifest-kinds", check.Fail)
+	if code := check.ExitCode(results); code != 2 {
+		t.Errorf("exit %d, want 2", code)
 	}
 }
 
@@ -227,14 +271,14 @@ func TestFishSourceFailsWithoutTheSourceLine(t *testing.T) {
 	fake.files["/home/.config/fish/config.fish"] =
 		[]byte("# stub\n# --- installer-managed blocks appear below this line ---\n")
 
-	assertStatus(t, check.All(ctx(fake, "dotfiles")), "fish-source", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "dotfiles")), "fish-source", check.Fail)
 }
 
 func TestFishSourceFailsWhenTheStubIsAbsent(t *testing.T) {
 	fake := healthy()
 	fake.readErr = map[string]bool{"/home/.config/fish/config.fish": true}
 
-	assertStatus(t, check.All(ctx(fake, "dotfiles")), "fish-source", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "dotfiles")), "fish-source", check.Fail)
 }
 
 // A source line for something else must not satisfy the check: the shared
@@ -244,11 +288,11 @@ func TestFishSourceFailsOnAnUnrelatedSourceLine(t *testing.T) {
 	fake.files["/home/.config/fish/config.fish"] =
 		[]byte("source $HOME/.config/fish/conf.d/other.fish\n")
 
-	assertStatus(t, check.All(ctx(fake, "dotfiles")), "fish-source", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "dotfiles")), "fish-source", check.Fail)
 }
 
 func TestFishSourcePassesOnTheSeededStub(t *testing.T) {
-	assertStatus(t, check.All(ctx(healthy(), "dotfiles")), "fish-source", check.OK)
+	assertStatus(t, all(t, ctx(healthy(), "dotfiles")), "fish-source", check.OK)
 }
 
 // The second silent total failure, and the one §8 creates deliberately: an
@@ -260,7 +304,7 @@ func TestGitconfigIncludeFailsOnThePreRenamePath(t *testing.T) {
 	fake.files["/home/.gitconfig"] =
 		[]byte("[include]\n\tpath = ~/dotfiles/git/gitconfig.symlink\n")
 
-	got := assertStatus(t, check.All(ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
 	if !strings.Contains(got.Detail, "migrate") {
 		t.Errorf("the finding must name the migration that fixes it: %s", got.Detail)
 	}
@@ -278,7 +322,7 @@ func TestGitconfigIncludeFailsWhenOnlyACommentNamesTheSharedConfig(t *testing.T)
 		"# Put anything worth sharing in ~/dotfiles/git/gitconfig.shared.\n" +
 			"[user]\n\tname = someone\n")
 
-	assertStatus(t, check.All(ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
 }
 
 // A longer path that merely starts with the shared config's name is a different
@@ -288,7 +332,7 @@ func TestGitconfigIncludeFailsOnASuffixedVariant(t *testing.T) {
 	fake.files["/home/.gitconfig"] =
 		[]byte("[include]\n\tpath = ~/dotfiles/git/gitconfig.shared.disabled\n")
 
-	assertStatus(t, check.All(ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
 }
 
 // The spellings git accepts for the same include, none of which may be rejected.
@@ -304,7 +348,7 @@ func TestGitconfigIncludeAcceptsTheFormsGitAccepts(t *testing.T) {
 	} {
 		fake := healthy()
 		fake.files["/home/.gitconfig"] = []byte("[include]\n" + line + "\n")
-		if got := find(t, check.All(ctx(fake, "dotfiles")), "gitconfig-include"); got.Status != check.OK {
+		if got := find(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include"); got.Status != check.OK {
 			t.Errorf("%q = %s (%s), want ok", line, got.Status, got.Detail)
 		}
 	}
@@ -314,11 +358,11 @@ func TestGitconfigIncludeFailsWhenTheFileIsAbsent(t *testing.T) {
 	fake := healthy()
 	fake.readErr = map[string]bool{"/home/.gitconfig": true}
 
-	assertStatus(t, check.All(ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "dotfiles")), "gitconfig-include", check.Fail)
 }
 
 func TestGitconfigIncludePassesOnTheSharedPath(t *testing.T) {
-	assertStatus(t, check.All(ctx(healthy(), "dotfiles")), "gitconfig-include", check.OK)
+	assertStatus(t, all(t, ctx(healthy(), "dotfiles")), "gitconfig-include", check.OK)
 }
 
 // Rule 2: between this task and Task 12 the Brewfile genuinely does not exist.
@@ -328,7 +372,7 @@ func TestPackagesFailsWhenTheBrewfileIsAbsent(t *testing.T) {
 	fake := healthy()
 	delete(fake.info, "/repo/bootstrap.d/Brewfile")
 
-	got := assertStatus(t, check.All(ctx(fake, "workstation")), "packages", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "workstation")), "packages", check.Fail)
 	if !strings.Contains(got.Detail, "the packages phase has not run") {
 		t.Errorf("the finding must say the packages phase has not run: %s", got.Detail)
 	}
@@ -343,14 +387,14 @@ func TestPackagesFailsWhenBrewBundleCheckFails(t *testing.T) {
 	fake := healthy()
 	fake.runErr = map[string]bool{"brew": true}
 
-	assertStatus(t, check.All(ctx(fake, "workstation")), "packages", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "workstation")), "packages", check.Fail)
 }
 
 func TestLoginShellFailsWhenTheShellIsNotFish(t *testing.T) {
 	c := ctx(healthy(), "workstation")
 	c.Shell = "/bin/zsh"
 
-	got := assertStatus(t, check.All(c), "login-shell", check.Fail)
+	got := assertStatus(t, all(t, c), "login-shell", check.Fail)
 	if !strings.Contains(got.Detail, "/bin/zsh") {
 		t.Errorf("the finding must name the shell it found: %s", got.Detail)
 	}
@@ -362,14 +406,14 @@ func TestLoginShellFailsOnAShellMerelyEndingInFish(t *testing.T) {
 	c := ctx(healthy(), "workstation")
 	c.Shell = "/usr/local/bin/notfish"
 
-	assertStatus(t, check.All(c), "login-shell", check.Fail)
+	assertStatus(t, all(t, c), "login-shell", check.Fail)
 }
 
 func TestLoginShellFailsWhenFishIsNotInEtcShells(t *testing.T) {
 	fake := healthy()
 	fake.files["/etc/shells"] = []byte("/bin/sh\n/bin/zsh\n")
 
-	got := assertStatus(t, check.All(ctx(fake, "workstation")), "login-shell", check.Fail)
+	got := assertStatus(t, all(t, ctx(fake, "workstation")), "login-shell", check.Fail)
 	if !strings.Contains(got.Detail, "/etc/shells") {
 		t.Errorf("the finding must name the file that is missing the entry: %s", got.Detail)
 	}
@@ -379,18 +423,18 @@ func TestLoginShellFailsWhenShellIsUnset(t *testing.T) {
 	c := ctx(healthy(), "workstation")
 	c.Shell = ""
 
-	assertStatus(t, check.All(c), "login-shell", check.Fail)
+	assertStatus(t, all(t, c), "login-shell", check.Fail)
 }
 
 func TestAgentsFailsWhenNotOnPath(t *testing.T) {
 	fake := healthy()
 	fake.lookPathErr = map[string]bool{"agents": true}
 
-	assertStatus(t, check.All(ctx(fake, "workstation")), "agents", check.Fail)
+	assertStatus(t, all(t, ctx(fake, "workstation")), "agents", check.Fail)
 }
 
 func TestPlatformReportsTheDetectedPlatform(t *testing.T) {
-	got := assertStatus(t, check.All(ctx(healthy(), "dotfiles")), "platform", check.OK)
+	got := assertStatus(t, all(t, ctx(healthy(), "dotfiles")), "platform", check.OK)
 	if !strings.Contains(got.Detail, "darwin") {
 		t.Errorf("the platform check must report what it detected: %s", got.Detail)
 	}
@@ -400,7 +444,7 @@ func TestPlatformFailsOnAnUnsupportedOperatingSystem(t *testing.T) {
 	c := ctx(healthy(), "dotfiles")
 	c.Platform = "plan9"
 
-	assertStatus(t, check.All(c), "platform", check.Fail)
+	assertStatus(t, all(t, c), "platform", check.Fail)
 }
 
 func TestExitCodeMapsToTheSharedTable(t *testing.T) {
@@ -432,7 +476,7 @@ func TestExitCodeMapsToTheSharedTable(t *testing.T) {
 // check's name and its status. Column layout is deliberately not a contract.
 func TestWriteReportsEveryCheckAndItsStatus(t *testing.T) {
 	var out bytes.Buffer
-	results := check.All(ctx(healthy(), "dotfiles"))
+	results := all(t, ctx(healthy(), "dotfiles"))
 	check.Write(&out, results)
 
 	for _, r := range results {

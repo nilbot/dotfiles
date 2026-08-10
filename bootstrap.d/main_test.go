@@ -210,10 +210,18 @@ func TestPreflightDeclaresPrivilegeAndNetwork(t *testing.T) {
 // that check is absent. Only the two stable parts of a line are read -- the
 // status and the name -- because the column layout is deliberately not a
 // contract.
+//
+// The first field must be one of the four statuses. Without that the phase
+// banner "== packages (not implemented)" parses as a check named "packages"
+// with status "==", and a case comparing two runs reads that as a verdict.
 func checkStatus(stdout, name string) string {
 	for _, line := range strings.Split(stdout, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == name {
+		if len(fields) < 2 || fields[1] != name {
+			continue
+		}
+		switch fields[0] {
+		case "ok", "warn", "fail", "n/a":
 			return fields[0]
 		}
 	}
@@ -259,6 +267,117 @@ func TestApplyStillSucceedsWhenVerifyFinds(t *testing.T) {
 	}
 	if checkStatus(stdout, "gitconfig-include") != "fail" {
 		t.Fatalf("this case proves nothing unless verify actually found something:\n%s", stdout)
+	}
+}
+
+// The same typo must answer 3 to every verb. A malformed manifest is bad INPUT,
+// and check reporting it as 2 -- "this machine is in a state bootstrap will not
+// touch" -- says something about the machine that is not true. Both codes exist
+// so a wrapping script can tell those apart; one verb disagreeing with the
+// others is exactly the confusion the shared table prevents.
+func TestCheckOnAMalformedManifestIsMalformedInput(t *testing.T) {
+	alt := altCheckout(t)
+	manifest := filepath.Join(alt, "bootstrap.d", "links.manifest")
+	if err := os.WriteFile(manifest, []byte("hardlink  a  b  *\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runShimEnv(t, filepath.Join(alt, "bootstrap"), tempHome(t), nil,
+		"check", "dotfiles")
+	if code != 3 {
+		t.Fatalf("exit %d, want 3 (malformed input):\n%s%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout+stderr, "hardlink") {
+		t.Errorf("the error should name the offending kind:\n%s%s", stdout, stderr)
+	}
+}
+
+// The other half of the exit-3 mapping, and the half that would rot silently: a
+// manifest that cannot be READ is not malformed input. Nothing is wrong with the
+// text -- the machine is in a state bootstrap cannot work from -- so that is a
+// block (2). Without this case the syntax arm could be widened to any error and
+// every read failure would start claiming the user made a typo.
+//
+// The manifest is replaced by a directory rather than chmod 000: ReadFile fails
+// deterministically on it, including when the suite runs as root.
+func TestCheckOnAnUnreadableManifestBlocks(t *testing.T) {
+	alt := altCheckout(t)
+	manifest := filepath.Join(alt, "bootstrap.d", "links.manifest")
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(manifest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runShimEnv(t, filepath.Join(alt, "bootstrap"), tempHome(t), nil,
+		"check", "dotfiles")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block):\n%s%s", code, stdout, stderr)
+	}
+	if checkStatus(stdout, "manifest-kinds") != "fail" {
+		t.Errorf("the unreadable manifest must be reported as a finding:\n%s", stdout)
+	}
+}
+
+// A check must never be handed a Planner.
+//
+// A Planner's Run records the command and returns nil without running it, so a
+// check that asks a question by running one reads that nil as success. That is a
+// false ok in the layer whose entire job is catching silent failures -- and it
+// would appear only under `plan`, where nobody is looking for it. phase.Verify
+// therefore builds its own Applier instead of using c.Change.
+//
+// The comparison is `plan` against `check` rather than against `apply`
+// deliberately: `plan` is the verb that carries the Planner and so the only one
+// that can exhibit the fault, and both of these verbs mutate nothing on any
+// future task. Once Task 12 makes the packages phase real, a test that ran
+// `apply workstation` would install Homebrew.
+//
+// Three things make this discriminate, and it proves nothing without all of
+// them: a Brewfile must exist (otherwise packages fails at its first arm before
+// any command), brew must resolve on PATH (otherwise it fails at the second),
+// and brew must answer non-zero -- which is what the stub is for. The verdict is
+// asserted to be "fail" as well as equal, because two "ok"s would agree without
+// either having asked anything.
+func TestPlanAndCheckAgreeOnThePackagesVerdict(t *testing.T) {
+	alt := altCheckout(t)
+	// A manifest with no rows: config then has nothing to refuse, so `plan`
+	// reaches the verify phase over a two-directory checkout.
+	if err := os.WriteFile(filepath.Join(alt, "bootstrap.d", "links.manifest"),
+		[]byte("# no rows\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(alt, "bootstrap.d", "Brewfile"),
+		[]byte("brew \"jq\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// A brew that reports the bundle unsatisfied. Prepended, not replacing PATH:
+	// the shim needs go, dirname, cksum and find.
+	stubDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(stubDir, "brew"),
+		[]byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	home := tempHome(t)
+	shim := filepath.Join(alt, "bootstrap")
+	planned, stderr, code := runShimEnv(t, shim, home, env, "plan", "workstation")
+	if code != 0 {
+		t.Fatalf("plan exit %d:\n%s%s", code, planned, stderr)
+	}
+	checked, _, _ := runShimEnv(t, shim, home, env, "check", "workstation")
+
+	got, want := checkStatus(planned, "packages"), checkStatus(checked, "packages")
+	if got != want {
+		t.Errorf("packages = %q under plan but %q under check; a check was handed "+
+			"a Planner, whose Run returns nil without running anything:\n%s", got, want, planned)
+	}
+	if want != "fail" {
+		t.Fatalf("packages = %q under check, want fail; the fixture is not "+
+			"exercising brew and this case proves nothing:\n%s", want, checked)
 	}
 }
 

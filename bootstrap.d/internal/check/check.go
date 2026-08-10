@@ -9,6 +9,21 @@
 // It does not import internal/phase. phase.Verify runs these checks, so the
 // dependency runs one way only, which is why Context is declared here instead
 // of reusing phase.Context.
+//
+// # Context.Change must be an Applier, never a Planner
+//
+// A Planner's Run records the command and returns nil without running it. A
+// check that asks a question by running one -- packages asks `brew bundle check`
+// -- would read that nil as success, so the answer would be "everything is
+// installed" on a machine where nothing is. That is a silent false pass in the
+// layer whose entire job is catching silent failures, and it would appear only
+// under `plan`, where nobody is looking for it.
+//
+// Handing a check an Applier does not weaken the dry-run invariant: every check
+// reads, and `brew bundle check` is a query. Checks never mutate, which is why
+// they do not need the Planner's protection in the first place. phase.Verify
+// therefore builds its own Applier rather than passing its Context's Change
+// along.
 package check
 
 import (
@@ -51,11 +66,18 @@ type Context struct {
 }
 
 // All runs spec 2 §10's eight checks, in the order they are listed there.
-func All(c Context) []Result {
+//
+// The error is separate from the results on purpose. Everything a check can say
+// about the machine is a Result; the error carries the one thing that is not
+// about the machine at all -- a manifest that does not parse, which is malformed
+// INPUT and answers 3, not 2. The results are complete either way, so a caller
+// that only reports may ignore it.
+func All(c Context) ([]Result, error) {
+	rows, rowsErr := loadRows(c)
 	results := []Result{
 		platform(c),
-		manifestOwners(c),
-		manifestKinds(c),
+		manifestOwners(rows, rowsErr),
+		manifestKinds(c, rows, rowsErr),
 		fishSource(c),
 		gitconfigInclude(c),
 	}
@@ -72,7 +94,7 @@ func All(c Context) []Result {
 		}
 		results = append(results, m.run(c))
 	}
-	return results
+	return results, rowsErr
 }
 
 // machineChecks are the three that concern machine-wide state.

@@ -22,31 +22,32 @@ func platform(c Context) Result {
 		fmt.Sprintf("unsupported operating system %q", c.Platform)}
 }
 
-// rows loads the applicable manifest rows, or returns the one sentence that
-// explains why it could not. Both manifest checks call it, so a manifest that
-// cannot be read or parsed produces the same account in both places rather than
-// two descriptions of one fault.
+// loadRows reads and parses the manifest once for both manifest checks, so one
+// fault produces one account of itself rather than two descriptions of it.
 //
-// The rows are platform-filtered first, exactly as phase.Config filters them:
+// The rows are platform-filtered here, exactly as phase.Config filters them:
 // asking whether a darwin-only row is satisfied on linux is asking the wrong
 // question.
-func rows(c Context) ([]manifest.Row, string) {
+//
+// The error is returned rather than flattened to a string because All hands it
+// back to its caller: a *manifest.SyntaxError is malformed INPUT, which the
+// check verb must answer with 3 like every other verb.
+func loadRows(c Context) ([]manifest.Row, error) {
 	path := filepath.Join(c.Root, "bootstrap.d", "links.manifest")
 	data, err := c.Change.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Sprintf("cannot read the manifest: %v", err)
+		return nil, fmt.Errorf("cannot read the manifest: %w", err)
 	}
 	parsed, err := manifest.Parse(data)
 	if err != nil {
-		return nil, err.Error()
+		return nil, err
 	}
-	return manifest.For(parsed, c.Platform), ""
+	return manifest.For(parsed, c.Platform), nil
 }
 
-func manifestOwners(c Context) Result {
-	applicable, problem := rows(c)
-	if problem != "" {
-		return Result{Fail, "manifest-owners", problem}
+func manifestOwners(applicable []manifest.Row, err error) Result {
+	if err != nil {
+		return Result{Fail, "manifest-owners", err.Error()}
 	}
 	if dupes := manifest.DuplicateTargets(applicable); len(dupes) > 0 {
 		return Result{Fail, "manifest-owners",
@@ -56,10 +57,9 @@ func manifestOwners(c Context) Result {
 		fmt.Sprintf("%d rows, one owner each", len(applicable))}
 }
 
-func manifestKinds(c Context) Result {
-	applicable, problem := rows(c)
-	if problem != "" {
-		return Result{Fail, "manifest-kinds", problem}
+func manifestKinds(c Context, applicable []manifest.Row, err error) Result {
+	if err != nil {
+		return Result{Fail, "manifest-kinds", err.Error()}
 	}
 	var findings []string
 	for _, row := range applicable {
