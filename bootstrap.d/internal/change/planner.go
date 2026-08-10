@@ -122,6 +122,21 @@ func (p *Planner) Seed(source, target string) error {
 	if err := seedSourceVerdict(srcInfo, source); err != nil {
 		return err
 	}
+	// seedSourceVerdict names the two cases worth a remediation message.
+	// Everything else -- a dangling symlink, a permission error -- is predicted
+	// EXACTLY by performing the same read Applier will and discarding the
+	// bytes. Reading is not a mutation, so Planner may do it.
+	//
+	// This ends a regress rather than narrowing it once more: predicting
+	// os.ReadFile from Lstat is approximate by construction, and each fix
+	// uncovered a narrower case that still diverged.
+	//
+	// Safe because a seed source is always a tracked repository file -- the
+	// manifest's source column is repo-relative and no plan step creates one --
+	// so the overlay can never need to satisfy this read.
+	if _, err := p.ReadFile(source); err != nil {
+		return err
+	}
 	if err := p.Dir(filepath.Dir(target)); err != nil {
 		return err
 	}

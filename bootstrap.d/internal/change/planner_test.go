@@ -177,6 +177,68 @@ func TestSeedRefusesUnusableSourceOnBothPaths(t *testing.T) {
 	}
 }
 
+// seedSourceVerdict names the two cases worth a remediation. Everything else is
+// predicted by performing the identical read, so these must fail the same way on
+// both paths -- byte-for-byte the same error, since it is the same read.
+func TestSeedPredictsReadFailuresExactly(t *testing.T) {
+	cases := []struct {
+		kind string
+		make func(t *testing.T, home string) string
+	}{
+		{"dangling symlink", func(t *testing.T, home string) string {
+			t.Helper()
+			source := filepath.Join(home, "dangling template")
+			if err := os.Symlink(filepath.Join(home, "gone"), source); err != nil {
+				t.Fatal(err)
+			}
+			return source
+		}},
+		{"permission denied", func(t *testing.T, home string) string {
+			t.Helper()
+			if os.Geteuid() == 0 {
+				t.Skip("root reads a mode-000 file regardless, so this cannot be exercised")
+			}
+			source := filepath.Join(home, "unreadable template")
+			if err := os.WriteFile(source, []byte("x"), 0o000); err != nil {
+				t.Fatal(err)
+			}
+			return source
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			// One home for both runs, so the two errors name the same path and
+			// are directly comparable. Safe because plan mutates nothing and
+			// apply fails before it acts.
+			home := tempHome(t)
+			source := tc.make(t, home)
+			target := filepath.Join(home, "config dir", "dst")
+			before := treeOf(t, home)
+
+			var planOut, applyOut bytes.Buffer
+			planErr := change.NewPlanner(change.NewApplier(&bytes.Buffer{}), &planOut).Seed(source, target)
+			applyErr := change.NewApplier(&applyOut).Seed(source, target)
+
+			if planErr == nil || applyErr == nil {
+				t.Fatalf("both paths must fail; plan = %v, apply = %v", planErr, applyErr)
+			}
+			if planErr.Error() != applyErr.Error() {
+				t.Errorf("plan and apply disagree:\nplan:  %v\napply: %v", planErr, applyErr)
+			}
+			// Covers the stray parent directory: the read must precede Dir.
+			if after := treeOf(t, home); after != before {
+				t.Errorf("a failed seed changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+			}
+			for name, out := range map[string]*bytes.Buffer{"plan": &planOut, "apply": &applyOut} {
+				if strings.Contains(out.String(), "seed") {
+					t.Errorf("%s reported a seed that failed:\n%s", name, out.String())
+				}
+			}
+		})
+	}
+}
+
 // Applier.Dir uses MkdirAll, which creates the whole ancestor chain, so a
 // Planner recording only the exact path announces directories apply never
 // creates. The fixture is the ordinary manifest shape -- two links into a
