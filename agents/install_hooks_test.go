@@ -2,11 +2,15 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 type hookInstallFixture struct {
@@ -19,10 +23,11 @@ type hookInstallFixture struct {
 func newHookInstallFixture(t *testing.T) hookInstallFixture {
 	t.Helper()
 	base := filepath.Join(t.TempDir(), "fixture with spaces")
+	home := filepath.Join(base, "home dir")
 	fixture := hookInstallFixture{
 		repoRoot:     filepath.Join(base, "dotfiles root"),
-		home:         filepath.Join(base, "home dir"),
-		globalConfig: filepath.Join(base, "global gitconfig"),
+		home:         home,
+		globalConfig: filepath.Join(home, ".gitconfig"),
 	}
 	fixture.binary = filepath.Join(fixture.home, "bin", "agents")
 	if err := os.MkdirAll(filepath.Join(fixture.repoRoot, "git", "hooks.d"), 0o755); err != nil {
@@ -84,11 +89,88 @@ func isolatedGitEnvironmentWithoutGlobal(home string) []string {
 
 func runHookInstaller(t *testing.T, fixture hookInstallFixture, mode string) (string, error) {
 	t.Helper()
+	return runHookInstallerWithEnvironment(t, fixture, mode, isolatedGitEnvironment(fixture.home, fixture.globalConfig))
+}
+
+func runHookInstallerWithEnvironment(t *testing.T, fixture hookInstallFixture, mode string, environment []string) (string, error) {
+	t.Helper()
+	script := filepath.Join(task18RepoRoot(t), "git", "install-hooks.sh")
+	command := exec.Command("bash", script, mode, fixture.repoRoot, fixture.home, fixture.binary)
+	command.Env = environment
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+func environmentWithHookInstallTestOverrides(environment []string, overrides ...string) []string {
+	keys := make(map[string]struct{}, len(overrides))
+	for _, override := range overrides {
+		key, _, _ := strings.Cut(override, "=")
+		keys[key] = struct{}{}
+	}
+	result := make([]string, 0, len(environment)+len(overrides))
+	for _, item := range environment {
+		key, _, _ := strings.Cut(item, "=")
+		if _, replaced := keys[key]; !replaced {
+			result = append(result, item)
+		}
+	}
+	return append(result, overrides...)
+}
+
+func runHookInstallerWithTimeout(t *testing.T, fixture hookInstallFixture, mode string) (string, error, bool) {
+	t.Helper()
 	script := filepath.Join(task18RepoRoot(t), "git", "install-hooks.sh")
 	command := exec.Command("bash", script, mode, fixture.repoRoot, fixture.home, fixture.binary)
 	command.Env = isolatedGitEnvironment(fixture.home, fixture.globalConfig)
-	output, err := command.CombinedOutput()
-	return string(output), err
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var output bytes.Buffer
+	command.Stdout = &output
+	command.Stderr = &output
+	if err := command.Start(); err != nil {
+		return output.String(), err, false
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case err := <-done:
+		return output.String(), err, false
+	case <-time.After(2 * time.Second):
+		processGroup := -command.Process.Pid
+		_ = syscall.Kill(processGroup, syscall.SIGKILL)
+		<-done
+		if err := syscall.Kill(processGroup, 0); err == nil {
+			return output.String(), fmt.Errorf("hook-installer process group %d remains alive after timeout cleanup", -processGroup), true
+		} else if err != syscall.ESRCH {
+			return output.String(), fmt.Errorf("verify hook-installer process group cleanup: %w", err), true
+		}
+		return output.String(), nil, true
+	}
+}
+
+func hookInstallManagedPaths(fixture hookInstallFixture) []string {
+	paths := []string{filepath.Join(fixture.home, ".gitattributes")}
+	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
+		paths = append(paths, filepath.Join(fixture.repoRoot, "git", "hooks.d", hook))
+	}
+	return paths
+}
+
+func assertNoHookInstallManagedPaths(t *testing.T, fixture hookInstallFixture) {
+	t.Helper()
+	for _, path := range hookInstallManagedPaths(fixture) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("refusal created %s: %v", path, err)
+		}
+	}
+}
+
+func fileHashForHookInstallTest(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(contents)
 }
 
 func copyPathForHookInstallTest(t *testing.T, source, destination string) {
@@ -204,6 +286,361 @@ func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalP
 	}
 }
 
+func TestHookInstallerRefusesRedirectedGlobalConfigBeforeAnyMutation(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	trackedSource := filepath.Join(task18RepoRoot(t), "git", "gitconfig.symlink")
+	trackedContents, err := os.ReadFile(trackedSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redirectedConfig := filepath.Join(fixture.repoRoot, "git", "copied tracked global config")
+	if err := os.WriteFile(redirectedConfig, trackedContents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture.globalConfig = redirectedConfig
+	trackedSourceHash := fileHashForHookInstallTest(t, trackedSource)
+	configHash := fileHashForHookInstallTest(t, redirectedConfig)
+	binaryHash := fileHashForHookInstallTest(t, fixture.binary)
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Error("redirected GIT_CONFIG_GLOBAL was accepted")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, "GIT_CONFIG_GLOBAL") ||
+		!strings.Contains(output, filepath.Join(fixture.home, ".gitconfig")) {
+		t.Errorf("redirected-config refusal is not actionable: %q", output)
+	}
+	if got := fileHashForHookInstallTest(t, redirectedConfig); got != configHash {
+		t.Error("redirected global config was modified")
+	}
+	if got := fileHashForHookInstallTest(t, trackedSource); got != trackedSourceHash {
+		t.Error("tracked global config source was modified")
+	}
+	if got := fileHashForHookInstallTest(t, fixture.binary); got != binaryHash {
+		t.Error("agents binary was modified")
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+func TestHookInstallerRefusesSymlinkedPrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	fixture.globalConfig = filepath.Join(fixture.home, ".gitconfig")
+	sharedConfig := filepath.Join(fixture.repoRoot, "git", "shared tracked global config")
+	if err := os.WriteFile(sharedConfig, []byte("[user]\n\tname = Preserved Symlink Target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(sharedConfig, fixture.globalConfig); err != nil {
+		t.Fatal(err)
+	}
+	sharedHash := fileHashForHookInstallTest(t, sharedConfig)
+	binaryHash := fileHashForHookInstallTest(t, fixture.binary)
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Error("symlinked primary global config was accepted")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, fixture.globalConfig) {
+		t.Errorf("symlinked-config refusal is not actionable: %q", output)
+	}
+	if target, readErr := os.Readlink(fixture.globalConfig); readErr != nil || target != sharedConfig {
+		t.Errorf("primary global symlink changed: target=%q err=%v", target, readErr)
+	}
+	if got := fileHashForHookInstallTest(t, sharedConfig); got != sharedHash {
+		t.Error("symlink target was modified")
+	}
+	if got := fileHashForHookInstallTest(t, fixture.binary); got != binaryHash {
+		t.Error("agents binary was modified")
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+func TestHookInstallerRefusesDanglingPrimaryGlobalConfigSymlinkBeforeAnyMutation(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	missingTarget := filepath.Join(fixture.repoRoot, "git", "missing global config target")
+	if err := os.Symlink(missingTarget, fixture.globalConfig); err != nil {
+		t.Fatal(err)
+	}
+	binaryHash := fileHashForHookInstallTest(t, fixture.binary)
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Error("dangling primary global config symlink was accepted")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, "non-symlink") {
+		t.Errorf("dangling-symlink refusal is not actionable: %q", output)
+	}
+	if target, readErr := os.Readlink(fixture.globalConfig); readErr != nil || target != missingTarget {
+		t.Errorf("dangling primary global symlink changed: target=%q err=%v", target, readErr)
+	}
+	if _, statErr := os.Lstat(missingTarget); !os.IsNotExist(statErr) {
+		t.Errorf("installer created dangling symlink target: %v", statErr)
+	}
+	if got := fileHashForHookInstallTest(t, fixture.binary); got != binaryHash {
+		t.Error("agents binary was modified")
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+func TestHookInstallerRefusesHardLinkedPrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	sharedConfig := filepath.Join(fixture.repoRoot, "git", "hard-linked tracked global config")
+	if err := os.WriteFile(sharedConfig, []byte("[user]\n\tname = Preserved Hard Link Target\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(sharedConfig, fixture.globalConfig); err != nil {
+		t.Fatal(err)
+	}
+	sharedBefore, err := os.Stat(sharedConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configHash := fileHashForHookInstallTest(t, sharedConfig)
+	binaryHash := fileHashForHookInstallTest(t, fixture.binary)
+
+	output, installErr := runHookInstaller(t, fixture, "install")
+	if installErr == nil {
+		t.Error("hard-linked primary global config was accepted")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, "hard links") {
+		t.Errorf("hard-linked-config refusal is not actionable: %q", output)
+	}
+	primaryAfter, statErr := os.Stat(fixture.globalConfig)
+	if statErr != nil || !os.SameFile(sharedBefore, primaryAfter) {
+		t.Errorf("primary hard link changed: info=%v err=%v", primaryAfter, statErr)
+	}
+	if got := fileHashForHookInstallTest(t, sharedConfig); got != configHash {
+		t.Error("hard-linked shared config was modified")
+	}
+	if got := fileHashForHookInstallTest(t, fixture.binary); got != binaryHash {
+		t.Error("agents binary was modified")
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+func TestHookInstallerRefusesNonRegularPrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*testing.T, hookInstallFixture) func()
+		unchanged func(*testing.T, hookInstallFixture)
+	}{
+		{
+			name: "directory",
+			configure: func(t *testing.T, fixture hookInstallFixture) func() {
+				if err := os.Mkdir(fixture.globalConfig, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				return func() {}
+			},
+			unchanged: func(t *testing.T, fixture hookInstallFixture) {
+				if info, err := os.Lstat(fixture.globalConfig); err != nil || !info.IsDir() {
+					t.Errorf("primary config directory changed: info=%v err=%v", info, err)
+				}
+			},
+		},
+		{
+			name: "FIFO",
+			configure: func(t *testing.T, fixture hookInstallFixture) func() {
+				if err := syscall.Mkfifo(fixture.globalConfig, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return func() {}
+			},
+			unchanged: func(t *testing.T, fixture hookInstallFixture) {
+				if info, err := os.Lstat(fixture.globalConfig); err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+					t.Errorf("primary config FIFO changed: info=%v err=%v", info, err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newHookInstallFixture(t)
+			cleanup := test.configure(t, fixture)
+			defer cleanup()
+			binaryHash := fileHashForHookInstallTest(t, fixture.binary)
+
+			output, err, timedOut := runHookInstallerWithTimeout(t, fixture, "install")
+			if timedOut {
+				t.Error("installer blocked while inspecting a non-regular primary global config")
+			}
+			if err != nil && timedOut {
+				t.Errorf("timed-out installer cleanup failed: %v", err)
+			}
+			if err == nil {
+				t.Error("non-regular primary global config was accepted")
+			}
+			if !strings.Contains(output, "refusing") || !strings.Contains(output, "regular file") {
+				t.Errorf("non-regular-config refusal is not actionable: %q", output)
+			}
+			test.unchanged(t, fixture)
+			if got := fileHashForHookInstallTest(t, fixture.binary); got != binaryHash {
+				t.Error("agents binary was modified")
+			}
+			assertNoHookInstallManagedPaths(t, fixture)
+		})
+	}
+}
+
+func TestHookInstallerRefusesUnwritablePrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission check is not meaningful as root")
+	}
+	fixture := newHookInstallFixture(t)
+	configBytes := []byte("[user]\n\tname = Preserved Read Only Config\n")
+	if err := os.WriteFile(fixture.globalConfig, configBytes, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	configHash := fileHashForHookInstallTest(t, fixture.globalConfig)
+	binaryHash := fileHashForHookInstallTest(t, fixture.binary)
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Error("unwritable primary global config was accepted")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, "not writable") {
+		t.Errorf("unwritable-config refusal is not actionable: %q", output)
+	}
+	if got := fileHashForHookInstallTest(t, fixture.globalConfig); got != configHash {
+		t.Error("unwritable primary config was modified")
+	}
+	if got := fileHashForHookInstallTest(t, fixture.binary); got != binaryHash {
+		t.Error("agents binary was modified")
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+func TestHookInstallerRevalidatesBinaryImmediatelyBeforeGlobalConfigWrite(t *testing.T) {
+	tests := []struct {
+		name        string
+		replacement string
+	}{
+		{name: "symlink replacement", replacement: "symlink"},
+		{name: "non-executable replacement", replacement: "non-executable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newHookInstallFixture(t)
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			shimDir := filepath.Join(t.TempDir(), "git swap shim bin")
+			if err := os.MkdirAll(shimDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			replacementTarget := filepath.Join(t.TempDir(), "replacement agents target")
+			if err := os.WriteFile(replacementTarget, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			counter := filepath.Join(t.TempDir(), "git invocation count")
+			shim := filepath.Join(shimDir, "git")
+			shimScript := []byte(`#!/bin/sh
+count=0
+if [ -f "$TEST_GIT_COUNT" ]; then
+  read -r count < "$TEST_GIT_COUNT"
+fi
+count=$((count + 1))
+printf '%s\n' "$count" > "$TEST_GIT_COUNT"
+if [ "$count" -eq 2 ]; then
+  case "$TEST_SWAP_KIND" in
+    symlink)
+      rm -f "$TEST_AGENTS_BINARY"
+      ln -s "$TEST_SWAP_TARGET" "$TEST_AGENTS_BINARY"
+      ;;
+    non-executable)
+      chmod 0644 "$TEST_AGENTS_BINARY"
+      ;;
+    *) exit 91 ;;
+  esac
+fi
+exec "$TEST_REAL_GIT" "$@"
+`)
+			if err := os.WriteFile(shim, shimScript, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			environment := environmentWithHookInstallTestOverrides(
+				isolatedGitEnvironment(fixture.home, fixture.globalConfig),
+				"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"TEST_REAL_GIT="+realGit,
+				"TEST_GIT_COUNT="+counter,
+				"TEST_SWAP_KIND="+test.replacement,
+				"TEST_AGENTS_BINARY="+fixture.binary,
+				"TEST_SWAP_TARGET="+replacementTarget,
+			)
+
+			output, installErr := runHookInstallerWithEnvironment(t, fixture, "install", environment)
+			if installErr == nil {
+				t.Error("installer activated hooks after the validated binary was replaced")
+			}
+			if !strings.Contains(output, "refusing") || !strings.Contains(output, "executable regular file") {
+				t.Errorf("binary-replacement refusal is not actionable: %q", output)
+			}
+			if strings.Contains(output, "installed global Git hooks") {
+				t.Errorf("installer printed a false success after binary replacement: %q", output)
+			}
+			if _, err := os.Lstat(fixture.globalConfig); !os.IsNotExist(err) {
+				t.Errorf("binary replacement activated global hooks: %v", err)
+			}
+		})
+	}
+}
+
+func TestHookInstallerRefusesInitiallyInvalidBinaryBeforeManagedLinks(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*testing.T, hookInstallFixture)
+	}{
+		{
+			name: "missing",
+			configure: func(t *testing.T, fixture hookInstallFixture) {
+				if err := os.Remove(fixture.binary); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "non-executable",
+			configure: func(t *testing.T, fixture hookInstallFixture) {
+				if err := os.Chmod(fixture.binary, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlink",
+			configure: func(t *testing.T, fixture hookInstallFixture) {
+				target := filepath.Join(t.TempDir(), "agents target")
+				if err := os.WriteFile(target, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(fixture.binary); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, fixture.binary); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newHookInstallFixture(t)
+			test.configure(t, fixture)
+			output, err := runHookInstaller(t, fixture, "install")
+			if err == nil {
+				t.Error("initially invalid binary was accepted")
+			}
+			if !strings.Contains(output, "refusing") || !strings.Contains(output, "executable regular file") {
+				t.Errorf("invalid-binary refusal is not actionable: %q", output)
+			}
+			assertNoHookInstallManagedPaths(t, fixture)
+			if _, err := os.Lstat(fixture.globalConfig); !os.IsNotExist(err) {
+				t.Errorf("invalid binary activated global hooks: %v", err)
+			}
+		})
+	}
+}
+
 func TestHookInstallerRefusesForeignGlobalBeforeAnyMutation(t *testing.T) {
 	fixture := newHookInstallFixture(t)
 	if err := os.WriteFile(fixture.globalConfig, []byte("[core]\n\thooksPath = /foreign/hooks\n"), 0o600); err != nil {
@@ -248,7 +685,7 @@ func TestMakeGitHooksBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	globalConfig := filepath.Join(home, "global config")
+	globalConfig := filepath.Join(home, ".gitconfig")
 	for attempt := 1; attempt <= 2; attempt++ {
 		output, err := runMakeGitHooks(t, root, home, globalConfig)
 		if err != nil {
@@ -297,7 +734,7 @@ func TestMakeGitHooksForeignPreflightRunsBeforeBuildOrLinks(t *testing.T) {
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	globalConfig := filepath.Join(home, "global config")
+	globalConfig := filepath.Join(home, ".gitconfig")
 	before := []byte("[core]\n\thooksPath = /preserved/foreign/hooks\n")
 	if err := os.WriteFile(globalConfig, before, 0o600); err != nil {
 		t.Fatal(err)
@@ -522,12 +959,34 @@ func TestHookInstallerRefusesForeignOwnedEntriesAndAttributes(t *testing.T) {
 
 func TestHookInstallerConfigWriteFailureLeavesLinksInactive(t *testing.T) {
 	fixture := newHookInstallFixture(t)
-	fixture.globalConfig = "/dev/null"
-	output, err := runHookInstaller(t, fixture, "install")
-	if err == nil {
-		t.Fatal("writing global config through /dev/null unexpectedly succeeded")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(output, "could not lock config file") {
+	shimDir := filepath.Join(t.TempDir(), "git shim bin")
+	if err := os.MkdirAll(shimDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	shim := filepath.Join(shimDir, "git")
+	shimScript := []byte("#!/bin/sh\n" +
+		"if [ \"$#\" -ge 3 ] && [ \"$1\" = config ] && [ \"$2\" = --global ] && [ \"$3\" = core.hooksPath ]; then\n" +
+		"  printf '%s\\n' 'simulated config write failure' >&2\n" +
+		"  exit 73\n" +
+		"fi\n" +
+		"exec \"$TEST_REAL_GIT\" \"$@\"\n")
+	if err := os.WriteFile(shim, shimScript, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	environment := environmentWithHookInstallTestOverrides(
+		isolatedGitEnvironment(fixture.home, fixture.globalConfig),
+		"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TEST_REAL_GIT="+realGit,
+	)
+	output, err := runHookInstallerWithEnvironment(t, fixture, "install", environment)
+	if err == nil {
+		t.Fatal("simulated final global config write unexpectedly succeeded")
+	}
+	if !strings.Contains(output, "simulated config write failure") {
 		t.Fatalf("unexpected config failure: %q", output)
 	}
 	for _, path := range []string{

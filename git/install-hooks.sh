@@ -42,15 +42,44 @@ config_correct=0
 # querying or writing an unrelated ambient user's global Git configuration.
 HOME=$install_home
 export HOME
+global_config=$install_home/.gitconfig
+if [ "${GIT_CONFIG_GLOBAL+x}" = x ] && [ "$GIT_CONFIG_GLOBAL" != "$global_config" ]; then
+	refuse "GIT_CONFIG_GLOBAL must equal the machine-local primary '$global_config'; no files were changed"
+fi
+GIT_CONFIG_GLOBAL=$global_config
+export GIT_CONFIG_GLOBAL
 
-expected_global_config() {
-	if [ -n "${GIT_CONFIG_GLOBAL:-}" ]; then
-		case "$GIT_CONFIG_GLOBAL" in
-			/*) printf '%s\n' "$GIT_CONFIG_GLOBAL" ;;
-			*) refuse "GIT_CONFIG_GLOBAL must be an absolute path" ;;
-		esac
-	else
-		printf '%s\n' "$install_home/.gitconfig"
+global_config_link_count() {
+	if count=$(stat -f '%l' "$global_config" 2>/dev/null); then
+		printf '%s\n' "$count"
+		return 0
+	fi
+	if count=$(stat -c '%h' -- "$global_config" 2>/dev/null); then
+		printf '%s\n' "$count"
+		return 0
+	fi
+	refuse "cannot inspect link count for primary global config '$global_config'; no files were changed"
+}
+
+validate_global_config_target() {
+	if [ -L "$global_config" ]; then
+		refuse "primary global config '$global_config' must be a non-symlink machine-local regular file; preserve or move the symlink aside deliberately, then retry"
+	fi
+	if [ ! -e "$global_config" ]; then
+		return 0
+	fi
+	if [ ! -f "$global_config" ]; then
+		refuse "primary global config '$global_config' must be a machine-local regular file; preserve or move it aside deliberately, then retry"
+	fi
+	count=$(global_config_link_count)
+	case "$count" in
+		''|*[!0-9]*) refuse "primary global config '$global_config' has an unreadable link count; no files were changed" ;;
+	esac
+	if [ "$count" -ne 1 ]; then
+		refuse "primary global config '$global_config' has multiple hard links and may be shared; copy it to a private file deliberately, then retry"
+	fi
+	if [ ! -w "$global_config" ]; then
+		refuse "primary global config '$global_config' is not writable; preserve it or repair its ownership and permissions deliberately, then retry"
 	fi
 }
 
@@ -77,7 +106,7 @@ inspect_global_hooks_path() {
 	esac
 	origin=${config_output%%"$tab"*}
 	configured_path=${config_output#*"$tab"}
-	expected_origin=file:$(expected_global_config)
+	expected_origin=file:$global_config
 	if [ "$configured_path" != "$hooks_dir" ] || [ "$origin" != "$expected_origin" ]; then
 		refuse "global core.hooksPath is already configured as '$configured_path' from '$origin'; preserve it or run 'git config --global --unset-all core.hooksPath' deliberately, then retry"
 	fi
@@ -100,6 +129,12 @@ check_exact_symlink_or_absent() {
 	fi
 }
 
+validate_binary() {
+	if [ ! -f "$binary" ] || [ ! -x "$binary" ] || [ -L "$binary" ]; then
+		refuse "agents binary '$binary' must be an executable regular file"
+	fi
+}
+
 preflight() {
 	if [ ! -d "$hooks_dir" ] || [ -L "$hooks_dir" ]; then
 		refuse "hooks directory '$hooks_dir' must be an existing real directory"
@@ -107,6 +142,7 @@ preflight() {
 	if [ ! -f "$attributes_source" ] || [ -L "$attributes_source" ]; then
 		refuse "tracked attributes source '$attributes_source' must be a regular file"
 	fi
+	validate_global_config_target
 	inspect_global_hooks_path
 	check_exact_symlink_or_absent "$attributes_link" "$attributes_source" "global attributes link"
 	for hook in $hook_names; do
@@ -120,9 +156,7 @@ if [ "$mode" = preflight ]; then
 	exit 0
 fi
 
-if [ ! -f "$binary" ] || [ ! -x "$binary" ] || [ -L "$binary" ]; then
-	refuse "agents binary '$binary' must be an executable regular file"
-fi
+validate_binary
 
 if [ ! -L "$attributes_link" ]; then
 	ln -s "$attributes_source" "$attributes_link"
@@ -136,6 +170,7 @@ done
 # Recheck immediately before activating the chain. The global key is written
 # last, so a partial install cannot make Git execute an incomplete hooks dir.
 preflight
+validate_binary
 if [ "$config_correct" -eq 0 ]; then
 	git config --global core.hooksPath "$hooks_dir"
 fi
