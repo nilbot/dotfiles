@@ -311,6 +311,24 @@ func TestRetiredTemplateFingerprintsMatchCanonicalBytes(t *testing.T) {
 	}
 }
 
+func TestIsRetiredShimMatchesOnlyExactBytes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pre-commit")
+	b := canonicalTemplateHook(t, "commit-msg")
+	if err := os.WriteFile(path, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !IsRetiredShim(path) {
+		t.Fatal("exact retired shim was not identified")
+	}
+	b[0] ^= 1
+	if err := os.WriteFile(path, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if IsRetiredShim(path) {
+		t.Fatal("one-byte-near foreign hook was identified as retired")
+	}
+}
+
 func TestChainSkipsOnlyExactRetiredTemplateShim(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

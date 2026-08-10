@@ -67,6 +67,13 @@ func TestCreateBuildsLayout(t *testing.T) {
 	if err := Create(root, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	claude, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(claude), DoctorInstruction) {
+		t.Fatalf("new scaffold omits doctor instruction:\n%s", claude)
+	}
 
 	for _, rel := range []string{
 		".agents/memory",
@@ -118,6 +125,25 @@ func TestCreateBuildsLayout(t *testing.T) {
 		if !hasLine(string(attrs), want) {
 			t.Errorf(".gitattributes missing the exact line %q:\n%s", want, attrs)
 		}
+	}
+}
+
+func TestCreateDoesNotMigrateExistingClaudeMD(t *testing.T) {
+	root := newRepo(t)
+	path := filepath.Join(root, "CLAUDE.md")
+	want := []byte("user-owned context\n")
+	if err := os.WriteFile(path, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Create(root, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("Create migrated existing CLAUDE.md: got %q want %q", got, want)
 	}
 }
 

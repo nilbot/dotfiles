@@ -196,6 +196,17 @@ func retiredTemplateShim(path string, size int64) bool {
 	return hex.EncodeToString(sum[:]) == want
 }
 
+// IsRetiredShim reports only the byte-exact dispatcher artifacts this tool
+// retired. It is exported narrowly so observational diagnostics share the
+// dispatcher's fingerprints instead of maintaining a second approximation.
+func IsRetiredShim(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	return retiredTemplateShim(path, info.Size())
+}
+
 var (
 	trailerLine         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*:[ \t]+\S.*$`)
 	claudeCoauthorLine  = regexp.MustCompile(`(?i)^co-authored-by[ \t]*:[ \t]*claude(?:[ \t]+code)?[ \t]*<noreply@anthropic\.com>[ \t]*$`)

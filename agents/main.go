@@ -80,6 +80,8 @@ func run(args []string) int {
 		return runFleetLS(args[1:], os.Stdout)
 	case "update":
 		return runFleetUpdate(args[1:], os.Stdout)
+	case "doctor":
+		return runDoctor(args[1:], os.Stdout)
 	default:
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
 		usage()
@@ -90,8 +92,19 @@ func run(args []string) int {
 func usage() {
 	fmt.Fprint(os.Stderr, `usage: agents <command> [flags]
 
-fleet commands:
-  ls [--prune]             list registered repositories and one-way drift
-  update --all [--apply]   preview or apply wiring to registered repositories
+  init [--local]              create .agents/, triggers, wiring, fleet entry
+  wire                        regenerate harness configs (merges, never overwrites)
+  doctor                      report wiring, trust evidence, reachability, and lane health
+  index                       regenerate memory and handoff indexes
+  save [-m msg]               commit .agents/ paths and nothing else
+  handoff write|prune         lane-scoped handoff management
+  trace ls|cache              query records; copy reachable transcripts locally
+  ls [--prune]                list the fleet on this machine
+  update --all [--apply]      rewire every registered repo (dry run by default)
+  guard --staged              pre-commit checks (the only command that blocks)
+  hook <event> --harness <n>  harness hook entrypoint
+
+exit codes: 0 ok, 1 advisory, 2 block, 3 malformed, 4 skip,
+            5 could not complete the operation
 `)
 }

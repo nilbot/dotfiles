@@ -173,7 +173,7 @@ func Build(a Adapter, semantic string, p Payload) Trace {
 
 // hookCommand renders the invocation that a harness will run. Harness identity
 // is on the command line because it cannot be read from the environment.
-func hookCommand(binary, harnessName, semantic string) string {
+func HookCommand(binary, harnessName, semantic string) string {
 	return fmt.Sprintf("%s hook %s --harness %s", binary, semantic, harnessName)
 }
 
@@ -214,7 +214,7 @@ func writeHooksJSON(path, harnessName string, events []Event, binary string) err
 		entry := map[string]any{
 			"hooks": []any{map[string]any{
 				"type":    "command",
-				"command": hookCommand(binary, harnessName, ev.Semantic),
+				"command": HookCommand(binary, harnessName, ev.Semantic),
 			}},
 		}
 		if ev.Matcher != "" {

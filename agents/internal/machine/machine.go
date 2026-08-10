@@ -31,6 +31,24 @@ func StateDir() string {
 	return filepath.Join(home, ".local", "state", "agents")
 }
 
+// ReadID observes an existing machine identity without creating machine state.
+func ReadID() (string, error) {
+	return ReadIDAt(filepath.Join(StateDir(), "machine-id"))
+}
+
+// ReadIDAt observes the identity at path without creating or repairing it.
+func ReadIDAt(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(string(b))
+	if id == "" {
+		return "", errors.New("machine id is empty")
+	}
+	return id, nil
+}
+
 // ID returns the stable identifier for this machine, generating it on first
 // call. It is deliberately NOT derived from the live hostname: hostnames change,
 // and a changed hostname would split one machine's history into two identities

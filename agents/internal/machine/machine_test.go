@@ -2,10 +2,45 @@ package machine
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"syscall"
 	"testing"
 )
+
+func TestReadIDAtIsObservational(t *testing.T) {
+	state := t.TempDir()
+	path := filepath.Join(state, "agents", "machine-id")
+	before, err := os.ReadDir(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReadIDAt(path); !os.IsNotExist(err) {
+		t.Fatalf("ReadIDAt missing error = %v, want not-exist", err)
+	}
+	after, err := os.ReadDir(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("ReadIDAt created state: before=%v after=%v", before, after)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("  observed-a1b2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadIDAt(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "observed-a1b2" {
+		t.Fatalf("ReadIDAt = %q, want observed-a1b2", got)
+	}
+}
 
 var idPattern = regexp.MustCompile(`^[a-z0-9-]+-[0-9a-f]{4}$`)
 

@@ -8,6 +8,13 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/record"
 )
 
+func TestHookCommandIsTheSingleGeneratedSpelling(t *testing.T) {
+	got := HookCommand("/tmp/agents", "codex", SessionStart)
+	if got != "/tmp/agents hook session-start --harness codex" {
+		t.Fatalf("HookCommand = %q", got)
+	}
+}
+
 // The decoder is the boundary where untrusted JSON becomes Go. Fields the
 // record must never carry have to die here, not later.
 func TestDecodeDiscardsForbiddenFields(t *testing.T) {

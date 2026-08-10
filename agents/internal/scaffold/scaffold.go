@@ -22,6 +22,10 @@ import (
 // that, so this is an error.
 var ErrLocalInLinkedWorktree = errors.New("--local is not supported inside a linked worktree: info/exclude is shared with the main checkout, so excluding /.agents/ here would hide every new file under .agents/ from git in every worktree of this repo, including files already written. Run `agents init --local` in the main checkout instead, or drop --local here")
 
+// DoctorInstruction is part of newly generated context only. Create never
+// rewrites an existing CLAUDE.md, so restoring this marker is not a migration.
+const DoctorInstruction = "Run `agents doctor` early and report any warnings before relying on this context."
+
 // ClaudeMD is the trigger, not the payload.
 //
 // It is the only file every harness loads automatically, so it costs context in
@@ -39,6 +43,8 @@ it is the record, and this file is only the pointer to it.
 A hook cannot install itself and a missing hook fails silently: an empty or
 stale ` + "`.agents/`" + ` means the setup is broken, not that there is nothing to
 say -- report it rather than working around it.
+
+` + DoctorInstruction + `
 
 Write handoffs with ` + "`agents handoff write`" + `, not by hand. Commit ` + "`.agents/`" + `
 changes with ` + "`agents save`" + ` so they do not ride along with code changes.
