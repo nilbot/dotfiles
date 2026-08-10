@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,17 @@ func runShim(t *testing.T, home string, args ...string) (string, string, int) {
 // PATH go through this; everything else uses runShim.
 func runShimEnv(t *testing.T, shim, home string, extraEnv []string, args ...string) (string, string, int) {
 	t.Helper()
+	return runShimIn(t, t.TempDir(), shim, home, extraEnv, args...)
+}
+
+// runShimIn is runShimEnv with an explicit working directory, so shim may be
+// RELATIVE to it. Only the CDPATH case needs that: `cd` consults CDPATH for a
+// relative operand and never for one starting with / or . -- an absolute $0
+// cannot reproduce the failure at all.
+func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...string) (string, string, int) {
+	t.Helper()
 	cmd := exec.Command(shim, args...)
-	cmd.Dir = t.TempDir()
+	cmd.Dir = dir
 	// XDG_CACHE_HOME must be redirected too, or an inherited value sends every
 	// case into the developer's real ~/.cache and the suite stops being
 	// hermetic -- the cache tests would then pass without exercising anything.
@@ -57,13 +67,46 @@ func runShimEnv(t *testing.T, shim, home string, extraEnv []string, args ...stri
 func altCheckout(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, name := range []string{"bootstrap", "bootstrap.d"} {
-		cp := exec.Command("cp", "-R", filepath.Join(repoRoot(t), name), filepath.Join(dir, name))
+	copyInto(t, dir, "bootstrap", "bootstrap.d")
+	return dir
+}
+
+// copyInto copies the named top-level entries of the repository into dst, which
+// need not exist. Split out of altCheckout for the cases that choose the
+// checkout's own name, its parent directory, or how much of the tree they need.
+func copyInto(t *testing.T, dst string, names ...string) {
+	t.Helper()
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		cp := exec.Command("cp", "-R", filepath.Join(repoRoot(t), name), filepath.Join(dst, name))
 		if out, err := cp.CombinedOutput(); err != nil {
 			t.Fatalf("cp %s: %v: %s", name, err, out)
 		}
 	}
-	return dir
+}
+
+// trackedEntries lists the repository's non-hidden top-level entries -- enough
+// of the tree for a real `plan` to resolve every manifest source, which the two
+// names altCheckout copies are not. Hidden entries are skipped: none of them is
+// a manifest source, and .claude/worktrees contains this very checkout.
+func trackedEntries(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, entry := range entries {
+		if !strings.HasPrefix(entry.Name(), ".") {
+			names = append(names, entry.Name())
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("the repository appears empty; a copy of it would prove nothing")
+	}
+	return names
 }
 
 // backdate ages a tree so nothing in it is newer than an already-built binary,
@@ -328,6 +371,157 @@ func TestNoCacheLocationIsBlock(t *testing.T) {
 		t.Errorf("the refusal should say there is nowhere to cache the build: %s", stderr)
 	}
 }
+
+// A poisoned CDPATH must not move the repository root.
+//
+// `cd` searches CDPATH for a relative operand and, when it finds one there,
+// echoes the directory it resolved to. So without the `CDPATH=` prefix in the
+// shim, BOOTSTRAP_ROOT becomes a same-named decoy AND arrives as two lines --
+// the "wrong tree" failure this whole redesign exists to prevent. It was found
+// by hand and fixed with nothing in the suite holding it there.
+//
+// Three things make the reproduction work, and it reproduces nothing without
+// any of them: the invocation is RELATIVE (cd never consults CDPATH for a path
+// starting with / or .), the working directory is the checkout's PARENT (so
+// dirname "$0" is a bare name rather than "." ), and the decoy carries the
+// checkout's own basename.
+func TestShimIgnoresAPoisonedCDPATH(t *testing.T) {
+	name := filepath.Base(repoRoot(t))
+
+	work := t.TempDir()
+	checkout := filepath.Join(work, name)
+	copyInto(t, checkout, trackedEntries(t)...)
+
+	decoyParent := t.TempDir()
+	decoy := filepath.Join(decoyParent, name)
+	if err := os.MkdirAll(filepath.Join(decoy, "bootstrap.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wantRoot, err := filepath.EvalSymlinks(checkout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoyRoot, err := filepath.EvalSymlinks(decoy)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stdout, stderr, code := runShimIn(t, work, filepath.Join(name, "bootstrap"), tempHome(t),
+		[]string{"CDPATH=" + decoyParent}, "plan", "dotfiles")
+	if code != 0 {
+		t.Fatalf("exit %d under a poisoned CDPATH:\n%s%s", code, stdout, stderr)
+	}
+
+	// Compared as directories rather than as strings. bash spells the same
+	// directory two ways -- an absolute operand keeps /var/folders, a relative
+	// one is appended to a getcwd() that has already become /private/var/folders
+	// -- and a case that failed on the spelling would look like a CDPATH failure
+	// without being one.
+	reported := reportedRoot(t, stdout)
+	gotRoot, err := filepath.EvalSymlinks(reported)
+	if err != nil {
+		t.Fatalf("preflight reported a root that does not resolve: %q: %v", reported, err)
+	}
+	if gotRoot != wantRoot {
+		t.Errorf("preflight reports %s, want the real checkout %s", gotRoot, wantRoot)
+	}
+	for _, path := range []string{decoy, decoyRoot} {
+		if strings.Contains(stdout+stderr, path) {
+			t.Errorf("the decoy %s reached the output:\n%s%s", path, stdout, stderr)
+		}
+	}
+}
+
+// reportedRoot returns the repository path preflight printed. Two spaces after
+// the label, matching phase.Preflight's column layout.
+func reportedRoot(t *testing.T, stdout string) string {
+	t.Helper()
+	const label = "repository  "
+	for _, line := range strings.Split(stdout, "\n") {
+		if i := strings.Index(line, label); i >= 0 {
+			return strings.TrimSpace(line[i+len(label):])
+		}
+	}
+	t.Fatalf("preflight printed no repository line:\n%s", stdout)
+	return ""
+}
+
+// die and exec are the only ways out of the shim, checked lexically.
+//
+// TestPhasePackageCannotPerformIO rejects exactly this method for the Go
+// packages, and the two do not contradict each other. There the subject is an
+// open-ended set of statements across a package that will keep growing, so a
+// scan can only approximate it -- the shell version's scan for mutating command
+// names was written wrong twice -- and the invariant is stated over the import
+// graph instead, where it is exact. Here the subject is one file of ninety
+// lines, fixed in shape, with exactly two intended ways out. Enumerating them
+// reads every line of the thing it constrains, so it is exhaustive rather than
+// approximate.
+//
+// ${var:?} is checked because it is the obvious way to write the cache-location
+// check and it exits 1 -- "advisory" in the shared table -- so a container with
+// neither variable set would report a hard stop as a soft warning.
+func TestShimHasExactlyTwoWaysOut(t *testing.T) {
+	path := filepath.Join(repoRoot(t), "bootstrap")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+
+	// die's body, as line numbers. Its opening and closing lines are matched
+	// exactly, so a reformatted function fails here rather than silently
+	// widening the region in which an exit is tolerated.
+	dieStart, dieEnd := 0, 0
+	for i, line := range lines {
+		switch {
+		case line == "die() {":
+			dieStart = i + 1
+		case dieStart != 0 && dieEnd == 0 && line == "}":
+			dieEnd = i + 1
+		}
+	}
+	if dieStart == 0 || dieEnd == 0 {
+		t.Fatalf("%s: no die() { ... } found; this guard would check nothing", path)
+	}
+
+	exits, execs := 0, 0
+	for i, line := range lines {
+		n := i + 1
+		// Whole-line comments only. The shim has none of any other kind, and a
+		// guard with no parsing of its own has no parsing of its own to get
+		// wrong; an inline comment added later fails loudly here instead of
+		// quietly weakening the check.
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if errIfUnset.MatchString(line) {
+			t.Errorf("%s:%d: ${var:?} exits 1, which is advisory, where a hard stop needs die: %s",
+				path, n, strings.TrimSpace(line))
+		}
+		if word("exit").MatchString(line) {
+			exits++
+			if n < dieStart || n > dieEnd {
+				t.Errorf("%s:%d: exit outside die(): %s", path, n, strings.TrimSpace(line))
+			}
+		}
+		if word("exec").MatchString(line) {
+			execs++
+		}
+	}
+	if exits != 1 {
+		t.Errorf("want exactly one exit, the one inside die(); found %d", exits)
+	}
+	if execs != 1 {
+		t.Errorf("want exactly one exec, the handover to the built binary; found %d", execs)
+	}
+}
+
+// errIfUnset matches a ${VAR:?...} expansion, and deliberately not ${VAR:-...}.
+var errIfUnset = regexp.MustCompile(`\$\{[A-Za-z_][A-Za-z_0-9]*:\?`)
+
+func word(s string) *regexp.Regexp { return regexp.MustCompile(`\b` + s + `\b`) }
 
 // HOME unset with XDG_CACHE_HOME set is a normal container shape, and
 // containers are why the dotfiles profile exists. Preflight must block rather
