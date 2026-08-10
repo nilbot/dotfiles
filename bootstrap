@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Stage zero, and the only shell in this design. Its whole job is to reach Go
+# and hand over -- it does no reconciliation and has no dry-run mode to keep
+# honest, which is why it can be shell when nothing else is.
+#
+# See docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md §2.1
+
+set -euo pipefail
+
+BOOTSTRAP_ROOT=$(cd "$(dirname "$0")" && pwd)
+export BOOTSTRAP_ROOT
+
+src=$BOOTSTRAP_ROOT/bootstrap.d
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles-bootstrap
+binary=$cache/bootstrap
+
+find_go() {
+	if command -v go >/dev/null 2>&1; then
+		command -v go
+		return 0
+	fi
+	if command -v brew >/dev/null 2>&1; then
+		printf 'bootstrap: installing Go via Homebrew\n' >&2
+		brew install go >&2
+		command -v go
+		return 0
+	fi
+	case "$(uname -s)" in
+		Darwin) hint='install Homebrew from https://brew.sh, or Go from https://go.dev/dl/' ;;
+		Linux)  hint='sudo apt-get install -y golang-go  (or: pacman -S go)' ;;
+		*)      hint='install Go from https://go.dev/dl/' ;;
+	esac
+	printf 'bootstrap: Go is required and was not found.\n  %s\nThen re-run this command.\n' "$hint" >&2
+	exit 2
+}
+
+go_bin=$(find_go)
+
+needs_build=0
+if [ ! -x "$binary" ]; then
+	needs_build=1
+else
+	while IFS= read -r file; do
+		if [ "$file" -nt "$binary" ]; then
+			needs_build=1
+			break
+		fi
+	done <<EOF
+$(find "$src" -name '*.go' -o -name 'go.mod')
+EOF
+fi
+
+if [ "$needs_build" -eq 1 ]; then
+	printf 'bootstrap: building\n' >&2
+	mkdir -p "$cache"
+	(cd "$src" && "$go_bin" build -trimpath -o "$binary" .)
+fi
+
+exec "$binary" "$@"
