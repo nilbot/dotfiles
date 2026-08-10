@@ -71,6 +71,44 @@ func TestInfoExcludePathInAPlainRepo(t *testing.T) {
 	}
 }
 
+func TestLegacyHooksPathInAPlainRepo(t *testing.T) {
+	dir := initRepo(t)
+	want := filepath.Join(resolved(t, dir), ".git", "hooks")
+	got, err := LegacyHooksPath(dir)
+	if err != nil {
+		t.Fatalf("LegacyHooksPath: %v", err)
+	}
+	if got != want {
+		t.Fatalf("LegacyHooksPath = %q, want %q", got, want)
+	}
+}
+
+func TestLegacyHooksPathInALinkedWorktree(t *testing.T) {
+	main := initRepo(t)
+	if err := os.WriteFile(filepath.Join(main, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, main, "add", "f.txt")
+	git(t, main, "commit", "-m", "init", "--no-verify")
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(t, main, "worktree", "add", "-b", "hooks-test", linked)
+	if info, err := os.Lstat(filepath.Join(linked, ".git")); err != nil || info.IsDir() {
+		t.Fatalf("fixture is not a linked worktree: %v", err)
+	}
+
+	got, err := LegacyHooksPath(linked)
+	if err != nil {
+		t.Fatalf("LegacyHooksPath: %v", err)
+	}
+	want := filepath.Join(resolved(t, main), ".git", "hooks")
+	if got != want {
+		t.Fatalf("LegacyHooksPath = %q, want common Git hooks %q", got, want)
+	}
+	if strings.HasPrefix(got, linked+string(filepath.Separator)+".git") {
+		t.Fatalf("LegacyHooksPath was derived below the linked worktree's .git file: %q", got)
+	}
+}
+
 // In a linked worktree .git is a regular FILE, so <root>/.git/info/exclude is
 // not a path that can be created -- MkdirAll on it fails with ENOTDIR, and
 // `agents init` dies after scaffolding but before wiring. git keeps info/exclude

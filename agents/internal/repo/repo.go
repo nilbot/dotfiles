@@ -49,6 +49,17 @@ func InfoExcludePath(dir string) (string, error) {
 	return filepath.Join(common, "info", "exclude"), nil
 }
 
+// LegacyHooksPath resolves the repository-owned hooks directory that a global
+// core.hooksPath shadows. It asks Git for the common directory so linked
+// worktrees do not incorrectly append hooks below their regular .git file.
+func LegacyHooksPath(dir string) (string, error) {
+	common, err := gitPath(dir, "--git-common-dir")
+	if err != nil {
+		return "", ErrNotARepo
+	}
+	return filepath.Join(common, "hooks"), nil
+}
+
 // IsLinkedWorktree reports whether dir sits in a linked worktree rather than in
 // the main checkout, told apart the way git itself tells them apart: a linked
 // worktree has its own git dir under <common>/worktrees/<name>, while the common

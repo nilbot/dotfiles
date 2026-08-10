@@ -4,13 +4,54 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/githook"
+	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 func main() {
+	if name := filepath.Base(os.Args[0]); githook.IsHookName(name) {
+		os.Exit(runGitHook(name, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	}
 	os.Exit(run(os.Args[1:]))
+}
+
+func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(stderr, "agents: git hook could not resolve the current directory")
+		return exitcode.Malformed
+	}
+	repoHooksDir, err := repo.LegacyHooksPath(cwd)
+	if err != nil {
+		fmt.Fprintln(stderr, "agents: git hook could not resolve the repository hooks directory")
+		return exitcode.Malformed
+	}
+	dispatcherPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(stderr, "agents: git hook could not resolve the dispatcher executable")
+		return exitcode.Malformed
+	}
+	chain := githook.Chain{
+		RepoHooksDir:   repoHooksDir,
+		ExtrasDir:      filepath.Join(os.Getenv("HOME"), "dotfiles", "git", "hooks"),
+		DispatcherPath: dispatcherPath,
+	}
+	if code := githook.Run(chain, name, args, stdin, stdout, stderr); code != 0 {
+		return code
+	}
+	if name != "pre-commit" {
+		return exitcode.OK
+	}
+	code := runGuard([]string{"--staged"}, stdout)
+	if code == exitcode.OK || code == exitcode.Advisory {
+		return exitcode.OK
+	}
+	return code
 }
 
 func run(args []string) int {
