@@ -55,7 +55,8 @@ that kind, and a regression becomes a test failure instead of a discovery.
 ./bootstrap apply workstation      # converge this machine
 ./bootstrap apply dotfiles         # narrow profile
 ./bootstrap check                  # is this machine healthy?
-./bootstrap migrate                # declared one-time migrations (§8)
+./bootstrap migrate                # reconciling migrations; lists reclaiming ones
+./bootstrap migrate <name>         # run one named migration, incl. reclaiming (§8.1)
 ```
 
 `./bootstrap` resolves the repository root from `$0`, not from `pwd`.
@@ -292,20 +293,43 @@ Hence `migrate`, and hence a `check` for it.
 
 ### 8.1 `./bootstrap migrate`
 
-Declared, idempotent, one-time migrations. Each refuses unless its preconditions
-hold. Two exist:
+Declared, idempotent, one-time operations. Each refuses unless its preconditions
+hold. Keeping them out of `apply` preserves §5 intact: `apply` never clobbers,
+and the code that knows about the past is quarantined where it can be pruned
+once no machine needs it.
+
+Migrations come in two kinds, and the kind determines whether a bare
+`./bootstrap migrate` will run it:
+
+| kind | destroys untracked data | run by bare `migrate` |
+|---|---|---|
+| **reconciling** | no — moves or rewrites | yes |
+| **reclaiming** | yes, irreversibly | no — must be named |
+
+**Reconciling migrations** run by default:
 
 1. **fish** — move fisher's untracked state out of the repo into a real
    `~/.config/fish`, then replace the symlink. This moves data that is *not in
    git* (`fish_variables`, the installed plugin set), which is exactly the
    fumble-prone step worth automating rather than printing as five hand-run
-   commands.
+   commands. The move completes before the source is released, so a failure
+   leaves the old state intact.
 2. **gitconfig include** — repoint a `~/.gitconfig` that includes the old
    `gitconfig.symlink` path.
 
-Keeping these out of `apply` preserves §5's invariant intact: `apply` never
-clobbers, and the code that knows about the past is quarantined where it can be
-pruned once no machine needs it.
+**Reclaiming migrations** run only when named — `./bootstrap migrate mambaforge`:
+
+3. **mambaforge** — remove `~/sdk/mambaforge` (3.5 GB). Precondition: refuse if
+   anything on `PATH` resolves inside it. Measured on this machine: nothing
+   does, and its four environments are named by Python version alone
+   (`3_9`–`3_12`), which is the job `uv` now performs.
+
+A bare `./bootstrap migrate` **lists** the reclaiming migrations it is eligible
+to run, with the exact command for each, and performs none of them. So nothing
+has to be remembered or rediscovered later — the tool says what is reclaimable
+and how — while a routine invocation can never destroy untracked data. This is
+the same shape as the rest of the design: declare the kind, and behaviour
+follows from the kind.
 
 ## 9. What is removed
 
@@ -320,7 +344,7 @@ reader must re-derive which files are live.
 |---|---|
 | zsh | `zsh/` (344 tracked files), the `omz` target, zsh from `super-install-dep.sh` |
 | tools | `tools/` |
-| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it |
+| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it. `~/sdk/mambaforge` itself is reclaimed by §8.1's third migration |
 | stale scripts | `snapshot.sh`, `recover.sh`, `mountcrypt.sh`, `mountsshfs.sh`, `post-install.sh` |
 | superseded installers | `super-install-dep.sh`, `user-install-dep.sh`, `softlinks.sh` — content carried into phases 10 and 20 |
 | editors | the `editors`, `tmux` and `extra` targets, and `spacemacs/` |
@@ -495,7 +519,10 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
 
 - `~/.oh-my-zsh` does not exist. zsh is fully out of use.
 - `micromamba` is not on `PATH`, so the mamba block in `mypost.fish` is already
-  inert. `~/sdk/mambaforge` survives from May 2024.
+  inert. `~/sdk/mambaforge` survives from May 2024 at 3.5 GB. Its four
+  environments are named by Python version only (`3_9`, `3_10`, `3_11`, `3_12`),
+  and none of `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip`
+  resolves inside it.
 - `gnupg/`, `gemini/skills/` and `macOS/iterm2/` are tracked and referenced by
   no target.
 - `bin/rgr.bin` and `bin/git-chdate.bin` have never worked (§9.2).
@@ -554,6 +581,7 @@ exchange for one convenience command.
 | The fish stub loses its `source` line, and the whole shared config goes dark | `check` #4. |
 | Editing `~/.config/fish/config.fish` silently produces untracked changes | The stub's header says so, mirroring `gitconfig.local.template`. Reduced, not eliminated. |
 | `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
+| A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
 | Bootstrap grows into an unmaintainable script | One file per phase; all mutation through five primitives; a structural test enforcing it. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 
@@ -563,8 +591,6 @@ exchange for one convenience command.
   does something wanted; the answer is that it does not work (BSD-only `date -j`,
   a 2021 `rclone` remote) and it is removed. Whether machine backup should exist
   at all is a separate question this spec does not answer.
-- **Whether `~/sdk/mambaforge` should be removed from disk.** Out of scope here —
-  the repo stops referencing it either way.
 - **The Linux distributions actually targeted.** Stage-zero commands are written
   for Debian/Ubuntu and Arch/Manjaro, matching what `super-install-dep.sh`
   covered. Neither is verified.
