@@ -10,6 +10,7 @@ package repo
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,9 +107,9 @@ func gitPath(dir, arg string) (string, error) {
 }
 
 func Discover(cwd string) (*Context, error) {
-	root, err := run(cwd, "rev-parse", "--show-toplevel")
+	root, err := discoverRoot(cwd)
 	if err != nil {
-		return nil, ErrNotARepo
+		return nil, err
 	}
 
 	rel := "."
@@ -131,6 +132,34 @@ func Discover(cwd string) (*Context, error) {
 		Worktree: filepath.Base(root),
 		RelCwd:   rel,
 	}, nil
+}
+
+func discoverRoot(cwd string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	cmd.Dir = cwd
+	cmd.Env = withCLocale(sanitizeEnv(os.Environ()))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if strings.HasPrefix(message, "fatal: not a git repository (or any of the parent directories):") {
+			return "", ErrNotARepo
+		}
+		return "", fmt.Errorf("discover Git repository: %w", err)
+	}
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+func withCLocale(env []string) []string {
+	var out []string
+	for _, item := range env {
+		key, _, _ := strings.Cut(item, "=")
+		if key != "LC_ALL" && key != "LANG" {
+			out = append(out, item)
+		}
+	}
+	return append(out, "LC_ALL=C", "LANG=C")
 }
 
 // Git runs a git command that changes the repository and returns its combined

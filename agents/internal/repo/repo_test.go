@@ -283,6 +283,28 @@ func TestDiscoverOutsideRepo(t *testing.T) {
 	}
 }
 
+func TestDiscoverPreservesMissingGitAsOperationalError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	if _, err := Discover(t.TempDir()); err == nil || errors.Is(err, ErrNotARepo) {
+		t.Fatalf("Discover missing Git err = %v, want operational error", err)
+	}
+}
+
+func TestDiscoverPreservesBadGitConfigAsOperationalError(t *testing.T) {
+	dir := initRepo(t)
+	bad := filepath.Join(t.TempDir(), "bad.gitconfig")
+	if err := os.WriteFile(bad, []byte("[broken\nPRIVATE-config-text\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", bad)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	if _, err := Discover(dir); err == nil || errors.Is(err, ErrNotARepo) {
+		t.Fatalf("Discover bad config err = %v, want operational error", err)
+	} else if strings.Contains(err.Error(), "PRIVATE-config-text") {
+		t.Fatalf("Discover exposed config content: %v", err)
+	}
+}
+
 func TestDiscoverIgnoresGitDirEnv(t *testing.T) {
 	// Hooks run with GIT_DIR set to a relative path like ".git". Discover should
 	// ignore this env var and find the repo based on cwd, not the env-poisoned git.

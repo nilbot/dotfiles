@@ -329,6 +329,21 @@ func TestIsRetiredShimMatchesOnlyExactBytes(t *testing.T) {
 	}
 }
 
+func TestIsRetiredShimDoesNotFollowSymlinkLeaf(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.WriteFile(target, canonicalTemplateHook(t, "commit-msg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "commit-msg")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if IsRetiredShim(link) {
+		t.Fatal("symlink to retired bytes was identified as an exact retired leaf")
+	}
+}
+
 func TestChainSkipsOnlyExactRetiredTemplateShim(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

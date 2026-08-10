@@ -171,7 +171,10 @@ func TestClaudeCodeWireMergesAndDoesNotDuplicate(t *testing.T) {
 	  "permissions": {"allow": ["Bash(git *)"]},
 	  "hooks": {
 	    "PreToolUse": [{"matcher":"Bash","hooks":[{"type":"command","command":"my-audit.sh"}]}],
-	    "SubagentStop": [{"hooks":[{"type":"command","command":"my-notify.sh"}]}]
+	    "SubagentStop": [{"hooks":[
+	      {"type":"command","command":"my-notify.sh"},
+	      {"type":"command","command":"/vendor/tool hook audit --harness external"}
+	    ]}]
 	  }
 	}`
 	if err := os.WriteFile(path, []byte(existing), 0o644); err != nil {
@@ -197,10 +200,13 @@ func TestClaudeCodeWireMergesAndDoesNotDuplicate(t *testing.T) {
 	}
 
 	cmds := commandsFor(t, settings, "SubagentStop")
-	var mine, ours int
+	var mine, foreignShape, ours int
 	for _, c := range cmds {
 		if c == "my-notify.sh" {
 			mine++
+		}
+		if c == "/vendor/tool hook audit --harness external" {
+			foreignShape++
 		}
 		if strings.Contains(c, "--harness claude-code") {
 			ours++
@@ -208,6 +214,9 @@ func TestClaudeCodeWireMergesAndDoesNotDuplicate(t *testing.T) {
 	}
 	if mine != 1 {
 		t.Errorf("a foreign hook on an event we own must survive: %v", cmds)
+	}
+	if foreignShape != 1 {
+		t.Errorf("a foreign hook with hook/harness words must survive: %v", cmds)
 	}
 	if ours != 1 {
 		t.Errorf("re-wiring must replace, not duplicate: %v", cmds)

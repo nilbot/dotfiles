@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -66,8 +67,12 @@ func runDoctorWithDependencies(args []string, stdout io.Writer, deps doctorComma
 	}
 	rc, err := deps.Discover(cwd)
 	if err != nil {
-		fmt.Fprintln(stdout, "agents doctor: not inside a Git repository")
-		return exitcode.Skip
+		if errors.Is(err, repo.ErrNotARepo) {
+			fmt.Fprintln(stdout, "agents doctor: not inside a Git repository")
+			return exitcode.Skip
+		}
+		fmt.Fprintln(stdout, "agents doctor: could not inspect the Git repository")
+		return exitcode.NoRecord
 	}
 	machineID, _ := deps.ReadID()
 	binary, err := deps.BinaryPath()

@@ -164,11 +164,34 @@ func TestCheckWiringAllowsForeignHooks(t *testing.T) {
 	cfg := readJSONMap(t, path)
 	groups := cfg["hooks"].(map[string]any)["Stop"].([]any)
 	cfg["hooks"].(map[string]any)["Stop"] = append(groups, map[string]any{
-		"hooks": []any{map[string]any{"type": "command", "command": "/foreign/audit"}},
+		"hooks": []any{
+			map[string]any{"type": "command", "command": "/foreign/audit"},
+			map[string]any{"type": "command", "command": "/vendor/tool hook audit --harness external"},
+		},
 	})
 	writeJSONMap(t, path, cfg)
 	if got, _, _ := checkWiring(a, root, binary); got.Status != OK {
 		t.Fatalf("foreign hook rejected: %+v", got)
+	}
+}
+
+func TestDoctorReadsGeneratedWiringAsVerifiedRegularLeaf(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "codex")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	target := filepath.Join(t.TempDir(), "hooks.json")
+	if err := os.Rename(path, target); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := checkWiring(a, root, binary); got.Status != Fail {
+		t.Fatalf("symlinked generated config = %+v, want fail", got)
 	}
 }
 
@@ -202,6 +225,23 @@ func TestCodexTrustUsesParsedCurrentHookKeys(t *testing.T) {
 				t.Fatalf("trust remedy is not the measured human check: %+v", got)
 			}
 		})
+	}
+}
+
+func TestCodexTrustRejectsSymlinkLeaf(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "private")
+	key := "/repo/.codex/hooks.json:stop:0:0"
+	if err := os.WriteFile(target, []byte("[hooks.state.\""+key+"\"]\ntrusted_hash='PRIVATE'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config.toml")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	got := checkCodexTrust(link, []string{key})
+	if got.Status != Fail || strings.Contains(got.Detail, "PRIVATE") {
+		t.Fatalf("symlinked Codex config = %+v, want content-safe fail", got)
 	}
 }
 
@@ -261,13 +301,16 @@ func (f fakeGit) run(_ string, args ...string) GitResult {
 
 func gitKey(args ...string) string { return strings.Join(args, "\x00") }
 
-func goodGitFixture(hooksDir, legacyDir string) fakeGit {
+func originValue(path, value string) string {
+	return "file:" + path + "\x00" + value + "\x00"
+}
+
+func goodGitFixture(hooksDir, globalConfig, sharedConfig string) fakeGit {
 	return fakeGit{
-		gitKey("config", "--global", "--get-all", "core.hooksPath"):      {Output: hooksDir + "\n"},
-		gitKey("config", "--local", "--get-all", "core.hooksPath"):       {Code: 1},
-		gitKey("config", "--get", "core.hooksPath"):                      {Output: hooksDir + "\n"},
-		gitKey("config", "--global", "--get-all", "core.attributesFile"): {Output: "~/.gitattributes\n"},
-		gitKey("rev-parse", "--git-path", "hooks"):                       {Output: legacyDir + "\n"},
+		gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath"):      {Output: originValue(globalConfig, hooksDir)},
+		gitKey("config", "--local", "--get-all", "core.hooksPath"):                                                {Code: 1},
+		gitKey("config", "--get", "core.hooksPath"):                                                               {Output: hooksDir + "\n"},
+		gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile"): {Output: originValue(sharedConfig, "~/.gitattributes")},
 	}
 }
 
@@ -277,6 +320,8 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 	binary := executableFile(t, root, "agents")
 	hooksDir := filepath.Join(root, "hooks.d")
 	legacyDir := filepath.Join(root, "legacy")
+	globalConfig := filepath.Join(root, "home", ".gitconfig")
+	sharedConfig := filepath.Join(root, "dotfiles", "git", "gitconfig.symlink")
 	attrsSource := filepath.Join(root, "global-attributes")
 	attrsLink := filepath.Join(root, "home-attributes")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
@@ -297,12 +342,15 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 		t.Fatal(err)
 	}
 	deps := Dependencies{
-		Git:                   goodGitFixture(hooksDir, legacyDir).run,
+		LegacyHooksPath:       func(string) (string, error) { return legacyDir, nil },
 		HooksDir:              hooksDir,
 		AttributesLink:        attrsLink,
 		AttributesSource:      attrsSource,
 		AttributesConfigValue: "~/.gitattributes",
+		GlobalGitConfig:       globalConfig,
+		SharedGitConfig:       sharedConfig,
 	}
+	deps.Git = goodGitFixture(hooksDir, globalConfig, sharedConfig).run
 	return deps, binary, legacyDir
 }
 
@@ -324,8 +372,8 @@ func TestGitDiagnosticsCoverConfigLinksAttributesAndLegacy(t *testing.T) {
 
 	t.Run("global unset", func(t *testing.T) {
 		bad := deps
-		git := goodGitFixture(deps.HooksDir, t.TempDir())
-		git[gitKey("config", "--global", "--get-all", "core.hooksPath")] = GitResult{Code: 1}
+		git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
+		git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")] = GitResult{Code: 1}
 		bad.Git = git.run
 		if got := checkByName(t, checkGitHooks(t.TempDir(), binary, bad), "git-hooks:global"); got.Status != Fail {
 			t.Fatalf("unset global = %+v", got)
@@ -333,8 +381,8 @@ func TestGitDiagnosticsCoverConfigLinksAttributesAndLegacy(t *testing.T) {
 	})
 	t.Run("global multiple", func(t *testing.T) {
 		bad := deps
-		git := goodGitFixture(deps.HooksDir, t.TempDir())
-		git[gitKey("config", "--global", "--get-all", "core.hooksPath")] = GitResult{Output: deps.HooksDir + "\n/other\n"}
+		git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
+		git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")] = GitResult{Output: originValue(deps.GlobalGitConfig, deps.HooksDir) + originValue(deps.GlobalGitConfig, "/other")}
 		bad.Git = git.run
 		if got := checkByName(t, checkGitHooks(t.TempDir(), binary, bad), "git-hooks:global"); got.Status != Fail {
 			t.Fatalf("multiple global = %+v", got)
@@ -342,7 +390,7 @@ func TestGitDiagnosticsCoverConfigLinksAttributesAndLegacy(t *testing.T) {
 	})
 	t.Run("local override warns", func(t *testing.T) {
 		bad := deps
-		git := goodGitFixture(deps.HooksDir, t.TempDir())
+		git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
 		git[gitKey("config", "--local", "--get-all", "core.hooksPath")] = GitResult{Output: "/local/hooks\n"}
 		git[gitKey("config", "--get", "core.hooksPath")] = GitResult{Output: "/local/hooks\n"}
 		bad.Git = git.run
@@ -354,9 +402,19 @@ func TestGitDiagnosticsCoverConfigLinksAttributesAndLegacy(t *testing.T) {
 			t.Fatalf("effective = %+v", got)
 		}
 	})
+	t.Run("included same-value hook mutation fails origin", func(t *testing.T) {
+		bad := deps
+		git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
+		git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")] = GitResult{Output: originValue(filepath.Join(t.TempDir(), "included"), deps.HooksDir)}
+		bad.Git = git.run
+		if got := checkByName(t, checkGitHooks(t.TempDir(), binary, bad), "git-hooks:global"); got.Status != Fail {
+			t.Fatalf("redirected hook origin = %+v", got)
+		}
+	})
 	t.Run("git failure is not ok", func(t *testing.T) {
 		bad := deps
 		bad.Git = func(string, ...string) GitResult { return GitResult{Code: 128} }
+		bad.LegacyHooksPath = func(string) (string, error) { return "", errors.New("Git failed") }
 		checks := checkGitHooks(t.TempDir(), binary, bad)
 		for _, name := range []string{"git-hooks:global", "git-hooks:local", "git-hooks:effective", "git-hooks:legacy"} {
 			if got := checkByName(t, checks, name); got.Status == OK {
@@ -462,14 +520,56 @@ func TestAttributeDiagnosticsRequireConfigLinkSourceAndRepoLines(t *testing.T) {
 	}
 }
 
+func TestAttributeDiagnosticsReadOnlyVerifiedRegularLeaves(t *testing.T) {
+	for _, leaf := range []string{"source", "repository"} {
+		t.Run(leaf, func(t *testing.T) {
+			deps, _, _ := newGitFiles(t)
+			repoRoot := t.TempDir()
+			repoPath := filepath.Join(repoRoot, ".gitattributes")
+			contents := []byte(".agents/reports/traces/*.jsonl merge=union\n.agents/** linguist-generated=true\n")
+			if err := os.WriteFile(repoPath, contents, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var path string
+			if leaf == "source" {
+				path = deps.AttributesSource
+			} else {
+				path = repoPath
+			}
+			target := filepath.Join(t.TempDir(), "attributes")
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(target, original, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+			if got := checkGitAttributes(repoRoot, deps); got.Status != Fail {
+				t.Fatalf("symlinked %s attributes = %+v, want fail", leaf, got)
+			}
+		})
+	}
+}
+
 func TestAttributeDiagnosticsRejectWrongConfigTargetAndSource(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		breakFixture func(t *testing.T, deps *Dependencies)
 	}{
 		{"config", func(t *testing.T, deps *Dependencies) {
-			git := goodGitFixture(deps.HooksDir, t.TempDir())
-			git[gitKey("config", "--global", "--get-all", "core.attributesFile")] = GitResult{Output: "/other\n"}
+			git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
+			git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")] = GitResult{Output: originValue(deps.SharedGitConfig, "/other")}
+			deps.Git = git.run
+		}},
+		{"included same-value origin", func(t *testing.T, deps *Dependencies) {
+			git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
+			git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")] = GitResult{Output: originValue(filepath.Join(t.TempDir(), "included"), deps.AttributesConfigValue)}
 			deps.Git = git.run
 		}},
 		{"wrong link target", func(t *testing.T, deps *Dependencies) {
@@ -557,6 +657,20 @@ func TestMemoryMachineAndScaffoldDiagnostics(t *testing.T) {
 	b, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
 	if err != nil || string(b) != "user file\n" {
 		t.Fatalf("doctor changed existing CLAUDE.md: %q %v", b, err)
+	}
+}
+
+func TestScaffoldInstructionRejectsSymlinkLeaf(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(t.TempDir(), "CLAUDE.md")
+	if err := os.WriteFile(target, []byte("Run `agents doctor` early and surface any advisory or failing checks.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkScaffoldInstruction(root); got.Status != Warn {
+		t.Fatalf("symlinked CLAUDE.md = %+v, want warn", got)
 	}
 }
 

@@ -65,10 +65,22 @@ func TestDoctorOutsideRepositorySkips(t *testing.T) {
 	deps := commandDepsForDoctor(t, nil, nil)
 	dir := t.TempDir()
 	deps.Getwd = func() (string, error) { return dir, nil }
-	deps.Discover = func(string) (*repo.Context, error) { return nil, errors.New("not repo") }
+	deps.Discover = func(string) (*repo.Context, error) { return nil, repo.ErrNotARepo }
 	var out bytes.Buffer
 	if got := runDoctorWithDependencies(nil, &out, deps); got != exitcode.Skip {
 		t.Fatalf("exit=%d output=%q", got, out.String())
+	}
+}
+
+func TestDoctorOperationalDiscoveryFailureDoesNotSkip(t *testing.T) {
+	deps := commandDepsForDoctor(t, nil, nil)
+	deps.Discover = func(string) (*repo.Context, error) { return nil, errors.New("Git executable unavailable") }
+	var out bytes.Buffer
+	if got := runDoctorWithDependencies(nil, &out, deps); got != exitcode.NoRecord {
+		t.Fatalf("exit=%d output=%q, want NoRecord", got, out.String())
+	}
+	if strings.Contains(out.String(), "Git executable unavailable") {
+		t.Fatalf("operational discovery detail leaked: %q", out.String())
 	}
 }
 

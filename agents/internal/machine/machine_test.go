@@ -42,6 +42,21 @@ func TestReadIDAtIsObservational(t *testing.T) {
 	}
 }
 
+func TestReadIDAtRejectsSymlinkLeaf(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "private-id")
+	if err := os.WriteFile(target, []byte("private-a1b2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "machine-id")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ReadIDAt(link); err == nil {
+		t.Fatalf("ReadIDAt(symlink) = %q, nil; want rejection", got)
+	}
+}
+
 var idPattern = regexp.MustCompile(`^[a-z0-9-]+-[0-9a-f]{4}$`)
 
 func TestIDIsGeneratedThenStable(t *testing.T) {

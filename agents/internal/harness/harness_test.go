@@ -1,6 +1,9 @@
 package harness
 
 import (
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -12,6 +15,54 @@ func TestHookCommandIsTheSingleGeneratedSpelling(t *testing.T) {
 	got := HookCommand("/tmp/agents", "codex", SessionStart)
 	if got != "/tmp/agents hook session-start --harness codex" {
 		t.Fatalf("HookCommand = %q", got)
+	}
+}
+
+func TestHookCommandQuotesExecutableForPOSIXShell(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent's tools")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(dir, "agents")
+	observed := filepath.Join(t.TempDir(), "observed")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" > \"$OBSERVED\"\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	command := HookCommand(binary, "codex", SessionStart)
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Env = append(os.Environ(), "OBSERVED="+observed)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("shell command %q: %v\n%s", command, err, out)
+	}
+	got, err := os.ReadFile(observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hook session-start --harness codex\n" {
+		t.Fatalf("observed argv = %q", got)
+	}
+}
+
+func TestOwnedHookCommandGrammarIsNarrowAndBackwardCompatible(t *testing.T) {
+	for _, command := range []string{
+		"/old/bin/agents hook stop --harness codex",
+		HookCommand("/tmp/agent's tools/agents", "claude-code", SubagentStop),
+	} {
+		if !IsOwnedHookCommand(command) {
+			t.Fatalf("agents command not recognized: %q", command)
+		}
+	}
+	for _, command := range []string{
+		"/vendor/tool hook audit --harness external",
+		"/vendor/agents hook audit --harness codex",
+		"/vendor/agents hook stop --harness external",
+		"/vendor/agents hook stop --harness codex --extra",
+		"agents hook stop --harness codex",
+	} {
+		if IsOwnedHookCommand(command) {
+			t.Fatalf("foreign command claimed as agents-owned: %q", command)
+		}
 	}
 }
 

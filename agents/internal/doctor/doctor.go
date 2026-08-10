@@ -19,6 +19,8 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/memory"
 	"github.com/nilbot/dotfiles/agents/internal/record"
+	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/safeio"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
@@ -52,11 +54,14 @@ type GitResult struct {
 type Dependencies struct {
 	LookPath              func(string) (string, error)
 	Git                   func(dir string, args ...string) GitResult
+	LegacyHooksPath       func(string) (string, error)
 	CodexConfig           string
 	HooksDir              string
 	AttributesLink        string
 	AttributesSource      string
 	AttributesConfigValue string
+	GlobalGitConfig       string
+	SharedGitConfig       string
 }
 
 func DefaultThresholds() Thresholds {
@@ -75,11 +80,14 @@ func DefaultDependencies() Dependencies {
 	return Dependencies{
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
+		LegacyHooksPath:       repo.LegacyHooksPath,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
 		HooksDir:              filepath.Join(dotfiles, "git", "hooks.d"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
 		AttributesSource:      filepath.Join(dotfiles, "git", "gitattributes"),
 		AttributesConfigValue: "~/.gitattributes",
+		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
+		SharedGitConfig:       filepath.Join(dotfiles, "git", "gitconfig.symlink"),
 	}
 }
 
@@ -186,13 +194,9 @@ func checkBinary(binary string, lookPath func(string) (string, error)) Check {
 func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, []string) {
 	name := "wiring:" + a.Name()
 	path := a.WireConfigPath(repoRoot)
-	b, err := os.ReadFile(path)
+	b, info, err := safeio.ReadRegularInfo(path)
 	if err != nil {
 		return Check{Name: name, Status: Fail, Detail: "generated hook config is unavailable", Remedy: "run `agents wire`"}, time.Time{}, nil
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return Check{Name: name, Status: Fail, Detail: "generated hook config cannot be inspected", Remedy: "run `agents wire`"}, time.Time{}, nil
 	}
 	var cfg map[string]any
 	if err := json.Unmarshal(b, &cfg); err != nil {
@@ -231,7 +235,7 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 					keys = append(keys, path+":"+snakeEvent(ev.Vendor)+fmt.Sprintf(":%d:%d", groupIndex, hookIndex))
 					continue
 				}
-				if command == wantCommand || generatedCommandShape(command) {
+				if command == wantCommand || harness.IsOwnedHookCommand(command) {
 					return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
 				}
 			}
@@ -249,7 +253,7 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 			for _, rawHook := range inner {
 				hook, _ := rawHook.(map[string]any)
 				command, _ := hook["command"].(string)
-				if generatedCommandShape(command) {
+				if harness.IsOwnedHookCommand(command) {
 					generatedCount++
 				}
 			}
@@ -259,10 +263,6 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("hook config contains %d generated commands; want %d exact required hooks", generatedCount, len(a.Events())), Remedy: "run `agents wire`"}, info.ModTime(), nil
 	}
 	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
-}
-
-func generatedCommandShape(command string) bool {
-	return strings.Contains(command, " hook ") && strings.Contains(command, " --harness ")
 }
 
 func snakeEvent(s string) string {
@@ -289,10 +289,14 @@ func checkCodexTrust(configPath string, currentKeys []string) Check {
 			} `toml:"state"`
 		} `toml:"hooks"`
 	}
-	if _, err := toml.DecodeFile(configPath, &cfg); err != nil {
-		if os.IsNotExist(err) {
+	b, err := safeio.ReadRegular(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
 			return Check{Name: "trust:codex", Status: Warn, Detail: "Codex config is missing; no persisted trust entry", Remedy: remedy}
 		}
+		return Check{Name: "trust:codex", Status: Fail, Detail: "Codex config is not a readable regular file", Remedy: remedy}
+	}
+	if _, err := toml.Decode(string(b), &cfg); err != nil {
 		return Check{Name: "trust:codex", Status: Fail, Detail: "Codex config is unreadable or malformed", Remedy: remedy}
 	}
 	if len(currentKeys) == 0 {
@@ -345,17 +349,17 @@ func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
 		return []Check{{Name: "git-hooks:global", Status: Fail, Detail: "Git diagnostic runner is unavailable"}}
 	}
 	var checks []Check
-	global := deps.Git(repoRoot, "config", "--global", "--get-all", "core.hooksPath")
-	globalValues := configValues(global.Output)
+	global := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")
+	globalValues, globalParseErr := configOriginValues(global.Output)
 	switch {
 	case global.Code == 1:
 		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath is unset", Remedy: "run the reviewed global hook installer"})
 	case global.Code != 0:
 		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath could not be read", Remedy: "inspect global Git configuration"})
-	case len(globalValues) != 1:
+	case globalParseErr != nil || len(globalValues) != 1:
 		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: fmt.Sprintf("global core.hooksPath has %d values", len(globalValues)), Remedy: "resolve the global values deliberately"})
-	case globalValues[0] != deps.HooksDir:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath points elsewhere", Remedy: "preserve the existing hook chain or run the reviewed installer deliberately"})
+	case globalValues[0].Origin != "file:"+deps.GlobalGitConfig || globalValues[0].Value != deps.HooksDir:
+		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath value or origin is unexpected", Remedy: "preserve included settings and restore the reviewed primary global setting deliberately"})
 	default:
 		checks = append(checks, Check{Name: "git-hooks:global", Status: OK, Detail: "global core.hooksPath is exact"})
 	}
@@ -401,6 +405,30 @@ func configValues(output string) []string {
 	return values
 }
 
+type configOriginValue struct {
+	Origin string
+	Value  string
+}
+
+func configOriginValues(output string) ([]configOriginValue, error) {
+	if output == "" {
+		return nil, nil
+	}
+	parts := strings.Split(output, "\x00")
+	if parts[len(parts)-1] != "" || len(parts)%2 != 1 {
+		return nil, errors.New("malformed Git origin output")
+	}
+	parts = parts[:len(parts)-1]
+	values := make([]configOriginValue, 0, len(parts)/2)
+	for i := 0; i < len(parts); i += 2 {
+		if parts[i] == "" {
+			return nil, errors.New("malformed Git origin output")
+		}
+		values = append(values, configOriginValue{Origin: parts[i], Value: parts[i+1]})
+	}
+	return values, nil
+}
+
 func checkInstalledLinks(hooksDir, binary string) Check {
 	binaryInfo, err := os.Stat(binary)
 	if err != nil {
@@ -424,14 +452,12 @@ func checkInstalledLinks(hooksDir, binary string) Check {
 }
 
 func checkLegacyHooks(repoRoot string, deps Dependencies) Check {
-	result := deps.Git(repoRoot, "rev-parse", "--git-path", "hooks")
-	values := configValues(result.Output)
-	if result.Code != 0 || len(values) != 1 {
+	if deps.LegacyHooksPath == nil {
 		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
 	}
-	dir := values[0]
-	if !filepath.IsAbs(dir) {
-		dir = filepath.Join(repoRoot, dir)
+	dir, err := deps.LegacyHooksPath(repoRoot)
+	if err != nil || !filepath.IsAbs(dir) {
+		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
 	}
 	var found []string
 	for _, name := range installedHookNames {
@@ -456,9 +482,9 @@ func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	if deps.Git == nil {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "Git diagnostic runner is unavailable", Remedy: "inspect global Git attributes configuration"}
 	}
-	result := deps.Git(repoRoot, "config", "--global", "--get-all", "core.attributesFile")
-	values := configValues(result.Output)
-	if result.Code != 0 || len(values) != 1 || values[0] != deps.AttributesConfigValue {
+	result := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")
+	values, parseErr := configOriginValues(result.Output)
+	if result.Code != 0 || parseErr != nil || len(values) != 1 || values[0].Origin != "file:"+deps.SharedGitConfig || values[0].Value != deps.AttributesConfigValue {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "global core.attributesFile is missing, unreadable, multiple, or unexpected", Remedy: "restore the reviewed global attributes configuration"}
 	}
 	linkInfo, err := os.Lstat(deps.AttributesLink)
@@ -473,11 +499,11 @@ func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	if err != nil || !sourceInfo.Mode().IsRegular() || !os.SameFile(linkTarget, sourceInfo) {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link does not resolve to the tracked source", Remedy: "run the reviewed global hook installer"}
 	}
-	source, err := os.ReadFile(deps.AttributesSource)
+	source, err := safeio.ReadRegular(deps.AttributesSource)
 	if err != nil || !hasExactLine(source, globalTraceAttribute) {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes source lacks the exact trace merge rule", Remedy: "restore the tracked attributes source"}
 	}
-	repoAttrs, err := os.ReadFile(filepath.Join(repoRoot, ".gitattributes"))
+	repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
 	if err != nil {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes is unavailable", Remedy: "run `agents init` after reviewing existing attributes"}
 	}
@@ -602,7 +628,7 @@ func checkMachine(thisMachine string) Check {
 }
 
 func checkScaffoldInstruction(repoRoot string) Check {
-	b, err := os.ReadFile(filepath.Join(repoRoot, "CLAUDE.md"))
+	b, err := safeio.ReadRegular(filepath.Join(repoRoot, "CLAUDE.md"))
 	if err != nil || !strings.Contains(string(b), scaffold.DoctorInstruction) {
 		return Check{Name: "scaffold:doctor-instruction", Status: Warn, Detail: "CLAUDE.md lacks the doctor instruction used by new scaffolds", Remedy: "review and add the current doctor instruction manually; existing user files are never migrated"}
 	}

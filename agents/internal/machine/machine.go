@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/nilbot/dotfiles/agents/internal/safeio"
 )
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
@@ -38,7 +40,7 @@ func ReadID() (string, error) {
 
 // ReadIDAt observes the identity at path without creating or repairing it.
 func ReadIDAt(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	b, err := safeio.ReadRegular(path)
 	if err != nil {
 		return "", err
 	}

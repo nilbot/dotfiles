@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/nilbot/dotfiles/agents/internal/safeio"
 )
 
 var installedHookNames = map[string]struct{}{
@@ -200,11 +202,16 @@ func retiredTemplateShim(path string, size int64) bool {
 // retired. It is exported narrowly so observational diagnostics share the
 // dispatcher's fingerprints instead of maintaining a second approximation.
 func IsRetiredShim(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	b, info, err := safeio.ReadRegularInfo(path)
+	if err != nil {
 		return false
 	}
-	return retiredTemplateShim(path, info.Size())
+	want, ok := retiredShimFingerprints[info.Size()]
+	if !ok || int64(len(b)) != info.Size() {
+		return false
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]) == want
 }
 
 var (
