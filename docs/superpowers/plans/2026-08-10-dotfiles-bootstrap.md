@@ -26,6 +26,32 @@ Every task's requirements implicitly include this section.
 - **Shim:** `#!/usr/bin/env bash` + `set -euo pipefail`, bash 3.2 compatible. It is the *only* shell file in this design.
 - **Commit messages:** no AI attribution, no `Co-Authored-By` trailer. Conventional prefixes matching repo history (`feat(bootstrap):`, `refactor(fish):`, `chore(remove):`).
 - **Staging:** commit the exact paths each task names. Never `git add -A` — this worktree has untracked `.agents/reports/traces/*.jsonl` and a git-ignored `.superpowers/`.
+
+### Three rules from defects this plan already produced
+
+Every Critical/Important finding so far fell into one of three classes, all of
+them errors in this plan's text. The rules exist so the next instance is caught
+by construction rather than by review.
+
+- **Any decision about whether an operation can proceed goes in a shared
+  `verdict` function that both `Applier` and `Planner` consult.** Never in one
+  implementation alone. Four divergences came from this: a missing seed source,
+  an unreadable one, `MkdirAll`'s ancestor chain, and an absent link source. If
+  `Applier` can fail somewhere `Planner` returns nil, that is a defect, not a
+  limitation — and if the prediction is approximate, have `Planner` *perform*
+  the read rather than predict it. Reading is not a mutation.
+  *Known and permanent exception:* `Run` and `Sudo`. `Planner` cannot predict
+  whether an arbitrary command will succeed, so it prints intent and returns
+  nil. Document it; do not pretend to close it.
+- **A task may only reference files that already exist when it runs.** A
+  manifest row, a check, or a test that names a file a later task creates will
+  fail from the moment it lands. If a task needs a file, either it creates it or
+  a earlier task does. This produced the Task 2 manifest defect and Task 6's
+  skips.
+- **In the shim, `die` and `exec` are the only ways out.** Every failure routes
+  through `die` (exit 2). `${var:?}` exits 1, a failing pipeline exits its own
+  status, and a failed `exec` exits 126/127 — all of which escape the shared
+  table and read to CI as something other than a block.
 - A `pre-commit` hook runs `agents guard --staged`. It should pass. If it blocks, report BLOCKED with its output rather than using `--no-verify`.
 
 ## File Structure
@@ -441,6 +467,7 @@ package change
 import (
 	"fmt"
 	"io"
+	"path/filepath" // pure string manipulation; performs no I/O
 )
 
 // FileInfo is the deliberately small view phases get of a path. It answers the
@@ -494,6 +521,21 @@ const (
 	verdictSatisfied              // already exactly right; no-op
 )
 
+// linkSourceVerdict refuses a link whose source is absent. Without it a
+// manifest typo -- or a row referring to a file a later commit will create --
+// produces a dangling symlink silently, which is worse than a refusal: the
+// machine ends up in a broken state that nothing reports. This masked half of
+// a real plan-ordering defect in Task 4.
+//
+// Unlike a seed, the source is not read, so existence is the whole test.
+func linkSourceVerdict(info FileInfo, source string) error {
+	if !info.Exists {
+		return refuse(source, "link source does not exist",
+			"restore it, or correct the manifest row that names it")
+	}
+	return nil
+}
+
 func linkVerdict(info FileInfo, current, want, target string) (verdict, error) {
 	switch {
 	case info.IsLink && current == want:
@@ -538,6 +580,32 @@ func seedSourceVerdict(info FileInfo, source string) error {
 			"correct the manifest row that names it")
 	}
 	return nil
+}
+
+// ancestorConflict refuses when any ancestor of path exists but is not a
+// directory. Applier's MkdirAll fails ENOTDIR there with a raw *fs.PathError
+// while Planner would happily plan the directory -- the same asymmetry class as
+// seedSourceVerdict, one level up the tree. Both implementations consult this.
+func ancestorConflict(m Interface, path string) error {
+	for dir := filepath.Dir(path); ; {
+		info, err := m.Lstat(dir)
+		if err != nil {
+			return err
+		}
+		if info.Exists {
+			if !info.IsDir {
+				return refuse(dir,
+					"exists and is not a directory, so it cannot contain "+path,
+					moveAside)
+			}
+			return nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir { // reached the filesystem root
+			return nil
+		}
+		dir = parent
+	}
 }
 
 func dirVerdict(info FileInfo, target string) (verdict, error) {
@@ -601,6 +669,9 @@ func (a *Applier) Dir(path string) error {
 	}
 	v, err := dirVerdict(info, path)
 	if err != nil || v == verdictSatisfied {
+		return err
+	}
+	if err := ancestorConflict(a, path); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
@@ -739,6 +810,9 @@ func (p *Planner) Dir(path string) error {
 	}
 	v, err := dirVerdict(info, path)
 	if err != nil || v == verdictSatisfied {
+		return err
+	}
+	if err := ancestorConflict(p, path); err != nil {
 		return err
 	}
 	// Applier uses MkdirAll, which creates the whole ancestor chain in one
@@ -1119,15 +1193,20 @@ Create `bootstrap.d/links.manifest`. `git/gitignore_global` and `fish/config.fis
 # kind  source                            target                            platform
 link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
-link    git/gitignore_global              .gitignore                        *
 link    claude/skills                     .claude/skills                    *
 link    gemini/skills                     .gemini/skills                    *
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
-seed    fish/config.fish.template         .config/fish/config.fish          *
 seed    git/gitconfig.local.template      .gitconfig                        *
 ```
+
+**A row and the file it names ship in the same commit.** An earlier draft
+listed `git/gitignore_global` and `fish/config.fish.template` here, which Tasks
+7 and 8 create — so from Task 4 onward `plan` correctly refused and three
+Task 3 tests went red. Task 7 adds the fish seed row with the template; Task 8
+adds the gitignore link row with the rename. Declaring a path this repository
+does not yet contain is simply false, and the tool is right to say so.
 
 - [ ] **Step 5: Run to verify it passes**
 
@@ -1715,28 +1794,40 @@ Create `bootstrap` at the repo root, `chmod +x`:
 
 set -euo pipefail
 
+# die and exec are the ONLY ways out of this script. Exit 2 is "block" in the
+# shared table; 1 is "advisory", which is how a CI job keying off codes would
+# read a hard stop. It is defined first so every later failure has somewhere to
+# go -- an earlier draft defined it below the root resolution, which therefore
+# exited 1.
+die() {
+	printf 'bootstrap: %s\n' "$1" >&2
+	exit 2
+}
+
 # CDPATH= and -- are load-bearing. Without them `cd` searches CDPATH for a
 # relative $0 and echoes the directory it resolved to, so BOOTSTRAP_ROOT can
 # silently become a same-named decoy directory AND arrive as two lines. That is
 # the "wrong tree" failure this whole redesign exists to prevent; it was
 # reproduced against the previous version of this file.
-BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd) ||
+	die "cannot resolve the repository root from '$0'"
 export BOOTSTRAP_ROOT
-
-# Exit 2 is "block" in the shared table. Never 1 (advisory) and never 127: a
-# broken build must not read as a soft warning to a CI job keying off codes.
-die() {
-	printf 'bootstrap: %s\n' "$1" >&2
-	exit 2
-}
 
 src=$BOOTSTRAP_ROOT/bootstrap.d
 
 # The cache is keyed on the checkout. Without the key, a main clone and a git
 # worktree share one binary, and whichever built first wins -- old code against
 # a new tree, silently.
-key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9')
-cache=${XDG_CACHE_HOME:-${HOME:?HOME and XDG_CACHE_HOME are both unset}/.cache}/dotfiles-bootstrap/$key
+key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9') ||
+	die "cannot derive a cache key; cksum and tr must be on PATH"
+
+# An explicit check, not ${HOME:?...}: a :? failure exits 1, measured on bash
+# 3.2.57 and 5.x. Exit 1 is "advisory" in the shared table, so a container with
+# neither variable set would report a hard stop as a soft warning.
+if [ -z "${XDG_CACHE_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+	die "neither XDG_CACHE_HOME nor HOME is set; there is nowhere to cache the build"
+fi
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles-bootstrap/$key
 binary=$cache/bootstrap
 
 # No auto-install: see spec §2.1. A helper called as go_bin=$(find_go) would
@@ -1779,7 +1870,10 @@ if [ "$needs_build" -eq 1 ]; then
 		die "the build failed; the compiler output is above"
 fi
 
-exec "$binary" "$@"
+# If exec succeeds it replaces this process, so the || arm runs only on
+# failure -- a corrupt or truncated cached binary, which would otherwise exit
+# 126 or 127.
+exec "$binary" "$@" || die "cannot execute the built binary at $binary"
 ```
 
 - [ ] **Step 7: Run to verify it passes**
@@ -2011,16 +2105,53 @@ process substitution to avoid a subshell swallowing the exit."
 
 ---
 
-### Task 5: The architecture test
+### Task 5: Invariant enforcement
+
+Three guards for invariants earlier tasks established. Grouped because they are
+one job — making this design's stated properties fail the build when violated —
+and because none is large enough to gate on its own.
 
 **Files:**
-- Test: `bootstrap.d/architecture_test.go`
+- Test: `bootstrap.d/architecture_test.go` (new)
+- Test: `bootstrap.d/main_test.go` (two added cases)
+- Modify: `bootstrap` (route the last three exits through `die`)
+- Modify: `bootstrap.d/internal/change/` (`ancestorConflict`)
 
 **Interfaces:**
 - Consumes: the packages built so far.
-- Produces: nothing at runtime. This is the §4 invariant, checked.
+- Produces: `ancestorConflict(m Interface, path string) error` in `change`.
 
-- [ ] **Step 1: Write the test**
+**Fix 4 — the last plan/apply asymmetry: `ancestorConflict`.** `Dir("a/b/c")`
+where `a/b` is a regular file: `Planner` plans one line and returns nil, while
+`Applier`'s `MkdirAll` fails `ENOTDIR` with a raw `*fs.PathError`. Same class as
+the seed-source divergences, one level up the tree. The shared function is
+specified in Task 1's `change.go` section; call it from **both** `Applier.Dir`
+and `Planner.Dir`, after the verdict and before acting. `change.go` gains
+`path/filepath`.
+
+**Fix 5 — the shim's last three escapes.** `die` moves to the top of the file
+so it exists before anything can fail; then the root resolution, the `cksum`
+key derivation, and `exec` itself each route through it. All three currently
+exit 1, the pipeline's status, or 126/127. The exact text is in Task 3's shim
+section, already updated.
+
+**Guard 2 — a `CDPATH` regression test.** The shim's `CDPATH= cd --` fix was
+verified by hand and never landed in the suite, so nothing stops it regressing.
+Add a case that exports a poisoned `CDPATH` pointing at a directory containing
+a decoy named like the repository's own basename, invokes the shim through a
+**relative** `$0` (the vulnerable shape — an absolute path never consults
+`CDPATH`), and asserts the run succeeds and preflight reports the real
+repository root. Mutation-test it: with `CDPATH=` removed from the shim it must
+fail.
+
+**Guard 3 — the shim's single exit path.** Add a case asserting `bootstrap`
+contains no `exit` outside the `die` function body and no `${var:?}` expansion.
+This is a lexical check, which Task 5's own architecture test rejects as a
+method for the phase files — say why it is acceptable here in the test's
+comment: the shim is sixty lines, fixed in shape, and has exactly two intended
+ways out, so the check is exhaustive rather than approximate.
+
+- [ ] **Step 1: Write the architecture test**
 
 Create `bootstrap.d/architecture_test.go`:
 
@@ -2138,9 +2269,9 @@ test, run it, implement, run it, commit.
 
 | # | Task | Files | Key requirement |
 |---|---|---|---|
-| 6 | `check` package, `check` verb, verify phase | `internal/check/`, `main.go` | The eight checks of spec §10. Checks 6–8 report **not applicable** under the `dotfiles` profile, not failure. Exit `0`/`1`/`2` per the shared table. Adds five `t.Skip("unskip in Task 8")` for checks that need files Tasks 7–8 create |
-| 7 | Fish inversion | `fish/config.fish.template`, `fish/config.fish`, `fish/mypre.fish`, `.gitignore` | Stub sources the tracked config; tracked config uses `(status dirname)`; rewrite `install_fisher` and `fish_reset_all` to target `$__fish_config_dir`; delete the five `fish/*` `.gitignore` lines |
-| 8 | Git renames | `git/gitconfig.shared`, `git/gitignore_global`, `git/gitconfig.local.template`, `Makefile` | Repoint the include; update the self-referential comment; confirm `grep -rn 'gitconfig\.symlink\|gitignore_global\.symlink'` is empty outside docs; remove Task 6's skips |
+| 6 | `check` package, `check` verb, verify phase | `internal/check/`, `main.go` | The eight checks of spec §10. Checks 6–8 report **not applicable** under the `dotfiles` profile, not failure. Exit `0`/`1`/`2` per the shared table. Adds five `t.Skip("unskip in Task 8")` for checks that need files Tasks 7–8 create. **`check_packages` must report `fail` with "the packages phase has not run" when `bootstrap.d/Brewfile` is absent** rather than passing a nonexistent path to `brew bundle check` — Task 12 creates it, so between here and there the file genuinely does not exist |
+| 7 | Fish inversion | `fish/config.fish.template`, `fish/config.fish`, `fish/mypre.fish`, `.gitignore`, `bootstrap.d/links.manifest` | Stub sources the tracked config; tracked config uses `(status dirname)`; rewrite `install_fisher` and `fish_reset_all` to target `$__fish_config_dir`; delete the five `fish/*` `.gitignore` lines. **Add the manifest row `seed fish/config.fish.template .config/fish/config.fish *` in this commit** — the row and the file it names ship together |
+| 8 | Git renames | `git/gitconfig.shared`, `git/gitignore_global`, `git/gitconfig.local.template`, `Makefile`, `bootstrap.d/links.manifest` | Repoint the include; update the self-referential comment; confirm `grep -rn 'gitconfig\.symlink\|gitignore_global\.symlink'` is empty outside docs; remove Task 6's skips. **Add the manifest row `link git/gitignore_global .gitignore *` in this commit**, after the rename creates the file |
 | 9 | `migrate`: reconciling | `internal/migrate/`, `main.go`, `preflight.go` | `fish` and `gitconfig` migrations. Fish **copies before removing** so an interrupt leaves the old state intact. Preflight refuses when one is pending and names `bootstrap migrate` |
 | 10 | `migrate`: reclaiming | `internal/migrate/` | `mambaforge`. Never runs from a bare `migrate`; bare `migrate` **lists** it with the exact command. Refuses if `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip` resolves inside it |
 | 11 | Devtools phase | `internal/phase/devtools.go` | `uv`; build `agents`; **delegate** git hooks to `git/install-hooks.sh` with `install <root> <home> <root>/../bin/agents`. Test asserts the invocation, not hook installation |
