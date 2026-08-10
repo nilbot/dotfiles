@@ -9,15 +9,18 @@
 # Targets are relative to $HOME. Sources are relative to the repository root.
 # ~/.gitattributes and core.hooksPath are deliberately absent: git/install-hooks.sh
 # owns them. One owner per path.
+#
+# A row and the file it names ship in the same commit. Rows for
+# git/gitignore_global and fish/config.fish.template arrive with Tasks 8 and 7,
+# which create those files. Declaring a path this repository does not contain
+# is simply false, and bootstrap is right to refuse it.
 
 # kind  source                            target                            platform
 link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
-link    git/gitignore_global              .gitignore                        *
 link    claude/skills                     .claude/skills                    *
 link    gemini/skills                     .gemini/skills                    *
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
-seed    fish/config.fish.template         .config/fish/config.fish          *
 seed    git/gitconfig.local.template      .gitconfig                        *
