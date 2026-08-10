@@ -750,6 +750,17 @@ func (p *Planner) Seed(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	// Applier reads the source, so Planner must check it exists. Otherwise a
+	// plan reports success where apply fails -- the exact divergence this
+	// package exists to prevent.
+	srcInfo, err := p.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if !srcInfo.Exists {
+		return refuse(source, "seed template is missing",
+			"restore it, or correct the manifest row that names it")
+	}
 	if err := p.Dir(filepath.Dir(target)); err != nil {
 		return err
 	}
