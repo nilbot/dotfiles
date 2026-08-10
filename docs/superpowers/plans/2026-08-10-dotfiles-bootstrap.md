@@ -520,6 +520,26 @@ func seedVerdict(info FileInfo, target string) (verdict, error) {
 	return verdictProceed, nil
 }
 
+// seedSourceVerdict decides whether a seed's SOURCE is usable. Applier reads it
+// with os.ReadFile and Planner cannot, so both consult this rather than each
+// deciding separately -- otherwise plan reports success for a source apply
+// cannot read, and the two produce different error types for one condition.
+//
+// The test is Exists && !IsDir, deliberately not IsRegular: Lstat reports a
+// symlinked template as IsLink, and os.ReadFile follows symlinks happily, so an
+// IsRegular test would diverge in the opposite direction.
+func seedSourceVerdict(info FileInfo, source string) error {
+	if !info.Exists {
+		return refuse(source, "seed template is missing",
+			"restore it, or correct the manifest row that names it")
+	}
+	if info.IsDir {
+		return refuse(source, "seed template is a directory, not a file",
+			"correct the manifest row that names it")
+	}
+	return nil
+}
+
 func dirVerdict(info FileInfo, target string) (verdict, error) {
 	switch {
 	case info.IsDir:
@@ -624,6 +644,15 @@ func (a *Applier) Seed(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	srcInfo, err := a.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if err := seedSourceVerdict(srcInfo, source); err != nil {
+		return err
+	}
+	// Read before creating the parent, so a bad template leaves no stray
+	// directory behind.
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
@@ -712,9 +741,29 @@ func (p *Planner) Dir(path string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	// Applier uses MkdirAll, which creates the whole ancestor chain in one
+	// call and reports one line. Record every ancestor the plan would bring
+	// into existence, or a later Link into a sibling re-plans a directory
+	// apply already made silently.
+	p.recordAncestors(path)
 	p.pending[path] = FileInfo{Exists: true, IsDir: true}
 	report(p.out, "plan  create directory %s", path)
 	return nil
+}
+
+func (p *Planner) recordAncestors(path string) {
+	for dir := filepath.Dir(path); ; {
+		info, err := p.Lstat(dir)
+		if err != nil || info.Exists {
+			return
+		}
+		p.pending[dir] = FileInfo{Exists: true, IsDir: true}
+		parent := filepath.Dir(dir)
+		if parent == dir { // reached the filesystem root
+			return
+		}
+		dir = parent
+	}
 }
 
 func (p *Planner) Link(source, target string) error {
@@ -750,16 +799,29 @@ func (p *Planner) Seed(source, target string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
-	// Applier reads the source, so Planner must check it exists. Otherwise a
-	// plan reports success where apply fails -- the exact divergence this
-	// package exists to prevent.
+	// p.Lstat, not the reader, so a template an earlier step planned into
+	// existence is honoured.
 	srcInfo, err := p.Lstat(source)
 	if err != nil {
 		return err
 	}
-	if !srcInfo.Exists {
-		return refuse(source, "seed template is missing",
-			"restore it, or correct the manifest row that names it")
+	if err := seedSourceVerdict(srcInfo, source); err != nil {
+		return err
+	}
+	// seedSourceVerdict names the two cases worth a remediation message.
+	// Everything else -- a dangling symlink, a permission error -- is predicted
+	// EXACTLY by performing the same read Applier will and discarding the
+	// bytes. Reading is not a mutation, so Planner may do it.
+	//
+	// This ends a regress rather than narrowing it once more: predicting
+	// os.ReadFile from Lstat is approximate by construction, and each fix
+	// uncovered a narrower case that still diverged.
+	//
+	// Safe because a seed source is always a tracked repository file -- the
+	// manifest's source column is repo-relative and no plan step creates one --
+	// so the overlay can never need to satisfy this read.
+	if _, err := p.ReadFile(source); err != nil {
+		return err
 	}
 	if err := p.Dir(filepath.Dir(target)); err != nil {
 		return err
