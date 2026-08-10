@@ -61,6 +61,7 @@ type fakeChange struct {
 	links       map[string]string
 	files       map[string][]byte
 	lookPathErr map[string]bool
+	failOn      string // when a mutation's target contains this, return a Refusal
 	Ops         []string
 }
 
@@ -73,12 +74,24 @@ func (f *fakeChange) LookPath(n string) (string, error) {
 	}
 	return "/usr/bin/" + n, nil
 }
-func (f *fakeChange) Dir(p string) error { f.Ops = append(f.Ops, "dir "+p); return nil }
+func (f *fakeChange) Dir(p string) error {
+	if f.failOn != "" && strings.Contains(p, f.failOn) {
+		return &change.Refusal{Path: p, Problem: "test", Remediation: "test"}
+	}
+	f.Ops = append(f.Ops, "dir "+p)
+	return nil
+}
 func (f *fakeChange) Link(s, t string) error {
+	if f.failOn != "" && strings.Contains(t, f.failOn) {
+		return &change.Refusal{Path: t, Problem: "test", Remediation: "test"}
+	}
 	f.Ops = append(f.Ops, "link "+t+" -> "+s)
 	return nil
 }
 func (f *fakeChange) Seed(s, t string) error {
+	if f.failOn != "" && strings.Contains(t, f.failOn) {
+		return &change.Refusal{Path: t, Problem: "test", Remediation: "test"}
+	}
 	f.Ops = append(f.Ops, "seed "+t+" from "+s)
 	return nil
 }
