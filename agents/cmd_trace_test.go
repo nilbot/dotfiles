@@ -22,8 +22,12 @@ import (
 // wired to Filter.Machine.
 func seedTraces(t *testing.T, root string) {
 	t.Helper()
+	seedTracesAt(t, root, time.Now().UTC())
+}
+
+func seedTracesAt(t *testing.T, root string, now time.Time) {
+	t.Helper()
 	w := record.NewWriter(repo.AgentsDir(root))
-	now := time.Now().UTC()
 	recs := []record.Record{
 		{When: now.Add(-1 * time.Hour), Harness: "codex", Machine: "m1", Event: "stop",
 			Lane: "lane-a", Cwd: "alpha/api", AgentType: "Explore",
@@ -238,11 +242,12 @@ func TestTraceLSRendersTheDerivedColumns(t *testing.T) {
 // exit code is the part a script can act on.
 func TestTraceLSAdvisoryOnUnreadableLines(t *testing.T) {
 	root := newRepo(t)
-	seedTraces(t, root)
+	now := time.Now().UTC()
+	seedTracesAt(t, root, now)
 	t.Chdir(root)
 
 	path := filepath.Join(repo.AgentsDir(root), "reports", "traces",
-		time.Now().UTC().Format("2006-01-02")+".jsonl")
+		now.Add(-time.Hour).Format("2006-01-02")+".jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
