@@ -258,6 +258,23 @@ func TestMissingGoRefusesWithTheInstallCommand(t *testing.T) {
 	}
 }
 
+// With neither variable set there is nowhere to cache the build, and that must
+// block (2). Writing this as ${HOME:?...} was the obvious way and exits 1 --
+// "advisory" -- so anything keying off the code reads a hard stop as a soft
+// warning. PATH is kept so the shim reaches the check instead of dying at
+// dirname; it is the two variables that must be absent, not the whole
+// environment.
+func TestNoCacheLocationIsBlock(t *testing.T) {
+	_, stderr, code := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"),
+		tempHome(t), []string{"HOME=", "XDG_CACHE_HOME="}, "--help")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block): %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "nowhere to cache") {
+		t.Errorf("the refusal should say there is nowhere to cache the build: %s", stderr)
+	}
+}
+
 // HOME unset with XDG_CACHE_HOME set is a normal container shape, and
 // containers are why the dotfiles profile exists. Preflight must block rather
 // than resolve every managed path against "/".

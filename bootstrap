@@ -33,7 +33,14 @@ src=$BOOTSTRAP_ROOT/bootstrap.d
 # worktree share one binary, and whichever built first wins -- old code against
 # a new tree, silently.
 key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9')
-cache=${XDG_CACHE_HOME:-${HOME:?HOME and XDG_CACHE_HOME are both unset}/.cache}/dotfiles-bootstrap/$key
+
+# An explicit check, not ${HOME:?...}: a :? failure exits 1, measured on bash
+# 3.2.57 and 5.x. Exit 1 is "advisory" in the shared table, so a container with
+# neither variable set would report a hard stop as a soft warning.
+if [ -z "${XDG_CACHE_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+	die "neither XDG_CACHE_HOME nor HOME is set; there is nowhere to cache the build"
+fi
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles-bootstrap/$key
 binary=$cache/bootstrap
 
 # No auto-install: see spec §2.1. A helper called as go_bin=$(find_go) would
