@@ -7,6 +7,7 @@ package change
 import (
 	"fmt"
 	"io"
+	"path/filepath"
 )
 
 // FileInfo is the deliberately small view phases get of a path. It answers the
@@ -119,6 +120,48 @@ func seedSourceVerdict(info FileInfo, source string) error {
 			"correct the manifest row that names it")
 	}
 	return nil
+}
+
+// ancestorConflict refuses when the nearest existing ancestor of path is not a
+// real directory, so it cannot contain what is about to be created. Both
+// implementations consult it, because without it the two disagree -- measured
+// on darwin:
+//
+//	regular file ancestor       both fail, but with a raw *fs.PathError
+//	                            (ENOTDIR) that names neither the ancestor nor
+//	                            any remediation
+//	dangling symlink ancestor   Applier's MkdirAll fails EEXIST; Planner plans
+//	                            the directory and returns nil
+//
+// A symlink to a real directory is refused too, which MkdirAll would have
+// followed. That is deliberate and consistent: IsDir means a REAL directory
+// everywhere in this package, and dirVerdict already refuses a symlinked target
+// with the same remediation. Telling them apart would need a following Stat,
+// which Interface does not offer -- and writing into a symlinked tree is the
+// "wrong tree" failure this design exists to prevent.
+//
+// The walk stops at the first ancestor that exists. It cannot run past the
+// filesystem root: filepath.Dir("/") is "/", which terminates the loop.
+func ancestorConflict(m Interface, path string) error {
+	for dir := filepath.Dir(path); ; {
+		info, err := m.Lstat(dir)
+		if err != nil {
+			return err
+		}
+		if info.Exists {
+			if !info.IsDir {
+				return refuse(dir,
+					"exists and is not a directory, so it cannot contain "+path,
+					moveAside)
+			}
+			return nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir { // reached the filesystem root
+			return nil
+		}
+		dir = parent
+	}
 }
 
 func dirVerdict(info FileInfo, target string) (verdict, error) {

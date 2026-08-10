@@ -54,6 +54,11 @@ func (p *Planner) Dir(path string) error {
 	if err != nil || v == verdictSatisfied {
 		return err
 	}
+	// Through p, not p.reader, so the walk sees directories earlier steps
+	// planned into existence -- the same overlay discipline Link and Seed use.
+	if err := ancestorConflict(p, path); err != nil {
+		return err
+	}
 	p.recordAncestors(path)
 	p.pending[path] = FileInfo{Exists: true, IsDir: true}
 	report(p.out, "plan  create directory %s", path)

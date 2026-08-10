@@ -183,7 +183,7 @@ func TestSeedRefusesUnusableSourceOnBothPaths(t *testing.T) {
 // machine broken with nothing reporting it. Plan said nothing either, so the
 // two agreed on the wrong answer.
 func TestLinkRefusesMissingSourceOnBothPaths(t *testing.T) {
-	for _, impl := range linkImpls() {
+	for _, impl := range impls() {
 		t.Run(impl.name, func(t *testing.T) {
 			home := tempHome(t)
 			source := filepath.Join(home, "no such source")
@@ -216,7 +216,7 @@ func TestLinkRefusesMissingSourceOnBothPaths(t *testing.T) {
 // macOS/ghostty), so tightening the guard to match seedSourceVerdict would
 // refuse rows the design requires.
 func TestLinkAcceptsADirectorySource(t *testing.T) {
-	for _, impl := range linkImpls() {
+	for _, impl := range impls() {
 		t.Run(impl.name, func(t *testing.T) {
 			home := tempHome(t)
 			source := filepath.Join(home, "skills dir")
@@ -230,7 +230,10 @@ func TestLinkAcceptsADirectorySource(t *testing.T) {
 	}
 }
 
-func linkImpls() []struct {
+// impls is the pair every "plan and apply must agree" case runs against. The
+// two implementations are interchangeable through change.Interface, which is
+// what makes one table body cover both.
+func impls() []struct {
 	name string
 	make func(out io.Writer) change.Interface
 } {
@@ -347,6 +350,103 @@ func TestPlanAndApplyAgreeOnCreatedDirectories(t *testing.T) {
 	if planned != created {
 		t.Errorf("plan announced %d directories, apply created %d:\nplan:\n%sapply:\n%s",
 			planned, created, planOut.String(), applyOut.String())
+	}
+}
+
+// The last plan/apply asymmetry, one level up the tree from the seed and link
+// source verdicts: Dir("a/b/c") when a/b cannot hold c. Measured on darwin,
+// before the fix:
+//
+//	regular file       Lstat("a/b/c") fails ENOTDIR, so BOTH paths return a raw
+//	                   *fs.PathError -- no Refusal, no remediation, and nothing
+//	                   naming a/b as the reason.
+//	dangling symlink   Lstat("a/b/c") is ENOENT, so Planner plans the directory
+//	                   and returns nil while Applier's MkdirAll fails EEXIST.
+//	                   Plan reported success for something apply cannot do.
+//
+// A symlink to a real directory is the third case and the one that changes
+// behaviour: MkdirAll would follow it and succeed. It is refused deliberately,
+// because FileInfo.IsDir means a REAL directory throughout this package and
+// dirVerdict already refuses a symlinked target with the same remediation.
+// Accepting a symlinked ancestor while refusing a symlinked target would be
+// incoherent, and writing into a symlinked tree is the "wrong tree" failure
+// this design exists to prevent.
+//
+// The refusal must name the ancestor that blocks, not the leaf being created:
+// "a/b/c cannot be created" sends you looking at the wrong path.
+func TestDirRefusesANonDirectoryAncestorOnBothPaths(t *testing.T) {
+	ancestors := []struct {
+		kind string
+		make func(t *testing.T, home string) string
+	}{
+		{"regular file", func(t *testing.T, home string) string {
+			t.Helper()
+			blocker := filepath.Join(home, "config dir", "fish")
+			if err := os.WriteFile(blocker, []byte("a file, not a directory"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return blocker
+		}},
+		{"dangling symlink", func(t *testing.T, home string) string {
+			t.Helper()
+			blocker := filepath.Join(home, "config dir", "fish")
+			if err := os.Symlink(filepath.Join(home, "gone"), blocker); err != nil {
+				t.Fatal(err)
+			}
+			return blocker
+		}},
+		{"symlink to a directory", func(t *testing.T, home string) string {
+			t.Helper()
+			real := filepath.Join(home, "elsewhere")
+			if err := os.MkdirAll(real, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			blocker := filepath.Join(home, "config dir", "fish")
+			if err := os.Symlink(real, blocker); err != nil {
+				t.Fatal(err)
+			}
+			return blocker
+		}},
+	}
+
+	for _, ancestor := range ancestors {
+		for _, impl := range impls() {
+			t.Run(ancestor.kind+"/"+impl.name, func(t *testing.T) {
+				home := tempHome(t)
+				if err := os.MkdirAll(filepath.Join(home, "config dir"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				blocker := ancestor.make(t, home)
+				before := treeOf(t, home)
+
+				var out bytes.Buffer
+				// Two levels below the blocker, not one: the shallow case is
+				// caught by the leaf Lstat alone, so a guard that only handled
+				// it would still leave the deeper path returning a raw error.
+				err := impl.make(&out).Dir(filepath.Join(blocker, "functions", "nested"))
+
+				var refusal *change.Refusal
+				if !errorsAs(err, &refusal) {
+					t.Fatalf("want *change.Refusal, got %T: %v", err, err)
+				}
+				if refusal.Path != blocker {
+					t.Errorf("the refusal should name the blocking ancestor %q, got %q",
+						blocker, refusal.Path)
+				}
+				if refusal.Remediation == "" {
+					t.Error("a refusal must name its remediation")
+				}
+				// Catches the symlinked-directory case in particular: without a
+				// refusal MkdirAll follows the link and creates the directory
+				// under home/elsewhere, which treeOf walks.
+				if after := treeOf(t, home); after != before {
+					t.Errorf("a refused directory changed the tree:\nbefore:\n%s\nafter:\n%s", before, after)
+				}
+				if strings.Contains(out.String(), "directory") {
+					t.Errorf("a refused directory must not be reported as done:\n%s", out.String())
+				}
+			})
+		}
 	}
 }
 

@@ -1,10 +1,12 @@
 package change
 
 import (
+	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 )
 
 // Applier performs operations for real.
@@ -14,7 +16,12 @@ func NewApplier(out io.Writer) *Applier { return &Applier{out: out} }
 
 func (a *Applier) Lstat(path string) (FileInfo, error) {
 	info, err := os.Lstat(path)
-	if os.IsNotExist(err) {
+	// ENOTDIR means an ancestor is not a directory, so this path does not exist
+	// and cannot -- which is what FileInfo{} says. os.IsNotExist is false for
+	// it (Errno.Is maps only ENOENT to ErrNotExist), so without this arm the
+	// error escapes as a raw *fs.PathError naming the leaf, and ancestorConflict
+	// never gets to name the ancestor that is actually in the way.
+	if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
 		return FileInfo{}, nil
 	}
 	if err != nil {
@@ -40,6 +47,9 @@ func (a *Applier) Dir(path string) error {
 	}
 	v, err := dirVerdict(info, path)
 	if err != nil || v == verdictSatisfied {
+		return err
+	}
+	if err := ancestorConflict(a, path); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
