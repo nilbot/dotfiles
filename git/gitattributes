@@ -1,0 +1,8 @@
+# Global git attributes, linked to ~/.gitattributes by `make githooks`.
+#
+# Per-repository .gitattributes (written by `agents init`) takes precedence
+# over anything here.
+
+# Trace indexes are append-only. Union merge keeps concurrent branch appends
+# as line-oriented JSONL instead of producing invalid conflict markers.
+.agents/reports/traces/*.jsonl merge=union

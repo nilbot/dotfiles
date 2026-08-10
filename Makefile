@@ -1,4 +1,4 @@
-.PHONY: all dep links editors tmux extra omz bins dotfiles fish agents
+.PHONY: all dep links editors tmux extra omz bins dotfiles fish agents githooks
 
 all: dep links editors tmux extra fish
 
@@ -6,7 +6,7 @@ dep:
 	sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi
 	./user-install-dep.sh
 
-links: bins dotfiles
+links: bins dotfiles githooks
 
 binaries := $(wildcard bin/*.bin)
 
@@ -20,9 +20,17 @@ bins:
 # The agents binary lives in dotfiles and is invoked by absolute path from
 # generated harness configs. Nothing is vendored per-repo.
 agents:
-	mkdir -p $(HOME)/bin
-	cd $(CURDIR)/agents && go build -trimpath -o $(HOME)/bin/agents .
+	mkdir -p "$(HOME)/bin"
+	cd "$(CURDIR)/agents" && go build -trimpath -o "$(HOME)/bin/agents" .
 	@echo "built $(HOME)/bin/agents"
+
+# Global Git hooks, for every repository on this machine. Preflight runs before
+# the build and the installer repeats it before linking; core.hooksPath is the
+# installer's final write.
+githooks:
+	bash "$(CURDIR)/git/install-hooks.sh" preflight "$(CURDIR)" "$(HOME)" "$(HOME)/bin/agents"
+	$(MAKE) --no-print-directory agents HOME="$(HOME)"
+	bash "$(CURDIR)/git/install-hooks.sh" install "$(CURDIR)" "$(HOME)" "$(HOME)/bin/agents"
 
 dotfiles:
 	mkdir -p $(HOME)/.config $(HOME)/.local
@@ -87,4 +95,3 @@ fishshell:
 	rm -rf $(HOME)/.config/fish
 	ln -s $(CURDIR)/fish $(HOME)/.config/fish
 	sudo -v || if [ -z $$? ]; then sudo chsh -s $(shell which fish) $(shell whoami); fi
-

@@ -16,9 +16,18 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ## Implementation
 
-**This protection system is integrated into the dotfiles and works automatically.**
+**This protection system is integrated into the dotfiles.**
 
-When you install dotfiles with `make dotfiles`, commit message protection is automatically configured system-wide. All new repositories and commits will have Claude Code footers automatically stripped.
+Run `make githooks` from the dotfiles checkout (or use `make links`, which
+includes it). The installer checks for existing Git-hook and global-attributes
+ownership before it builds or changes anything. It refuses a foreign global
+`core.hooksPath` instead of replacing or implicitly chaining it.
+
+After a successful install, Git invokes the Go-backed `agents` multicall binary
+for `pre-commit`, `commit-msg`, `post-merge`, and `post-checkout` in new and
+pre-existing repositories. Existing repository hooks and the executable
+personal hooks in `git/hooks/` remain chained by the dispatcher. A repository
+with its own local `core.hooksPath` intentionally overrides the global chain.
 
 ## Session Behavior Rules
 
@@ -58,27 +67,34 @@ EOF
 
 ### Quick Status Check
 ```bash
-# Verify protection is active
-~/.claude/check-commits.sh
+# The global value should be this checkout's git/hooks.d directory.
+git config --global --show-origin --get-all core.hooksPath
 
-# Check recent commits for violations  
-~/.claude/check-commits.sh . 10
+# Each installed hook should resolve to the freshly built ~/bin/agents.
+for hook in pre-commit commit-msg post-merge post-checkout; do
+  readlink "$HOME/dotfiles/git/hooks.d/$hook"
+done
+
+# The global attributes link should resolve to the tracked attributes file.
+readlink "$HOME/.gitattributes"
 ```
 
 ### Expected Behavior
 - ✅ Commits complete normally
 - ✅ Claude footers are silently removed
 - ✅ Commit messages remain clean in `git log`
-- ✅ No performance issues or hanging
+- ✅ Existing repository and personal hooks run before the built-in stage
+- ⚠️ A local `core.hooksPath` override bypasses the global chain by Git design
 
 ## Files Reference
 
 - **`~/.claude/CLAUDE.md`** - This configuration file
-- **`~/.claude/check-commits.sh`** - Violation detection script
-- **`~/.claude/commit-msg`** - Standalone hook (if needed)
+- **`~/bin/agents`** - Go-backed multicall hook dispatcher
+- **`~/dotfiles/git/install-hooks.sh`** - ownership-checking installer
+- **`~/dotfiles/git/hooks/`** - optional executable personal hook stages
 
 ---
 
 **🚨 CRITICAL**: This configuration is mandatory for ALL Claude Code usage.  
-**🔄 AUTOMATIC**: Protection works transparently via dotfiles integration.  
-**✅ VERIFIED**: System tested and optimized for performance.
+**🔄 AUTOMATIC AFTER INSTALL**: Protection applies through global Git hook dispatch.
+**🔎 VERIFY LOCALLY**: Use the commands above after installation.

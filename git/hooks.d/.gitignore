@@ -1,0 +1,4 @@
+# The symlinks in this directory point at an absolute path on one machine
+# (~/bin/agents). `make githooks` creates them. Only this file is tracked.
+*
+!.gitignore
