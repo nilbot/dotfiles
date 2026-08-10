@@ -3,6 +3,17 @@ package phase
 import "fmt"
 
 func Preflight(c Context) error {
+	// The two load-bearing inputs, checked in the phase whose entire job is
+	// checking. HOME unset with XDG_CACHE_HOME set is a normal container shape
+	// -- and containers are exactly why the dotfiles profile exists -- which
+	// would otherwise resolve every managed path against "/".
+	if c.Root == "" {
+		return fmt.Errorf("repository root is empty; the shim exports BOOTSTRAP_ROOT")
+	}
+	if c.Home == "" {
+		return fmt.Errorf("HOME is empty; every managed path is resolved against it")
+	}
+
 	c.logf("== preflight")
 	c.logf("   platform    %s", c.Platform)
 	c.logf("   repository  %s", c.Root)
