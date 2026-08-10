@@ -36,6 +36,12 @@ func Config(c Context) error {
 			err = c.Change.Seed(source, target)
 		case manifest.KindDir:
 			err = c.Change.Dir(target)
+		default:
+			// Unreachable while manifest.Parse rejects unknown kinds at load --
+			// but that guard lives in another package. A kind added there and
+			// not here would otherwise skip the row in silence, which is the one
+			// failure mode this design refuses to accept anywhere else.
+			err = fmt.Errorf("unknown kind %q for target %s", row.Kind, row.Target)
 		}
 		if err != nil {
 			return err
