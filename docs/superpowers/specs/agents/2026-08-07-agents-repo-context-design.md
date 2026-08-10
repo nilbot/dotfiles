@@ -1,7 +1,7 @@
 # `agents` — repo-tracked agent context, wired from dotfiles
 
 **Date:** 2026-08-07
-**Status:** design approved, not yet implemented
+**Status:** implemented
 **Scope:** spec 1 of 3 (see [Roadmap](#roadmap-specs-2-to-4) for what is deliberately deferred)
 
 ---
@@ -610,10 +610,12 @@ control, so a mismatch is news, not a bug. `agents ls` reports; nothing blocks.
 
 ---
 
-## Roadmap: specs 2 to 4
+## Roadmap: specs 2 to 5
 
 Recorded here so the sequencing survives a fresh session with no conversation
-history. Each graduates to its own document when started.
+history. Numbers are stable catalog identifiers, not implementation priority;
+dependencies and readiness decide what starts next. Each graduates to a full design
+and implementation plan when started.
 
 ### Spec 2 — dotfiles hygiene
 
@@ -675,6 +677,19 @@ vendors become visible as data rather than as scattered adapter code, and that
 comparison is where insight about the vendors themselves would come from. That is
 a research payoff, not an engineering one, and it should be undertaken knowingly
 rather than smuggled in as premature abstraction.
+
+### Spec 5 — CI, releases, and binary distribution
+
+The implemented local loop builds the current checkout directly to
+`~/bin/agents`; it does not provide pull-request CI, release artifacts, or a way to
+install and upgrade a published binary. Those concerns must be designed together,
+because artifact format determines the installation and rollback contract.
+
+The likely publishing direction is a Homebrew-installable release, but the full
+design must first settle platform support, versioning, checksums and provenance,
+GitHub Actions verification, artifact or bottle production, safe activation, and
+how an installed binary reports or detects drift from the checked-out source. See
+[the Spec 5 scope](2026-08-10-spec-5-ci-release-distribution.md).
 
 ---
 
