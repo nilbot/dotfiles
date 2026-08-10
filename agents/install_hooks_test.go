@@ -54,11 +54,22 @@ func task18RepoRoot(t *testing.T) string {
 	return root
 }
 
-func isolatedGitEnvironment(home, globalConfig string) []string {
-	environment := make([]string, 0, len(os.Environ())+4)
+func isolatedGitEnvironment(t *testing.T, home, globalConfig string) []string {
+	t.Helper()
+	output, err := exec.Command("go", "env", "GOPATH", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatalf("resolve Go cache paths: %v", err)
+	}
+	goPaths := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+	if len(goPaths) != 2 || goPaths[0] == "" || goPaths[1] == "" {
+		t.Fatalf("unexpected go env output: %q", output)
+	}
+
+	environment := make([]string, 0, len(os.Environ())+6)
 	for _, item := range os.Environ() {
 		if strings.HasPrefix(item, "HOME=") || strings.HasPrefix(item, "GIT_CONFIG_GLOBAL=") ||
-			strings.HasPrefix(item, "GIT_CONFIG_NOSYSTEM=") || strings.HasPrefix(item, "GIT_TERMINAL_PROMPT=") {
+			strings.HasPrefix(item, "GIT_CONFIG_NOSYSTEM=") || strings.HasPrefix(item, "GIT_TERMINAL_PROMPT=") ||
+			strings.HasPrefix(item, "GOPATH=") || strings.HasPrefix(item, "GOMODCACHE=") {
 			continue
 		}
 		environment = append(environment, item)
@@ -68,7 +79,35 @@ func isolatedGitEnvironment(home, globalConfig string) []string {
 		"GIT_CONFIG_GLOBAL="+globalConfig,
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_TERMINAL_PROMPT=0",
+		"GOPATH="+goPaths[0],
+		"GOMODCACHE="+goPaths[1],
 	)
+}
+
+func TestIsolatedGitEnvironmentPinsGoCachePaths(t *testing.T) {
+	output, err := exec.Command("go", "env", "GOPATH", "GOMODCACHE").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
+	if len(want) != 2 || want[0] == "" || want[1] == "" {
+		t.Fatalf("unexpected go env output: %q", output)
+	}
+
+	environment := isolatedGitEnvironment(t, t.TempDir(), filepath.Join(t.TempDir(), ".gitconfig"))
+	got := make(map[string]string)
+	for _, item := range environment {
+		key, value, found := strings.Cut(item, "=")
+		if found {
+			got[key] = value
+		}
+	}
+	if got["GOPATH"] != want[0] {
+		t.Errorf("child GOPATH = %q, want go env value %q", got["GOPATH"], want[0])
+	}
+	if got["GOMODCACHE"] != want[1] {
+		t.Errorf("child GOMODCACHE = %q, want go env value %q", got["GOMODCACHE"], want[1])
+	}
 }
 
 func isolatedGitEnvironmentWithoutGlobal(home string) []string {
@@ -89,7 +128,7 @@ func isolatedGitEnvironmentWithoutGlobal(home string) []string {
 
 func runHookInstaller(t *testing.T, fixture hookInstallFixture, mode string) (string, error) {
 	t.Helper()
-	return runHookInstallerWithEnvironment(t, fixture, mode, isolatedGitEnvironment(fixture.home, fixture.globalConfig))
+	return runHookInstallerWithEnvironment(t, fixture, mode, isolatedGitEnvironment(t, fixture.home, fixture.globalConfig))
 }
 
 func runHookInstallerWithEnvironment(t *testing.T, fixture hookInstallFixture, mode string, environment []string) (string, error) {
@@ -121,7 +160,7 @@ func runHookInstallerWithTimeout(t *testing.T, fixture hookInstallFixture, mode 
 	t.Helper()
 	script := filepath.Join(task18RepoRoot(t), "git", "install-hooks.sh")
 	command := exec.Command("bash", script, mode, fixture.repoRoot, fixture.home, fixture.binary)
-	command.Env = isolatedGitEnvironment(fixture.home, fixture.globalConfig)
+	command.Env = isolatedGitEnvironment(t, fixture.home, fixture.globalConfig)
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var output bytes.Buffer
 	command.Stdout = &output
@@ -241,7 +280,7 @@ func runMakeGitHooks(t *testing.T, root, home, globalConfig string) (string, err
 	t.Helper()
 	command := exec.Command("make", "--no-print-directory", "githooks", "HOME="+home)
 	command.Dir = root
-	command.Env = isolatedGitEnvironment(home, globalConfig)
+	command.Env = isolatedGitEnvironment(t, home, globalConfig)
 	output, err := command.CombinedOutput()
 	return string(output), err
 }
@@ -275,7 +314,7 @@ func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalP
 	}
 
 	command := exec.Command("git", "config", "--global", "--get-all", "core.hooksPath")
-	command.Env = isolatedGitEnvironment(fixture.home, fixture.globalConfig)
+	command.Env = isolatedGitEnvironment(t, fixture.home, fixture.globalConfig)
 	configured, err := command.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -559,7 +598,7 @@ exec "$TEST_REAL_GIT" "$@"
 				t.Fatal(err)
 			}
 			environment := environmentWithHookInstallTestOverrides(
-				isolatedGitEnvironment(fixture.home, fixture.globalConfig),
+				isolatedGitEnvironment(t, fixture.home, fixture.globalConfig),
 				"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 				"TEST_REAL_GIT="+realGit,
 				"TEST_GIT_COUNT="+counter,
@@ -718,7 +757,7 @@ func TestMakeGitHooksBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T
 		t.Errorf("attributes target = %q, want %q", gotAttrs, want)
 	}
 	configured := exec.Command("git", "config", "--global", "--get-all", "core.hooksPath")
-	configured.Env = isolatedGitEnvironment(home, globalConfig)
+	configured.Env = isolatedGitEnvironment(t, home, globalConfig)
 	configuredPath, err := configured.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -978,7 +1017,7 @@ func TestHookInstallerConfigWriteFailureLeavesLinksInactive(t *testing.T) {
 		t.Fatal(err)
 	}
 	environment := environmentWithHookInstallTestOverrides(
-		isolatedGitEnvironment(fixture.home, fixture.globalConfig),
+		isolatedGitEnvironment(t, fixture.home, fixture.globalConfig),
 		"PATH="+shimDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"TEST_REAL_GIT="+realGit,
 	)
@@ -1035,7 +1074,7 @@ func runIsolatedGit(t *testing.T, dir, home, globalConfig string, args ...string
 	t.Helper()
 	command := exec.Command("git", args...)
 	command.Dir = dir
-	command.Env = isolatedGitEnvironment(home, globalConfig)
+	command.Env = isolatedGitEnvironment(t, home, globalConfig)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, output)
