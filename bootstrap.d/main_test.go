@@ -180,14 +180,18 @@ func TestPlanRunsFromAnyDirectoryAndNamesItsPhases(t *testing.T) {
 	}
 }
 
+// The assertion is on each phase's banner rather than on its bare name: the
+// verify phase reports a check called "packages", correctly, as not applicable
+// under this profile, and a substring test cannot tell that from the phase
+// having run.
 func TestDotfilesProfileSkipsPrivilegedPhases(t *testing.T) {
 	stdout, stderr, code := runShim(t, tempHome(t), "plan", "dotfiles")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
-	for _, forbidden := range []string{"packages", "devtools"} {
+	for _, forbidden := range []string{"== packages", "== fish", "== devtools"} {
 		if strings.Contains(stdout, forbidden) {
-			t.Errorf("dotfiles must not run the %s phase:\n%s", forbidden, stdout)
+			t.Errorf("dotfiles must not run the %q phase:\n%s", forbidden, stdout)
 		}
 	}
 }
@@ -199,6 +203,94 @@ func TestPreflightDeclaresPrivilegeAndNetwork(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "sudo") || !strings.Contains(stdout, "network") {
 		t.Errorf("preflight must declare what needs sudo and network:\n%s", stdout)
+	}
+}
+
+// checkStatus returns the status check.Write printed for one check, or "" when
+// that check is absent. Only the two stable parts of a line are read -- the
+// status and the name -- because the column layout is deliberately not a
+// contract.
+func checkStatus(stdout, name string) string {
+	for _, line := range strings.Split(stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == name {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+// A bare $HOME is unhealthy, and check must say so in a way a human can act on:
+// a non-zero code and the names of the rows that are not there.
+//
+// The three machine-wide checks are asserted n/a rather than fail. Under the
+// dotfiles profile they cover state that profile deliberately does not manage,
+// and three false problems in every container run is how a report stops being
+// read.
+func TestCheckOnABareHomeNamesTheMissingRows(t *testing.T) {
+	stdout, stderr, code := runShim(t, tempHome(t), "check", "dotfiles")
+	if code != 1 && code != 2 {
+		t.Fatalf("exit %d, want 1 or 2 on a bare home:\n%s%s", code, stdout, stderr)
+	}
+	for _, want := range []string{".tmux.conf", ".config/starship.toml"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("check does not name the missing row %s:\n%s", want, stdout)
+		}
+	}
+	for _, name := range []string{"login-shell", "agents", "packages"} {
+		if got := checkStatus(stdout, name); got != "n/a" {
+			t.Errorf("%s = %q under the dotfiles profile, want n/a:\n%s", name, got, stdout)
+		}
+	}
+}
+
+// Verify reports and returns nil: an advisory finding at the end of an apply
+// must not look like a failed apply. On a bare $HOME the two guards genuinely
+// fail even after a successful apply, so this asserts both halves at once --
+// findings printed, exit still 0. Only the check verb exits on the answer.
+func TestApplyStillSucceedsWhenVerifyFinds(t *testing.T) {
+	stdout, stderr, code := runShim(t, tempHome(t), "apply", "dotfiles")
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; a verify finding is not a failed apply:\n%s%s",
+			code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "== verify") {
+		t.Fatalf("the verify phase printed no check report:\n%s", stdout)
+	}
+	if checkStatus(stdout, "gitconfig-include") != "fail" {
+		t.Fatalf("this case proves nothing unless verify actually found something:\n%s", stdout)
+	}
+}
+
+// The fish stub's source line, end to end. Skipped until Task 7 adds the
+// manifest's fish seed row and the template it names -- until then there is no
+// stub for apply to seed, so this fails for a reason that is not a defect.
+func TestCheckFindsTheFishSourceLineAfterApply(t *testing.T) {
+	t.Skip("unskip in Task 8")
+
+	home := tempHome(t)
+	if _, stderr, code := runShim(t, home, "apply", "dotfiles"); code != 0 {
+		t.Fatalf("apply exit %d: %s", code, stderr)
+	}
+	stdout, _, _ := runShim(t, home, "check", "dotfiles")
+	if got := checkStatus(stdout, "fish-source"); got != "ok" {
+		t.Errorf("fish-source = %q after apply, want ok:\n%s", got, stdout)
+	}
+}
+
+// A converged machine is healthy. Skipped until Task 8: gitconfig.local.template
+// still names the pre-rename gitconfig.symlink path, so what apply seeds is
+// exactly what gitconfig-include is built to reject.
+func TestCheckIsHealthyAfterApply(t *testing.T) {
+	t.Skip("unskip in Task 8")
+
+	home := tempHome(t)
+	if _, stderr, code := runShim(t, home, "apply", "dotfiles"); code != 0 {
+		t.Fatalf("apply exit %d: %s", code, stderr)
+	}
+	stdout, stderr, code := runShim(t, home, "check", "dotfiles")
+	if code != 0 {
+		t.Fatalf("exit %d after a successful apply, want 0:\n%s%s", code, stdout, stderr)
 	}
 }
 

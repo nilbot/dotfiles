@@ -19,7 +19,13 @@ type Context struct {
 	Home     string
 	Platform string
 	Profile  string
-	Out      io.Writer
+
+	// Shell is $SHELL, supplied by main exactly as Home is. Nothing in this
+	// package can reach the environment on its own, and the verify phase needs
+	// the login shell to report on it.
+	Shell string
+
+	Out io.Writer
 }
 
 func (c Context) logf(format string, args ...any) {

@@ -49,8 +49,9 @@ func nonTestImports(t *testing.T, dir string) map[string][]string {
 
 // The dry-run invariant, enforced exactly.
 //
-// internal/phase reaches the machine only through change.Interface. If it could
-// import os or os/exec it could mutate while the user asked for a plan, and no
+// internal/phase and internal/check reach the machine only through
+// change.Interface. If either could import os or os/exec it could mutate while
+// the user asked for a plan -- or while they asked a question -- and no
 // behavioural test would necessarily catch it.
 //
 // The shell version could only approximate this by scanning for command names
@@ -58,10 +59,14 @@ func nonTestImports(t *testing.T, dir string) map[string][]string {
 // import set is exact.
 //
 // The whole module-internal closure is walked, not just the direct imports of
-// internal/phase: a phase that imported a helper which imported os would
+// each package: a phase that imported a helper which imported os would
 // otherwise launder the capability through one hop. internal/change is where
 // the walk stops -- it is the one package permitted to touch the machine, and
 // phase reaching it is the design.
+//
+// Both roots are seeded into one walk. internal/phase imports internal/check
+// for the verify phase, so checking phase alone would already cover it today;
+// naming check explicitly means the guard survives that import going away.
 func TestPhasePackageCannotPerformIO(t *testing.T) {
 	forbidden := map[string]bool{
 		"os": true, "os/exec": true, "os/signal": true, "os/user": true,
@@ -69,13 +74,16 @@ func TestPhasePackageCannotPerformIO(t *testing.T) {
 		"net": true, "net/http": true,
 	}
 	// path/filepath is pure string manipulation and is allowed; io is allowed
-	// for the Writer interface. Neither can reach the filesystem on its own.
+	// for the Writer interface, regexp for matching text already read. None of
+	// them can reach the filesystem on its own.
 
-	start := filepath.Join("internal", "phase")
 	stop := map[string]bool{"internal/change": true}
 
 	seen := map[string]bool{}
-	queue := []string{start}
+	queue := []string{
+		filepath.Join("internal", "phase"),
+		filepath.Join("internal", "check"),
+	}
 	for len(queue) > 0 {
 		dir := queue[0]
 		queue = queue[1:]
@@ -93,8 +101,8 @@ func TestPhasePackageCannotPerformIO(t *testing.T) {
 					continue
 				}
 				if forbidden[path] {
-					t.Errorf("%s imports %q; phases must reach the machine only "+
-						"through change.Interface", file, path)
+					t.Errorf("%s imports %q; phases and checks must reach the "+
+						"machine only through change.Interface", file, path)
 				}
 			}
 		}
@@ -106,6 +114,7 @@ func TestOnlyChangeImportsOSExec(t *testing.T) {
 	for _, dir := range []string{
 		filepath.Join("internal", "manifest"),
 		filepath.Join("internal", "phase"),
+		filepath.Join("internal", "check"),
 	} {
 		for file, paths := range nonTestImports(t, dir) {
 			for _, path := range paths {

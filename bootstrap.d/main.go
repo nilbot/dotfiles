@@ -11,6 +11,7 @@ import (
 	"runtime"
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
+	"github.com/nilbot/dotfiles/bootstrap/internal/check"
 	"github.com/nilbot/dotfiles/bootstrap/internal/manifest"
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
@@ -123,7 +124,7 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 
 	ctx := phase.Context{
 		Change: machine, Root: repoRoot, Home: os.Getenv("HOME"),
-		Platform: plat, Profile: profile, Out: stdout,
+		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"), Out: stdout,
 	}
 	for _, p := range phases {
 		if err := p.Run(ctx); err != nil {
@@ -150,7 +151,46 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 	return exitOK
 }
 
-// runCheck and runMigrate arrive in later tasks; until then every invocation is
-// honestly "not applicable" rather than a false success.
-func runCheck(string, io.Writer, io.Writer) int   { return exitNotApplicable }
+// runCheck reports whether this machine is healthy, and is the one caller that
+// exits on the answer. phase.Verify runs the same checks and returns nil: an
+// advisory finding at the end of an apply must not look like a failed apply.
+func runCheck(profile string, stdout, stderr io.Writer) int {
+	// Validated by the one place that knows the profile names, so `check` and
+	// `apply` can never disagree about which profiles exist. The phase list
+	// itself is not wanted here -- check runs no phases.
+	if _, err := phase.For(profile); err != nil {
+		fmt.Fprintf(stderr, "bootstrap: %v\n", err)
+		return exitMalformed
+	}
+	plat, err := platform()
+	if err != nil {
+		fmt.Fprintf(stderr, "bootstrap: %v\n", err)
+		return exitNotApplicable
+	}
+	repoRoot, err := root()
+	if err != nil {
+		fmt.Fprintf(stderr, "bootstrap: %v\n", err)
+		return exitBlock
+	}
+	home := os.Getenv("HOME")
+	// The same guard preflight applies, for the same reason: without HOME every
+	// managed path resolves somewhere else entirely, and a report about the
+	// wrong paths is worse than no report.
+	if home == "" {
+		fmt.Fprintln(stderr, "bootstrap: check: HOME is empty; "+
+			"every managed path is resolved against it")
+		return exitBlock
+	}
+
+	results := check.All(check.Context{
+		Change: change.NewApplier(stdout), Root: repoRoot, Home: home,
+		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"),
+	})
+	fmt.Fprintln(stdout, "== check")
+	check.Write(stdout, results)
+	return check.ExitCode(results)
+}
+
+// runMigrate arrives in a later task; until then every invocation is honestly
+// "not applicable" rather than a false success.
 func runMigrate(string, io.Writer, io.Writer) int { return exitNotApplicable }
