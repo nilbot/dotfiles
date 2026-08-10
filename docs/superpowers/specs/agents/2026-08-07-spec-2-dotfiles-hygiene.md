@@ -1,52 +1,570 @@
-# Spec 2 — dotfiles hygiene
+# Spec 2 — dotfiles hygiene: a phased, cross-platform bootstrap
 
-**Status:** scope only — not designed, not implemented
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §8 must land first,
-or the git-hook cleanup gets done twice.
+**Date:** 2026-08-07 (scope) / 2026-08-10 (design)
+**Status:** designed — not implemented
+**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §8, which has landed.
 
-This is the residue left over after spec 1: changes to the dotfiles repo that have
-nothing to do with agents and were split out to keep spec 1 reviewable. No shared
-code with spec 1; the only ordering constraint is §8.
+---
 
-## Scope
+## What changed from the scope note
 
-**Remove zsh.** `zsh/` is 1.6 MB across 335 files, mostly vendored oh-my-zsh custom
-themes and plugins. The login shell has been fish for some time
-(`dscl` reports `/opt/homebrew/bin/fish`). The `omz` Makefile target, the zsh
-branches in `snapshot.sh` and `super-install-dep.sh`, and the zsh references in
-`tools/*.sh` all go with it.
+The original scope treated this as cleanup: delete `zsh/`, consolidate two
+overlapping link mechanisms, remove dead scripts. Reviewing it surfaced a larger
+framing error, and the design follows from correcting it.
 
-**Rationalize the link machinery.** `softlinks.sh` and the `Makefile` `dotfiles`
-target overlap and have drifted. The two live landmines are already fixed
-(2026-08-07, `37f00a0` — see spec 1 §8.4); what remains is consolidation of the two
-overlapping mechanisms into one.
+**"Bootstrap" must mean reaching a usable workstation, not creating symlinks.**
+`make dotfiles` is retired completely rather than kept as an alias — an alias
+would preserve an interface we no longer want and leave two apparent entry
+points, which is the exact overlap this spec exists to remove.
 
-Also rename `git/gitconfig.symlink`. The name is now wrong: as of `37f00a0` it is
-*included* by a machine-local `~/.gitconfig` rather than symlinked to it. Same for
-`git/gitignore_global.symlink`, which is still genuinely symlinked — so the two
-files now need different names for different reasons, and the `.symlink` suffix has
-stopped carrying information.
+Three scope items are already closed and are recorded here so they are not
+attempted twice:
 
-**Remove the dead `claude/` scripts** left over once spec 1 §8 lands:
-`claude/commit-msg` (GNU `sed -i`, broken on macOS, referenced by nothing),
-`claude/check-commits.sh` (points at `~/.git-templates/`, a path that has never
-existed), `claude/setup-protection.sh` (re-sets a value `gitconfig.symlink` already
-sets), `claude/update-repo-hooks.sh` (obsoleted by `core.hooksPath`).
+- The dead `claude/` scripts (`commit-msg`, `check-commits.sh`,
+  `setup-protection.sh`, `update-repo-hooks.sh`) were removed with spec 1 §8 in
+  `b87810f`. `claude/` now holds only `CLAUDE.md` and `skills/`.
+- No `.DS_Store` is tracked. `git ls-files` finds none.
+- `git/hooks/go.pre-commit`'s fate is decided below: it is removed.
 
-**Decide the fate of `git/hooks/go.pre-commit`.** It runs
-`go build -n && go test && go fmt && go vet` on every commit in any repo with `.go`
-files at the root. Under spec 1 §8's chain it keeps working unchanged; whether it
-*should* run on every commit is a separate question worth asking once.
+---
 
-**Housekeeping noticed in passing:** `fish/config.fish.bak.1784491210` is an
-untracked stray backup; `.DS_Store` files are committed in several directories.
+## 1. The rule this spec is built on
 
-## Explicitly out of scope
+Spec 1 §8.4 fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
+are harness-owned. Those were two instances of one rule, never stated. Stating
+it is most of this design:
 
-Anything touching `.agents/`, the `agents` binary, or harness wiring. That is spec 1.
+> **A well-known path that some other program writes to must be a machine-local
+> regular file, seeded once from a tracked template, that *references* tracked
+> content. Never a symlink into the repo.**
+>
+> Contrapositive: a well-known path nothing else writes to may be a symlink.
+
+`~/.gitconfig` was the first instance. `~/.config/fish/config.fish` is the
+second, and it is currently broken in exactly the way `~/.gitconfig` was — see
+§6.
+
+The rule's value is that it is **checkable**. Once each managed path declares
+which kind it is, `bootstrap check` can verify that the path on disk is still
+that kind, and a regression becomes a test failure instead of a discovery.
+
+## 2. Interface
+
+```sh
+./bootstrap plan  workstation      # what would change; writes nothing
+./bootstrap apply workstation      # converge this machine
+./bootstrap apply dotfiles         # narrow profile
+./bootstrap check                  # is this machine healthy?
+./bootstrap migrate                # declared one-time migrations (§8)
+```
+
+`./bootstrap` resolves the repository root from `$0`, not from `pwd`.
+`softlinks.sh` uses `pwd` today and silently links the wrong tree when run from
+anywhere else.
+
+For a new machine, `./bootstrap apply workstation` performs the complete setup.
+For an existing machine the same command converges whatever is missing.
+
+## 3. Phases
+
+Ordered, independently repeatable.
+
+| # | Phase | Does | `workstation` | `dotfiles` |
+|---|---|---|---|---|
+| 00 | preflight | detect OS and architecture, check stage-zero tools, declare what needs `sudo` and network | ✓ | ✓ |
+| 10 | packages | native stage-zero → Homebrew → `Brewfile` | ✓ | — |
+| 20 | config | reconcile every row of `links.manifest` | ✓ | ✓ |
+| 30 | fish | `/etc/shells`, login shell, fisher plugins | ✓ | — |
+| 40 | devtools | `uv`, build `agents`, global Git hooks | ✓ | — |
+| 50 | verify | the same checks `check` runs | ✓ | ✓ |
+
+**The `dotfiles` profile is preflight + config + verify: no sudo, no network, no
+package manager, no login-shell change.** That is what makes it safe inside a
+container, on a machine whose packages are managed elsewhere, and inside a test.
+It is a phase filter, not a second code path.
+
+### 3.1 Packages, and why Homebrew on Linux
+
+One `Brewfile` serves both platforms. The native package manager installs only
+what Homebrew itself requires, and nothing else:
+
+- Debian/Ubuntu — `build-essential curl file git`
+- Arch/Manjaro — `base-devel curl file git`
+
+Everything above stage zero comes from the `Brewfile`, on both platforms. The
+alternative — per-distro native package lists, which `super-install-dep.sh` does
+today — needs two or three manifests kept in sync across distros whose package
+names disagree (`fd` vs `fd-find`, `bat` vs `batcat`), and several tools in use
+here are not consistently packaged natively at all.
+
+The PATH assumption already exists: `fish/mypre.fish` adds
+`/home/linuxbrew/.linuxbrew/bin` on Linux and `/opt/homebrew/bin` on macOS.
+
+The `Brewfile` carries platform sections, because casks are macOS-only. The
+current `brew/*.list` files are **audited, not mechanically translated** — see
+§9 for what does not survive the audit.
+
+### 3.2 Fish
+
+Confirm fish was installed by phase 10; add its resolved path to `/etc/shells`
+if absent; change the login shell only when it is not already fish; install
+fisher plugins explicitly rather than relying on a shell-start side effect.
+
+This phase has never actually run — see [Measured facts](#measured-facts-2026-08-10).
+
+### 3.3 Devtools
+
+`uv`, the `agents` binary built to `~/bin/agents`, and global Git hooks. The
+Git-hook step **delegates to `git/install-hooks.sh`**, which already performs
+this carefully and has tests. It is not reimplemented.
+
+## 4. The dry-run invariant
+
+`plan` and `apply` are the same code. Every mutation goes through five
+primitives in `bootstrap.d/lib.sh` — `do_link`, `do_seed`, `do_dir`, `do_run`,
+`do_sudo` — which in plan mode print their intent and return 0 without touching
+anything. No phase file may call `ln`, `rm`, `cp`, `mkdir`, `brew`, or `chsh`
+directly.
+
+**This is enforced structurally, not by discipline:** a test greps the phase
+files for bare mutating commands and fails on a hit. Same reasoning as spec 1
+§3.2, where redaction is guaranteed by the record type having no field capable
+of carrying a secret rather than by grepping output.
+
+A separate `plan` implementation was rejected. Two implementations of one
+behaviour drift, which is precisely the failure the `softlinks.sh` / `Makefile`
+overlap already demonstrates in this repo.
+
+## 5. Refuse, never clobber
+
+Inherited from `git/install-hooks.sh`, which does this well already.
+
+A target that exists and is not the exact intended thing produces a **refusal
+naming the remediation**, never a deletion. Idempotence comes from "already
+correct → no-op", not from "delete and redo".
+
+This is a change in kind. The current Makefile does `rm -rf $HOME/.vim`,
+`rm -rf $HOME/.emacs.d`, `rm -rf $HOME/.config/fish`, and
+`rm -f $HOME/.config/starship.toml` — and its `editors` and `tmux` targets fail
+outright on a second run, because `git clone` into an existing directory is an
+error. Neither property is acceptable in something meant to converge an existing
+machine.
+
+## 6. `links.manifest`
+
+One tracked table. Three kinds, which are §1's rule made mechanical:
+
+| kind | meaning | use when |
+|---|---|---|
+| `link` | symlink target → repo source | nothing else writes to this path |
+| `seed` | copy source → target **once**, never overwrite | another program writes here |
+| `dir` | real machine-owned directory | a program owns the whole directory |
+
+```
+# kind  source                            target                            platform
+link    starship.toml                     .config/starship.toml             *
+link    tmux/tmux.conf                    .tmux.conf                        *
+link    git/gitignore_global              .gitignore                        *
+link    claude/skills                     .claude/skills                    *
+link    gemini/skills                     .gemini/skills                    *
+link    macOS/ghostty                     .config/ghostty                   darwin
+link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
+dir     -                                 .config/fish                      *
+seed    fish/config.fish.template         .config/fish/config.fish          *
+seed    git/gitconfig.local.template      .gitconfig                        *
+```
+
+`check` verifies each target is the **right kind**. A `link` target that has
+become a real file is a finding. A `seed` target that has become a symlink into
+the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
+fixed and the fish regression §7 fixes.
+
+**Harness skill directories are ordinary rows.** Today `claude/skills` is linked
+by a hand-written Makefile line and `gemini/skills` by nothing at all — two
+harnesses already diverging, the same drift spec 1 opened with. A third harness
+becomes one row.
+
+This has to be the bootstrap's job rather than `agents`', for a hard reason:
+**`agents` is a Go binary built by phase 40, so it cannot be a dependency of
+phase 20.** The trigger for revisiting, stated the way spec 4 states its
+triggers:
+
+> Move global harness assets into `agents` when they need **generation** rather
+> than **linking** — when a global config must be merged into a file the harness
+> co-owns, as `~/.claude/settings.json` already is per-repo, rather than
+> symlinked wholesale.
+
+Linking is declarative and a table suffices. Merging needs a program that
+understands the format. The boundary is observable, so it will be obvious when
+it is crossed.
+
+### 6.1 One owner per path
+
+`~/.gitattributes` and the `core.hooksPath` wiring belong to
+`git/install-hooks.sh`. The manifest therefore does **not** list them.
+
+One split is deliberate: `~/.gitconfig` is *seeded* by phase 20 (the dying
+Makefile target does this today; `install-hooks.sh` validates the file but never
+creates it), then *validated* by `install-hooks.sh` in phase 40.
+
+`check` asserts no path is claimed twice. Two owners is how `softlinks.sh` and
+the Makefile drifted apart in the first place.
+
+## 7. Fish: zero symlinks under `~/.config/fish`
+
+`~/.config/fish` is a symlink to `dotfiles/fish/`, so fisher writes `functions/`,
+`completions/`, `conf.d/`, `fish_plugins` and `fish_variables` into the tracked
+repo, held back only by `.gitignore`.
+
+Per-file symlinking does **not** fix this, and that is the important part.
+Third-party installers write to `config.fish` by appending managed blocks, so
+the one file that must be tracked is also the one file that gets written to. The
+evidence is in the repo: tracked `fish/config.fish` carries a
+`# >>> grok installer >>>` block, and tracked `fish/mypost.fish` carries a block
+marked *"managed by 'mamba init'"*. Both arrived because the well-known path was
+a link into the repo.
+
+The fix is §1's rule, and fish supports it because — measured, not assumed —
+`conf.d/*.fish` is sourced **before** `config.fish`, giving the same last-wins
+ordering that makes git's `[include]` work.
+
+| Path | Kind | Owner |
+|---|---|---|
+| `~/.config/fish/` | real directory | machine |
+| `~/.config/fish/config.fish` | seeded once, never overwritten | machine + installers |
+| `conf.d/`, `functions/`, `completions/`, `fish_plugins`, `fish_variables` | real, machine-local | fisher |
+| `dotfiles/fish/*.fish` | tracked | repo — reached by `source` only |
+
+The seeded stub:
+
+```fish
+# Machine-local fish config. NOT tracked by dotfiles. Shareable settings belong
+# in ~/dotfiles/fish/config.fish -- edits here are invisible to the repo.
+source $HOME/dotfiles/fish/config.fish
+# --- installer-managed blocks appear below this line ---
+```
+
+Installer blocks append below the `source` line, so they land machine-local
+**and** correctly override — the identical ordering argument
+`git/gitconfig.local.template` already makes in its own header comment.
+
+The stub necessarily names the clone location, and that is correct: it is
+machine-local and seeded once, so it is the right place for the one fact that
+varies per machine. Everything downstream of it is relative — tracked
+`fish/config.fish` sources `mypre`, `alias` and `mypost` from its own
+`(status dirname)`, so the clone path appears exactly once on a machine and the
+tracked files work unchanged from a worktree or a relocated clone.
+
+Three consequences:
+
+1. **Five `.gitignore` lines are deleted** — `fish/fish_variables`,
+   `fish/fish_plugins`, `fish/functions/`, `fish/completions/`, `fish/conf.d/`.
+   They exist only to hold back writes that will no longer arrive. `.gitignore`
+   stops being load-bearing.
+2. **Two tracked functions are built around the old layout and are rewritten,
+   not merely relinked.** `fish_reset_all` does
+   `rm -rf $HOME/dotfiles/fish/{functions,completions,conf.d}/` and must target
+   `$__fish_config_dir`; `install_fisher` reads `$HOME/dotfiles/fish/fishfile`
+   and must resolve it from `(status dirname)`.
+3. **`check` gains a real check.** If anything strips the `source` line from the
+   stub, the entire shared configuration goes dark with no error at all. That is
+   a silent total failure and it is cheap to detect.
+
+The `# >>> grok installer >>>` block is lifted out of tracked `config.fish` into
+the local stub. The mamba block in `mypost.fish` goes entirely (§9).
+
+## 8. The `.symlink` rename, and the migration hazard inside it
+
+The suffix has stopped carrying information, and for two different reasons:
+
+- `git/gitconfig.symlink` → **`git/gitconfig.shared`**. Since `37f00a0` it is
+  *included* by a machine-local `~/.gitconfig`, not symlinked to it.
+- `git/gitignore_global.symlink` → **`git/gitignore_global`**. Still genuinely
+  symlinked, but the manifest's `kind` column now carries what the suffix used
+  to.
+
+**The first rename is a live hazard.** Every existing machine's `~/.gitconfig`
+contains `path = ~/dotfiles/git/gitconfig.symlink`. It is a `seed` row, so
+bootstrap will never overwrite it — the include would silently point at a
+missing file and *every shared git setting would disappear with no error*.
+
+Hence `migrate`, and hence a `check` for it.
+
+### 8.1 `./bootstrap migrate`
+
+Declared, idempotent, one-time migrations. Each refuses unless its preconditions
+hold. Two exist:
+
+1. **fish** — move fisher's untracked state out of the repo into a real
+   `~/.config/fish`, then replace the symlink. This moves data that is *not in
+   git* (`fish_variables`, the installed plugin set), which is exactly the
+   fumble-prone step worth automating rather than printing as five hand-run
+   commands.
+2. **gitconfig include** — repoint a `~/.gitconfig` that includes the old
+   `gitconfig.symlink` path.
+
+Keeping these out of `apply` preserves §5's invariant intact: `apply` never
+clobbers, and the code that knows about the past is quarantined where it can be
+pruned once no machine needs it.
+
+## 9. What is removed
+
+Each group gets **its own commit naming what was removed and why**. Git history
+is the archive — `git show <sha>:bin/rgr.bin` recovers any of this byte-for-byte
+forever — so the only real obligation is findability, and that is a
+commit-message obligation, not a working-tree one. Keeping dead files in the
+tree as "reference" is the mechanism by which a dotfiles repo rots: every future
+reader must re-derive which files are live.
+
+| Group | Removed |
+|---|---|
+| zsh | `zsh/` (344 tracked files), the `omz` target, zsh from `super-install-dep.sh` |
+| tools | `tools/` |
+| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it |
+| stale scripts | `snapshot.sh`, `recover.sh`, `mountcrypt.sh`, `mountsshfs.sh`, `post-install.sh` |
+| superseded installers | `super-install-dep.sh`, `user-install-dep.sh`, `softlinks.sh` — content carried into phases 10 and 20 |
+| editors | the `editors`, `tmux` and `extra` targets, and `spacemacs/` |
+| fonts | `install-font-linux.sh` |
+| bins | `bin/` (all four) and the `bins` target |
+| go hook | `git/hooks/go.pre-commit` |
+| unlinked | `gnupg/`, `macOS/iterm2/` |
+| Makefile | everything except the `agents` target |
+
+`macOS/filebrowser/` stays: a self-contained opt-in launchd setup with its own
+script, claimed by no phase.
+
+Two side effects the removal commits must state: `~/.spacemacs` becomes a
+dangling symlink on this machine, and `~/.tmux/plugins/tpm` and `~/.vim` remain
+on disk. Dropping a target stops *managing* a thing; it does not delete it.
+
+### 9.1 Why `go.pre-commit` goes
+
+It runs `go build -n && go test && go fmt && go vet` on every commit in any repo
+with `.go` files at the root. Three defects, any one of which is disqualifying:
+
+- Every command is `>/dev/null 2>&1`, so a failure yields a generic message and
+  **no diagnostic**.
+- `go fmt` **rewrites files mid-commit without staging them**, so a formatting
+  fix silently fails to be committed.
+- `go test` on a large module makes every commit slow.
+
+This is CI's job, and CI is [spec 5](2026-08-10-spec-5-ci-release-distribution.md).
+
+### 9.2 Why the `bin/` scripts have no reference value
+
+Asked explicitly, and checked rather than assumed:
+
+- **`rgr.bin` has never worked.** It invokes `e`, not `rg`, with ripgrep's
+  flags. On this machine `e` resolves to `/usr/local/plan9/bin/e` — Plan 9's
+  editor — because `$PLAN9/bin` is on `PATH`. So it does not fail cleanly; it
+  silently runs the wrong program.
+- **`git-chdate.bin` has never worked.** Its `--env-filter` body is
+  single-quoted, so `$hash` and `$proper` never expand: the comparison tests
+  against an empty string and it exports empty dates. It also uses deprecated
+  `git filter-branch` and BSD-only `date -v`.
+- **`git-stats.bin` works** and is the only one with content, but it is fifteen
+  lines you would rewrite from the idea rather than the code.
+- `infernowm.bin` is a two-line Plan 9 launcher.
+
+`bins` also links with the `.bin` suffix intact, so the commands are `rgr.bin`
+and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
+
+## 10. `bootstrap check`
+
+1. Platform supported.
+2. Every manifest row: target present, **right kind**, pointing at the right source.
+3. No path claimed by two rows.
+4. `~/.config/fish/config.fish` still contains its `source` line.
+5. `~/.gitconfig` includes the current shared-config path.
+6. Login shell is fish; fish is present in `/etc/shells`. *(workstation only)*
+7. `agents` on `PATH`, with `agents doctor`'s result folded in. *(workstation only)*
+8. `Brewfile` packages present. *(workstation only)*
+
+`check` takes the same profile argument as `apply` and defaults to
+`workstation`. Checks 6–8 concern state the `dotfiles` profile deliberately does
+not manage, so under that profile they report **not applicable** rather than a
+finding — otherwise every container run would report three false failures.
+
+Output is a concise healthy / advisory / failure summary.
+
+**Exit codes come from [spec 1 §6](2026-08-07-agents-repo-context-design.md#6-binary-surface)'s
+table**, with the same meanings: `0` ok, `1` advisory, `2` block, `3` malformed
+input, `4` not applicable. (`5`, "could not record", has no analogue here.) One
+vocabulary across both tools in this repo.
+
+Checks 4 and 5 are the two silent-total-failure modes, and both exist *because*
+this design introduces them. A design that creates a new silent failure mode
+owes a check for it.
+
+## 11. Testing
+
+A second Go module at `bootstrap.d/`, module path
+`github.com/nilbot/dotfiles/bootstrap`, containing **tests only — it ships no Go
+code**. It is a sibling of `agents/`; nothing moves into `agents/`, which is
+unchanged. The `.d` suffix matches the existing `git/hooks.d/` precedent.
+
+Verified rather than assumed: a Go module in a dot-suffixed directory works, and
+the module path need not match the directory name.
+
+No `go.work`, and no shared helper package. The shared surface is about forty
+lines of "make a temp `HOME`, run the script, assert on the filesystem" — the
+git-specific helpers in `agents/install_hooks_test.go` are not needed, because
+phase 40 *delegates* to `install-hooks.sh` and the test only has to assert it
+was invoked with the right arguments (a stub on `PATH`). Two independent `go
+test` invocations mean **a bootstrap test failure can never block an `agents`
+binary release**, which matters because spec 5 builds release CI around that
+module specifically.
+
+Tests, with `HOME` redirected under `t.TempDir()`:
+
+- `plan` changes nothing — a tree snapshot before and after is byte-identical.
+- `apply dotfiles` twice: the second run is entirely no-ops. Idempotence is the
+  property the Makefile never had.
+- Refusal paths: a pre-existing wrong-kind target is refused, not clobbered.
+- Kind regressions: a `link` target that became a real file; a `seed` target
+  that became a symlink into the repo.
+- Structural: no bare `ln`/`rm`/`cp`/`mkdir`/`brew`/`chsh` in any phase file.
+- Phase 40 invokes `install-hooks.sh` with the correct arguments.
+- `darwin` rows are skipped on linux and vice versa.
+
+**Honest limits.** Phases 10, 30 and 40 need network, `sudo`, and a package
+manager; they are exercised in plan mode and against stubs on `PATH`, never
+end-to-end. And **no Linux machine is available to verify against**, so Linux
+support ships written and unit-tested but unverified in practice. That is
+recorded in [Risks](#risks), not claimed as working.
+
+## 12. Commit order
+
+Bootstrap lands **before** anything is removed, so the repo is never in a state
+where a machine cannot be provisioned:
+
+1. Bootstrap skeleton, `lib.sh`, `links.manifest`, tests. Nothing removed; both
+   paths work.
+2. Fish inversion (§7) and the `migrate` verb (§8.1).
+3. Phase 20 reaches parity with the Makefile's link targets → those targets go.
+4. Phase 10 and the `Brewfile` → `super-install-dep.sh` and
+   `user-install-dep.sh` go.
+5. The removal commits (§9), one per group.
+6. Makefile reduced to the `agents` target.
+7. This document's status, and the README table row, updated.
+
+---
+
+## Measured facts (2026-08-10)
+
+Observed on this machine, not read from documentation.
+
+### The Makefile's privileged steps have never run
+
+`make dep` is guarded by `sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi`.
+If `sudo -v` succeeds, `||` short-circuits and the branch is skipped. If it
+fails, `[ -z 1 ]` is false — `$?` is a non-empty string — and the branch is
+skipped too. **Neither path can ever run it.**
+
+The identical construct guards `chsh` in both the `omz` and `fishshell` targets,
+so **`make` has never set the login shell either.** Corroborated: the login
+shell is `/opt/homebrew/bin/fish`, yet `/etc/shells` contains **no fish entry**
+at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
+
+### The installers are broken independently of that
+
+- `user-install-dep.sh` reads `brew/brew-cask.list`; the file is
+  `brew/brew-casks.list`.
+- It calls `brew cask install`, which is no longer a Homebrew command.
+- It installs Homebrew via the retired ruby `master`-branch URLs, for both
+  Homebrew and Linuxbrew.
+- `post-install.sh` is **not valid bash**: `bash -n` reports
+  `syntax error near unexpected token 'elif'` at line 9 (empty `then` branches).
+  It also calls `$(name -v)` for `uname -v`.
+- `make extra` links `$HOME/crypt/extras.secret` into the repo. `~/crypt` does
+  not exist; the real location is `~/etc/extras.secret`, which is what
+  `gitconfig.symlink` includes. No `extras.secret` link exists in the repo. The
+  target produces a dangling symlink.
+
+### Fish
+
+- `~/.config/fish` has been a symlink to `~/dotfiles/fish` since April 2021.
+- Tracked `fish/config.fish` carries a `# >>> grok installer >>>` block; tracked
+  `fish/mypost.fish` carries a block marked *"managed by 'mamba init'"*. Both
+  are third-party writes that reached tracked content through that symlink.
+- fish 4.8.1, probed with a redirected `XDG_CONFIG_HOME`: `conf.d/*.fish` is
+  sourced **before** `config.fish`.
+- `$__fish_config_dir` is `~/.config/fish`.
+
+### Dead things confirmed dead
+
+- `~/.oh-my-zsh` does not exist. zsh is fully out of use.
+- `micromamba` is not on `PATH`, so the mamba block in `mypost.fish` is already
+  inert. `~/sdk/mambaforge` survives from May 2024.
+- `gnupg/`, `gemini/skills/` and `macOS/iterm2/` are tracked and referenced by
+  no target.
+- `bin/rgr.bin` and `bin/git-chdate.bin` have never worked (§9.2).
+
+### Go module layout
+
+A Go module in a dot-suffixed sibling directory (`bootstrap.d/`) builds and
+tests correctly, and its module path need not match the directory name.
+
+---
+
+## Rejected alternatives
+
+**Rebuilding the Makefile as the bootstrap interface** (`make plan`,
+`make workstation`, `make check`). Make is another prerequisite; its recipes are
+awkward for structured checks, safe conflict handling and portable quoting; and
+targets conceal side effects, as the present `all` and `links` graph already
+demonstrates. It would improve on today without being the right shape.
+
+**A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
+Strong language and testability, but it requires Homebrew *before* bootstrap can
+start, must locate or embed the dotfiles it configures, creates release-version
+coordination between binary and repository, couples this spec to the
+unimplemented spec 5, and risks turning the `agents` repo-context tool into an
+unrelated workstation manager. Possibly worthwhile later; wrong stage-zero
+mechanism today.
+
+**Keeping `make dotfiles` as an alias.** Preserves an interface we no longer
+want and leaves two apparent entry points — the overlap this spec exists to
+remove.
+
+**Per-file symlinks under `~/.config/fish`.** Narrows the surface without fixing
+it: the file that must be tracked is the same file installers append to. See §7.
+
+**Relocating fisher's state via fish variables** while keeping the directory
+symlink. More moving parts than either alternative, and it depends on fisher
+honouring those paths — unverified.
+
+**A separate read-only `plan` implementation.** Two implementations of one
+behaviour drift; §4.
+
+**Extracting a shared Go test-helper package**, or a tracked `go.work`. The
+former makes `agents` export a package solely for a consumer outside itself; the
+latter alters module resolution during builds, so spec 5's release path would
+have to remember `GOWORK=off` — a footgun handed to an unwritten spec in
+exchange for one convenience command.
+
+---
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| Linux support is written but never executed on Linux | Stated plainly, not claimed as working. Plan-mode and stub tests cover the logic; end-to-end verification is owed before the Linux path is described as supported. |
+| The `gitconfig.shared` rename silently empties shared git config on existing machines | `migrate` repoints the include; `check` #5 detects a stale one. |
+| The fish stub loses its `source` line, and the whole shared config goes dark | `check` #4. |
+| Editing `~/.config/fish/config.fish` silently produces untracked changes | The stub's header says so, mirroring `gitconfig.local.template`. Reduced, not eliminated. |
+| `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
+| Bootstrap grows into an unmaintainable script | One file per phase; all mutation through five primitives; a structural test enforcing it. |
+| Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 
 ## Open questions
 
-- Is any zsh config still referenced by a remote machine or container image that
-  clones this repo? Check before deleting rather than after.
-- Does `snapshot.sh` still do something wanted? It is untouched since 2021.
+- **`snapshot.sh`'s replacement, if any.** The scope note asked whether it still
+  does something wanted; the answer is that it does not work (BSD-only `date -j`,
+  a 2021 `rclone` remote) and it is removed. Whether machine backup should exist
+  at all is a separate question this spec does not answer.
+- **Whether `~/sdk/mambaforge` should be removed from disk.** Out of scope here —
+  the repo stops referencing it either way.
+- **The Linux distributions actually targeted.** Stage-zero commands are written
+  for Debian/Ubuntu and Arch/Manjaro, matching what `super-install-dep.sh`
+  covered. Neither is verified.
