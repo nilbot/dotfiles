@@ -1,7 +1,11 @@
 # Spec 2 — dotfiles hygiene: a phased, cross-platform bootstrap
 
-**Date:** 2026-08-07 (scope) / 2026-08-10 (design)
+**Date:** 2026-08-07 (scope) / 2026-08-10 (design; language reversed same day)
 **Status:** designed — not implemented
+**Implementation language:** Go, with a shell shim for stage zero (§2.1). The
+first implementation was shell throughout and was reversed after one task; the
+evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
+and the reasoning under [Rejected alternatives](#rejected-alternatives).
 **Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §8, which has landed.
 
 ---
@@ -66,6 +70,32 @@ anywhere else.
 For a new machine, `./bootstrap apply workstation` performs the complete setup.
 For an existing machine the same command converges whatever is missing.
 
+### 2.1 The shim, and the one manual step
+
+`./bootstrap` is a ~40-line shell shim. It is the only shell in the design, and
+it has exactly one job: get to Go, then hand over.
+
+1. `go` on `PATH` → use it.
+2. Otherwise `brew` on `PATH` → `brew install go`.
+3. Otherwise **refuse**, naming the exact one-liner for the detected platform.
+
+It then builds `bootstrap.d/` to a cached binary under
+`${XDG_CACHE_HOME:-~/.cache}/dotfiles-bootstrap/`, rebuilding only when a source
+file is newer, and `exec`s it with the original arguments.
+
+**Building from the checkout, not installing a release.** The binary always
+matches the tree you cloned: no release-version coordination, no drift between
+an installed tool and the configuration it applies, and no dependency on
+[spec 5](2026-08-10-spec-5-ci-release-distribution.md), which is unwritten.
+
+**The honest cost:** a machine with neither Go nor Homebrew needs one manual
+command before `./bootstrap` runs. That is deliberate. The shim could download
+and checksum a Go toolchain, but doing that correctly is more consequential code
+than the step it saves — on a path exercised once per machine, in a script whose
+whole value is being short enough to read before you run it. Spec 1 §9 made the
+same call about Codex hook trust: the design's job is to make a required manual
+step *one obvious step* rather than a silent failure.
+
 ## 3. Phases
 
 Ordered, independently repeatable.
@@ -121,16 +151,46 @@ this carefully and has tests. It is not reimplemented.
 
 ## 4. The dry-run invariant
 
-`plan` and `apply` are the same code. Every mutation goes through five
-primitives in `bootstrap.d/lib.sh` — `do_link`, `do_seed`, `do_dir`, `do_run`,
-`do_sudo` — which in plan mode print their intent and return 0 without touching
-anything. No phase file may call `ln`, `rm`, `cp`, `mkdir`, `brew`, or `chsh`
-directly.
+`plan` and `apply` are the same code. **All machine access — reads included —
+goes through one interface**, `change.Interface`, with two implementations:
+`Applier` performs the operation, `Planner` records the intent and touches
+nothing.
 
-**This is enforced structurally, not by discipline:** a test greps the phase
-files for bare mutating commands and fails on a hit. Same reasoning as spec 1
-§3.2, where redaction is guaranteed by the record type having no field capable
-of carrying a secret rather than by grepping output.
+```go
+type Interface interface {
+	// queries
+	Lstat(path string) (FileInfo, error)
+	Readlink(path string) (string, error)
+	LookPath(name string) (string, error)
+	ReadFile(path string) ([]byte, error)
+
+	// mutations
+	Dir(path string) error
+	Link(source, target string) error
+	Seed(source, target string) error
+	Run(name string, args ...string) error
+	Sudo(name string, args ...string) error
+}
+```
+
+**The phase package imports nothing capable of I/O.** Not `os`, not `os/exec`.
+It receives a `change.Interface` and can reach the machine no other way, so "a
+phase cannot mutate outside dry-run control" is a property of the **import
+graph** — exact, complete, and machine-checked by one test that asserts the
+package's import set.
+
+This is the same move spec 1 §3.2 makes for redaction, and the reason it had to
+be this rather than a lexical scan is recorded in
+[Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10): the shell
+version's grep-based equivalent was written wrong twice — once flagging the
+*correct* form, once missing a real violation.
+
+**Queries go through the interface too, which is what makes `Planner` honest.**
+It overlays planned changes on what it reads, so a `Link` into a directory the
+plan just created reports that directory as present. The shell design could not
+do this: `do_link` called `do_dir` unconditionally and re-emitted a
+`create directory` line for every link into a shared parent — output `apply`
+would never produce.
 
 A separate `plan` implementation was rejected. Two implementations of one
 behaviour drift, which is precisely the failure the `softlinks.sh` / `Makefile`
@@ -420,50 +480,76 @@ Checks 4 and 5 are the two silent-total-failure modes, and both exist *because*
 this design introduces them. A design that creates a new silent failure mode
 owes a check for it.
 
-## 11. Testing
+## 11. Module layout and testing
 
 A second Go module at `bootstrap.d/`, module path
-`github.com/nilbot/dotfiles/bootstrap`, containing **tests only — it ships no Go
-code**. It is a sibling of `agents/`; nothing moves into `agents/`, which is
-unchanged. The `.d` suffix matches the existing `git/hooks.d/` precedent.
+`github.com/nilbot/dotfiles/bootstrap`. It is a **sibling** of `agents/`;
+nothing moves into `agents/`, which is unchanged.
 
-Verified rather than assumed: a Go module in a dot-suffixed directory works, and
-the module path need not match the directory name.
+```
+bootstrap                       the shim (§2.1) -- the only shell in the design
+bootstrap.d/
+  go.mod                        module github.com/nilbot/dotfiles/bootstrap
+  main.go                       verbs, profiles, dispatch
+  links.manifest  Brewfile
+  internal/change/              Interface, Applier, Planner -- owns ALL I/O
+  internal/manifest/            row parsing, the Kind type
+  internal/phase/               the six phases -- imports no I/O package
+  internal/check/               the eight checks
+  internal/migrate/             reconciling and reclaiming migrations
+```
 
-No `go.work`, and no shared helper package. The shared surface is about forty
-lines of "make a temp `HOME`, run the script, assert on the filesystem" — the
-git-specific helpers in `agents/install_hooks_test.go` are not needed, because
-phase 40 *delegates* to `install-hooks.sh` and the test only has to assert it
-was invoked with the right arguments (a stub on `PATH`). Two independent `go
-test` invocations mean **a bootstrap test failure can never block an `agents`
-binary release**, which matters because spec 5 builds release CI around that
-module specifically.
+The directory keeps its `.d` suffix: the module *path* is what Go cares about,
+and renaming buys nothing. Verified rather than assumed — a Go module in a
+dot-suffixed directory builds and tests correctly, and the module path need not
+match the directory name.
 
-Tests, with `HOME` redirected under `t.TempDir()`:
+**No `go.work`, and no shared helper package with `agents/`.** Two independent
+`go test ./...` invocations mean a bootstrap failure can never block an `agents`
+binary release, which matters because spec 5 builds release CI around that
+module specifically. Phase 40 *delegates* git-hook installation to the
+already-tested `git/install-hooks.sh`, so its test only asserts the invocation
+arguments — which is why none of `agents`' git-specific test helpers are needed.
 
-- `plan` changes nothing — a tree snapshot before and after is byte-identical.
-- `apply dotfiles` twice: the second run is entirely no-ops. Idempotence is the
-  property the Makefile never had.
+Tests come in two layers, and the split is the point:
+
+**Logic tests** run against a fake `change.Interface`. No temp `HOME`, no
+filesystem, no subprocess — phases are pure functions over an interface:
+
+- Every manifest kind, and refusal on an unknown one.
+- Duplicate-target detection, platform filtering.
 - Refusal paths: a pre-existing wrong-kind target is refused, not clobbered.
 - Kind regressions: a `link` target that became a real file; a `seed` target
   that became a symlink into the repo.
-- Structural: no bare `ln`/`rm`/`cp`/`mkdir`/`brew`/`chsh` in any phase file.
+- `Planner` records the right operations, in order, for each profile.
+
+**Integration tests** use a real `Applier` with `HOME` redirected under
+`t.TempDir()`:
+
+- `plan` changes nothing — a tree snapshot before and after is identical,
+  compared by content and link target, not merely by name and kind.
+- `apply dotfiles` twice: the second run is entirely no-ops. Idempotence is the
+  property the Makefile never had.
 - Phase 40 invokes `install-hooks.sh` with the correct arguments.
-- `darwin` rows are skipped on linux and vice versa.
+
+**Architecture test:** `internal/phase`'s import set contains no I/O package.
+This is the §4 invariant, checked exactly.
 
 **Honest limits.** Phases 10, 30 and 40 need network, `sudo`, and a package
-manager; they are exercised in plan mode and against stubs on `PATH`, never
-end-to-end. And **no Linux machine is available to verify against**, so Linux
-support ships written and unit-tested but unverified in practice. That is
-recorded in [Risks](#risks), not claimed as working.
+manager; their logic is covered by fakes and their real execution is not
+exercised end-to-end. **No Linux machine is available to verify against**, so
+Linux support ships written and unit-tested but unverified in practice. That is
+recorded in [Risks](#risks), not claimed as working. The shim itself is shell
+and gets a small integration test, but its Go-absent branch cannot be tested on
+a machine that has Go.
 
 ## 12. Commit order
 
 Bootstrap lands **before** anything is removed, so the repo is never in a state
 where a machine cannot be provisioned:
 
-1. Bootstrap skeleton, `lib.sh`, `links.manifest`, tests. Nothing removed; both
-   paths work.
+1. `change.Interface` with both implementations, `manifest`, the shim, and the
+   dispatcher. Nothing removed; both paths work.
 2. Fish inversion (§7) and the `migrate` verb (§8.1).
 3. Phase 20 reaches parity with the Makefile's link targets → those targets go.
 4. Phase 10 and the `Brewfile` → `super-install-dep.sh` and
@@ -532,6 +618,42 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
 A Go module in a dot-suffixed sibling directory (`bootstrap.d/`) builds and
 tests correctly, and its module path need not match the directory name.
 
+### The six bash defects that decided §1 (2026-08-10)
+
+The first implementation was shell. One task — roughly 100 lines of `lib.sh`
+plus its tests — produced six defects, every one a property of the language
+rather than a mistake about the design. Recorded because the decision to switch
+rests on them, and because a future reader will otherwise wonder why a dotfiles
+bootstrap is a Go program.
+
+1. `do_dir` assigned `target` as a global. `do_link` calls
+   `do_dir "$(dirname "$target")"` *before* using `$target`, so every symlink
+   would have been created at its parent directory's path. Caught in review.
+2. `local current=$(readlink "$target") || refuse "…"` never fires. `local` is a
+   builtin whose own exit status is 0, so it masks the command substitution's.
+   The fix for defect 1 introduced this one.
+3. `dry_run() { [ "$BOOTSTRAP_DRY_RUN" -eq 1 ]; }` fails **open**. `-eq` is
+   numeric: `BOOTSTRAP_DRY_RUN=true` and `BOOTSTRAP_DRY_RUN=` each print
+   `integer expression expected` and then take the *mutate* branch. The one
+   variable whose purpose is preventing mutation treated anything it could not
+   parse as permission to proceed.
+4. `manifest_rows | while read …` puts the loop in a subshell, where `refuse`'s
+   `exit 2` ends only the subshell and the run continues past a refusal.
+   Required process substitution instead.
+5. Whether `[ "$X" -eq 0 ] && X=1` inside a `case` arm aborts under `set -e` had
+   to be settled by running a probe. It does not — but the reasoning is not
+   something a reader can check by inspection.
+6. The lexical scan enforcing §4 was written wrong twice. Version one flagged
+   `do_run mkdir -p "$x"`, the correct form, because the mutating word sits
+   after whitespace there exactly as in a bare call. Version two missed
+   `; do cp "$x" /tmp` because the `;` alternative consumed `do` as its captured
+   word before the `do` alternative could match. Only a
+   split-on-separators-and-take-each-first-word approach, verified against
+   sixteen allowed forms and nine violations, was correct.
+
+Defects 1 and 2 are impossible in Go. Defect 3 is a `bool`. Defect 4 is an early
+`return`. Defect 5 does not exist. Defect 6 becomes an import-set assertion.
+
 ---
 
 ## Rejected alternatives
@@ -543,12 +665,31 @@ targets conceal side effects, as the present `all` and `links` graph already
 demonstrates. It would improve on today without being the right shape.
 
 **A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
-Strong language and testability, but it requires Homebrew *before* bootstrap can
-start, must locate or embed the dotfiles it configures, creates release-version
-coordination between binary and repository, couples this spec to the
-unimplemented spec 5, and risks turning the `agents` repo-context tool into an
-unrelated workstation manager. Possibly worthwhile later; wrong stage-zero
-mechanism today.
+Note this is *not* the same as §2.1's build-from-checkout, which was adopted.
+Distribution via Homebrew requires Homebrew *before* bootstrap can start, must
+locate or embed the dotfiles it configures, creates release-version coordination
+between binary and repository, and couples this spec to the unimplemented spec 5.
+Building from the checkout has none of those properties. Publishing a release
+binary may still be worthwhile later; it is the wrong *stage-zero* mechanism.
+
+**A separate `bootstrap` subcommand inside the `agents` binary.** Rejected for
+the reason spec 1 already names: it would turn a repo-context tool into an
+unrelated workstation manager. Two Go modules, two binaries, one repo.
+
+**Bash for the whole bootstrap.** This was the original decision and it was
+reversed after one task of implementation. Reversed on evidence, not taste — see
+[the six defects](#the-six-bash-defects-that-decided-1-2026-08-10). The
+deciding one is that the §4 invariant, in shell, could only be enforced by
+lexically scanning phase files for mutating command names, and that scan was
+written wrong twice: once flagging the *correct* `do_run mkdir` form, once
+missing a real `; do cp` violation. **A guarantee enforced by a heuristic its
+own author cannot write correctly is not a guarantee.** In Go the same property
+is an import-set assertion: exact, complete, and impossible to get subtly wrong.
+
+The advantages shell genuinely had are real and were given up knowingly:
+zero stage-zero dependencies, and a tool short enough to read before running it
+on your own machine. §2.1's shim preserves the second for the only part that
+still runs before anything is verified.
 
 **Keeping `make dotfiles` as an alias.** Preserves an interface we no longer
 want and leaves two apparent entry points — the overlap this spec exists to
@@ -582,7 +723,9 @@ exchange for one convenience command.
 | Editing `~/.config/fish/config.fish` silently produces untracked changes | The stub's header says so, mirroring `gitconfig.local.template`. Reduced, not eliminated. |
 | `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
 | A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
-| Bootstrap grows into an unmaintainable script | One file per phase; all mutation through five primitives; a structural test enforcing it. |
+| Bootstrap grows into an unmaintainable program | One package per concern; all machine access through `change.Interface`; an architecture test on the phase package's import set. |
+| Go is a stage-zero dependency the old design did not have | The shim installs it via Homebrew when present, and otherwise refuses with the exact command. One manual step on a machine that has neither. §2.1. |
+| The shim is shell, so it inherits the defects that motivated the switch | It is ~40 lines, does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 
 ## Open questions
