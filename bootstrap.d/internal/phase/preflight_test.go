@@ -216,8 +216,14 @@ type fakeChange struct {
 	// two the same -- or that abandons a search on the first error -- can only be
 	// caught by a fake that can tell them apart.
 	lstatErr map[string]bool
-	failOn   string // when a mutation's target contains this, return a Refusal
-	Ops      []string
+	// readFileErr makes a path UNREADABLE rather than empty, the same
+	// distinction lstatErr draws. fakeChange.ReadFile otherwise returns
+	// (nil, nil) for an absent path, which would let "/etc/shells cannot be
+	// read" and "/etc/shells lists nothing" be the same case -- and they call
+	// for opposite behaviour.
+	readFileErr map[string]bool
+	failOn      string // when a mutation's target contains this, return a Refusal
+	Ops         []string
 }
 
 func (f *fakeChange) Lstat(p string) (change.FileInfo, error) {
@@ -227,7 +233,12 @@ func (f *fakeChange) Lstat(p string) (change.FileInfo, error) {
 	return f.info[p], nil
 }
 func (f *fakeChange) Readlink(p string) (string, error) { return f.links[p], nil }
-func (f *fakeChange) ReadFile(p string) ([]byte, error) { return f.files[p], nil }
+func (f *fakeChange) ReadFile(p string) ([]byte, error) {
+	if f.readFileErr[p] {
+		return nil, errPermission
+	}
+	return f.files[p], nil
+}
 func (f *fakeChange) LookPath(n string) (string, error) {
 	if f.lookPathErr[n] {
 		return "", errNotFound

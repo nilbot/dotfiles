@@ -11,7 +11,7 @@ end
 # an interactive shell.
 function install_fisher
     set --local plugins (read --null <(status dirname)/fishfile)
-    curl -sL https://git.io/fisher | source && fisher install jorgebucaran/fisher $plugins
+    curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish | source && fisher install jorgebucaran/fisher $plugins
 end
 # <<< fisher plugin manager <<<
 

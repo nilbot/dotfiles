@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"runtime"
 
@@ -100,6 +101,17 @@ func root() (string, error) {
 	return filepath.Dir(filepath.Dir(exe)), nil
 }
 
+// currentUser prefers the passwd database over $USER. $USER is inherited and
+// can name someone else entirely -- after `sudo -E`, or a container started
+// with `docker exec -u` -- and the login shell being changed belongs to the
+// account this process actually runs as, not to whoever exported the variable.
+func currentUser() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}
+
 func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 	phases, err := phase.For(profile)
 	if err != nil {
@@ -125,7 +137,8 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 
 	ctx := phase.Context{
 		Change: machine, Root: repoRoot, Home: os.Getenv("HOME"),
-		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"), Out: stdout,
+		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"),
+		User: currentUser(), Out: stdout,
 	}
 	for _, p := range phases {
 		if err := p.Run(ctx); err != nil {

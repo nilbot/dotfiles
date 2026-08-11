@@ -53,6 +53,12 @@ type Context struct {
 	// the login shell to report on it.
 	Shell string
 
+	// User is the current user's login name, supplied by main exactly as Shell
+	// is. `sudo chsh -s <shell>` with no user argument changes ROOT's login
+	// shell, so the name is not optional -- and nothing in this package can
+	// reach the passwd database or the environment on its own.
+	User string
+
 	Out io.Writer
 }
 

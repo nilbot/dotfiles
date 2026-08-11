@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -48,8 +49,8 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...
 	// case into the developer's real ~/.cache and the suite stops being
 	// hermetic -- the cache tests would then pass without exercising anything.
 	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CACHE_HOME="+home+"/cache")
-	// A stub brew, for the same reason XDG_CACHE_HOME is redirected above: without
-	// it these cases are not hermetic.
+	// A stub brew and a stub fish, for the same reason XDG_CACHE_HOME is
+	// redirected above: without them these cases are not hermetic.
 	//
 	// `plan workstation` reaches the verify phase, and phase.Verify deliberately
 	// builds a real Applier rather than using the Planner it was handed -- a check
@@ -65,7 +66,7 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...
 	// is still appended AFTER, and a later duplicate key wins, so the one case
 	// that needs a brew with a particular exit status keeps supplying its own.
 	cmd.Env = append(cmd.Env,
-		"PATH="+stubBrewDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+		"PATH="+stubToolDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Env = append(cmd.Env, extraEnv...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -80,22 +81,47 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...
 	return stdout.String(), stderr.String(), code
 }
 
-// stubBrewDir holds a `brew` that succeeds and does nothing, prepended to PATH
-// by runShimIn.
+// stubToolDir holds the two commands a shim case must never reach on the
+// developer's own machine -- `brew` and `fish` -- prepended to PATH by
+// runShimIn.
 //
-// It only ever answers `brew bundle check`, which reads and reports. Exit 0 --
-// "every Brewfile entry is installed" -- is the choice that keeps the cases
-// using it deterministic; none of them asserts the packages verdict, and the one
-// that does supplies its own brew with the exit status it needs.
+// brew is EXECUTED. It only ever answers `brew bundle check`, which reads and
+// reports. Exit 0 -- "every Brewfile entry is installed" -- is the choice that
+// keeps the cases using it deterministic; none of them asserts the packages
+// verdict, and the one that does supplies its own brew with the exit status it
+// needs.
+//
+// fish is only ever RESOLVED. `plan workstation` reaches the fish phase, whose
+// first act is LookPath("fish"), and Planner.LookPath consults the real PATH --
+// so without this stub those cases pass or fail according to whether the
+// developer happens to have fish installed. Everything the phase does with the
+// answer goes through Planner.Run and Planner.Sudo, which record and execute
+// nothing, so this file is never run. It exits 127 with a message rather than 0
+// so that "never run" is checked by the suite instead of asserted in a comment:
+// a future case that reaches an `apply workstation` would fail here, loudly,
+// instead of installing plugins into the developer's own fish configuration.
 //
 // Prepended rather than replacing PATH: the shim needs go, dirname, cksum and
 // find.
-func stubBrewDir(t *testing.T) string {
+func stubToolDir(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "brew"),
-		[]byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
+	for name, body := range map[string]string{
+		"brew": "#!/bin/sh\nexit 0\n",
+		"fish": "#!/bin/sh\n" +
+			"echo \"stub fish executed with: $*\" >&2\nexit 127\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		// Set rather than requested: os.WriteFile's mode is masked by the umask,
+		// and exec.LookPath rejects a file it cannot execute -- under a umask that
+		// cleared the x bits the fish phase would refuse and every `plan
+		// workstation` case would fail for a reason having nothing to do with what
+		// it asserts.
+		if err := os.Chmod(filepath.Join(dir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dir
 }
@@ -230,6 +256,48 @@ func TestDotfilesProfileSkipsPrivilegedPhases(t *testing.T) {
 	for _, forbidden := range []string{"== packages", "== fish", "== devtools"} {
 		if strings.Contains(stdout, forbidden) {
 			t.Errorf("dotfiles must not run the %q phase:\n%s", forbidden, stdout)
+		}
+	}
+}
+
+// The login name reaches the fish phase, and it comes from the passwd database
+// rather than from $USER.
+//
+// `sudo chsh -s <shell>` with NO user argument changes ROOT's login shell, so
+// the name is the one argument this command cannot be missing -- and nothing
+// else covers the wiring from main to phase.Context, because every phase test
+// supplies User itself.
+//
+// Both variables are overridden for the fixture to discriminate at all. SHELL,
+// because the phase plans a chsh only when the login shell is not already fish,
+// which on the machine this repository provisions it is. USER, because it is
+// inherited and can name someone else entirely -- after `sudo -E`, or a
+// container started with `docker exec -u` -- while the shell being changed
+// belongs to the account this process actually runs as.
+func TestPlanNamesTheCurrentUserWhenItChangesTheLoginShell(t *testing.T) {
+	me, err := user.Current()
+	if err != nil {
+		t.Skipf("no passwd entry for this process: %v", err)
+	}
+	stdout, stderr, code := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"),
+		tempHome(t), []string{"SHELL=/bin/bash", "USER=somebodyelse"},
+		"plan", "workstation")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s%s", code, stdout, stderr)
+	}
+	var lines []string
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.Contains(line, "chsh -s ") {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		t.Fatalf("a login shell that is not fish must plan a chsh:\n%s", stdout)
+	}
+	for _, line := range lines {
+		if !strings.HasSuffix(strings.TrimSpace(line), " "+me.Username) {
+			t.Errorf("chsh must end in this account's login name (%s), not $USER "+
+				"and not nothing at all: %s", me.Username, line)
 		}
 	}
 }
@@ -415,7 +483,13 @@ func TestPlanAndCheckAgreeOnThePackagesVerdict(t *testing.T) {
 		[]byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	env := []string{"PATH=" + stubDir + string(os.PathListSeparator) + os.Getenv("PATH")}
+	// This PATH is appended after the one runShimIn builds and so replaces it,
+	// which would drop the stub fish along with the stub brew. stubToolDir goes
+	// back in behind this case's own brew -- which therefore still wins -- so
+	// `plan workstation` reaches the fish phase on a machine that has no fish.
+	env := []string{"PATH=" + strings.Join(
+		[]string{stubDir, stubToolDir(t), os.Getenv("PATH")},
+		string(os.PathListSeparator))}
 
 	home := tempHome(t)
 	shim := filepath.Join(alt, "bootstrap")
