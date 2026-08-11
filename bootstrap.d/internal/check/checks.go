@@ -175,10 +175,15 @@ func fishSource(c Context) Result {
 // the resolved root as it writes, so a seeded path should be right -- but
 // "should be" is not a check, and both git and fish pass over an include or
 // source they cannot open without stopping.
+//
+// The pattern must carry exactly one capture group, around the path. Both of
+// today's do; a third that did not would panic on m[1] inside a guard whose
+// entire job is to keep a silent failure from going unreported, so a match with
+// nothing captured is skipped rather than indexed.
 func resolves(c Context, data []byte, pattern *regexp.Regexp) (found, dangling string) {
 	for _, line := range strings.Split(string(data), "\n") {
 		m := pattern.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
+		if len(m) < 2 {
 			continue
 		}
 		path := expandHome(m[1], c.Home)

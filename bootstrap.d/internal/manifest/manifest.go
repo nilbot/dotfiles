@@ -65,7 +65,14 @@ func Parse(data []byte) ([]Row, error) {
 		default:
 			return nil, &SyntaxError{line, fmt.Sprintf("unknown platform %q", fields[3])}
 		}
-		rows = append(rows, Row{kind, fields[1], fields[2], fields[3]})
+		// Keyed. Source and Target are adjacent strings of the same type, so an
+		// unkeyed literal survives a field reorder in the struct above and
+		// silently inverts every row in the manifest -- linking the repository
+		// file at the target's path, past the compiler and past every test that
+		// builds its rows through this function.
+		rows = append(rows, Row{
+			Kind: kind, Source: fields[1], Target: fields[2], Platform: fields[3],
+		})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
