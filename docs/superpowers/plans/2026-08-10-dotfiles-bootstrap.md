@@ -3072,6 +3072,470 @@ required by tooling that had never declared them."
 
 ---
 
+### Task 13: The fish phase
+
+**Files:**
+- Modify: `bootstrap.d/internal/phase/fish.go` (replaces the Task 3 stub)
+- Modify: `bootstrap.d/internal/phase/phase.go` (add `Context.User`)
+- Modify: `bootstrap.d/main.go` (supply `User`)
+- Modify: `bootstrap.d/main_test.go` (stub `fish` alongside the stub `brew`)
+- Modify: `fish/mypre.fish` (pin the fisher installer URL)
+- Test: `bootstrap.d/internal/phase/fish_test.go`
+
+**Interfaces:**
+- Consumes: `Context` (`Change`, `Root`, `Shell`, `Out`), `Machine.LookPath`,
+  `Machine.ReadFile`, `Machine.Sudo`, `Machine.Run`.
+- Produces: `func Fish(c Context) error`; `Context.User string`.
+
+**Why this phase exists at all.** The Makefile's `chsh` was guarded by
+`sudo -v || if [ -z $? ]`, which skips on *both* branches and so has never run.
+Corroborated on this machine: fish is the login shell, and `/etc/shells`
+contains no fish entry at all — the shell was changed by hand at some point and
+the Makefile never did it. This phase adds the `/etc/shells` entry *before*
+changing the shell, and changes nothing when the login shell is already fish.
+
+**Two hazards specific to this task.**
+
+1. **No test may execute `fish`, `chsh`, `sudo` or `tee`.** Earlier in this
+   project an agent ran `fish` without `--no-config`, which loaded the owner's
+   real configuration and triggered a live `fisher install` that reinstalled
+   four plugins at upstream HEAD. Every test here drives `fakeChange`.
+2. **`sudo chsh -s <shell>` with no user argument changes *root's* shell.** The
+   login name is therefore not optional, and `internal/phase` cannot read the
+   passwd database or the environment. That is what `Context.User` is for.
+
+- [ ] **Step 1: Add `Context.User`**
+
+In `internal/phase/phase.go`, directly below the existing `Shell` field:
+
+```go
+	// User is the current user's login name, supplied by main exactly as Shell
+	// is. `sudo chsh -s <shell>` with no user argument changes ROOT's login
+	// shell, so the name is not optional -- and nothing in this package can
+	// reach the passwd database or the environment on its own.
+	User string
+```
+
+In `main.go`, add `"os/user"` to the imports, add this helper, and set
+`User: currentUser()` in **both** `phase.Context` literals (the apply/plan one
+and the one the `check` verb builds) so they cannot drift:
+
+```go
+// currentUser prefers the passwd database over $USER. $USER is inherited and
+// can name someone else entirely -- after `sudo -E`, or a container started
+// with `docker exec -u` -- and the login shell being changed belongs to the
+// account this process actually runs as, not to whoever exported the variable.
+func currentUser() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+	return os.Getenv("USER")
+}
+```
+
+- [ ] **Step 2: Write the failing test**
+
+Create `bootstrap.d/internal/phase/fish_test.go`. `fakeChange.LookPath` returns
+`"/usr/bin/" + name`, so `/usr/bin/fish` is the resolved path throughout.
+
+```go
+package phase_test
+
+import (
+	"bytes"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
+)
+
+func fishContext(fake *fakeChange, out *bytes.Buffer, shell string) phase.Context {
+	return phase.Context{
+		Change: fake, Root: "/repo", Home: "/home", Platform: "darwin",
+		Profile: "workstation", Shell: shell, User: "someone", Out: out,
+	}
+}
+
+func TestFishRegistersTheShellThenChangesItThenInstallsPlugins(t *testing.T) {
+	fake := &fakeChange{}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{
+		`sudo /bin/sh -c printf '%s\n' "$1" >> /etc/shells sh /usr/bin/fish`,
+		"sudo chsh -s /usr/bin/fish someone",
+		"run fish --no-config -c source $argv[1]/fish/mypre.fish; install_fisher /repo",
+	}
+	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\n\nwant:\n%s",
+			strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// The order is load-bearing, not cosmetic: chsh refuses a shell that is not
+// listed in /etc/shells, so a run that changed the shell first would fail on
+// exactly the fresh machine this phase exists for.
+func TestFishAddsTheShellsEntryBeforeChangingTheShell(t *testing.T) {
+	fake := &fakeChange{}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	shells, chsh := -1, -1
+	for i, op := range fake.Ops {
+		if strings.Contains(op, "/etc/shells") {
+			shells = i
+		}
+		if strings.Contains(op, "chsh") {
+			chsh = i
+		}
+	}
+	if shells == -1 || chsh == -1 {
+		t.Fatalf("both steps must appear: %v", fake.Ops)
+	}
+	if shells > chsh {
+		t.Errorf("chsh at %d precedes the /etc/shells entry at %d; chsh refuses "+
+			"an unlisted shell, so this order fails on a fresh machine", chsh, shells)
+	}
+}
+
+// The path is passed as $1 and never interpolated into the script text, so a
+// prefix containing a quote, a space or $(...) cannot change what root runs.
+func TestFishPassesTheShellPathAsAnArgumentNotInsideTheScript(t *testing.T) {
+	fake := &fakeChange{}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var op string
+	for _, o := range fake.Ops {
+		if strings.Contains(o, "/etc/shells") {
+			op = o
+		}
+	}
+	if !strings.Contains(op, `printf '%s\n' "$1" >> /etc/shells`) {
+		t.Errorf("the script must use the positional $1: %s", op)
+	}
+	if !strings.HasSuffix(op, `>> /etc/shells sh /usr/bin/fish`) {
+		t.Errorf("the path must follow the script as $0 and $1: %s", op)
+	}
+}
+
+func TestFishSkipsTheShellsEntryWhenItIsAlreadyListed(t *testing.T) {
+	fake := &fakeChange{files: map[string][]byte{
+		"/etc/shells": []byte("# comment\n/bin/sh\n/bin/bash\n/usr/bin/fish\n"),
+	}}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	for _, op := range fake.Ops {
+		if strings.Contains(op, "/etc/shells") {
+			t.Errorf("must not append an entry that is already present: %s", op)
+		}
+	}
+	if !strings.Contains(out.String(), "already") {
+		t.Errorf("the skip must be visible in the phase's output:\n%s", out.String())
+	}
+}
+
+// An unreadable /etc/shells is not an absent entry. Appending a duplicate line
+// is inert; omitting a missing one makes chsh refuse.
+func TestFishAddsTheEntryWhenShellsCannotBeRead(t *testing.T) {
+	fake := &fakeChange{readFileErr: map[string]bool{"/etc/shells": true}}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	found := false
+	for _, op := range fake.Ops {
+		if strings.Contains(op, "/etc/shells") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("an unreadable /etc/shells must not be read as 'already listed': %v", fake.Ops)
+	}
+}
+
+func TestFishSkipsChshWhenTheLoginShellIsAlreadyFish(t *testing.T) {
+	for _, shell := range []string{"/opt/homebrew/bin/fish", "/usr/local/bin/fish"} {
+		fake := &fakeChange{}
+		var out bytes.Buffer
+		if err := phase.Fish(fishContext(fake, &out, shell)); err != nil {
+			t.Fatalf("%s: unexpected error: %v", shell, err)
+		}
+		for _, op := range fake.Ops {
+			if strings.Contains(op, "chsh") {
+				t.Errorf("%s: must not plan a shell change: %s", shell, op)
+			}
+		}
+	}
+}
+
+func TestFishRefusesWhenTheLoginNameIsUnknown(t *testing.T) {
+	fake := &fakeChange{}
+	var out bytes.Buffer
+	ctx := fishContext(fake, &out, "/bin/bash")
+	ctx.User = ""
+	err := phase.Fish(ctx)
+	if err == nil {
+		t.Fatal("an empty login name must refuse: `sudo chsh -s <shell>` with no " +
+			"user argument changes root's shell")
+	}
+	for _, op := range fake.Ops {
+		if strings.Contains(op, "chsh") {
+			t.Errorf("no chsh may be recorded without a login name: %s", op)
+		}
+	}
+}
+
+func TestFishRefusesWhenFishIsAbsentAndDoesNothing(t *testing.T) {
+	fake := &fakeChange{lookPathErr: map[string]bool{"fish": true}}
+	var out bytes.Buffer
+	err := phase.Fish(fishContext(fake, &out, "/bin/bash"))
+	if err == nil {
+		t.Fatal("want a refusal when fish is not installed")
+	}
+	if !strings.Contains(err.Error(), "packages phase") {
+		t.Errorf("the refusal must point at the phase that installs fish: %v", err)
+	}
+	if len(fake.Ops) != 0 {
+		t.Errorf("nothing may run before fish is known to exist: %v", fake.Ops)
+	}
+}
+
+// --no-config is not tidiness. Sourcing the owner's configuration to install
+// plugins runs whatever that configuration does; this invocation needs exactly
+// one function from one tracked file and asks for nothing else.
+func TestFishInstallsPluginsWithoutLoadingTheUsersConfiguration(t *testing.T) {
+	fake := &fakeChange{}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	last := fake.Ops[len(fake.Ops)-1]
+	if !strings.HasPrefix(last, "run fish --no-config -c ") {
+		t.Errorf("the plugin install must be last and must use --no-config: %s", last)
+	}
+	if !strings.Contains(last, "$argv[1]") {
+		t.Errorf("the root must reach fish as $argv[1], not interpolated: %s", last)
+	}
+	if !strings.HasSuffix(last, " /repo") {
+		t.Errorf("the resolved root must be the trailing argument: %s", last)
+	}
+}
+
+func TestFishStopsAtTheFirstFailure(t *testing.T) {
+	for _, tc := range []struct{ name, failOn string }{
+		{"shells entry", "/bin/sh"},
+		{"chsh", "chsh"},
+		{"fisher", "fish --no-config"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeChange{failOn: tc.failOn}
+			var out bytes.Buffer
+			if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err == nil {
+				t.Fatal("want the refusal to propagate, got nil")
+			}
+			for _, op := range fake.Ops {
+				if strings.Contains(op, tc.failOn) {
+					t.Errorf("the failing operation must not be recorded: %s", op)
+				}
+			}
+		})
+	}
+}
+
+// git.io is GitHub's retired URL shortener. Measured 2026-08-11: it still
+// answers 301 to
+// https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish
+// -- so this is hardening, not a repair. Provisioning a new machine should not
+// route through a service its owner has already announced the end of.
+func TestMypreNamesTheFisherInstallerDirectly(t *testing.T) {
+	body, err := os.ReadFile("../../../fish/mypre.fish")
+	if err != nil {
+		t.Fatalf("the fish phase invokes install_fisher from this file: %v", err)
+	}
+	if strings.Contains(string(body), "git.io") {
+		t.Error("git.io is a retired shortener; name the raw URL it redirects to")
+	}
+	if !strings.Contains(string(body),
+		"https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish") {
+		t.Error("install_fisher must fetch the installer from its canonical URL")
+	}
+}
+```
+
+`fakeChange` needs one new seam, alongside the existing `lstatErr`:
+
+```go
+	// readFileErr makes a path UNREADABLE rather than empty, the same
+	// distinction lstatErr draws. fakeChange.ReadFile otherwise returns
+	// (nil, nil) for an absent path, which would let "/etc/shells cannot be
+	// read" and "/etc/shells lists nothing" be the same case -- and they call
+	// for opposite behaviour.
+	readFileErr map[string]bool
+```
+
+```go
+func (f *fakeChange) ReadFile(p string) ([]byte, error) {
+	if f.readFileErr[p] {
+		return nil, errPermission
+	}
+	return f.files[p], nil
+}
+```
+
+- [ ] **Step 3: Run to verify it fails**
+
+Run: `cd bootstrap.d && go test ./internal/phase/ -run 'Fish|Mypre' -v`
+Expected: FAIL. The stub is
+`func Fish(c Context) error { c.logf("== fish (not implemented)"); return nil }`,
+so it records no operations at all — the failures should read as empty `ops:`
+lists and "nothing may run" assertions, not as mismatched arguments.
+
+- [ ] **Step 4: Implement the phase**
+
+Replace `bootstrap.d/internal/phase/fish.go`:
+
+```go
+package phase
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+)
+
+// appendShell runs under sh rather than this process because the redirection
+// has to happen with root's privileges: `sudo tee -a` would need a stdin that
+// change.Applier does not give a command. The path arrives as $1 and is never
+// interpolated into the script text, so a prefix containing a quote, a space or
+// $(...) cannot change what root runs.
+const appendShell = `printf '%s\n' "$1" >> /etc/shells`
+
+// Fish makes fish the login shell and installs the plugin set.
+//
+// Plugins are installed explicitly here rather than by a shell-start side
+// effect: a provisioning step that only happens if you happen to open a shell
+// is not a provisioning step.
+//
+// Like the packages phase, this one refuses under `plan` on a machine that does
+// not have fish yet. That is the same accepted limitation, for the same reason:
+// `plan` cannot preview a machine whose packages phase has not run, because
+// Planner records a command without performing it and nothing in Machine
+// reports which happened.
+func Fish(c Context) error {
+	c.logf("== fish")
+
+	fishPath, err := c.Change.LookPath("fish")
+	if err != nil {
+		return fmt.Errorf("fish is not on PATH; the packages phase installs it -- " +
+			"run './bootstrap apply workstation'")
+	}
+	c.logf("   fish        %s", fishPath)
+
+	if err := registerShell(c, fishPath); err != nil {
+		return err
+	}
+	if err := loginShell(c, fishPath); err != nil {
+		return err
+	}
+
+	// fish expands $argv itself, so the root never enters a command string that
+	// something else parses first.
+	return c.Change.Run("fish", "--no-config", "-c",
+		"source $argv[1]/fish/mypre.fish; install_fisher", c.Root)
+}
+
+// registerShell adds fish to /etc/shells. chsh refuses a shell that is not
+// listed there, so this runs first.
+func registerShell(c Context, fishPath string) error {
+	body, err := c.Change.ReadFile("/etc/shells")
+	if err != nil {
+		// Unreadable is not absent. A duplicate line in /etc/shells is inert; a
+		// missing one makes chsh refuse, so the append is the safe answer to not
+		// knowing.
+		c.logf("   /etc/shells unreadable (%v); adding the entry regardless", err)
+	} else {
+		for _, line := range strings.Split(string(body), "\n") {
+			if strings.TrimSpace(line) == fishPath {
+				c.logf("   /etc/shells already lists %s", fishPath)
+				return nil
+			}
+		}
+	}
+	c.logf("   /etc/shells adding %s", fishPath)
+	return c.Change.Sudo("/bin/sh", "-c", appendShell, "sh", fishPath)
+}
+
+func loginShell(c Context, fishPath string) error {
+	if filepath.Base(c.Shell) == "fish" {
+		c.logf("   chsh        login shell is already fish (%s)", c.Shell)
+		return nil
+	}
+	if c.User == "" {
+		return fmt.Errorf("cannot change the login shell: neither the passwd " +
+			"database nor $USER names the current user, and `sudo chsh` without " +
+			"a name would change root's shell")
+	}
+	c.logf("   chsh        %s -> %s for %s", c.Shell, fishPath, c.User)
+	return c.Change.Sudo("chsh", "-s", fishPath, c.User)
+}
+```
+
+In `fish/mypre.fish`, replace the `git.io` URL inside `install_fisher` with the
+URL it redirects to, keeping `HEAD` (fisher's own documented form, meaning the
+default branch):
+
+```fish
+    curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish | source && fisher install jorgebucaran/fisher $plugins
+```
+
+In `bootstrap.d/main_test.go`, extend the stub directory Task 12 added so it
+provides `fish` as well as `brew`. `plan workstation` reaches this phase and
+`Planner.LookPath` consults the real PATH, so without this the shim cases pass
+or fail according to whether the developer happens to have fish installed.
+`Planner` executes nothing, so the stub is never run — only resolved.
+
+- [ ] **Step 5: Run to verify it passes**
+
+Run: `cd bootstrap.d && go test -count=1 ./...`
+Expected: PASS, whole suite. Then run it again under `umask 077`.
+
+Confirm with recording sentinels — `fish`, `chsh`, `sudo`, `tee`, `curl` first
+on PATH, each appending its argv to a log and exiting 127 — that the suite
+invokes none of them, and report the log.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add bootstrap.d/internal/phase/fish.go bootstrap.d/internal/phase/fish_test.go \
+        bootstrap.d/internal/phase/phase.go bootstrap.d/internal/phase/preflight_test.go \
+        bootstrap.d/main.go bootstrap.d/main_test.go fish/mypre.fish
+git commit -m "feat(bootstrap): add the fish phase
+
+The Makefile's chsh was guarded by 'sudo -v || if [ -z \$? ]', which skips
+on both branches and so has never run -- corroborated by fish being the
+login shell while /etc/shells contains no fish entry at all. This phase
+adds the entry before changing the shell, because chsh refuses a shell
+that is not listed, and changes nothing when the login shell is already
+fish.
+
+Plugins install explicitly rather than through a shell-start side effect.
+The invocation passes --no-config: installing plugins does not need the
+owner's configuration, and sourcing it would run whatever it does.
+
+install_fisher now names the fisher installer's canonical URL. git.io
+still redirects there today, but it is GitHub's retired shortener and
+provisioning should not depend on it."
+```
+
+---
+
 ### Tasks 13 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
