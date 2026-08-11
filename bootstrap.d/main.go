@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 	"github.com/nilbot/dotfiles/bootstrap/internal/check"
@@ -120,12 +122,40 @@ func currentUser() string {
 // accounts of whatever machine the suite is on.
 type commandOutput func(name string, args ...string) ([]byte, error)
 
-// runCommand is the real commandOutput. Standard error is discarded rather
-// than combined: a run that falls back to the hint cleanly must not also spray
-// a tool's diagnostic through the middle of a plan, and nothing written there
-// is part of the answer.
+// databaseTimeout bounds the user-database read.
+//
+// Reading $SHELL could not hang; running a command can. `getent passwd` goes
+// through NSS, so on a machine bound to a directory service it can block on the
+// network, and a wedged DirectoryService does the same to dscl -- which would
+// stop plan, apply and check dead, on the machines least likely to be able to
+// afford it. The resolver's whole posture is that it never fails, it falls back;
+// an unbounded wait is the one failure mode that contradicts that, because it
+// does not degrade, it stops.
+//
+// Five seconds is far longer than a local record read (milliseconds) and far
+// shorter than a stuck directory lookup, which has no bound at all. The
+// trade-off it accepts: a genuine lookup slower than this falls back to $SHELL
+// and may report the stale answer -- the original defect, for that one run, on
+// that one class of machine. Hanging forever is worse.
+const databaseTimeout = 5 * time.Second
+
+// runCommand is the real commandOutput, bounded by databaseTimeout.
 func runCommand(name string, args ...string) ([]byte, error) {
-	return exec.Command(name, args...).Output()
+	return runCommandWithin(databaseTimeout, name, args...)
+}
+
+// runCommandWithin takes the deadline as an argument so a test can pin the
+// giving-up behaviour without waiting the real one out.
+//
+// Standard error is discarded rather than combined, because nothing a tool
+// writes there is part of the answer and a diagnostic must never be offered to
+// the parser as a record. Neither choice can reach this process's own stderr --
+// Output captures it into ExitError.Stderr, CombinedOutput returns it in the
+// slice -- so nothing here can leak into a plan either way.
+func runCommandWithin(limit time.Duration, name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	return exec.CommandContext(ctx, name, args...).Output()
 }
 
 // loginShell reports the shell this account logs in with, which is a property

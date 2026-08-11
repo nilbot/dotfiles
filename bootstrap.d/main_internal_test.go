@@ -1,13 +1,20 @@
-// The one white-box case in this directory. Everything else about main is
+// The white-box cases for this directory. Everything else about main is
 // asserted through the shim, in package main_test, because everything else
-// about main is observable from outside; loginShell is not exported and must
-// not be, so it is exercised here.
+// about main is observable from outside; loginShell and runCommandWithin are
+// not exported and must not be, so they are exercised here.
+//
+// Deliberately separated from the package clause below: main.go carries this
+// package's doc comment, and a second one attached here would leave which is
+// which ambiguous.
+
 package main
 
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 // fakeCommand stands in for the platform's user database tool. No case in this
@@ -33,6 +40,62 @@ func (f *fakeCommand) read(name string, args ...string) ([]byte, error) {
 		return nil, f.err
 	}
 	return []byte(f.out), nil
+}
+
+// runCommandWithin is the one hop that turns the argv loginShell builds into a
+// real process, and the unit cases above inject past it -- so without these two
+// it is production code no test reaches. It is covered with /bin/sh, never with
+// dscl or getent: what is being checked is the hop, and the hop does not care
+// which program is on the other end.
+//
+// Every argument is checked through, in order, by having sh echo the one it was
+// given last. Dropping or reordering any of them changes the output. That gap
+// was real: with the argv-blind stubs this file's shim cases used to carry,
+// `exec.Command(name)` -- every argument discarded -- left the entire
+// login-shell suite green while a real machine fell back to $SHELL.
+func TestRunCommandPassesEveryArgumentAndReturnsStandardOutput(t *testing.T) {
+	out, err := runCommandWithin(databaseTimeout, "/bin/sh", "-c",
+		`printf 'UserShell: %s\n' "$1"`, "sh", "/opt/homebrew/bin/fish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); got != "UserShell: /opt/homebrew/bin/fish\n" {
+		t.Errorf("output = %q; every argument must reach the command, in order", got)
+	}
+}
+
+// The deadline, and the reason there is one: reading $SHELL could not hang,
+// running a command can, and a resolver that never fails must not be able to
+// stop the run instead.
+//
+// The limit is a parameter so this waits milliseconds rather than the real five
+// seconds. The elapsed bound is what actually pins the behaviour -- without a
+// deadline this command returns cleanly after ten seconds, which fails both the
+// error assertion and this one.
+func TestRunCommandGivesUpOnACommandThatDoesNotReturn(t *testing.T) {
+	start := time.Now()
+	out, err := runCommandWithin(50*time.Millisecond, "/bin/sh", "-c", "sleep 10")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Errorf("a command that outlives its deadline must be an error, got %q", out)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("waited %v on a 50ms deadline; the read is unbounded, so a wedged "+
+			"directory service stops plan, apply and check outright", elapsed)
+	}
+}
+
+// The deadline must not be reached by a command that answers, or every run on a
+// healthy machine would fall back to $SHELL -- the defect, restored.
+func TestRunCommandDoesNotDisturbACommandThatAnswers(t *testing.T) {
+	out, err := runCommandWithin(databaseTimeout, "/bin/sh", "-c", "sleep 0.05; echo ok")
+	if err != nil {
+		t.Fatalf("a command well inside the deadline must succeed: %v", err)
+	}
+	if strings.TrimSpace(string(out)) != "ok" {
+		t.Errorf("output = %q, want ok", out)
+	}
 }
 
 // The incident this resolver exists for, on darwin.

@@ -91,15 +91,32 @@ const stubLoginShell = "/bin/bash"
 // developer's own machine -- `brew`, `fish`, and the two user-database tools --
 // prepended to PATH by runShimIn.
 //
-// dscl and getent are EXECUTED, by every verb: main reads the account's login
-// shell from the passwd database, because $SHELL is inherited and describes the
-// session rather than the account. Without these stubs each case would report
-// whatever the developer's own passwd entry says -- fish on the machine this
-// repository provisions, something else in CI, nothing at all in a container
-// with no entry for the running uid -- and the cases below that turn on the
-// login shell would pass or fail accordingly. They answer stubLoginShell in the
-// shape the real tools use: `UserShell: <path>` for dscl, a seven-field passwd
-// line for getent.
+// dscl and getent are EXECUTED, by plan, apply and check: those three build a
+// context, and main fills its Shell from the passwd database because $SHELL is
+// inherited and describes the session rather than the account. Without these
+// stubs each of those cases would report whatever the developer's own passwd
+// entry says -- fish on the machine this repository provisions, something else
+// in CI, nothing at all in a container with no entry for the running uid -- and
+// the cases that turn on the login shell would pass or fail accordingly.
+//
+// migrate and --help build no context and never resolve a shell, which is what
+// makes three cases here hermetic in spite of themselves: each supplies its own
+// PATH in extraEnv, built from the TEST PROCESS's PATH, which does not contain
+// this directory -- so the entry runShimIn set is replaced and these stubs are
+// dropped. Those three are the migrate-mambaforge case and the two --help cases
+// that go through misresolvingPATH. That is load-bearing, not trivia: a case
+// added later that supplied its own PATH under plan, apply or check would reach
+// the real tools, and nothing would say so. The one such case that exists today
+// (the packages verdict) puts stubToolDir back in deliberately.
+//
+// Both stubs REJECT an argv they do not recognise, with exit 64, rather than
+// answering anyway. A stub that replies to any question cannot tell a correct
+// command from a broken one: with an unconditional printf, dropping every
+// argument from the exec call left the whole login-shell suite green while the
+// resolver silently fell back to $SHELL on a real machine -- which is the defect
+// this task exists to fix. Otherwise they answer stubLoginShell in the shape the
+// real tools use: `UserShell: <path>` for dscl, a seven-field passwd line for
+// getent.
 //
 // brew is EXECUTED. It only ever answers `brew bundle check`, which reads and
 // reports. Exit 0 -- "every Brewfile entry is installed" -- is the choice that
@@ -126,8 +143,18 @@ func stubToolDir(t *testing.T) string {
 		"brew": "#!/bin/sh\nexit 0\n",
 		"fish": "#!/bin/sh\n" +
 			"echo \"stub fish executed with: $*\" >&2\nexit 127\n",
-		"dscl":   "#!/bin/sh\nprintf 'UserShell: %s\\n' " + stubLoginShell + "\n",
-		"getent": "#!/bin/sh\nprintf 'stub:x:1000:1000::/home/stub:%s\\n' " + stubLoginShell + "\n",
+		"dscl": "#!/bin/sh\n" +
+			"[ $# -eq 4 ] || exit 64\n" +
+			"[ \"$1\" = \".\" ] || exit 64\n" +
+			"[ \"$2\" = \"-read\" ] || exit 64\n" +
+			"[ \"$4\" = \"UserShell\" ] || exit 64\n" +
+			"case \"$3\" in /Users/?*) ;; *) exit 64 ;; esac\n" +
+			"printf 'UserShell: %s\\n' " + stubLoginShell + "\n",
+		"getent": "#!/bin/sh\n" +
+			"[ $# -eq 2 ] || exit 64\n" +
+			"[ \"$1\" = \"passwd\" ] || exit 64\n" +
+			"[ -n \"$2\" ] || exit 64\n" +
+			"printf 'stub:x:1000:1000::/home/stub:%s\\n' " + stubLoginShell + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
