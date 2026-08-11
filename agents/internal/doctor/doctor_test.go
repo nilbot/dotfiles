@@ -368,7 +368,8 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 // This case is deliberately written against neither the fixture nor the helper:
 //
 //   - the literal pins doctor.go itself, so a rename that updates the fixtures
-//     and forgets DefaultDependencies fails here;
+//     and forgets DependenciesFor -- which DefaultDependencies delegates to, and
+//     where the path is actually built -- fails here;
 //   - the file check pins the repository, so a rename that forgets BOTH -- the
 //     shape the branch actually shipped -- fails here too. The include line in
 //     git/gitconfig.local.template names this same path, and bootstrap's
