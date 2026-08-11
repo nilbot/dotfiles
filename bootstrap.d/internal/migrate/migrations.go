@@ -461,13 +461,30 @@ func mambaforgeRun(c Context) error {
 //
 //	raw       a link INSIDE the installation pointing back out. The interpreter
 //	          it reaches survives the removal; the link the shell found does not.
-//	resolved  a route into the installation through a symlink anywhere in the
-//	          path -- ~/condabin -> ~/sdk/mambaforge/bin, or a symlinked ancestor
-//	          of the installation itself while PATH names the other route.
+//	resolved  a route in through a symlinked COMPONENT -- ~/condabin ->
+//	          ~/sdk/mambaforge/bin, or a symlinked ancestor of the installation
+//	          itself while PATH names the other route.
 //
-// Everything here FAILS CLOSED. A path that cannot be resolved is refused rather
-// than assumed harmless: the cost of a wrong refusal is one message, and the
-// cost of a wrong proceed is 3.5 GB that no repository can return.
+// What this does NOT catch, measured on darwin, both reproduced by deleting the
+// installation and re-stating it. Neither is reachable on the machine this
+// targets -- ~/sdk, ~/sdk/mambaforge and its bin/ are all real directories, and
+// PATH names none of them -- and closing either properly means comparing
+// filesystem IDENTITY rather than path strings, which needs a Machine method
+// this design does not have:
+//
+//   - A link TARGET embedding "<symlink>/..". resolvePath cleans the target
+//     before resolving it, so ~/bin/python3 -> "L/../bin/python3" with
+//     L -> <install>/bin answers ~/bin/bin/python3 while the kernel executes
+//     <install>/bin/python3. Go's own walkSymlinks resolves ".." against the
+//     already-resolved prefix instead; this does not.
+//   - A case-variant spelling on a case-insensitive filesystem, which is
+//     darwin's APFS default. PATH=$HOME/SDK/mambaforge/bin executes the
+//     interpreter inside ~/sdk/mambaforge, every Lstat succeeds so no component
+//     is rewritten, and `within` compares bytes.
+//
+// Everything else here FAILS CLOSED. A path that cannot be resolved is refused
+// rather than assumed harmless: the cost of a wrong refusal is one message, and
+// the cost of a wrong proceed is 3.5 GB that no repository can return.
 func mambaforgeInUse(mach Machine, dir string) error {
 	refuse := func(problem string) error {
 		return &change.Refusal{
@@ -536,6 +553,11 @@ var errLinkLoop = errors.New("too many symbolic links")
 // every component gets its own Lstat and its own chance to be a link. Components
 // that do not exist are passed through unchanged -- Lstat reports absence rather
 // than failing, and a path that is not there cannot be a live tool anyway.
+//
+// ".." is resolved LEXICALLY, by Clean and by Join, and that is a real limit
+// rather than a simplification: a link target of the form "<symlink>/.." is
+// collapsed before the symlink is resolved, so this answers something the kernel
+// does not. See mambaforgeInUse for the measurement and for what it costs.
 //
 // A relative path is REFUSED, not resolved. Resolving one needs a working
 // directory, which this package deliberately cannot read; returning it unchanged

@@ -836,7 +836,9 @@ func TestMambaforgeIsTheOnlyReclaimingMigration(t *testing.T) {
 		t.Errorf("reclaiming = %q, want \"mambaforge\"", got)
 	}
 	// The other three are unchanged, so preflight still refuses on exactly what
-	// it refused on before -- see TestPendingReclamationDoesNotBlockApply.
+	// it refused on before -- see TestAMambaforgeMachineHasNothingReconcilingPending
+	// and, for what preflight then does with that,
+	// phase.TestPreflightAllowsAPendingReclamation.
 	if got := strings.Join(Names(All(), Reconciling), ","); got != "fish,gitconfig,gitignore" {
 		t.Errorf("reconciling = %q, want \"fish,gitconfig,gitignore\"", got)
 	}
@@ -1100,6 +1102,59 @@ func TestMambaforgeRefusesWhatItCannotResolve(t *testing.T) {
 	}
 }
 
+// The third fail-closed route: the INSTALLATION's own path cannot be resolved.
+//
+// One failure there makes every comparison below it untrustworthy, so it must
+// refuse before any tool is looked up at all. It had no case until the reviewer
+// pointed out that replacing the branch with `resolvedDir, _ := resolvePath(...)`
+// left the suite green -- an unexercised branch in front of an irrecoverable
+// delete, presented as held.
+//
+// ~/sdk is made a link to itself while ~/sdk/mambaforge stays a real directory,
+// so the migration is still pending and the refusal is about resolution rather
+// than about the shape of the target.
+func TestMambaforgeRefusesWhenItsOwnPathCannotBeResolved(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mambaforgeMachine(t)
+	onlyPATH(t, t.TempDir())
+	// The double must name the path in its RESOLVED spelling. By the time the
+	// walk reaches this component it has already rewritten the prefix -- on
+	// darwin t.TempDir() lives under /var, which is itself a link to /private/var
+	// -- so a double keyed on the raw path never matches and the case passes
+	// while exercising nothing. It did exactly that on the first run.
+	resolvedHome, err := filepath.EvalSymlinks(f.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := f.ctx()
+	c.Change = loopingComponent{
+		Interface: change.NewApplier(&f.out, f.root),
+		dir:       filepath.Join(resolvedHome, "sdk"),
+	}
+	before := tree(t, f.home)
+
+	if pending, err := named(t, "mambaforge").Pending(c.Query()); err != nil || !pending {
+		t.Fatalf("the migration must still be pending here (%v, %v), or the refusal "+
+			"below would be about the target's shape rather than about resolution",
+			pending, err)
+	}
+
+	err = named(t, "mambaforge").Run(c)
+	var refusal *change.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+	}
+	if !strings.Contains(refusal.Error(), "cannot be resolved") {
+		t.Errorf("the refusal must say it could not decide:\n%s", refusal.Error())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conda-meta", "history")); err != nil {
+		t.Errorf("an undecidable guard deleted 3.5 GB anyway: %v", err)
+	}
+	if after := tree(t, f.home); after != before {
+		t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
 // A sibling whose name merely BEGINS with the target's is not inside it.
 // strings.HasPrefix without the separator says otherwise, and the machine then
 // keeps 3.5 GB forever with a refusal naming a directory that has nothing to do
@@ -1280,6 +1335,29 @@ func (l lookPathAt) Readlink(path string) (string, error) {
 }
 
 var errNotOnPATH = errors.New("not on PATH")
+
+// loopingComponent is an Applier that reports one DIRECTORY as a symlink to
+// itself while everything under it stays real, so a case can make the
+// installation's own path unresolvable without changing what Lstat says about
+// the installation. The filesystem cannot be made to hold that combination.
+type loopingComponent struct {
+	change.Interface
+	dir string
+}
+
+func (l loopingComponent) Lstat(path string) (change.FileInfo, error) {
+	if path == l.dir {
+		return change.FileInfo{Exists: true, IsLink: true}, nil
+	}
+	return l.Interface.Lstat(path)
+}
+
+func (l loopingComponent) Readlink(path string) (string, error) {
+	if path == l.dir {
+		return l.dir, nil
+	}
+	return l.Interface.Readlink(path)
+}
 
 // ------------------------------------------------------------ the verb
 
