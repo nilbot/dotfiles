@@ -48,6 +48,24 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...
 	// case into the developer's real ~/.cache and the suite stops being
 	// hermetic -- the cache tests would then pass without exercising anything.
 	cmd.Env = append(os.Environ(), "HOME="+home, "XDG_CACHE_HOME="+home+"/cache")
+	// A stub brew, for the same reason XDG_CACHE_HOME is redirected above: without
+	// it these cases are not hermetic.
+	//
+	// `plan workstation` reaches the verify phase, and phase.Verify deliberately
+	// builds a real Applier rather than using the Planner it was handed -- a check
+	// that asked its question through a Planner would read its recorded nil as
+	// success. So the packages check really does execute
+	// `brew bundle check --file <this repo's Brewfile>`, against the developer's
+	// own Homebrew, and the result depends on what they happen to have installed
+	// rather than on anything in this repository. Measured: two real invocations
+	// per suite run, once bootstrap.d/Brewfile existed.
+	//
+	// This is the funnel every helper passes through, so hermeticity is a property
+	// of the harness rather than of each case remembering to ask for it. extraEnv
+	// is still appended AFTER, and a later duplicate key wins, so the one case
+	// that needs a brew with a particular exit status keeps supplying its own.
+	cmd.Env = append(cmd.Env,
+		"PATH="+stubBrewDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Env = append(cmd.Env, extraEnv...)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
@@ -60,6 +78,26 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...
 		t.Fatal(err)
 	}
 	return stdout.String(), stderr.String(), code
+}
+
+// stubBrewDir holds a `brew` that succeeds and does nothing, prepended to PATH
+// by runShimIn.
+//
+// It only ever answers `brew bundle check`, which reads and reports. Exit 0 --
+// "every Brewfile entry is installed" -- is the choice that keeps the cases
+// using it deterministic; none of them asserts the packages verdict, and the one
+// that does supplies its own brew with the exit status it needs.
+//
+// Prepended rather than replacing PATH: the shim needs go, dirname, cksum and
+// find.
+func stubBrewDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "brew"),
+		[]byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
 }
 
 // altCheckout copies the shim and its sources to a second directory, so a test

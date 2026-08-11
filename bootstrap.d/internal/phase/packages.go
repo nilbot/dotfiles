@@ -3,6 +3,7 @@ package phase
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // homebrewInstaller is Homebrew's documented one-liner, verbatim, as the
@@ -37,7 +38,8 @@ func Packages(c Context) error {
 	if err := stageZero(c); err != nil {
 		return err
 	}
-	if err := homebrew(c); err != nil {
+	brew, err := homebrew(c)
+	if err != nil {
 		return err
 	}
 
@@ -46,7 +48,10 @@ func Packages(c Context) error {
 	// happened to invoke ./bootstrap from.
 	brewfile := filepath.Join(c.Root, "bootstrap.d", "Brewfile")
 	c.logf("   brewfile    %s", brewfile)
-	return c.Change.Run("brew", "bundle", "--file", brewfile)
+	// Through the RESOLVED path rather than the bare name. See homebrew: on the
+	// fresh machine this phase exists for, `brew` is not on this process's PATH
+	// even after a successful install.
+	return c.Change.Run(brew, "bundle", "--file", brewfile)
 }
 
 // stageZero installs Homebrew's own prerequisites -- a C toolchain, curl, file
@@ -96,8 +101,17 @@ func stageZero(c Context) error {
 		"toolchain, curl, file and git by hand, then retry", c.Platform)
 }
 
-// homebrew installs Homebrew when it is absent, and this is the ONLY place this
-// design executes remote code.
+// brewLocations are the three prefixes Homebrew installs to, in probe order:
+// Apple Silicon macOS, Intel macOS, Linux. They are consulted only after the
+// installer has run -- see resolveBrew.
+var brewLocations = []string{
+	"/opt/homebrew/bin/brew",
+	"/usr/local/bin/brew",
+	"/home/linuxbrew/.linuxbrew/bin/brew",
+}
+
+// homebrew installs Homebrew when it is absent and returns the path to invoke it
+// by. This is the ONLY place this design executes remote code.
 //
 // Three things keep that narrow, and a future reader tempted to "harden" it
 // should weigh them before removing anything. It runs solely when LookPath
@@ -107,11 +121,64 @@ func stageZero(c Context) error {
 // this step exactly as it covers the rest. And the alternative to trusting
 // Homebrew's installer is vendoring a copy of it here, which trades a fetch from
 // the project that maintains it for a stale fork nobody updates.
-func homebrew(c Context) error {
+func homebrew(c Context) (string, error) {
+	// The already-installed path resolves through LookPath and stops there: no
+	// probing, because PATH is the machine's own answer to "which brew" and a
+	// guess from a fixed list could disagree with it.
 	if path, err := c.Change.LookPath("brew"); err == nil {
 		c.logf("   homebrew    already installed (%s)", path)
-		return nil
+		return path, nil
 	}
 	c.logf("   homebrew    not on PATH; running the official installer")
-	return c.Change.Run("/bin/bash", "-c", homebrewInstaller)
+	if err := c.Change.Run("/bin/bash", "-c", homebrewInstaller); err != nil {
+		return "", err
+	}
+	return resolveBrew(c)
+}
+
+// resolveBrew finds the brew the installer just wrote, and exists because
+// LookPath cannot find it.
+//
+// The installer appends a `shellenv` line to a shell PROFILE. A profile is read
+// by the next login shell; it cannot alter the PATH of a process that is already
+// running, and exec.LookPath -- which is what Machine.LookPath is -- resolves
+// against exactly that inherited PATH. So on the fresh machine this phase exists
+// for, `brew` is still not on PATH one statement after installing it, and
+// invoking it by bare name fails with "executable file not found in $PATH". The
+// contract that produced ("run bootstrap twice") is not one a provisioner should
+// offer.
+//
+// LookPath is retried first anyway: it costs nothing, and it is right in the one
+// case the probe list cannot cover -- a machine whose PATH already contained a
+// Homebrew prefix that had no brew in it until just now.
+func resolveBrew(c Context) (string, error) {
+	if path, err := c.Change.LookPath("brew"); err == nil {
+		c.logf("   homebrew    installed; %s", path)
+		return path, nil
+	}
+	for _, candidate := range brewLocations {
+		info, err := c.Change.Lstat(candidate)
+		if err != nil {
+			return "", err
+		}
+		if info.Exists {
+			c.logf("   homebrew    installed; %s (not yet on PATH -- Homebrew's "+
+				"shellenv line is read by the next login shell)", candidate)
+			return candidate, nil
+		}
+	}
+
+	// A plain error rather than a change.Refusal, for the reason stageZero gives:
+	// a Refusal says a path on this machine is in a state bootstrap will not
+	// write over, and these three paths are in no state at all. Both answer 2.
+	//
+	// Guessing past this point is worse than stopping. The installer reported
+	// success and brew is neither on PATH nor at any prefix Homebrew uses, which
+	// means something upstream changed -- and the next step would hand a bad path
+	// to `brew bundle`, whose failure would name the guess rather than the cause.
+	return "", fmt.Errorf("Homebrew's installer reported success but no brew "+
+		"could be found: not on PATH, and absent from all three locations "+
+		"Homebrew installs to (%s); if this is a `plan` on a machine that has no "+
+		"Homebrew yet, that is the same evidence -- the installer was recorded, "+
+		"not run", strings.Join(brewLocations, ", "))
 }

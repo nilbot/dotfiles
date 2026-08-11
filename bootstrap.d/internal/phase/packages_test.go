@@ -22,8 +22,34 @@ const (
 	opPacman      = "sudo pacman -S --needed --noconfirm base-devel curl file git"
 	opInstallBrew = `run /bin/bash -c /bin/bash -c ` +
 		`"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
-	opBrewBundle = "run brew bundle --file /repo/bootstrap.d/Brewfile"
 )
+
+// brewOnPath is what fakeChange.LookPath answers for a command it can resolve,
+// and therefore the path the bundle runs through on a machine that already has
+// Homebrew.
+const brewOnPath = "/usr/bin/brew"
+
+// The three prefixes Homebrew installs to, in the order the phase probes them.
+const (
+	brewAppleSilicon = "/opt/homebrew/bin/brew"
+	brewIntel        = "/usr/local/bin/brew"
+	brewLinux        = "/home/linuxbrew/.linuxbrew/bin/brew"
+)
+
+// opBundleVia is the last operation of every successful run. The phase invokes
+// brew by the path it RESOLVED rather than by name, so which path appears here
+// is the assertion rather than an incidental detail.
+func opBundleVia(brew string) string {
+	return "run " + brew + " bundle --file /repo/bootstrap.d/Brewfile"
+}
+
+// installedAt is the state a successful Homebrew install leaves behind: a brew
+// at one of the three prefixes, and still nothing on PATH. That combination is
+// the whole point -- the installer appends a shellenv line to a shell profile,
+// which cannot alter the PATH of the process that ran it.
+func installedAt(fake *fakeChange, path string) {
+	fake.info[path] = change.FileInfo{Exists: true, IsRegular: true}
+}
 
 // packagesCtx builds the phase's world. absent names the commands LookPath must
 // fail for, which is the only input that decides which branch runs.
@@ -57,7 +83,7 @@ func TestPackagesSkipsStageZeroOnDarwin(t *testing.T) {
 	if err := phase.Packages(ctx); err != nil {
 		t.Fatalf("Packages: %v", err)
 	}
-	if want := []string{opBrewBundle}; strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
+	if want := []string{opBundleVia(brewOnPath)}; strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
 	for _, op := range fake.Ops {
@@ -78,7 +104,7 @@ func TestPackagesRunsAptStageZeroOnDebian(t *testing.T) {
 	if err := phase.Packages(ctx); err != nil {
 		t.Fatalf("Packages: %v", err)
 	}
-	want := []string{opAptUpdate, opAptInstall, opBrewBundle}
+	want := []string{opAptUpdate, opAptInstall, opBundleVia(brewOnPath)}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
@@ -100,7 +126,7 @@ func TestPackagesRunsPacmanStageZeroOnArch(t *testing.T) {
 	if err := phase.Packages(ctx); err != nil {
 		t.Fatalf("Packages: %v", err)
 	}
-	want := []string{opPacman, opBrewBundle}
+	want := []string{opPacman, opBundleVia(brewOnPath)}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
@@ -136,14 +162,116 @@ func TestPackagesRefusesWhenNoNativePackageManagerIsPresent(t *testing.T) {
 
 // The installer is the one place this design executes remote code, so the
 // condition it runs under is worth pinning from both sides.
+//
+// This is also the fresh-machine case, and the one an earlier draft of this
+// phase got wrong. The installer appends a `shellenv` line to a shell PROFILE,
+// which the next login shell reads; it cannot change the PATH of the process
+// that ran it, and Machine.LookPath is exec.LookPath over exactly that inherited
+// PATH. So `brew` is still not on PATH one statement after installing it, and a
+// bundle invoked by bare name dies with "executable file not found in $PATH" on
+// precisely the machine this phase exists for.
 func TestPackagesInstallsHomebrewWhenItIsAbsent(t *testing.T) {
 	fake, ctx, _ := packagesCtx("darwin", "brew")
+	installedAt(fake, brewAppleSilicon)
 	if err := phase.Packages(ctx); err != nil {
 		t.Fatalf("Packages: %v", err)
 	}
-	want := []string{opInstallBrew, opBrewBundle}
+	want := []string{opInstallBrew, opBundleVia(brewAppleSilicon)}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
-		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
+		t.Errorf("ops:\n%s\nwant:\n%s\n\nthe bundle must run through the path the "+
+			"installer wrote, not the bare name: brew is not on this process's PATH "+
+			"and cannot be, so `run brew bundle` fails on every fresh machine",
+			strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// Each of the three prefixes Homebrew actually installs to, and the order they
+// are probed in. LookPath is retried first and still fails here -- that is the
+// whole premise -- so what is asserted is the Lstat probe alone.
+//
+// The last case is the ordering: with two prefixes populated the FIRST in the
+// list wins, so a reordering of brewLocations is a visible change rather than a
+// silent one.
+func TestPackagesResolvesBrewByProbingAfterTheInstaller(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		platform  string
+		installed []string
+		want      string
+	}{
+		{"apple silicon", "darwin", []string{brewAppleSilicon}, brewAppleSilicon},
+		{"intel", "darwin", []string{brewIntel}, brewIntel},
+		{"linux", "linux", []string{brewLinux}, brewLinux},
+		{"both mac prefixes populated, first wins", "darwin",
+			[]string{brewIntel, brewAppleSilicon}, brewAppleSilicon},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, ctx, out := packagesCtx(tc.platform, "brew", "pacman")
+			for _, path := range tc.installed {
+				installedAt(fake, path)
+			}
+			if err := phase.Packages(ctx); err != nil {
+				t.Fatalf("Packages: %v", err)
+			}
+			if last := fake.Ops[len(fake.Ops)-1]; last != opBundleVia(tc.want) {
+				t.Errorf("bundle ran as %q, want %q", last, opBundleVia(tc.want))
+			}
+			// Reported, not silent. A machine whose brew is off PATH is a machine
+			// whose next shell behaves differently from this one, and the operator
+			// should be able to see that in the log rather than infer it.
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("the resolved path must appear in the phase's output:\n%s",
+					out.String())
+			}
+		})
+	}
+}
+
+// The installer reporting success while brew is nowhere means something upstream
+// changed. Guessing past that is worse than stopping: the next step would hand a
+// fabricated path to `brew bundle`, whose failure would name the guess instead of
+// the cause.
+//
+// All three locations must be named. A reader who hits this needs to know where
+// bootstrap looked before they can tell a moved prefix from a broken install.
+func TestPackagesRefusesWhenBrewCannotBeResolvedAfterInstalling(t *testing.T) {
+	fake, ctx, _ := packagesCtx("darwin", "brew")
+	err := phase.Packages(ctx)
+	if err == nil {
+		t.Fatal("an installer that produced no usable brew must be refused, not " +
+			"followed by a bundle through a path nobody verified")
+	}
+	for _, path := range []string{brewAppleSilicon, brewIntel, brewLinux} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("the refusal must name %s: %v", path, err)
+		}
+	}
+	for _, op := range fake.Ops {
+		if strings.Contains(op, "bundle") {
+			t.Errorf("the bundle ran despite brew being unresolvable: %q", op)
+		}
+	}
+}
+
+// The already-installed path must NOT probe. PATH is the machine's own answer to
+// "which brew", and a fixed list could disagree with it -- a Homebrew under
+// /opt/homebrew on a machine deliberately using /usr/local would be silently
+// swapped underneath the operator.
+//
+// The fixture makes the two answers differ: brew resolves on PATH to
+// /usr/bin/brew AND a brew exists at the first probe location. Only an
+// implementation that probes when it should not can produce the second.
+func TestPackagesPrefersPathOverProbingWhenBrewIsAlreadyInstalled(t *testing.T) {
+	fake, ctx, _ := packagesCtx("darwin")
+	installedAt(fake, brewAppleSilicon)
+	if err := phase.Packages(ctx); err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+	want := []string{opBundleVia(brewOnPath)}
+	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\nwant:\n%s\n\nLookPath answered %s; probing overrode the "+
+			"machine's own answer", strings.Join(fake.Ops, "\n"),
+			strings.Join(want, "\n"), brewOnPath)
 	}
 }
 
@@ -162,8 +290,15 @@ func TestPackagesSkipsTheInstallerWhenBrewIsPresent(t *testing.T) {
 	}
 	// Skipped, not silent: a phase that says nothing about a step it did not take
 	// is indistinguishable from one that forgot it.
-	if !strings.Contains(strings.ToLower(out.String()), "homebrew") {
-		t.Errorf("the skip must be visible in the phase's output:\n%s", out.String())
+	//
+	// "already" is required, not merely the word Homebrew. The two outcomes an
+	// operator has to tell apart are "it was here, nothing was done" and "it was
+	// installed just now, and your next shell will see a PATH this one does not";
+	// a message that fits both reports neither.
+	log := strings.ToLower(out.String())
+	if !strings.Contains(log, "homebrew") || !strings.Contains(log, "already") {
+		t.Errorf("the skip must be visible in the phase's output, and distinguishable "+
+			"from having installed Homebrew:\n%s", out.String())
 	}
 }
 
@@ -174,29 +309,34 @@ func TestPackagesSkipsTheInstallerWhenBrewIsPresent(t *testing.T) {
 // prerequisites is a bundle against a Homebrew that may not exist yet.
 func TestPackagesBundlesLastOnEveryPath(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		platform string
-		absent   []string
+		name      string
+		platform  string
+		absent    []string
+		installed string // where the installer put brew, when it had to run
+		want      string
 	}{
-		{"darwin, brew present", "darwin", nil},
-		{"darwin, brew absent", "darwin", []string{"brew"}},
-		{"debian", "linux", []string{"pacman"}},
-		{"debian, brew absent", "linux", []string{"pacman", "brew"}},
-		{"arch", "linux", []string{"apt-get"}},
-		{"arch, brew absent", "linux", []string{"apt-get", "brew"}},
+		{"darwin, brew present", "darwin", nil, "", brewOnPath},
+		{"darwin, brew absent", "darwin", []string{"brew"}, brewAppleSilicon, brewAppleSilicon},
+		{"debian", "linux", []string{"pacman"}, "", brewOnPath},
+		{"debian, brew absent", "linux", []string{"pacman", "brew"}, brewLinux, brewLinux},
+		{"arch", "linux", []string{"apt-get"}, "", brewOnPath},
+		{"arch, brew absent", "linux", []string{"apt-get", "brew"}, brewLinux, brewLinux},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, ctx, _ := packagesCtx(tc.platform, tc.absent...)
+			if tc.installed != "" {
+				installedAt(fake, tc.installed)
+			}
 			if err := phase.Packages(ctx); err != nil {
 				t.Fatalf("Packages: %v", err)
 			}
 			if len(fake.Ops) == 0 {
 				t.Fatal("the phase performed nothing")
 			}
-			// opBrewBundle spells the absolute path, so matching it asserts both
-			// halves at once.
-			if last := fake.Ops[len(fake.Ops)-1]; last != opBrewBundle {
-				t.Errorf("last op is %q, want %q; ops: %v", last, opBrewBundle, fake.Ops)
+			// opBundleVia spells the absolute Brewfile path, so matching it asserts
+			// both halves at once.
+			if last := fake.Ops[len(fake.Ops)-1]; last != opBundleVia(tc.want) {
+				t.Errorf("last op is %q, want %q; ops: %v", last, opBundleVia(tc.want), fake.Ops)
 			}
 		})
 	}
@@ -220,14 +360,14 @@ func TestPackagesStopsAtTheFirstFailure(t *testing.T) {
 		mustNot  []string
 	}{
 		{"apt update", "linux", []string{"pacman"}, "sudo apt-get update", "apt-get",
-			[]string{opAptInstall, opBrewBundle}},
+			[]string{opAptInstall, opBundleVia(brewOnPath)}},
 		{"apt install", "linux", []string{"pacman"}, "sudo apt-get install", "apt-get",
-			[]string{opBrewBundle}},
+			[]string{opBundleVia(brewOnPath)}},
 		{"pacman", "linux", []string{"apt-get"}, "sudo pacman", "pacman",
-			[]string{opBrewBundle}},
+			[]string{opBundleVia(brewOnPath)}},
 		{"homebrew installer", "darwin", []string{"brew"}, "Homebrew/install", "/bin/bash",
-			[]string{opBrewBundle}},
-		{"bundle", "darwin", nil, "run brew bundle", "brew", nil},
+			[]string{opBundleVia(brewOnPath), opBundleVia(brewAppleSilicon)}},
+		{"bundle", "darwin", nil, "bundle", brewOnPath, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, ctx, _ := packagesCtx(tc.platform, tc.absent...)
