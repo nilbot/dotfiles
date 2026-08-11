@@ -3536,6 +3536,270 @@ provisioning should not depend on it."
 
 ---
 
+### Task 14: The removal campaign
+
+**Files:**
+- Delete: `zsh/`, `tools/`, `miniforge/`, `bin/`, `spacemacs/`, `gnupg/`,
+  `macOS/iterm2/`, `git/hooks/go.pre-commit`, `snapshot.sh`, `recover.sh`,
+  `mountcrypt.sh`, `mountsshfs.sh`, `post-install.sh`, `softlinks.sh`,
+  `install-font-linux.sh`
+- Modify: `fish/mypost.fish`, `fish/alias.fish`
+- Test: `bootstrap.d/removals_test.go`
+
+**Interfaces:**
+- Consumes: `repoRoot(t)` from `bootstrap.d/main_test.go`.
+- Produces: nothing. This task is pure deletion.
+
+**Counts measured on the tree, not estimated:** `zsh/` is 344 tracked files;
+`tools/`, `bin/`, `miniforge/`, `spacemacs/`, `gnupg/` and `macOS/iterm2/` are
+20 between them.
+
+**One commit per group, and each message names its own recovery command.** The
+message must carry the *parent's* short sha, not `HEAD~1` — `HEAD~1` is read
+relative to whatever HEAD is when someone later reads the log, which after eight
+removal commits points at the wrong tree. Capture it first:
+
+```bash
+parent=$(git rev-parse --short HEAD)
+```
+
+and write that value into the message.
+
+**Known consequence, sequenced deliberately:** `Makefile:37-38` name
+`./softlinks.sh` and `spacemacs/dotspacemacs`, so `make dotfiles` is broken
+between this task's commits and Task 15's, which deletes those lines. Task 12
+left `make dep` broken the same way. Both are retired targets in a Makefile
+Task 15 reduces to one target; leaving them momentarily broken is cheaper than
+editing a file twice.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `bootstrap.d/removals_test.go`. It uses `repoRoot(t)`, the helper
+`main_test.go` already provides — there is no `newFixture` in this module.
+
+```go
+package bootstrap_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The removals are pinned rather than merely performed. Nothing else stops a
+// later commit from reintroducing a path this spec retired, and the reasons are
+// in commit messages that no test reads.
+func TestRemovedPathsAreGone(t *testing.T) {
+	root := repoRoot(t)
+	gone := []string{
+		"zsh", "tools", "miniforge", "bin", "spacemacs", "gnupg",
+		"macOS/iterm2", "git/hooks/go.pre-commit",
+		"snapshot.sh", "recover.sh", "mountcrypt.sh", "mountsshfs.sh",
+		"post-install.sh", "softlinks.sh", "install-font-linux.sh",
+	}
+	for _, path := range gone {
+		if _, err := os.Stat(filepath.Join(root, path)); !os.IsNotExist(err) {
+			t.Errorf("%s should have been removed", path)
+		}
+	}
+}
+
+// Deleting miniforge/ without deleting the fish wiring would leave the machine
+// still trying to initialise a package manager that is no longer installed --
+// the config outlives the thing it configures, which is the failure this whole
+// spec is about.
+func TestNoFishConfigReferencesRemovedTooling(t *testing.T) {
+	root := repoRoot(t)
+	for _, name := range []string{"mypost.fish", "alias.fish", "mypre.fish", "config.fish"} {
+		data, err := os.ReadFile(filepath.Join(root, "fish", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, gone := range []string{"mambaforge", "MAMBA_EXE", "micromamba", "conda"} {
+			if strings.Contains(string(data), gone) {
+				t.Errorf("fish/%s still references %q", name, gone)
+			}
+		}
+	}
+}
+
+// The mojo block is the only thing mypost.fish carries once the conda and mamba
+// blocks are gone. Asserting it survives is what makes the case above a
+// deletion of two blocks rather than of the file.
+func TestMypostKeepsTheMojoBlock(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "fish", "mypost.fish"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "MODULAR_HOME") {
+		t.Error("the mojo block is not part of this removal")
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd bootstrap.d && go test ./... -run 'Removed|NoFishConfig|Mypost'`
+Expected: FAIL — every listed path still exists, and `mypost.fish` and
+`alias.fish` still name mamba. `TestMypostKeepsTheMojoBlock` passes from the
+start; that is correct, it is a guard against overshooting, not a red test.
+
+- [ ] **Step 3: Remove, one commit per group**
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -r -q zsh/
+git commit -m "chore(remove): drop zsh
+
+344 tracked files, mostly vendored oh-my-zsh themes and plugins. The login
+shell has been fish for years and ~/.oh-my-zsh no longer exists on this
+machine. Recover with: git show $parent:zsh/<path>"
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -r -q tools/
+git commit -m "chore(remove): drop tools/
+
+Four scripts for etcd, protoc and a mysql compose file, two of them
+#!/usr/bin/env zsh, unreferenced by anything and untouched since 2021.
+Recover with: git show $parent:tools/<path>"
+```
+
+Before the miniforge commit, edit the two fish files. In `fish/mypost.fish`
+delete lines 1–19 — the commented-out `# >>> conda initialize >>>` block and
+the live `# >>> mamba initialize >>>` block — leaving the mojo block as the
+file's only content. In `fish/alias.fish` delete this branch:
+
+```fish
+if type -q (command -v micromamba)
+    alias mamba=micromamba
+    alias conda=micromamba
+end
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -r -q miniforge/
+git add fish/mypost.fish fish/alias.fish
+git commit -m "chore(remove): drop miniforge/ and the mamba wiring
+
+Python environments are managed by uv now. The mamba block in
+fish/mypost.fish was live but inert: it tested /opt/homebrew/bin/micromamba,
+which the packages phase no longer installs. The alias branch was dead on
+arrival -- 'type -q (command -v micromamba)' passes command -v's OUTPUT to
+type, so it tested a path as if it were a command name.
+
+~/sdk/mambaforge itself (3.5 GB, untracked) is reclaimed separately by
+'./bootstrap migrate mambaforge'. Recover with: git show $parent:miniforge/<path>"
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -q snapshot.sh recover.sh mountcrypt.sh mountsshfs.sh post-install.sh
+git commit -m "chore(remove): drop unreferenced personal scripts
+
+snapshot.sh and recover.sh use BSD-only 'date -j' and an rclone remote
+from 2021. mountcrypt.sh points at the Intel /usr/local encfs path.
+mountsshfs.sh has an inverted -d guard and a host that no longer exists.
+post-install.sh is not valid bash at all: 'bash -n' reports a syntax
+error at line 9 from its empty then-branches.
+
+None is referenced by anything. Recover with: git show $parent:<name>"
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -q softlinks.sh install-font-linux.sh
+git commit -m "chore(remove): drop softlinks.sh and the vendored font installer
+
+softlinks.sh is superseded by the config phase, which carries its
+alacritty and ghostty links as manifest rows -- and resolves the repo root
+from the executable rather than pwd, which softlinks.sh got wrong.
+
+install-font-linux.sh is an 8.9 KB copy of nerd-fonts' installer pinned to
+a 2019 commit and referenced by nothing. On macOS the Brewfile's
+font-symbols-only-nerd-font replaces it. On LINUX IT REPLACES NOTHING:
+that entry is a cask, casks do not exist on Linux, and Homebrew publishes
+no formula for the font. A Linux workstation has no managed nerd font
+after this commit -- install it by hand until spec 5 gives fonts an owner.
+
+Recover with: git show $parent:<name>"
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -r -q bin/
+git commit -m "chore(remove): drop bin/
+
+Checked rather than assumed: rgr.bin invokes 'e' with ripgrep's flags,
+which resolves to /usr/local/plan9/bin/e -- Plan 9's editor -- so it
+silently runs the wrong program. git-chdate.bin single-quotes its
+--env-filter body, so \$hash and \$proper never expand and it exports
+empty dates; it also uses deprecated git filter-branch and BSD-only
+'date -v'. git-stats.bin works but is fifteen lines. infernowm.bin
+launches a Plan 9 window manager.
+
+They were also linked with the .bin suffix intact, so the commands were
+'rgr.bin' and 'git-stats.bin' -- the latter defeating the git- prefix
+that would have made it a git subcommand.
+
+Recover with: git show $parent:bin/<name>"
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -r -q spacemacs/ gnupg/ macOS/iterm2/
+git commit -m "chore(remove): drop unlinked tracked configuration
+
+spacemacs/dotspacemacs was linked by the editors target, which rm -rf'd
+~/.emacs.d and cloned spacemacs afresh -- destructive, and failing on any
+second run. gnupg/ and macOS/iterm2/ were linked by nothing at all.
+
+On an existing machine ~/.spacemacs is now a dangling symlink: rm it.
+~/.emacs.d, ~/.vim and ~/.tmux/plugins/tpm stay on disk; dropping a
+target stops managing a thing, it does not delete it.
+
+Recover with: git show $parent:<path>"
+```
+
+```bash
+parent=$(git rev-parse --short HEAD)
+git rm -q git/hooks/go.pre-commit
+git commit -m "chore(remove): drop the Go pre-commit hook
+
+It ran 'go build -n && go test && go fmt && go vet' on every commit in
+any repo with .go files at the root, with every command redirected to
+/dev/null -- so a failure gave a generic message and no diagnostic.
+Worse, 'go fmt' rewrote files mid-commit without staging them, so a
+formatting fix silently failed to be committed.
+
+This is CI's job. See spec 5. Recover with: git show $parent:git/hooks/go.pre-commit"
+```
+
+- [ ] **Step 4: Run the whole suite**
+
+Run: `cd bootstrap.d && go test -count=1 ./...`
+Expected: PASS, all six packages. Then again under `umask 077`.
+
+This is the step that catches a removal something still depends on. If a case
+fails, do not delete the case — report what depends on the removed path.
+
+- [ ] **Step 5: Commit the test**
+
+```bash
+git add bootstrap.d/removals_test.go
+git commit -m "test(bootstrap): pin the removals
+
+Guards against a later commit reintroducing a path this spec retired, and
+against fish config regaining a reference to tooling that is no longer
+installed. The reasons live in the eight removal commits; nothing else
+reads those, so the paths are asserted here."
+```
+
+---
+
 ### Tasks 13 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
