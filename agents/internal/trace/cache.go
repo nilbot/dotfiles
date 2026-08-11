@@ -99,6 +99,129 @@ func Cache(root, thisMachine string, recs []record.Record) (CacheReport, error) 
 	return rep, nil
 }
 
+// MigrateReport says what a move of the old cache did. Details names every file
+// it could not move, for the same reason CacheReport does: a count alone leaves
+// the reader unable to go and look.
+type MigrateReport struct {
+	Moved   int
+	Skipped int // the destination already holds it
+	Failed  int
+	Details []string
+}
+
+// MigrateLegacyCache moves a pre-common-directory cache into the current one.
+//
+// The old location was <root>/.agents/.trace-cache, one per worktree. Content
+// there is not stale duplicate data to be discarded: it is often the only
+// surviving copy of a transcript the harness has since deleted, which is the
+// whole reason the cache exists. So this moves rather than removes, and refuses
+// to delete anything it could not move.
+//
+// Names carry over unchanged: cacheName hashes the SOURCE transcript path, not
+// the cache location, so a file keeps the name it already had and two worktrees
+// that cached the same transcript produce the same name with identical bytes.
+// That is why a collision is Skipped rather than a conflict.
+func MigrateLegacyCache(oldRoot, newRoot string) (MigrateReport, error) {
+	var rep MigrateReport
+
+	entries, err := os.ReadDir(oldRoot)
+	if err != nil {
+		// Absent is the steady state: every `agents trace cache` calls this,
+		// forever, long after the last old cache is gone.
+		if os.IsNotExist(err) {
+			return rep, nil
+		}
+		return rep, err
+	}
+
+	for _, harness := range entries {
+		if !harness.IsDir() {
+			// The old layout wrote a .gitignore beside the content to hide it.
+			// It is infrastructure, not a transcript, and the new location does
+			// not need one -- drop it with the directory.
+			continue
+		}
+		dir := filepath.Join(oldRoot, harness.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			rep.Failed++
+			rep.Details = append(rep.Details, fmt.Sprintf("unreadable (%v): %s", err, dir))
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			src := filepath.Join(dir, f.Name())
+			dst := filepath.Join(newRoot, harness.Name(), f.Name())
+			if _, err := os.Stat(dst); err == nil {
+				rep.Skipped++
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				rep.Failed++
+				// The SOURCE, not the destination directory that could not be
+				// made: the source is the file still sitting somewhere the tool
+				// will stop looking, and it is what the reader has to go and
+				// rescue by hand.
+				rep.Details = append(rep.Details, fmt.Sprintf("cannot move (%v): %s", err, src))
+				continue
+			}
+			// Rename first: within one filesystem it is atomic and free. The two
+			// roots are usually both under the repository, but a worktree can
+			// live on another volume, where rename fails with EXDEV -- so fall
+			// back to the copy that Cache already uses, then remove the source.
+			if err := os.Rename(src, dst); err != nil {
+				if cerr := copyFile(src, dst); cerr != nil {
+					rep.Failed++
+					rep.Details = append(rep.Details, fmt.Sprintf("cannot move (%v): %s", cerr, src))
+					continue
+				}
+				if rerr := os.Remove(src); rerr != nil {
+					// The content is safe; only the old copy lingers. Counting
+					// this as failed would be wrong -- nothing was lost -- but
+					// it must be said, because the old directory will survive.
+					rep.Details = append(rep.Details, fmt.Sprintf("copied but could not remove (%v): %s", rerr, src))
+				}
+			}
+			rep.Moved++
+		}
+	}
+
+	// Only when everything is out. os.Remove on the directory, not RemoveAll:
+	// it succeeds exactly when the directory is empty, which is the check.
+	// RemoveAll here would delete a transcript that failed to move -- the one
+	// outcome this function exists to prevent.
+	if rep.Failed == 0 {
+		removeIfEmpty(oldRoot)
+	}
+	return rep, nil
+}
+
+// removeIfEmpty clears the old cache from the bottom up, stopping at anything
+// that still holds a file. Best effort: a directory left behind costs a second
+// migration that finds nothing, while deleting one that still has content costs
+// the content.
+func removeIfEmpty(root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		path := filepath.Join(root, e.Name())
+		if e.IsDir() {
+			removeIfEmpty(path)
+			continue
+		}
+		// The old .gitignore is this tool's own two-byte file and the only
+		// non-transcript the old layout wrote.
+		if e.Name() == ".gitignore" {
+			_ = os.Remove(path)
+		}
+	}
+	_ = os.Remove(root)
+}
+
 // target is one transcript to consider, and the record that speaks for it.
 type target struct {
 	rec record.Record

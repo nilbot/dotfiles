@@ -595,3 +595,120 @@ func TestCacheOverwritesAStaleTemporaryFile(t *testing.T) {
 		}
 	}
 }
+
+// The cache used to live at <root>/.agents/.trace-cache. Moving it left real
+// content stranded: on the machine this was written for, one worktree's copy
+// held 58 transcripts totalling 36 MB, and every one of them was the only
+// surviving copy of something the harness had already deleted. A move that
+// silently skipped them would have destroyed more than the bug did.
+func TestMigrateLegacyCacheMovesContentAndClearsTheOldDirectory(t *testing.T) {
+	old := t.TempDir()
+	newRoot := filepath.Join(t.TempDir(), "new")
+
+	write(t, filepath.Join(old, "codex", "rollout-a-aaaaaaaaaaaa.jsonl"), "A\n")
+	write(t, filepath.Join(old, "claude-code", "session-b-bbbbbbbbbbbb.jsonl"), "B\n")
+	// Infrastructure the old layout needed and the new one does not.
+	write(t, filepath.Join(old, ".gitignore"), "*\n")
+
+	rep, err := MigrateLegacyCache(old, newRoot)
+	if err != nil {
+		t.Fatalf("MigrateLegacyCache: %v", err)
+	}
+	if rep.Moved != 2 {
+		t.Errorf("Moved = %d, want 2 (the .gitignore is not a transcript)", rep.Moved)
+	}
+
+	for path, want := range map[string]string{
+		filepath.Join(newRoot, "codex", "rollout-a-aaaaaaaaaaaa.jsonl"):       "A\n",
+		filepath.Join(newRoot, "claude-code", "session-b-bbbbbbbbbbbb.jsonl"): "B\n",
+	} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("expected %s: %v", path, err)
+			continue
+		}
+		if string(b) != want {
+			t.Errorf("%s = %q, want %q", path, b, want)
+		}
+	}
+	// The harness level must survive the move: it is what keeps two harnesses'
+	// identically-named transcripts apart.
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Errorf("the old cache directory is still there (%v); a migration that "+
+			"leaves it behind invites a second one that finds nothing and says so",
+			err)
+	}
+}
+
+// Same transcript, cached from two worktrees: cacheName hashes the SOURCE path,
+// so both copies carry one name and hold identical bytes. The destination wins
+// and the run is not an error -- this is the expected shape of consolidating
+// several worktrees, not a conflict.
+func TestMigrateLegacyCacheKeepsWhatIsAlreadyThere(t *testing.T) {
+	old := t.TempDir()
+	newRoot := t.TempDir()
+
+	write(t, filepath.Join(old, "codex", "rollout-x-cccccccccccc.jsonl"), "from the worktree\n")
+	write(t, filepath.Join(newRoot, "codex", "rollout-x-cccccccccccc.jsonl"), "already here\n")
+
+	rep, err := MigrateLegacyCache(old, newRoot)
+	if err != nil {
+		t.Fatalf("MigrateLegacyCache: %v", err)
+	}
+	if rep.Moved != 0 || rep.Skipped != 1 {
+		t.Errorf("Moved/Skipped = %d/%d, want 0/1", rep.Moved, rep.Skipped)
+	}
+	b, err := os.ReadFile(filepath.Join(newRoot, "codex", "rollout-x-cccccccccccc.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "already here\n" {
+		t.Errorf("content = %q; a migration must never overwrite a transcript already cached", b)
+	}
+}
+
+// Nothing to do is not a failure, and must not be reported as one: every
+// `agents trace cache` calls this, forever, long after the last old cache is gone.
+func TestMigrateLegacyCacheIsSilentWhenThereIsNoOldCache(t *testing.T) {
+	rep, err := MigrateLegacyCache(filepath.Join(t.TempDir(), "absent"), t.TempDir())
+	if err != nil {
+		t.Fatalf("an absent old cache must not be an error: %v", err)
+	}
+	if rep.Moved != 0 || rep.Skipped != 0 || len(rep.Details) != 0 {
+		t.Errorf("report = %+v, want an empty one", rep)
+	}
+}
+
+// The destructive path, and the only one that can lose a transcript for good.
+//
+// A file blocks the harness directory the move needs to create, so one transcript
+// cannot go anywhere. The old cache must survive intact: the alternative is
+// deleting the last copy of something the harness already dropped, which is
+// worse than never having migrated.
+func TestMigrateLegacyCacheKeepsTheOldDirectoryWhenAMoveFails(t *testing.T) {
+	old := t.TempDir()
+	newRoot := t.TempDir()
+
+	stuck := write(t, filepath.Join(old, "codex", "rollout-stuck-dddddddddddd.jsonl"), "irreplaceable\n")
+	// Not a directory, so MkdirAll below it fails with ENOTDIR.
+	write(t, filepath.Join(newRoot, "codex"), "in the way\n")
+
+	rep, err := MigrateLegacyCache(old, newRoot)
+	if err != nil {
+		t.Fatalf("one stuck file must not fail the whole run: %v", err)
+	}
+	if rep.Failed != 1 || rep.Moved != 0 {
+		t.Errorf("Failed/Moved = %d/%d, want 1/0", rep.Failed, rep.Moved)
+	}
+	if joined := strings.Join(rep.Details, "\n"); !strings.Contains(joined, stuck) {
+		t.Errorf("Details must name what could not be moved; got:\n%s", joined)
+	}
+
+	b, err := os.ReadFile(stuck)
+	if err != nil {
+		t.Fatalf("the transcript that could not be moved was deleted anyway: %v", err)
+	}
+	if string(b) != "irreplaceable\n" {
+		t.Errorf("content = %q, want it untouched", b)
+	}
+}

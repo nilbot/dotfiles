@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -183,6 +184,21 @@ func runTraceCache(args []string, stdout io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord
+	}
+
+	// Before anything else, and reported rather than silent: the old
+	// per-worktree cache holds transcripts that are often the only surviving
+	// copy, and after the move to the common directory nothing else would ever
+	// look there again.
+	if mrep, err := trace.MigrateLegacyCache(filepath.Join(dir, ".trace-cache"), cacheRoot); err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: migrating the previous cache: %v\n", err)
+		return exitcode.NoRecord
+	} else if mrep.Moved > 0 || mrep.Skipped > 0 || mrep.Failed > 0 {
+		fmt.Fprintf(stdout, "migrated the previous cache: moved %d, already here %d, failed %d\n",
+			mrep.Moved, mrep.Skipped, mrep.Failed)
+		for _, d := range mrep.Details {
+			fmt.Fprintln(stdout, "  "+tableCell(d))
+		}
 	}
 
 	res, err := trace.Query(dir, trace.Filter{Lane: *lane, Since: d}, time.Now().UTC())
