@@ -11,10 +11,6 @@ end
 if type -q (command -v fd)
     alias find=fd
 end
-if type -q (command -v micromamba)
-    alias mamba=micromamba
-    alias conda=micromamba
-end
 if type -q (command -v uv)
     alias pip='uv pip'
     alias venv='uv venv'
