@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
+	"github.com/nilbot/dotfiles/bootstrap/internal/migrate"
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
 
@@ -144,6 +145,61 @@ func TestPreflightAllowsAMigratedMachine(t *testing.T) {
 	}
 	if err := phase.Preflight(ctx); err != nil {
 		t.Fatalf("a migrated machine must pass preflight: %v", err)
+	}
+}
+
+// The RECONCILING filter, pinned here rather than only end to end.
+//
+// A reclaiming migration is pending for as long as the thing it reclaims exists,
+// and a bare `./bootstrap migrate` deliberately never runs one -- so refusing on
+// it would deadlock apply on an otherwise perfectly healthy machine, naming a
+// remedy that does not clear the refusal.
+//
+// This machine is exactly TestPreflightAllowsAMigratedMachine's, plus a pending
+// reclamation. That is the only variable, so a failure here means the filter and
+// nothing else.
+//
+// The premise is asserted through migrate.Names against the two KINDS, not
+// against migration names. What matters is that something reclaiming is due and
+// nothing reconciling is -- registering a second reclaiming migration later, or
+// renaming this one, must not require editing this case.
+func TestPreflightAllowsAPendingReclamation(t *testing.T) {
+	var out bytes.Buffer
+	fake := &fakeChange{
+		info: map[string]change.FileInfo{
+			"/home/.gitignore":           {Exists: true, IsLink: true},
+			"/repo/git/gitignore_global": {Exists: true, IsRegular: true},
+			"/home/.config/fish":         {Exists: true, IsDir: true},
+			// The reclaimable installation: a real directory, untracked, and
+			// pending until somebody deliberately names it.
+			"/home/sdk/mambaforge": {Exists: true, IsDir: true},
+		},
+		links: map[string]string{
+			"/home/.gitignore": "/repo/git/gitignore_global",
+		},
+	}
+
+	due, err := migrate.Pending(migrate.Query{Read: fake, Root: "/repo", Home: "/home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrate.Names(due, migrate.Reclaiming)) == 0 {
+		t.Fatalf("nothing reclaiming is pending on this fixture, so this case would "+
+			"pass without exercising the filter at all: %v", due)
+	}
+	if names := migrate.Names(due, migrate.Reconciling); len(names) != 0 {
+		t.Fatalf("%v is also pending, so a refusal below would be correct and this "+
+			"case would prove nothing about the filter", names)
+	}
+
+	ctx := phase.Context{
+		Change: fake, Root: "/repo", Home: "/home", Platform: "darwin",
+		Profile: "dotfiles", Out: &out,
+	}
+	if err := phase.Preflight(ctx); err != nil {
+		t.Fatalf("preflight refused over a pending reclamation: %v\n"+
+			"a bare migrate never runs one, so the remedy this names cannot clear "+
+			"it and apply is deadlocked on a healthy machine", err)
 	}
 }
 
