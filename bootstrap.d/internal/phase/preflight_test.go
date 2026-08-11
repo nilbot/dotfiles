@@ -40,19 +40,56 @@ func TestForRejectsUnknownProfile(t *testing.T) {
 	}
 }
 
-func TestPreflightRefusesWithoutStageZeroTools(t *testing.T) {
+// Each of the four in turn, because a list is only checked to the extent
+// something looks for each entry: a single missing-git case passes whether or
+// not the other three are on it at all.
+//
+// bash runs git/install-hooks.sh in devtools and that script uses awk; curl
+// fetches Homebrew's installer in packages and fisher in the fish phase. All
+// three were absent from the old list, so their absence surfaced as a raw exec
+// failure from inside a phase rather than as the named refusal preflight exists
+// to give.
+func TestPreflightRefusesWorkstationWithoutEachStageZeroTool(t *testing.T) {
+	for _, tool := range []string{"git", "awk", "bash", "curl"} {
+		t.Run(tool, func(t *testing.T) {
+			var out bytes.Buffer
+			fake := &fakeChange{lookPathErr: map[string]bool{tool: true}}
+			ctx := phase.Context{
+				Change: fake, Root: "/repo", Home: "/home", Platform: "darwin",
+				Profile: "workstation", Out: &out,
+			}
+			err := phase.Preflight(ctx)
+			if err == nil {
+				t.Fatalf("preflight must refuse a workstation without %s", tool)
+			}
+			if !strings.Contains(err.Error(), tool) {
+				t.Errorf("refusal should name the tool: %v", err)
+			}
+		})
+	}
+}
+
+// The other direction, and the reason the list became profile-dependent.
+//
+// The dotfiles profile runs preflight, config and verify, none of which executes
+// anything -- so a container that has git and nothing else satisfies the
+// contract the profile advertises ("no sudo, no network, no package manager").
+// The old list demanded awk, which only git/install-hooks.sh uses, in the
+// devtools phase this profile excludes: the profile's own promise was refused by
+// the phase that assesses it.
+//
+// lookPathOnly rather than a list of absences, so this states "git and nothing
+// else" and a tool added to the list later cannot resolve here by accident.
+func TestPreflightAcceptsTheDotfilesProfileWithOnlyGit(t *testing.T) {
 	var out bytes.Buffer
-	fake := &fakeChange{lookPathErr: map[string]bool{"git": true}}
+	fake := &fakeChange{lookPathOnly: map[string]bool{"git": true}}
 	ctx := phase.Context{
 		Change: fake, Root: "/repo", Home: "/home", Platform: "darwin",
-		Profile: "workstation", Out: &out,
+		Profile: "dotfiles", Out: &out,
 	}
-	err := phase.Preflight(ctx)
-	if err == nil {
-		t.Fatal("preflight must refuse when a stage-zero tool is missing")
-	}
-	if !strings.Contains(err.Error(), "git") {
-		t.Errorf("refusal should name the tool: %v", err)
+	if err := phase.Preflight(ctx); err != nil {
+		t.Fatalf("the dotfiles profile invokes none of awk, bash or curl, so a "+
+			"container carrying only git must pass: %v", err)
 	}
 }
 
@@ -210,6 +247,12 @@ type fakeChange struct {
 	links       map[string]string
 	files       map[string][]byte
 	lookPathErr map[string]bool
+	// lookPathOnly, when non-nil, is the WHOLE of what this machine has on PATH;
+	// every other name fails. lookPathErr names what is absent, which cannot
+	// express "git and nothing else" -- the container shape the dotfiles profile
+	// exists for -- because a name added to a required list later would still
+	// resolve and the case would keep passing without checking anything.
+	lookPathOnly map[string]bool
 	// lstatErr makes a path UNREADABLE rather than absent, which is a different
 	// answer and one a real filesystem gives often enough to matter: an EACCES on
 	// a directory component yields an error, not FileInfo{}. Code that treats the
@@ -240,6 +283,9 @@ func (f *fakeChange) ReadFile(p string) ([]byte, error) {
 	return f.files[p], nil
 }
 func (f *fakeChange) LookPath(n string) (string, error) {
+	if f.lookPathOnly != nil && !f.lookPathOnly[n] {
+		return "", errNotFound
+	}
 	if f.lookPathErr[n] {
 		return "", errNotFound
 	}

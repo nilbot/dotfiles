@@ -26,7 +26,7 @@ func Preflight(c Context) error {
 	c.logf("   home        %s", c.Home)
 	c.logf("   profile     %s", c.Profile)
 
-	for _, tool := range []string{"git", "awk", "sed"} {
+	for _, tool := range stageZeroTools(c.Profile) {
 		if _, err := c.Change.LookPath(tool); err != nil {
 			return fmt.Errorf("required stage-zero tool %q is not on PATH", tool)
 		}
@@ -40,6 +40,42 @@ func Preflight(c Context) error {
 	}
 
 	return pendingMigrations(c)
+}
+
+// stageZeroTools is what the phases THIS profile runs will actually invoke, and
+// it depends on the profile for the same reason check.managesMachine does: a
+// refusal has to be about the run that was asked for.
+//
+// git is required by both. Nothing in this module execs it, but the checkout is
+// a git repository and the tooling around it -- git/install-hooks.sh, the agents
+// binary -- has no meaning without it.
+//
+// The other three are workstation's, because they belong to the three phases the
+// dotfiles profile excludes:
+//
+//   - bash runs git/install-hooks.sh twice in devtools (devtools.go), and that
+//     script counts git's config output with awk (git/install-hooks.sh).
+//   - curl fetches Homebrew's installer in packages and, through
+//     install_fisher in fish/mypre.fish, fisher itself in the fish phase. That
+//     same file also reaches for awk on its WSL branch.
+//
+// The dotfiles profile runs preflight, config and verify, which execute nothing
+// at all -- so demanding bash, curl or awk there would refuse the container the
+// profile exists to serve over tools it would never invoke. That is not
+// hypothetical: awk was on the old list, and a container without it was turned
+// away for a phase it does not run.
+//
+// sed is on neither list. It was the Makefile's substitution, which died with
+// the Makefile; nothing the provisioner runs uses it.
+//
+// Nothing narrower than "workstation" gets the short list, so a profile added
+// later is refused for a tool it might not need rather than failing inside a
+// phase for one it does.
+func stageZeroTools(profile string) []string {
+	if profile == "dotfiles" {
+		return []string{"git"}
+	}
+	return []string{"git", "awk", "bash", "curl"}
 }
 
 // pendingMigrations refuses a machine whose shape a later phase would refuse
