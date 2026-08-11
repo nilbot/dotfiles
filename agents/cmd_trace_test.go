@@ -14,6 +14,7 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
 // seedTraces writes two records that differ in every filterable field, so a
@@ -852,5 +853,69 @@ func TestTraceShowNeedsAnIdentifier(t *testing.T) {
 	var out bytes.Buffer
 	if code := runTrace([]string{"show"}, &out); code != exitcode.Malformed {
 		t.Errorf("exit = %d, want Malformed (%d)", code, exitcode.Malformed)
+	}
+}
+
+// The destructive command, and the two things that keep it safe: it is a dry
+// run unless asked, and it never touches the index.
+func TestTraceCachePruneIsADryRunUntilAskedAndNeverTouchesTheIndex(t *testing.T) {
+	mid := thisMachine(t)
+	src := localTranscript(t, "rollout-throwaway.jsonl")
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "codex", Machine: mid, Lane: "throwaway", SessionID: "rollout-throwaway",
+		Transcript: src, PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.OK {
+		t.Fatalf("cache exit = %d:\n%s", code, out.String())
+	}
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := trace.CachedPath(cacheRoot, record.Record{Harness: "codex", Transcript: src})
+	if _, err := os.Stat(cached); err != nil {
+		t.Fatalf("nothing was cached, so this test would prove nothing: %v", err)
+	}
+
+	// Dry run.
+	out.Reset()
+	if code := runTrace([]string{"cache", "prune", "--lane", "throwaway"}, &out); code != exitcode.Advisory {
+		t.Errorf("dry-run exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	if _, err := os.Stat(cached); err != nil {
+		t.Fatalf("the dry run deleted the copy: %v", err)
+	}
+
+	// And for real.
+	out.Reset()
+	if code := runTrace([]string{"cache", "prune", "--lane", "throwaway", "--yes"}, &out); code != exitcode.OK {
+		t.Errorf("exit = %d, want OK; output:\n%s", code, out.String())
+	}
+	if _, err := os.Stat(cached); !os.IsNotExist(err) {
+		t.Errorf("the copy survived a confirmed prune: %v", err)
+	}
+
+	// The index is the record that anything existed. It must be untouched.
+	out.Reset()
+	if code := runTrace([]string{"ls"}, &out); code != exitcode.OK {
+		t.Fatalf("ls exit = %d:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "throwaway") {
+		t.Errorf("pruning the cache removed the record too; `trace ls` no longer lists "+
+			"the lane, so nothing says a transcript ever existed:\n%s", out.String())
+	}
+}
+
+func TestTraceCachePruneRefusesWithoutALane(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid)
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache", "prune"}, &out); code != exitcode.Malformed {
+		t.Errorf("exit = %d, want Malformed (%d): pruning every lane is not on offer",
+			code, exitcode.Malformed)
 	}
 }

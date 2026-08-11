@@ -3,6 +3,7 @@ package trace
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -156,6 +157,70 @@ func Resolve(root string, rec record.Record) (path, origin string, err error) {
 	// Both paths, because "not found" alone cannot tell a transcript that was
 	// never cached from one whose cache is somewhere else.
 	return "", "", fmt.Errorf("no transcript at %s and none cached at %s", src, cached)
+}
+
+// PruneReport says what pruning a lane took, or would take. Bytes is reported
+// because "12 files" does not tell anyone whether it is worth doing, and this
+// is the one operation here that cannot be undone.
+type PruneReport struct {
+	Removed int
+	Bytes   int64
+	Details []string
+}
+
+// PruneLane removes cached copies belonging to one named lane.
+//
+// It removes COPIES and never records. The cache holds duplicates of what a
+// harness wrote; the index is the tracked, merged, cross-machine statement that
+// a transcript existed at all. Deleting an index entry loses the knowledge that
+// there was ever anything to look for, so this takes records as input and only
+// ever unlinks files beneath root.
+//
+// The lane is named by the caller and never inferred. "The branch is gone" does
+// not mean "the content is irrelevant": a deleted branch is usually a merged
+// one, and a throwaway worktree is often exactly where the interesting
+// investigation happened. Nothing here consults git.
+//
+// apply=false reports what would go without touching anything, because this
+// deletes the only remaining copy of things and the destructive form should have
+// to be asked for.
+func PruneLane(root string, recs []record.Record, lane string, apply bool) (PruneReport, error) {
+	var rep PruneReport
+	if lane == "" {
+		return rep, errors.New("a lane must be named; pruning every lane is not something this offers")
+	}
+
+	seen := map[string]bool{}
+	for _, r := range recs {
+		if r.Lane != lane || r.Transcript == "" {
+			continue
+		}
+		dst := CachedPath(root, r)
+		if seen[dst] {
+			continue
+		}
+		seen[dst] = true
+
+		// Only what is actually here: one session writes many records, most of
+		// which were never copied, and counting those would make a lane whose
+		// transcripts are all still live read as a large saving.
+		info, err := os.Lstat(dst)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		rep.Removed++
+		rep.Bytes += info.Size()
+		rep.Details = append(rep.Details, dst)
+		if !apply {
+			continue
+		}
+		if err := os.Remove(dst); err != nil {
+			rep.Removed--
+			rep.Bytes -= info.Size()
+			rep.Details[len(rep.Details)-1] = fmt.Sprintf("could not remove (%v): %s", err, dst)
+		}
+	}
+	return rep, nil
 }
 
 // MigrateReport says what a move of the old cache did. Details names every file

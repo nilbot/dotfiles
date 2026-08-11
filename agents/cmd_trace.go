@@ -262,7 +262,79 @@ func runTraceShow(args []string, stdout io.Writer) int {
 // record can tie to a session. Each of them raises the exit code, since the
 // whole point of running this is to find out what is not here -- a class that is
 // counted but exits 0 is one a script will never look at.
+// runTraceCachePrune removes cached copies for one named lane.
+//
+// Spelled `trace cache prune` rather than `trace prune`, because the noun is
+// what makes it safe. Two things here could be pruned and only one ever may:
+// the cache holds copies, while the index is the tracked, merged record that a
+// transcript existed at all -- lose that and you lose the knowledge that there
+// was anything to look for. A bare `trace prune` does not say which it touches.
+//
+// The lane is named by a human and never inferred from git. "The branch is
+// gone" does not mean "the content is irrelevant": a deleted branch is usually
+// a merged one, and a throwaway worktree is often exactly where the interesting
+// investigation happened.
+func runTraceCachePrune(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("trace cache prune", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	lane := fs.String("lane", "", "the lane whose cached copies to remove (required)")
+	apply := fs.Bool("yes", false, "actually remove them; without this it only reports")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Malformed
+	}
+	if *lane == "" {
+		fmt.Fprintln(stdout, "usage: agents trace cache prune --lane <name> [--yes]")
+		return exitcode.Malformed
+	}
+
+	rc, dir, code := repoHere(stdout)
+	if code != exitcode.OK {
+		return code
+	}
+	cacheRoot, err := repo.TraceCacheDir(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// Every record, not a window: a lane worth pruning is usually an old one.
+	res, err := trace.Query(dir, trace.Filter{}, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	rep, err := trace.PruneLane(cacheRoot, res.Records, *lane, *apply)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
+		return exitcode.Malformed
+	}
+	if rep.Removed == 0 {
+		fmt.Fprintf(stdout, "no cached transcripts for lane %q\n", *lane)
+		return exitcode.OK
+	}
+	verb := "would remove"
+	if *apply {
+		verb = "removed"
+	}
+	fmt.Fprintf(stdout, "%s %d cached transcript(s), %.1f MB, for lane %q\n",
+		verb, rep.Removed, float64(rep.Bytes)/(1024*1024), *lane)
+	for _, d := range rep.Details {
+		fmt.Fprintln(stdout, "  "+tableCell(d))
+	}
+	if !*apply {
+		// Advisory, not OK: there is something here to look at and decide about,
+		// and a script must be able to tell "nothing to do" from "did nothing".
+		fmt.Fprintln(stdout, "nothing was removed; re-run with --yes to remove them")
+		return exitcode.Advisory
+	}
+	fmt.Fprintln(stdout, "the trace index is unchanged; `agents trace ls` still lists these records")
+	return exitcode.OK
+}
+
 func runTraceCache(args []string, stdout io.Writer) int {
+	if len(args) > 0 && args[0] == "prune" {
+		return runTraceCachePrune(args[1:], stdout)
+	}
 	fs := flag.NewFlagSet("trace cache", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	lane := fs.String("lane", "", "only this lane")

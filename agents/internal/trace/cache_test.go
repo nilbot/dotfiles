@@ -896,3 +896,107 @@ func TestCacheKeepsTheFullerCopyWhenTheSourceShrinks(t *testing.T) {
 			"copy -- ours may be the only one that still holds what was dropped", b)
 	}
 }
+
+// Pruning removes copies and never the record of them.
+//
+// Two prunable things exist here and only one may ever go. The cache holds
+// copies; the index (.agents/reports/traces/*.jsonl) is the durable, tracked,
+// cross-machine record that a transcript existed at all. Losing the index loses
+// the knowledge that there was anything to look for -- so this function is
+// handed records and only ever deletes files under the cache root.
+func TestPruneLaneRemovesOnlyThatLanesCopies(t *testing.T) {
+	cacheRoot := t.TempDir()
+	keep := write(t, filepath.Join(t.TempDir(), "rollout-keep.jsonl"), "keep\n")
+	drop := write(t, filepath.Join(t.TempDir(), "rollout-drop.jsonl"), "drop\n")
+	recs := []record.Record{
+		{Machine: "m1", Harness: "codex", Lane: "master", Transcript: keep, PointerVerified: true},
+		{Machine: "m1", Harness: "codex", Lane: "throwaway", Transcript: drop, PointerVerified: true},
+	}
+	if _, err := Cache(cacheRoot, "m1", recs); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := PruneLane(cacheRoot, recs, "throwaway", true)
+	if err != nil {
+		t.Fatalf("PruneLane: %v", err)
+	}
+	if rep.Removed != 1 {
+		t.Errorf("Removed = %d, want 1", rep.Removed)
+	}
+	if rep.Bytes != int64(len("drop\n")) {
+		t.Errorf("Bytes = %d, want %d: the size is what makes the report worth reading",
+			rep.Bytes, len("drop\n"))
+	}
+	if _, err := os.Stat(CachedPath(cacheRoot, recs[1])); !os.IsNotExist(err) {
+		t.Errorf("the pruned lane's copy is still there: %v", err)
+	}
+	if b, err := os.ReadFile(CachedPath(cacheRoot, recs[0])); err != nil || string(b) != "keep\n" {
+		t.Errorf("another lane's copy was taken with it: %q (%v)", b, err)
+	}
+}
+
+// Dry run by default. This deletes the only remaining copy of things, so the
+// destructive form has to be asked for.
+func TestPruneLaneReportsWithoutRemovingUnlessAsked(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-dry.jsonl"), "still here\n")
+	recs := []record.Record{
+		{Machine: "m1", Harness: "codex", Lane: "gone-branch", Transcript: src, PointerVerified: true},
+	}
+	if _, err := Cache(cacheRoot, "m1", recs); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := PruneLane(cacheRoot, recs, "gone-branch", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Removed != 1 || rep.Bytes == 0 {
+		t.Errorf("a dry run must still report what it would take: %+v", rep)
+	}
+	if _, err := os.Stat(CachedPath(cacheRoot, recs[0])); err != nil {
+		t.Errorf("a dry run deleted something: %v", err)
+	}
+}
+
+// An unknown lane is not an error, and must not be read as "nothing to prune
+// here" either -- the report says zero and the caller decides.
+func TestPruneLaneOnALaneWithNoCopiesRemovesNothing(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-other.jsonl"), "x\n")
+	recs := []record.Record{
+		{Machine: "m1", Harness: "codex", Lane: "master", Transcript: src, PointerVerified: true},
+	}
+	if _, err := Cache(cacheRoot, "m1", recs); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := PruneLane(cacheRoot, recs, "never-existed", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Removed != 0 {
+		t.Errorf("Removed = %d, want 0", rep.Removed)
+	}
+	if _, err := os.Stat(CachedPath(cacheRoot, recs[0])); err != nil {
+		t.Errorf("an unmatched lane took another lane's copy: %v", err)
+	}
+}
+
+// A transcript the harness still holds is not what pruning is for, but the
+// decision is the operator's: they named the lane. What matters is that the
+// count is honest about it, so a lane whose sources are all still live does not
+// read as a big win.
+func TestPruneLaneCountsOnlyWhatIsActuallyInTheCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	never := filepath.Join(t.TempDir(), "rollout-never-cached.jsonl")
+	recs := []record.Record{
+		{Machine: "m1", Harness: "codex", Lane: "lane-a", Transcript: never, PointerVerified: true},
+	}
+	rep, err := PruneLane(cacheRoot, recs, "lane-a", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Removed != 0 || rep.Bytes != 0 {
+		t.Errorf("report = %+v, want zeroes: nothing was ever cached for that record", rep)
+	}
+}
