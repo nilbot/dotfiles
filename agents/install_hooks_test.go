@@ -260,18 +260,15 @@ func temporaryDotfilesCopy(t *testing.T) string {
 	t.Helper()
 	sourceRoot := task18RepoRoot(t)
 	destinationRoot := filepath.Join(t.TempDir(), "temporary dotfiles with spaces")
-	for _, relative := range []string{"Makefile", "agents", "git/install-hooks.sh"} {
+	// The Makefile is no longer copied: nothing here runs make since the
+	// githooks target was retired and this fixture drives install-hooks.sh
+	// directly. The two git/ files were optional while they were being
+	// introduced; they exist unconditionally now, so a missing one is a broken
+	// checkout and should fail loudly in setup.
+	for _, relative := range []string{
+		"agents", "git/install-hooks.sh", "git/gitattributes", "git/hooks.d/.gitignore",
+	} {
 		copyPathForHookInstallTest(t, filepath.Join(sourceRoot, relative), filepath.Join(destinationRoot, relative))
-	}
-	// These files are part of Task 18. Keeping them optional here lets the RED
-	// boundary fail on the missing Make target rather than in test setup.
-	for _, relative := range []string{"git/gitattributes", "git/hooks.d/.gitignore"} {
-		source := filepath.Join(sourceRoot, relative)
-		if _, err := os.Lstat(source); err == nil {
-			copyPathForHookInstallTest(t, source, filepath.Join(destinationRoot, relative))
-		} else if !os.IsNotExist(err) {
-			t.Fatal(err)
-		}
 	}
 	return destinationRoot
 }
@@ -811,44 +808,41 @@ func TestGitHookSequenceBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testin
 	}
 }
 
-func TestGitHookSequenceForeignPreflightRunsBeforeBuildOrLinks(t *testing.T) {
-	root := temporaryDotfilesCopy(t)
-	home := filepath.Join(t.TempDir(), "foreign preflight home with spaces")
-	if err := os.MkdirAll(home, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	globalConfig := filepath.Join(home, ".gitconfig")
+// Preflight mode is what a caller runs BEFORE spending a build, so its refusal
+// has to be complete on its own: it must detect the foreign path and mutate
+// nothing, without any later step having run.
+//
+// This case drives `preflight` directly rather than through a build-and-install
+// sequence. Driving the sequence proved less than it appeared to: the caller
+// returns on a preflight error before it builds, so "no binary exists
+// afterwards" was guaranteed by the caller's control flow and could not fail
+// whatever install-hooks.sh did. What the sequence's ordering is worth pinning
+// for lives in the phase that now runs it --
+// bootstrap.d/internal/phase/devtools_test.go asserts preflight's position
+// relative to the build by index.
+func TestHookInstallerPreflightRefusesForeignGlobalWithoutMutating(t *testing.T) {
+	fixture := newHookInstallFixture(t)
 	before := []byte("[core]\n\thooksPath = /preserved/foreign/hooks\n")
-	if err := os.WriteFile(globalConfig, before, 0o600); err != nil {
+	if err := os.WriteFile(fixture.globalConfig, before, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	output, err := runHookSequence(t, root, home, globalConfig)
+	output, err := runHookInstaller(t, fixture, "preflight")
 	if err == nil {
-		t.Fatal("the hook sequence overwrote a foreign global path")
+		t.Fatal("preflight passed over a foreign global core.hooksPath, so a " +
+			"caller would go on to build and link against it")
 	}
 	if !strings.Contains(output, "refusing") || !strings.Contains(output, "core.hooksPath") {
 		t.Fatalf("refusal is not actionable: %q", output)
 	}
-	for _, path := range []string{
-		filepath.Join(home, "bin", "agents"),
-		filepath.Join(home, ".gitattributes"),
-		filepath.Join(root, "git", "hooks.d", "pre-commit"),
-		filepath.Join(root, "git", "hooks.d", "commit-msg"),
-		filepath.Join(root, "git", "hooks.d", "post-merge"),
-		filepath.Join(root, "git", "hooks.d", "post-checkout"),
-	} {
-		if _, statErr := os.Lstat(path); !os.IsNotExist(statErr) {
-			t.Errorf("foreign preflight created %s: %v", path, statErr)
-		}
-	}
-	after, readErr := os.ReadFile(globalConfig)
+	after, readErr := os.ReadFile(fixture.globalConfig)
 	if readErr != nil {
 		t.Fatal(readErr)
 	}
 	if !bytes.Equal(after, before) {
 		t.Fatalf("foreign global config changed:\nbefore=%q\nafter=%q", before, after)
 	}
+	assertNoHookInstallManagedPaths(t, fixture)
 }
 
 func TestHookInstallerSecondRunPreservesExactInstalledObjectsAndTrackedConfig(t *testing.T) {

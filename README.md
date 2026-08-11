@@ -42,7 +42,8 @@ Provisioning belongs to `./bootstrap`; `make dotfiles` is retired, not aliased.
 |---|---|
 | `bootstrap`, `bootstrap.d/` | the provisioner: shim, phases, `links.manifest`, `Brewfile` |
 | `agents/` | the `agents` binary — repo-tracked agent context (spec 1) |
-| `fish/`, `git/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
+| `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
+| `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
 | `docs/superpowers/` | the specs and plans that carry the reasoning |
 
 Start with [the spec index](docs/superpowers/specs/agents/README.md).

@@ -68,6 +68,6 @@ func Devtools(c Context) error {
 	// core.hooksPath LAST so a partial install cannot activate an incomplete
 	// hooks directory -- and it is tested in the module that owns it.
 	// Reimplementing it here would be a second copy of that ordering, subject to
-	// drifting out of step with the one the Makefile and its tests exercise.
+	// drifting out of step with the one agents/install_hooks_test.go exercises.
 	return c.Change.Run("bash", installer, "install", c.Root, c.Home, binary)
 }
