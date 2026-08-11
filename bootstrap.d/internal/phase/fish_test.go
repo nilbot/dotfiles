@@ -180,7 +180,7 @@ func TestFishRefusesAnUnknownLoginNameBeforePerformingAnything(t *testing.T) {
 	}
 }
 
-// The other direction, and the reason the check is not simply "c.User == ''" at
+// The other direction, and the reason the check is not a bare empty-User test at
 // the top of the phase: a machine already running fish issues no chsh, so it
 // needs no login name and must not be refused for lacking one.
 func TestFishNeedsNoLoginNameWhenTheShellIsAlreadyFish(t *testing.T) {
