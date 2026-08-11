@@ -728,3 +728,129 @@ func TestInitStillScaffoldsWhereThereIsNoAgentsDir(t *testing.T) {
 		t.Fatalf(".agents/memory/ must exist after init: %v; output:\n%s", err, out.String())
 	}
 }
+
+// The command that makes the cache worth having.
+//
+// Everything else in this feature writes: the hook records a pointer, `trace
+// cache` copies bytes. Until something reads them back, a cached transcript is
+// a file nobody can reach through the tool that saved it, and the agent_id a
+// memory entry cites in its sources: is a dead reference the moment the harness
+// cleans up.
+func TestTraceShowReadsFromTheSourceThenFromTheCache(t *testing.T) {
+	mid := thisMachine(t)
+	const body = `{"type":"assistant","text":"the finding"}` + "\n"
+	src := filepath.Join(t.TempDir(), "agent-a1b2c3d4e5f60718.jsonl")
+	if err := os.WriteFile(src, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "claude-code", Machine: mid, Event: "subagent-stop",
+		AgentID: "a1b2c3d4e5f60718", SessionID: "11111111-2222-3333-4444-555555555555",
+		Transcript: src, PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	// While the harness still holds it.
+	var out bytes.Buffer
+	if code := runTrace([]string{"show", "a1b2c3d4"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK; output:\n%s", code, out.String())
+	}
+	if out.String() != body {
+		t.Errorf("stdout = %q, want exactly the transcript so it pipes", out.String())
+	}
+
+	// Cache it, then take the source away -- the state this whole feature is for.
+	var discard bytes.Buffer
+	if code := runTrace([]string{"cache"}, &discard); code != exitcode.OK {
+		t.Fatalf("cache exit = %d:\n%s", code, discard.String())
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if code := runTrace([]string{"show", "a1b2c3d4"}, &out); code != exitcode.OK {
+		t.Fatalf("after the harness deleted the source, exit = %d; the cached copy "+
+			"is the only one left and reading it is the point:\n%s", code, out.String())
+	}
+	if out.String() != body {
+		t.Errorf("stdout = %q, want the cached transcript", out.String())
+	}
+}
+
+// A session id must work as well as an agent id: the pointer a reader has in
+// hand depends on which record they were looking at.
+func TestTraceShowAcceptsASessionIDAndCanPrintThePathInstead(t *testing.T) {
+	mid := thisMachine(t)
+	src := localTranscript(t, "rollout-session.jsonl")
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "codex", Machine: mid, Event: "stop",
+		SessionID:  "019ff17a-585a-7e11-8bc7-5be760346670",
+		Transcript: src, PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"show", "--path", "019ff17a"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d:\n%s", code, out.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != src {
+		t.Errorf("--path printed %q, want the resolved path %q", got, src)
+	}
+}
+
+// Neither place holds it: NoRecord, because the operation could not be
+// completed. Not Advisory -- a script that pipes this would otherwise treat an
+// empty stdout as an empty transcript.
+func TestTraceShowReportsWhenNeitherSourceNorCacheHoldsIt(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "codex", Machine: mid, Event: "stop",
+		SessionID:  "deadbeef-0000-0000-0000-000000000000",
+		Transcript: filepath.Join(t.TempDir(), "rollout-vanished.jsonl"), PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	code := runTrace([]string{"show", "deadbeef"}, &out)
+	if code != exitcode.NoRecord {
+		t.Errorf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+	}
+	if !strings.Contains(out.String(), "rollout-vanished.jsonl") {
+		t.Errorf("the failure must name the transcript it looked for; got:\n%s", out.String())
+	}
+}
+
+// Guessing between two records would hand back one transcript while the reader
+// believes they asked for the other.
+func TestTraceShowRefusesAnAmbiguousPrefixAndListsTheCandidates(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, AgentID: "aa11111111111111",
+			Transcript: localTranscript(t, "one.jsonl"), PointerVerified: true},
+		record.Record{Harness: "codex", Machine: mid, AgentID: "aa22222222222222",
+			Transcript: localTranscript(t, "two.jsonl"), PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"show", "aa"}, &out); code != exitcode.Malformed {
+		t.Errorf("exit = %d, want Malformed (%d) for an ambiguous prefix", code, exitcode.Malformed)
+	}
+	for _, want := range []string{"aa11111111111111", "aa22222222222222"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the candidates must be listed so the reader can choose; %q missing from:\n%s",
+				want, out.String())
+		}
+	}
+}
+
+func TestTraceShowNeedsAnIdentifier(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid)
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runTrace([]string{"show"}, &out); code != exitcode.Malformed {
+		t.Errorf("exit = %d, want Malformed (%d)", code, exitcode.Malformed)
+	}
+}

@@ -6,12 +6,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/machine"
+	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safetext"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
@@ -19,12 +21,14 @@ import (
 
 func runTrace(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: agents trace ls|cache [flags]")
+		fmt.Fprintln(stdout, "usage: agents trace ls|show|cache [flags]")
 		return exitcode.Malformed
 	}
 	switch args[0] {
 	case "ls":
 		return runTraceLS(args[1:], stdout)
+	case "show":
+		return runTraceShow(args[1:], stdout)
 	case "cache":
 		return runTraceCache(args[1:], stdout)
 	default:
@@ -144,6 +148,110 @@ func runTraceLS(args []string, stdout io.Writer) int {
 // internal/safetext alongside the markdown escapers the two generated indexes
 // use, so the three cannot drift apart.
 func tableCell(s string) string { return safetext.Flatten(s) }
+
+// runTraceShow reads one transcript back, from the harness's copy or from ours.
+//
+// This is what stops the cache being write-only. `trace cache` preserves bytes;
+// without a way to read them, a cached transcript is a file no part of this tool
+// can reach, and the agent_id a memory entry cites in its sources: stops
+// resolving the moment the harness cleans up -- leaving the entry's derivation
+// uncheckable, which is the one thing sources: exists to prevent.
+//
+// The transcript goes to stdout unflattened and unannotated, because it is data
+// rather than a table: whoever asked for it is piping it somewhere. Everything
+// about the retrieval goes to stderr, which is also why the origin is reported
+// there -- a reader must be able to tell live data from a copy, without that
+// note ending up in the file they redirected.
+func runTraceShow(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("trace show", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	pathOnly := fs.Bool("path", false, "print the resolved path instead of the content")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Malformed
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stdout, "usage: agents trace show [--path] <agent-id or session-id prefix>")
+		return exitcode.Malformed
+	}
+	want := fs.Arg(0)
+
+	rc, dir, code := repoHere(stdout)
+	if code != exitcode.OK {
+		return code
+	}
+	cacheRoot, err := repo.TraceCacheDir(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// No window: a transcript worth reading back is usually an old one, and a
+	// default --since would silently answer "not found" for it.
+	res, err := trace.Query(dir, trace.Filter{}, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	// One entry per transcript, keyed on the identifier that matched: a session
+	// writes many records naming one file, and reporting that as ambiguous
+	// would make the common case an error.
+	matches := map[string]record.Record{}
+	for _, r := range res.Records {
+		for _, id := range []string{r.AgentID, r.SessionID} {
+			if id != "" && strings.HasPrefix(id, want) {
+				if prev, seen := matches[id]; !seen || (!prev.PointerVerified && r.PointerVerified) {
+					matches[id] = r
+				}
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		fmt.Fprintf(stdout, "agents trace show: no record with an agent or session id starting %q\n", want)
+		return exitcode.NoRecord
+	case 1:
+	default:
+		ids := make([]string, 0, len(matches))
+		for id := range matches {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		// Listed rather than guessed: handing back one transcript while the
+		// reader believes they asked for another is worse than refusing.
+		fmt.Fprintf(stdout, "agents trace show: %q matches %d records:\n", want, len(ids))
+		for _, id := range ids {
+			fmt.Fprintf(stdout, "  %s\t%s\n", id, tableCell(matches[id].Transcript))
+		}
+		return exitcode.Malformed
+	}
+
+	var rec record.Record
+	for _, r := range matches {
+		rec = r
+	}
+	path, origin, err := trace.Resolve(cacheRoot, rec)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if *pathOnly {
+		fmt.Fprintln(stdout, path)
+		return exitcode.OK
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	defer f.Close()
+	fmt.Fprintf(os.Stderr, "reading from the %s: %s\n", origin, path)
+	if _, err := io.Copy(stdout, f); err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	return exitcode.OK
+}
 
 // runTraceCache materialises the transcripts this machine can still reach.
 //
