@@ -12,40 +12,45 @@ end
 function install_fisher
     set --local plugins (read --null <(status dirname)/fishfile)
 
-    # Refuse the one collision fisher cannot reconcile, BEFORE fisher runs.
+    # Install onto a machine with no plugin files; leave an existing
+    # installation alone.
     #
-    # fisher decides install-vs-update per plugin from the UNIVERSAL variable
-    # $_fisher_plugins, never from the fish_plugins file, and its conflict branch
-    # runs only for the ones it classified as installs. So the broken state is
-    # plugin files already on disk while that variable is empty: fisher refuses
-    # every plugin, installs nothing, and -- because nothing installed -- goes on
-    # to delete its own record of what is installed. That deletion is what made
+    # Under --no-config, which is how the bootstrap fish phase calls this
+    # function, fisher's universal record is invisible, so bootstrap cannot tell
+    # "already installed" from "half installed" and must not guess. It therefore
+    # installs only onto a machine with no plugin files at all, and leaves an
+    # existing installation alone. Maintenance is `fisher update` from an
+    # interactive shell, where the record is visible.
+    #
+    # The record in question is $_fisher_plugins, a UNIVERSAL variable: fisher
+    # decides install-vs-update per plugin from it and never from the
+    # fish_plugins file, and its conflict branch runs only for the ones it
+    # classified as installs. --no-config disables universal variables outright
+    # -- measured on fish 4.8.1, four plugins visible under `fish -c` and none
+    # under `fish --no-config -c`. So with files on disk and no visible record,
+    # fisher refuses every plugin as a conflict, installs nothing, and -- because
+    # nothing installed -- deletes its own record. That deletion is what made
     # every retry in the field fail identically.
     #
-    # The variable is empty far more often than it looks. `fish --no-config`,
-    # which is how the bootstrap fish phase calls this function, disables
-    # universal variables outright, so it is empty there even on a machine whose
-    # plugins are all present and healthy.
+    # The skip is status 0 on purpose. Every phase must be safe to re-run, and a
+    # machine whose plugins are already in place is one this phase has nothing to
+    # do to; a refusal would fail `apply workstation` on a healthy machine.
     #
-    # Nothing is deleted or moved here. Every file in those directories was
-    # plugin-owned on the machine that hit this, but that is a fact about one
-    # machine, not a guarantee: a hand-written function there would be destroyed
-    # with no way back. The remediation is stated and left to its owner.
-    if not set --query _fisher_plugins[1]
-        # For `set`, a glob matching nothing expands to zero arguments instead of
-        # erroring the way it would for any other command.
-        set --local colliding $__fish_config_dir/functions/*.fish \
-            $__fish_config_dir/conf.d/*.fish \
-            $__fish_config_dir/completions/*.fish
-        if set --query colliding[1]
-            echo 'install_fisher: refusing to run fisher.' >&2
-            echo 'fisher has no record of an installed plugin ($_fisher_plugins is empty), yet these files are already in place:' >&2
-            printf '    %s\n' $colliding >&2
-            echo "They are fisher's to reinstall, which is why nothing here touches them." >&2
-            echo "Were fisher to run now it would refuse each plugin as a conflict, install nothing, and delete $__fish_config_dir/fish_plugins." >&2
-            echo "Move aside $__fish_config_dir/functions, $__fish_config_dir/conf.d and $__fish_config_dir/completions yourself, then run install_fisher again." >&2
-            return 2
-        end
+    # The case this rule does NOT serve is a partially installed machine: it is
+    # skipped exactly like a complete one, and its owner completes it with
+    # `fisher update`. Nothing here deletes or moves anything to find out which
+    # it is. Every file in those directories was plugin-owned on the machine that
+    # hit this, but that is a fact about one machine, not a guarantee -- a
+    # hand-written function there would be destroyed with no way back.
+    #
+    # For `set`, a glob matching nothing expands to zero arguments instead of
+    # erroring the way it would for any other command.
+    set --local installed $__fish_config_dir/functions/*.fish \
+        $__fish_config_dir/conf.d/*.fish \
+        $__fish_config_dir/completions/*.fish
+    if set --query installed[1]
+        echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,conf.d,completions}; leaving them alone -- maintain them with 'fisher update' from an interactive shell."
+        return 0
     end
 
     curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish | source && fisher install $plugins

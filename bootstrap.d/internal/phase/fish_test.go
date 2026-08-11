@@ -413,40 +413,35 @@ func TestInstallFisherTakesItsWholePluginListFromTheFile(t *testing.T) {
 // execute: this asserts the guard's TEXT and its ORDER, not its behaviour. See
 // the report for what that leaves uncovered.
 //
-// The state it refuses is plugin files on disk with an empty $_fisher_plugins.
-// fisher classifies install-vs-update from that universal variable and never
-// from the fish_plugins file, its conflict branch runs only for plugins it
-// classified as installs, and when nothing installs it reaches
-// `command rm -f $fish_plugins` and deletes its own record -- which is what made
-// every retry in the field fail identically. Refusing before fisher runs is what
-// stops the loop from starting.
-func TestInstallFisherRefusesTheCollisionBeforeInvokingFisher(t *testing.T) {
+// The rule is install onto a machine with no plugin files, and leave an existing
+// installation alone. Under --no-config -- which is how the fish phase calls this
+// function, and which disables universal variables outright -- fisher's record
+// $_fisher_plugins is invisible, so bootstrap cannot tell "already installed"
+// from "half installed" and must not guess. Letting fisher run anyway is what
+// broke the machine in the field: it classifies install-vs-update from that
+// invisible record, refuses every plugin as a conflict, installs nothing, and --
+// because nothing installed -- reaches `command rm -f $fish_plugins` and deletes
+// its own record, which made every retry identical.
+//
+// The skip is status 0, and that is the assertion this case exists for. Every
+// phase must be safe to re-run; a refusal here fails `apply workstation` on a
+// perfectly healthy machine, which is why the first version of this guard was
+// wrong.
+func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
 	body := installFisherBody(t)
 	invoke := indexOf(body, "fisher install")
 	if invoke < 0 {
 		t.Fatalf("install_fisher never invokes `fisher install`:\n%s", strings.Join(body, "\n"))
 	}
-	// The classification fisher actually performs. A guard reading the
-	// fish_plugins FILE instead would ask a question whose answer decides
-	// nothing, which is the mistake this task exists to correct.
-	guard := conditionIndex(body, "_fisher_plugins")
-	if guard < 0 {
-		t.Fatalf("no statement tests $_fisher_plugins, which is what fisher itself "+
-			"classifies install-vs-update from:\n%s", strings.Join(body, "\n"))
-	}
-	if guard > invoke {
-		t.Errorf("the guard is at line %d and fisher runs at line %d; a guard that "+
-			"runs after fisher cannot stop fisher from deleting fish_plugins", guard, invoke)
-	}
 	// Each of the three directories has to be LOOKED IN. Naming them in the
 	// message is the other half, asserted separately below: a guard that globs
-	// two of the three lets a collision in the third through to fisher, and the
-	// message would still read as though all three had been checked.
+	// two of the three lets the third through to fisher, and the message would
+	// still read as though all three had been checked.
 	for _, dir := range []string{"functions", "conf.d", "completions"} {
 		i := conditionIndex(body, dir+"/*.fish")
 		if i < 0 {
-			t.Errorf("nothing looks for a .fish file in %s/, so a collision there "+
-				"reaches fisher unguarded", dir)
+			t.Errorf("nothing looks for a .fish file in %s/, so an existing "+
+				"installation there reaches fisher anyway", dir)
 			continue
 		}
 		if i > invoke {
@@ -454,31 +449,87 @@ func TestInstallFisherRefusesTheCollisionBeforeInvokingFisher(t *testing.T) {
 				dir, i, invoke)
 		}
 	}
-	// The remediation is the operator's to perform, so a refusal that does not
-	// say where to look, or whose files they are, is a dead end.
-	if missing := saysAll(body[:invoke], "functions", "conf.d", "completions", "reinstall"); missing != nil {
-		t.Errorf("the refusal never says %v; it must name the three directories and "+
-			"say the files are fisher's to reinstall, or the operator cannot tell a "+
-			"plugin file from their own", missing)
+	// The skip has to be CONDITIONAL on what the glob found. Without this, a
+	// guard whose condition had been replaced by a constant would satisfy every
+	// other assertion here -- the glob, the message and the return would all
+	// still be present -- while either skipping every machine or none.
+	glob := conditionIndex(body, "functions/*.fish")
+	if glob >= 0 {
+		var name string
+		for _, field := range strings.Fields(body[glob])[1:] {
+			if !strings.HasPrefix(field, "-") {
+				name = field
+				break
+			}
+		}
+		if name == "" {
+			t.Fatalf("cannot tell what the glob is assigned to: %q", strings.TrimSpace(body[glob]))
+		}
+		tested := -1
+		for i, line := range body[:invoke] {
+			if i == glob || conditionIndex([]string{line}, name) < 0 {
+				continue
+			}
+			tested = i
+			break
+		}
+		if tested < 0 {
+			t.Errorf("nothing tests %s after the glob fills it, so the skip does not "+
+				"depend on whether any plugin file was actually found", name)
+		} else {
+			// Two shapes that would satisfy every assertion above while inverting
+			// or disabling the rule. These are checks on the CONDITION'S TEXT --
+			// whether it evaluates as intended is the part no Go test can reach.
+			cond := strings.TrimSpace(body[tested])
+			// The skip fires when the glob found something. Negated, it would
+			// install onto exactly the machines it exists to leave alone, and skip
+			// the fresh ones it exists to provision.
+			if strings.HasPrefix(cond, "if not ") || strings.HasPrefix(cond, "if !") {
+				t.Errorf("the skip is conditioned on %q; inverted, it installs onto a "+
+					"machine that already has plugin files and skips the fresh one", cond)
+			}
+			// A constant conjunct switches the whole guard off in place. The
+			// semicolon is trimmed because `if false; and set --query installed[1]`
+			// is how that is spelled on one line, and it is the shape a plausible
+			// edit takes -- the variable is still tested, so nothing else here
+			// notices.
+			for _, word := range strings.Fields(cond) {
+				if word = strings.Trim(word, ";"); word == "false" || word == "true" {
+					t.Errorf("the condition %q carries the constant %q, so it no longer "+
+						"depends on what the glob found", cond, word)
+				}
+			}
+		}
 	}
-	// Non-zero, and before the invocation: `return` with no status is 0, which
-	// would report a refused run as a successful one.
-	ret := indexOf(body[:invoke], "return ")
+	// A skip nobody can see is indistinguishable from a phase that did its work,
+	// and the maintenance path is the whole reason skipping is acceptable.
+	if missing := saysAll(body[:invoke], "functions", "conf.d", "completions", "fisher update"); missing != nil {
+		t.Errorf("the skip never says %v; it must name the three directories it "+
+			"found files in and point at `fisher update` from an interactive shell, "+
+			"which is where fisher's record is visible", missing)
+	}
+	// Zero, and before the invocation. This is the correction: a machine whose
+	// plugins are already in place is one this phase has nothing to do to, so
+	// `apply workstation` must stay green on it.
+	ret := indexOf(body[:invoke], "return")
 	if ret < 0 {
-		t.Fatalf("the guard must return non-zero without invoking fisher:\n%s",
-			strings.Join(body, "\n"))
+		t.Fatalf("nothing returns before `fisher install`, so an existing "+
+			"installation is handed to fisher:\n%s", strings.Join(body, "\n"))
 	}
-	if strings.TrimSpace(body[ret]) == "return" || strings.TrimSpace(body[ret]) == "return 0" {
-		t.Errorf("the guard returns %q; a refusal that exits 0 is reported as a "+
-			"successful provisioning run", strings.TrimSpace(body[ret]))
+	if got := strings.TrimSpace(body[ret]); got != "return 0" {
+		t.Errorf("the skip is %q, want `return 0`; a non-zero skip fails "+
+			"`apply workstation` on a healthy machine, and a bare `return` leaves "+
+			"the status to whatever ran last", got)
 	}
-	// Refuse, never clobber. Every file in those directories was plugin-owned on
-	// the machine that hit this, but that is a fact about one machine: a
-	// hand-written function there would be destroyed with no way back.
+	// Never clobber. Every file in those directories was plugin-owned on the
+	// machine that hit this, but that is a fact about one machine: a hand-written
+	// function there would be destroyed with no way back. It is also what makes
+	// skipping the only available verdict -- bootstrap cannot inspect its way to
+	// a better one.
 	for _, destructive := range []string{"rm ", "rm -", "mv "} {
 		if i := indexOf(body, destructive); i >= 0 {
-			t.Errorf("install_fisher line %d runs %q; the remediation is stated and "+
-				"left to the operator: %q", i, destructive, strings.TrimSpace(body[i]))
+			t.Errorf("install_fisher line %d runs %q; an existing installation is "+
+				"left exactly as it was found: %q", i, destructive, strings.TrimSpace(body[i]))
 		}
 	}
 }
