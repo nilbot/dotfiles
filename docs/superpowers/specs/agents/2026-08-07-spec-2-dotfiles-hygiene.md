@@ -858,7 +858,7 @@ exchange for one convenience command.
 | `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
 | A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
 | Bootstrap grows into an unmaintainable program | One package per concern; all machine access through `change.Interface`; an architecture test on the phase package's import set. |
-| Go is a stage-zero dependency the old design did not have | The shim installs it via Homebrew when present, and otherwise refuses with the exact command. One manual step on a machine that has neither. §2.1. |
+| Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go; spec 5's published artifact is what removes it. §2.1, §2.2. |
 | The shim is shell, so it inherits the defects that motivated the switch | It is ~40 lines, does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 
