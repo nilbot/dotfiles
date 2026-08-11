@@ -39,19 +39,35 @@ function install_fisher
     # The case this rule does NOT serve is a partially installed machine: it is
     # skipped exactly like a complete one, and its owner completes it with
     # `fisher update`, or starts over with `fish_reset_all` below -- which
-    # removes these three directories BEFORE calling this function, so the skip
-    # never blocks a deliberate reset. Nothing here deletes or moves anything to
-    # find out which it is. Every file in those directories was plugin-owned on the machine that
-    # hit this, but that is a fact about one machine, not a guarantee -- a
-    # hand-written function there would be destroyed with no way back.
+    # removes these directories BEFORE calling this function, so the skip never
+    # blocks a deliberate reset. That is a promise the reset has to keep: it
+    # clears exactly the set globbed here, and a test pins the two together.
+    # Nothing here deletes or moves anything to find out which case it is. Every
+    # file in those directories was plugin-owned on the machine that hit this,
+    # but that is a fact about one machine, not a guarantee -- a hand-written
+    # function there would be destroyed with no way back.
+    #
+    # Four directories, and every file in them rather than *.fish alone, because
+    # that is exactly what fisher's own conflict test looks at:
+    #
+    #     set --local user_files $fisher_path/{functions,themes,conf.d,completions}/*
+    #
+    # A guard examining less than fisher does would pass a machine straight
+    # through to a collision fisher then hits.
     #
     # For `set`, a glob matching nothing expands to zero arguments instead of
     # erroring the way it would for any other command.
-    set --local installed $__fish_config_dir/functions/*.fish \
-        $__fish_config_dir/conf.d/*.fish \
-        $__fish_config_dir/completions/*.fish
+    set --local installed $__fish_config_dir/functions/* \
+        $__fish_config_dir/themes/* \
+        $__fish_config_dir/conf.d/* \
+        $__fish_config_dir/completions/*
+    # The [1] is load-bearing. `set --local installed <globs>` CREATES the
+    # variable even when every glob expands to nothing, so `set --query installed`
+    # without the index is constantly true: the skip would fire on every machine,
+    # bootstrap would never install a plugin -- silently, at status 0 -- and
+    # fish_reset_all would never rebuild after its own rm -rf.
     if set --query installed[1]
-        echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,conf.d,completions}; leaving them alone -- maintain them with 'fisher update', or rebuild from nothing with 'fish_reset_all', from an interactive shell."
+        echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,themes,conf.d,completions}; leaving them alone -- maintain them with 'fisher update', or rebuild from nothing with 'fish_reset_all', from an interactive shell."
         return 0
     end
 
@@ -238,10 +254,16 @@ end
 # $__fish_config_dir -- fish's own answer for where its configuration directory
 # is. It used to point inside the checkout, because ~/.config/fish was a symlink
 # to it; that is what this reset exists to stop being true.
+#
+# themes/ is in the list because install_fisher's skip globs it, and fisher
+# creates and fills it like the other three. Clearing three of the four would
+# leave a machine this function can no longer rebuild: the reset would destroy
+# what it removed, install_fisher would skip on the one directory left standing,
+# and there would be no way back. A test pins the two lists together.
 function fish_reset_all
     echo '' >$__fish_config_dir/fish_plugins
     echo '' >$__fish_config_dir/fish_variables
-    rm -rf $__fish_config_dir/{functions,completions,conf.d}/
+    rm -rf $__fish_config_dir/{functions,themes,completions,conf.d}/
     install_fisher
     reload
 end

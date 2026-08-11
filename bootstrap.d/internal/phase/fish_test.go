@@ -3,6 +3,7 @@ package phase_test
 import (
 	"bytes"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -285,10 +286,21 @@ func mypre(t *testing.T) string {
 // into decoration.
 func installFisherBody(t *testing.T) []string {
 	t.Helper()
+	return functionBody(t, "install_fisher")
+}
+
+// functionBody is installFisherBody over any function in mypre.fish.
+//
+// Backslash continuations are JOINED, so one statement is one element. The
+// guard's glob spans four lines, and its operands have to be compared as a set
+// against what fisher itself looks at -- which cannot be done while each line is
+// a separate haystack for a substring search.
+func functionBody(t *testing.T, name string) []string {
+	t.Helper()
 	var body []string
-	inside := false
+	inside, continued := false, false
 	for _, line := range strings.Split(mypre(t), "\n") {
-		if strings.HasPrefix(line, "function install_fisher") {
+		if strings.HasPrefix(line, "function "+name) {
 			inside = true
 			continue
 		}
@@ -297,19 +309,26 @@ func installFisherBody(t *testing.T) []string {
 		}
 		if line == "end" {
 			if len(body) == 0 {
-				t.Fatal("install_fisher has no body at all")
+				t.Fatalf("%s has no body at all", name)
 			}
 			return body
 		}
-		if trimmed := strings.TrimSpace(line); trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		body = append(body, line)
+		if continued {
+			joined := strings.TrimSuffix(strings.TrimRight(body[len(body)-1], " \t"), `\`)
+			body[len(body)-1] = strings.TrimRight(joined, " \t") + " " + trimmed
+		} else {
+			body = append(body, line)
+		}
+		continued = strings.HasSuffix(trimmed, `\`)
 	}
 	if !inside {
-		t.Fatal("mypre.fish defines no install_fisher; the fish phase calls it by name")
+		t.Fatalf("mypre.fish defines no %s", name)
 	}
-	t.Fatal("install_fisher is never closed by an `end` at column 0")
+	t.Fatalf("%s is never closed by an `end` at column 0", name)
 	return nil
 }
 
@@ -338,6 +357,33 @@ func conditionIndex(body []string, want string) int {
 		}
 	}
 	return -1
+}
+
+// globOperands finds the statement that collects the plugin files and returns
+// its index together with the set of glob operands it passes. Operands are the
+// fields beginning with `$`, which is every path in this statement and nothing
+// else in it.
+//
+// It is located by `/functions/` rather than by the whole operand, so a renamed
+// configuration-directory variable is reported as a wrong operand -- naming what
+// is wrong -- instead of vanishing into "no such statement".
+func globOperands(t *testing.T, body []string) (int, map[string]bool) {
+	t.Helper()
+	i := conditionIndex(body, "/functions/")
+	if i < 0 {
+		t.Fatalf("nothing globs a functions/ directory, so the skip can never fire:\n%s",
+			strings.Join(body, "\n"))
+	}
+	operands := map[string]bool{}
+	for _, field := range strings.Fields(body[i]) {
+		if strings.HasPrefix(field, "$") {
+			operands[field] = true
+		}
+	}
+	if len(operands) == 0 {
+		t.Fatalf("the glob statement passes no paths at all: %q", strings.TrimSpace(body[i]))
+	}
+	return i, operands
 }
 
 // saysAll reports whether the output statements in body name every one of want.
@@ -433,83 +479,106 @@ func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
 	if invoke < 0 {
 		t.Fatalf("install_fisher never invokes `fisher install`:\n%s", strings.Join(body, "\n"))
 	}
-	// Each of the three directories has to be LOOKED IN. Naming them in the
-	// message is the other half, asserted separately below: a guard that globs
-	// two of the three lets the third through to fisher, and the message would
-	// still read as though all three had been checked.
-	for _, dir := range []string{"functions", "conf.d", "completions"} {
-		i := conditionIndex(body, dir+"/*.fish")
-		if i < 0 {
-			t.Errorf("nothing looks for a .fish file in %s/, so an existing "+
-				"installation there reaches fisher anyway", dir)
-			continue
+	// The glob operands, compared as a SET against what fisher itself looks at.
+	//
+	// A substring search was not enough and had already let two edits through:
+	// `conditionIndex(body, dir+"/*.fish")` is satisfied by
+	// $__fish_cfg_dir/functions/*.fish and by */*.fishy alike -- either of which
+	// globs nothing at all, so the guard never fires and the field bug returns
+	// with every assertion here still green.
+	glob, operands := globOperands(t, body)
+	if glob > invoke {
+		t.Errorf("the glob is at line %d and fisher runs at line %d", glob, invoke)
+	}
+	// fisher's own conflict test is
+	// `$fisher_path/{functions,themes,conf.d,completions}/*` (fisher.fish:173) --
+	// four directories, EVERY file, not just *.fish. A guard that looks at less
+	// than fisher does can pass a machine through to a collision fisher hits.
+	want := []string{
+		"$__fish_config_dir/functions/*",
+		"$__fish_config_dir/themes/*",
+		"$__fish_config_dir/conf.d/*",
+		"$__fish_config_dir/completions/*",
+	}
+	for _, w := range want {
+		if !operands[w] {
+			t.Errorf("the guard never globs %s; fisher's conflict test covers it, so "+
+				"a file there is a collision this skip does not see", w)
 		}
-		if i > invoke {
-			t.Errorf("%s/ is only examined at line %d, after fisher runs at line %d",
-				dir, i, invoke)
+	}
+	for got := range operands {
+		if !slices.Contains(want, got) {
+			t.Errorf("the guard globs %s, which fisher's conflict test does not cover", got)
 		}
 	}
 	// The skip has to be CONDITIONAL on what the glob found. Without this, a
 	// guard whose condition had been replaced by a constant would satisfy every
 	// other assertion here -- the glob, the message and the return would all
 	// still be present -- while either skipping every machine or none.
-	glob := conditionIndex(body, "functions/*.fish")
-	if glob >= 0 {
-		var name string
-		for _, field := range strings.Fields(body[glob])[1:] {
-			if !strings.HasPrefix(field, "-") {
-				name = field
-				break
-			}
-		}
-		if name == "" {
-			t.Fatalf("cannot tell what the glob is assigned to: %q", strings.TrimSpace(body[glob]))
-		}
-		tested := -1
-		for i, line := range body[:invoke] {
-			if i == glob || conditionIndex([]string{line}, name) < 0 {
-				continue
-			}
-			tested = i
+	var name string
+	for _, field := range strings.Fields(body[glob])[1:] {
+		if !strings.HasPrefix(field, "-") {
+			name = field
 			break
 		}
-		if tested < 0 {
-			t.Errorf("nothing tests %s after the glob fills it, so the skip does not "+
-				"depend on whether any plugin file was actually found", name)
-		} else {
-			// Two shapes that would satisfy every assertion above while inverting
-			// or disabling the rule. These are checks on the CONDITION'S TEXT --
-			// whether it evaluates as intended is the part no Go test can reach.
-			cond := strings.TrimSpace(body[tested])
-			// The skip fires when the glob found something. Negated, it would
-			// install onto exactly the machines it exists to leave alone, and skip
-			// the fresh ones it exists to provision.
-			if strings.HasPrefix(cond, "if not ") || strings.HasPrefix(cond, "if !") {
-				t.Errorf("the skip is conditioned on %q; inverted, it installs onto a "+
-					"machine that already has plugin files and skips the fresh one", cond)
-			}
-			// A constant conjunct switches the whole guard off in place. The
-			// semicolon is trimmed because `if false; and set --query installed[1]`
-			// is how that is spelled on one line, and it is the shape a plausible
-			// edit takes -- the variable is still tested, so nothing else here
-			// notices.
-			for _, word := range strings.Fields(cond) {
-				if word = strings.Trim(word, ";"); word == "false" || word == "true" {
-					t.Errorf("the condition %q carries the constant %q, so it no longer "+
-						"depends on what the glob found", cond, word)
-				}
-			}
+	}
+	if name == "" {
+		t.Fatalf("cannot tell what the glob is assigned to: %q", strings.TrimSpace(body[glob]))
+	}
+	tested := -1
+	for i, line := range body[:invoke] {
+		if i == glob || conditionIndex([]string{line}, name) < 0 {
+			continue
+		}
+		tested = i
+		break
+	}
+	if tested < 0 {
+		t.Fatalf("nothing tests %s after the glob fills it, so the skip does not "+
+			"depend on whether any plugin file was actually found", name)
+	}
+	// Three shapes that would satisfy every assertion above while inverting or
+	// disabling the rule. These are checks on the CONDITION'S TEXT -- whether it
+	// evaluates as intended is the part no Go test can reach.
+	cond := strings.TrimSpace(body[tested])
+	// The index, not merely the name. `set --local installed <globs>` CREATES
+	// the variable even when every glob expands to nothing, so
+	// `set --query installed` without [1] is constantly true: the skip fires on
+	// every machine, bootstrap never installs a plugin -- silently, at status 0 --
+	// and fish_reset_all never rebuilds after its own rm -rf. Measured on fish
+	// 4.8.1; dropping the [1] left this whole suite green.
+	if !strings.Contains(cond, name+"[1]") {
+		t.Errorf("the condition is %q; it must test %s[1], because `set --local %s "+
+			"<globs>` creates the variable even when every glob matches nothing -- "+
+			"so without the index it is constantly true and nothing is ever installed",
+			cond, name, name)
+	}
+	// The skip fires when the glob found something. Negated, it would install
+	// onto exactly the machines it exists to leave alone, and skip the fresh
+	// ones it exists to provision.
+	if strings.HasPrefix(cond, "if not ") || strings.HasPrefix(cond, "if !") {
+		t.Errorf("the skip is conditioned on %q; inverted, it installs onto a "+
+			"machine that already has plugin files and skips the fresh one", cond)
+	}
+	// A constant conjunct switches the whole guard off in place. The semicolon
+	// is trimmed because `if false; and set --query installed[1]` is how that is
+	// spelled on one line, and it is the shape a plausible edit takes -- the
+	// variable is still tested, so nothing else here notices.
+	for _, word := range strings.Fields(cond) {
+		if word = strings.Trim(word, ";"); word == "false" || word == "true" {
+			t.Errorf("the condition %q carries the constant %q, so it no longer "+
+				"depends on what the glob found", cond, word)
 		}
 	}
 	// A skip nobody can see is indistinguishable from a phase that did its work,
-	// and the maintenance path is the whole reason skipping is acceptable.
-	if missing := saysAll(body[:invoke], "functions", "conf.d", "completions",
+	// and the remedies are the whole reason skipping is acceptable.
+	if missing := saysAll(body[:invoke], "functions", "themes", "conf.d", "completions",
 		"fisher update", "fish_reset_all"); missing != nil {
-		t.Errorf("the skip never says %v; it must name the three directories it "+
+		t.Errorf("the skip never says %v; it must name the four directories it "+
 			"found files in and point at BOTH remedies from an interactive shell, "+
 			"where fisher's record is visible: `fisher update` to reconcile, and "+
 			"`fish_reset_all` to start over. The reset is the one that resolves the "+
-			"collision this skip exists for -- it removes those three directories "+
+			"collision this skip exists for -- it removes those directories "+
 			"before calling install_fisher, which is the recovery a user in the "+
 			"field had to work out by hand", missing)
 	}
@@ -526,6 +595,24 @@ func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
 			"`apply workstation` on a healthy machine, and a bare `return` leaves "+
 			"the status to whatever ran last", got)
 	}
+	// The message has to come BEFORE the return, or it is never reached. saysAll
+	// above only proves the words are somewhere in the function; swapping the two
+	// lines leaves them there and makes the skip silent, which is the one thing
+	// that assertion exists to prevent.
+	say := -1
+	for i, line := range body[:invoke] {
+		if strings.HasPrefix(strings.TrimSpace(line), "echo ") {
+			say = i
+			break
+		}
+	}
+	if say < 0 {
+		t.Error("the skip prints nothing at all")
+	} else if say > ret {
+		t.Errorf("the skip returns at line %d and only speaks at line %d, so it never "+
+			"speaks: a silent skip is indistinguishable from a phase that did its work",
+			ret, say)
+	}
 	// Never clobber. Every file in those directories was plugin-owned on the
 	// machine that hit this, but that is a fact about one machine: a hand-written
 	// function there would be destroyed with no way back. It is also what makes
@@ -535,6 +622,37 @@ func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
 		if i := indexOf(body, destructive); i >= 0 {
 			t.Errorf("install_fisher line %d runs %q; an existing installation is "+
 				"left exactly as it was found: %q", i, destructive, strings.TrimSpace(body[i]))
+		}
+	}
+}
+
+// The skip's message names fish_reset_all as the way out, and that promise has
+// to hold: the reset removes fisher's generated state and then calls
+// install_fisher to rebuild it, so it must clear EVERY directory the skip globs.
+// Leave one populated and the reset destroys the others, install_fisher skips on
+// the one still standing, and the machine cannot be rebuilt at all -- strictly
+// worse than the collision this guard exists for.
+//
+// The directories are read out of install_fisher's own glob rather than listed
+// again here, so the two cannot drift: widening the guard without widening the
+// reset fails immediately.
+func TestFishResetAllClearsEveryDirectoryTheSkipGlobs(t *testing.T) {
+	_, operands := globOperands(t, installFisherBody(t))
+	reset := functionBody(t, "fish_reset_all")
+	i := indexOf(reset, "rm -rf")
+	if i < 0 {
+		t.Fatalf("fish_reset_all removes nothing, so it cannot rebuild anything:\n%s",
+			strings.Join(reset, "\n"))
+	}
+	for operand := range operands {
+		// "$__fish_config_dir/conf.d/*" -> "conf.d"
+		dir := strings.TrimSuffix(operand, "/*")
+		dir = dir[strings.LastIndex(dir, "/")+1:]
+		if !strings.Contains(reset[i], dir) {
+			t.Errorf("install_fisher globs %s/ but fish_reset_all does not clear it: "+
+				"a file left there survives the reset, install_fisher then skips, and "+
+				"the reset has destroyed the rest for nothing -- %q",
+				dir, strings.TrimSpace(reset[i]))
 		}
 	}
 }
