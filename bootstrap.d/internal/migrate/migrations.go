@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -454,70 +455,146 @@ func mambaforgeRun(c Context) error {
 // call -- so it names both the tool and where it resolves. "refusing to remove
 // ~/sdk/mambaforge" without those is a dead end for whoever reads it, and the
 // remedy differs completely depending on which tool fired.
+//
+// Containment is tested on BOTH the raw path and the fully resolved one, and
+// each catches something the other cannot:
+//
+//	raw       a link INSIDE the installation pointing back out. The interpreter
+//	          it reaches survives the removal; the link the shell found does not.
+//	resolved  a route into the installation through a symlink anywhere in the
+//	          path -- ~/condabin -> ~/sdk/mambaforge/bin, or a symlinked ancestor
+//	          of the installation itself while PATH names the other route.
+//
+// Everything here FAILS CLOSED. A path that cannot be resolved is refused rather
+// than assumed harmless: the cost of a wrong refusal is one message, and the
+// cost of a wrong proceed is 3.5 GB that no repository can return.
 func mambaforgeInUse(mach Machine, dir string) error {
+	refuse := func(problem string) error {
+		return &change.Refusal{
+			Path:    dir,
+			Problem: problem,
+			Remediation: "take it off PATH -- or move whatever still needs it to " +
+				"uv -- then retry",
+		}
+	}
+	// Resolved once, outside the loop: the installation's own route does not
+	// change per tool, and one failure to resolve it means no comparison below
+	// can be trusted.
+	resolvedDir, err := resolvePath(mach, dir)
+	if err != nil {
+		return refuse(fmt.Sprintf("this path cannot be resolved (%v), so whether "+
+			"anything on PATH is inside it cannot be decided", err))
+	}
 	for _, tool := range mambaforgeTools {
-		at, inside, err := resolvesInto(mach, tool, dir)
+		at, err := mach.LookPath(tool)
 		if err != nil {
-			return err
+			// Not on PATH, or found and not executable. exec.LookPath reports both
+			// this way, and neither is a tool about to be deleted out from under a
+			// running process.
+			continue
 		}
-		if inside {
-			return &change.Refusal{
-				Path: dir,
-				Problem: fmt.Sprintf("%q on PATH resolves to %s, inside it, so this "+
-					"toolchain is still live", tool, at),
-				Remediation: "take it off PATH -- or move whatever still needs it to " +
-					"uv -- then retry",
-			}
+		resolvedAt, err := resolvePath(mach, at)
+		if err != nil {
+			return refuse(fmt.Sprintf("%q on PATH is %s, which cannot be resolved "+
+				"(%v), so whether it is inside cannot be decided", tool, at, err))
 		}
+		if !within(dir, at) && !within(resolvedDir, resolvedAt) {
+			continue
+		}
+		where := at
+		if resolvedAt != at {
+			where = at + ", which resolves to " + resolvedAt
+		}
+		return refuse(fmt.Sprintf("%q on PATH is %s, inside it, so this toolchain "+
+			"is still live", tool, where))
 	}
 	return nil
 }
 
-// maxLinkHops bounds the symlink chain resolvesInto will follow. It is Linux's
-// MAXSYMLINKS and above darwin's 32, so any chain the kernel can resolve this
-// one can too -- and a chain longer than the kernel's own limit answers ELOOP,
-// which is not a tool anything is currently running.
+// maxLinkHops bounds the symlinks resolvePath will follow across a whole path.
+// It is Linux's MAXSYMLINKS and above darwin's 32, so any path the kernel can
+// resolve this can too -- and exceeding it is an ERROR rather than an answer,
+// because a guard that reads "I gave up" as "nothing is in use" fails in the one
+// direction that costs 3.5 GB.
 const maxLinkHops = 40
 
-// resolvesInto reports whether looking up name leads into dir, and where.
+// errLinkLoop is what exceeding maxLinkHops reports.
+var errLinkLoop = errors.New("too many symbolic links")
+
+// resolvePath resolves EVERY component of path, not just the last one.
 //
-// Every hop is tested, not just the final destination. exec.LookPath answers
-// with the entry it found ON PATH and does not resolve symlinks, so a
-// ~/.local/bin/python pointing into the installation reads as a path outside it
-// -- and comparing LookPath's answer directly would let the removal proceed
-// against a live interpreter AND break the link on the way past.
+// That distinction is the whole reason this function exists. Lstat follows all
+// but the final component, so with PATH=$HOME/condabin and
+// condabin -> ~/sdk/mambaforge/bin, Lstat("$HOME/condabin/python3") reports a
+// plain regular file: IsLink is false, a per-hop loop over the LEAF stops
+// immediately, and the removal proceeds against a live interpreter. Measured on
+// darwin. The mirror image is an installation reached through a symlinked
+// ancestor while PATH names the other route, where the two spellings never
+// share a prefix at all.
 //
-// A tool that is not on PATH is not in use, so a LookPath error is not an error
-// here. exec.LookPath reports both "no such name" and "found but not
-// executable" that way, and neither is something about to be deleted out from
-// under a running process.
+// The walk starts at the root and rebuilds the path one component at a time, so
+// every component gets its own Lstat and its own chance to be a link. Components
+// that do not exist are passed through unchanged -- Lstat reports absence rather
+// than failing, and a path that is not there cannot be a live tool anyway.
 //
-// The comparison is between absolute paths. A relative PATH entry cannot be
-// resolved without a working directory, which this package deliberately cannot
-// read -- and a PATH holding one is not a shape any machine here has.
-func resolvesInto(m Machine, name, dir string) (string, bool, error) {
-	path, err := m.LookPath(name)
-	if err != nil {
-		return "", false, nil
+// A relative path is REFUSED, not resolved. Resolving one needs a working
+// directory, which this package deliberately cannot read; returning it unchanged
+// would silently compare two things that are not comparable. exec.LookPath
+// produces one only from a relative PATH entry, which no machine here has.
+func resolvePath(mach Machine, path string) (string, error) {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%q is relative, and this package cannot read a "+
+			"working directory to resolve it against", path)
 	}
-	for hop := 0; hop < maxLinkHops; hop++ {
-		if within(dir, path) {
-			return path, true, nil
+	sep := string(filepath.Separator)
+	resolved := sep
+	rest := strings.TrimPrefix(path, sep)
+	for hops := 0; rest != ""; {
+		name := rest
+		if i := strings.Index(rest, sep); i >= 0 {
+			name, rest = rest[:i], rest[i+1:]
+		} else {
+			rest = ""
 		}
-		info, err := m.Lstat(path)
+		if name == "" || name == "." {
+			continue
+		}
+		// Join cleans, so ".." walks up -- which is exact here rather than
+		// approximate, because everything already in resolved has had its own
+		// symlinks resolved away.
+		next := filepath.Join(resolved, name)
+		info, err := mach.Lstat(next)
 		if err != nil {
-			return "", false, err
+			return "", err
 		}
 		if !info.IsLink {
-			return "", false, nil
+			resolved = next
+			continue
 		}
-		dest, err := m.Readlink(path)
+		hops++
+		if hops > maxLinkHops {
+			return "", errLinkLoop
+		}
+		dest, err := mach.Readlink(next)
 		if err != nil {
-			return "", false, err
+			return "", err
 		}
-		path = resolveLink(path, dest)
+		// The link's target is pushed back onto the work list rather than
+		// appended to the answer, so a target that is itself a link is followed
+		// too. An absolute target restarts at the root; a relative one continues
+		// from the directory holding the link, which is exactly `resolved`.
+		dest = filepath.Clean(dest)
+		if filepath.IsAbs(dest) {
+			resolved, dest = sep, strings.TrimPrefix(dest, sep)
+		}
+		if rest == "" {
+			rest = dest
+		} else {
+			rest = dest + sep + rest
+		}
 	}
-	return "", false, nil
+	return resolved, nil
 }
 
 // within reports whether path is dir or below it.

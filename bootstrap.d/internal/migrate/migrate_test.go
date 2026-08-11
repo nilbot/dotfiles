@@ -978,6 +978,128 @@ func TestMambaforgeRefusesThroughASymlinkOnPATH(t *testing.T) {
 	}
 }
 
+// A PATH entry whose DIRECTORY component is a symlink into the installation.
+//
+// Lstat follows all but the final component, so Lstat("$HOME/condabin/python3")
+// with condabin -> <install>/bin reports a plain regular file: IsLink is false.
+// A guard that followed links from the leaf only stops on hop zero and lets the
+// removal proceed against a live interpreter. Measured on darwin.
+func TestMambaforgeRefusesThroughASymlinkedPATHDirectory(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mambaforgeMachine(t)
+	inside := filepath.Join(dir, "bin", "python3")
+	writeExecutable(t, inside)
+
+	// The shape conda's own installer writes: a stable name in $HOME pointing at
+	// whichever installation is current.
+	condabin := filepath.Join(f.home, "condabin")
+	symlink(t, filepath.Join(dir, "bin"), condabin)
+	onlyPATH(t, condabin)
+	before := tree(t, f.home)
+
+	err := named(t, "mambaforge").Run(f.ctx())
+	var refusal *change.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+	}
+	if !strings.Contains(refusal.Error(), inside) {
+		t.Errorf("the refusal must name where the tool actually resolves:\n%s", refusal.Error())
+	}
+	if after := tree(t, f.home); after != before {
+		t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// The mirror image: the INSTALLATION is reached through a symlinked ancestor,
+// while PATH names the other route. The two spellings share no prefix at all, so
+// no amount of resolving the tool alone would find the overlap -- the target
+// directory has to be resolved too.
+//
+// This is the dangerous direction. ~/sdk/mambaforge is still pending (Lstat
+// follows the symlinked ancestor and reports a real directory), so RemoveAll
+// would delete the real installation straight through the link.
+func TestMambaforgeRefusesThroughASymlinkedAncestor(t *testing.T) {
+	f := newFixture(t)
+	// The real installation, somewhere else entirely.
+	elsewhere := filepath.Join(t.TempDir(), "volume", "sdk")
+	install := filepath.Join(elsewhere, "mambaforge")
+	writeFile(t, filepath.Join(install, "conda-meta", "history"), "# created 2024-05\n")
+	inside := filepath.Join(install, "bin", "conda")
+	writeExecutable(t, inside)
+	// ~/sdk is the symlink, so ~/sdk/mambaforge is the migration's target and the
+	// installation at the same time.
+	symlink(t, elsewhere, filepath.Join(f.home, "sdk"))
+	// PATH names the other route, which shares no prefix with ~/sdk/mambaforge.
+	onlyPATH(t, filepath.Join(install, "bin"))
+
+	if !isPending(t, f.ctx(), "mambaforge") {
+		t.Fatal("~/sdk/mambaforge must still be pending here, or this case is not " +
+			"exercising the dangerous shape at all")
+	}
+
+	err := named(t, "mambaforge").Run(f.ctx())
+	var refusal *change.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+	}
+	if !strings.Contains(refusal.Error(), inside) {
+		t.Errorf("the refusal must name the live tool:\n%s", refusal.Error())
+	}
+	if _, err := os.Stat(filepath.Join(install, "conda-meta", "history")); err != nil {
+		t.Errorf("the reclamation deleted the installation through the symlink: %v", err)
+	}
+}
+
+// A path the guard cannot resolve must REFUSE, not proceed. "I gave up" read as
+// "nothing is in use" fails in the one direction that costs 3.5 GB, and the user
+// pays one message for the other direction.
+//
+// Both shapes go through a double rather than the filesystem, and deliberately:
+// the kernel's own MAXSYMLINKS is 32 on darwin, so a chain long enough to exhaust
+// the budget makes exec.LookPath itself fail before the resolver is ever reached.
+// A relative PATH entry would need the test to chdir. Neither is reachable from a
+// fixture, and an unreachable branch in this guard is one nobody has checked.
+func TestMambaforgeRefusesWhatItCannotResolve(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		at    string
+		loop  bool
+		wants string
+	}{
+		{"a symlink loop", "/nowhere/bin/python3", true, "too many symbolic links"},
+		{"a relative PATH entry", "relbin/python3", false, "relative"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			dir := f.mambaforgeMachine(t)
+			onlyPATH(t, t.TempDir())
+			c := f.ctx()
+			c.Change = lookPathAt{
+				Interface: change.NewApplier(&f.out, f.root),
+				tool:      "python3", at: tc.at, loop: tc.loop,
+			}
+			before := tree(t, f.home)
+
+			err := named(t, "mambaforge").Run(c)
+			var refusal *change.Refusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+			}
+			if !strings.Contains(refusal.Error(), tc.wants) {
+				t.Errorf("the refusal must say why it could not decide (%q):\n%s",
+					tc.wants, refusal.Error())
+			}
+			if _, err := os.Stat(filepath.Join(dir, "conda-meta", "history")); err != nil {
+				t.Errorf("an undecidable guard deleted 3.5 GB anyway: %v", err)
+			}
+			if after := tree(t, f.home); after != before {
+				t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s",
+					before, after)
+			}
+		})
+	}
+}
+
 // A sibling whose name merely BEGINS with the target's is not inside it.
 // strings.HasPrefix without the separator says otherwise, and the machine then
 // keeps 3.5 GB forever with a refusal naming a directory that has nothing to do
@@ -1010,32 +1132,64 @@ func TestMambaforgeOnAReclaimedMachineSaysSo(t *testing.T) {
 	}
 }
 
-// A symlink at that path is refused rather than removed. RemoveAll would take
-// the LINK, reclaim nothing, and report success -- a silent wrong outcome on the
-// one verb in this design whose job is destroying something.
+// Anything at that path which is not a real directory is refused rather than
+// removed. Both halves of the branch are covered: RemoveAll on the symlink would
+// take the LINK, reclaim nothing, and report success -- a silent wrong outcome on
+// the one verb in this design whose job is destroying something -- and a regular
+// file there is simply not the installation this reclaims.
 func TestMambaforgeRefusesAPathThatIsNotADirectory(t *testing.T) {
-	f := newFixture(t)
-	elsewhere := filepath.Join(t.TempDir(), "mambaforge")
-	writeFile(t, filepath.Join(elsewhere, "conda-meta", "history"), "# created 2024-05\n")
-	link := filepath.Join(f.home, "sdk", "mambaforge")
-	symlink(t, elsewhere, link)
-	onlyPATH(t, t.TempDir())
-	before := tree(t, f.home)
+	path := func(f *fixture) string { return filepath.Join(f.home, "sdk", "mambaforge") }
 
-	err := named(t, "mambaforge").Run(f.ctx())
-	var refusal *change.Refusal
-	if !errors.As(err, &refusal) {
-		t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
-	}
-	if !strings.Contains(refusal.Error(), link) {
-		t.Errorf("the refusal must name the path:\n%s", refusal.Error())
-	}
-	if after := tree(t, f.home); after != before {
-		t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
-	}
-	if _, err := os.Stat(filepath.Join(elsewhere, "conda-meta", "history")); err != nil {
-		t.Errorf("the migration followed the symlink and destroyed what it pointed at: %v", err)
-	}
+	t.Run("a symlink", func(t *testing.T) {
+		f := newFixture(t)
+		elsewhere := filepath.Join(t.TempDir(), "mambaforge")
+		writeFile(t, filepath.Join(elsewhere, "conda-meta", "history"), "# created 2024-05\n")
+		symlink(t, elsewhere, path(f))
+		onlyPATH(t, t.TempDir())
+		before := tree(t, f.home)
+
+		err := named(t, "mambaforge").Run(f.ctx())
+		var refusal *change.Refusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+		}
+		if !strings.Contains(refusal.Error(), path(f)) {
+			t.Errorf("the refusal must name the path:\n%s", refusal.Error())
+		}
+		if after := tree(t, f.home); after != before {
+			t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s",
+				before, after)
+		}
+		if _, err := os.Stat(filepath.Join(elsewhere, "conda-meta", "history")); err != nil {
+			t.Errorf("the migration followed the symlink and destroyed what it "+
+				"pointed at: %v", err)
+		}
+	})
+
+	// The half the self-review reworded the message for, and which nothing was
+	// asserting.
+	t.Run("a regular file", func(t *testing.T) {
+		f := newFixture(t)
+		writeFile(t, path(f), "not an installation\n")
+		onlyPATH(t, t.TempDir())
+		before := tree(t, f.home)
+
+		err := named(t, "mambaforge").Run(f.ctx())
+		var refusal *change.Refusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+		}
+		if !strings.Contains(refusal.Error(), path(f)) {
+			t.Errorf("the refusal must name the path:\n%s", refusal.Error())
+		}
+		if refusal.Remediation == "" {
+			t.Error("a refusal must name its remediation")
+		}
+		if after := tree(t, f.home); after != before {
+			t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s",
+				before, after)
+		}
+	})
 }
 
 // The rule, over the REAL migration rather than the fake Task 9 wired the
@@ -1063,12 +1217,15 @@ func TestBareMigrateListsMambaforgeAndDeletesNothing(t *testing.T) {
 	}
 }
 
-// Preflight refuses on RECONCILING migrations only, and that filter was
-// exercised by nothing but a fake until now. A reclaiming migration is pending
-// until someone deliberately runs it -- possibly forever -- so refusing on one
-// would deadlock apply on a machine that is otherwise perfectly healthy, with a
-// remedy that does not clear it.
-func TestPendingReclamationDoesNotBlockApply(t *testing.T) {
+// The INPUT preflight sees on a machine whose only pending migration is the
+// reclamation: something reclaiming due, nothing reconciling.
+//
+// This states the fact, not the behaviour. It cannot call Preflight -- this
+// package cannot import internal/phase, which imports it -- so what preflight
+// then DOES with that input is pinned where it belongs, by
+// phase.TestPreflightAllowsAPendingReclamation. Read together they say: this
+// shape occurs, and preflight passes it.
+func TestAMambaforgeMachineHasNothingReconcilingPending(t *testing.T) {
 	f := newFixture(t)
 	f.mambaforgeMachine(t)
 
@@ -1084,6 +1241,45 @@ func TestPendingReclamationDoesNotBlockApply(t *testing.T) {
 			names)
 	}
 }
+
+// lookPathAt is an Applier that reports one guarded tool at a chosen path, and
+// optionally makes that path a symlink to itself.
+//
+// It exists for the two shapes a fixture cannot produce. The kernel's own
+// MAXSYMLINKS is 32 on darwin and 40 on Linux, so a chain long enough to exhaust
+// the resolver's budget makes exec.LookPath fail first and the branch is never
+// entered; and a relative PATH entry would need the case to chdir the whole test
+// binary. Both branches decide whether an irrecoverable delete proceeds, so
+// neither may go unexercised.
+type lookPathAt struct {
+	change.Interface
+	tool string
+	at   string
+	loop bool
+}
+
+func (l lookPathAt) LookPath(name string) (string, error) {
+	if name == l.tool {
+		return l.at, nil
+	}
+	return "", errNotOnPATH
+}
+
+func (l lookPathAt) Lstat(path string) (change.FileInfo, error) {
+	if l.loop && path == l.at {
+		return change.FileInfo{Exists: true, IsLink: true}, nil
+	}
+	return l.Interface.Lstat(path)
+}
+
+func (l lookPathAt) Readlink(path string) (string, error) {
+	if l.loop && path == l.at {
+		return l.at, nil
+	}
+	return l.Interface.Readlink(path)
+}
+
+var errNotOnPATH = errors.New("not on PATH")
 
 // ------------------------------------------------------------ the verb
 
