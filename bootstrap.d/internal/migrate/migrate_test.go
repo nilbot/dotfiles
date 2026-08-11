@@ -1393,6 +1393,46 @@ func TestBareRunReconcilesEverything(t *testing.T) {
 	}
 }
 
+// The checkout is named BEFORE anything is migrated, and on every route into the
+// verb -- bare, by name, and on a machine with nothing to do.
+//
+// The gitconfig migration writes the root's absolute path into ~/.gitconfig, and
+// nothing else in the design writes a checkout path into $HOME behind a message
+// that does not say which checkout. A user arrives here by following preflight's
+// "run './bootstrap migrate', then retry", printed by a run that DID name its
+// root; migrating from a worktree or a second clone then points the real
+// ~/.gitconfig at it, and apply cannot repair that -- ~/.gitconfig is a seed row
+// and Seed never overwrites a regular file.
+// The subtest names deliberately avoid the word this case searches for: t.TempDir
+// spells the test's name into the path it returns, so a subtest called
+// "gitconfig" would put that string inside the root and the ordering assertion
+// below would match the path instead of the migration.
+func TestRunNamesTheCheckoutBeforeMigratingAnything(t *testing.T) {
+	for _, tc := range []struct{ subtest, arg string }{
+		{"bare", ""},
+		{"by name", "gitconfig"},
+	} {
+		t.Run(tc.subtest, func(t *testing.T) {
+			f := newFixture(t)
+			f.oldGitconfigMachine(t)
+			if err := Run(f.ctx(), tc.arg); err != nil {
+				t.Fatal(err)
+			}
+			out := f.out.String()
+			line := "   repository  " + f.root
+			if !strings.Contains(out, line) {
+				t.Fatalf("migrate never names the checkout it writes into; want a %q "+
+					"line, in preflight's shape:\n%s", line, out)
+			}
+			// Before the migration, not after it: a path reported once the file has
+			// already been rewritten is a record, not a warning.
+			if strings.Index(out, line) > strings.Index(out, "\n   gitconfig\n") {
+				t.Errorf("the root is named after the migration ran:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestBareRunOnACleanMachineSaysSo(t *testing.T) {
 	f := newFixture(t)
 	if err := Run(f.ctx(), ""); err != nil {

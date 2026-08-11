@@ -204,6 +204,17 @@ func Run(c Context, name string) error { return run(c, name, All()) }
 // a mechanism proved only against a fake proves only the fake.
 func run(c Context, name string, all []Migration) error {
 	c.logf("== migrate")
+	// The root, named before a migration runs, in preflight's shape and for
+	// preflight's reason. This verb is reached by following the refusal preflight
+	// prints -- "run './bootstrap migrate', then retry" -- and the gitconfig
+	// migration then writes THIS checkout's absolute path into ~/.gitconfig's
+	// [include]. Run from a worktree, or from a second clone, that names a
+	// directory the machine is not provisioned from; and because the migration is
+	// no longer pending afterwards, apply cannot repair it either -- ~/.gitconfig
+	// is a seed row and Seed never overwrites a regular file. The recovery is a
+	// hand edit, so the checkout is worth one line before rather than a puzzle
+	// after.
+	c.logf("   repository  %s", c.Root)
 	if name != "" {
 		for _, m := range all {
 			if m.Name == name {
