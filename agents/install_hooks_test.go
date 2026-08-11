@@ -276,13 +276,57 @@ func temporaryDotfilesCopy(t *testing.T) string {
 	return destinationRoot
 }
 
-func runMakeGitHooks(t *testing.T, root, home, globalConfig string) (string, error) {
+// runHookSequence performs what the Makefile's githooks target used to: the
+// installer's preflight, then the build, then the install.
+//
+// That target went with the rest of provisioning in spec 2. The SEQUENCE did
+// not: bootstrap's devtools phase runs these same three steps in this same
+// order (bootstrap.d/internal/phase/devtools.go), because the installer links
+// four hook names AT the binary and refuses unless it is an executable regular
+// file. Driving the steps directly attaches the two cases below to the ordering
+// property itself rather than to whichever caller happens to run it.
+func runHookSequence(t *testing.T, root, home, globalConfig string) (string, error) {
 	t.Helper()
-	command := exec.Command("make", "--no-print-directory", "githooks", "HOME="+home)
-	command.Dir = root
-	command.Env = isolatedGitEnvironment(t, home, globalConfig)
-	output, err := command.CombinedOutput()
-	return string(output), err
+	// make's $(CURDIR) is the PHYSICAL working directory -- it comes from
+	// getcwd() -- so the target used to hand the installer a root with every
+	// symlink resolved. On macOS that is the difference between /var/... and
+	// /private/var/..., and the installer records what it is given, so a
+	// logical path here would write a core.hooksPath that does not match what
+	// these cases assert. Resolving once keeps that property with the sequence.
+	physicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = physicalRoot
+
+	binary := filepath.Join(home, "bin", "agents")
+	installer := filepath.Join(root, "git", "install-hooks.sh")
+	environment := isolatedGitEnvironment(t, home, globalConfig)
+
+	var combined strings.Builder
+	run := func(name string, args ...string) error {
+		command := exec.Command(name, args...)
+		command.Dir = root
+		command.Env = environment
+		output, err := command.CombinedOutput()
+		combined.Write(output)
+		return err
+	}
+
+	// Preflight first, and its failure returns before anything is built or
+	// linked -- that is the whole subject of the foreign-preflight case.
+	if err := run("bash", installer, "preflight", root, home, binary); err != nil {
+		return combined.String(), err
+	}
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		return combined.String(), err
+	}
+	if err := run("go", "build", "-C", filepath.Join(root, "agents"),
+		"-trimpath", "-o", binary, "."); err != nil {
+		return combined.String(), err
+	}
+	err = run("bash", installer, "install", root, home, binary)
+	return combined.String(), err
 }
 
 func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalPath(t *testing.T) {
@@ -718,7 +762,7 @@ func TestHookInstallerRefusesForeignGlobalBeforeAnyMutation(t *testing.T) {
 	}
 }
 
-func TestMakeGitHooksBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T) {
+func TestGitHookSequenceBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T) {
 	root := temporaryDotfilesCopy(t)
 	home := filepath.Join(t.TempDir(), "temporary home with spaces")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -726,9 +770,9 @@ func TestMakeGitHooksBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T
 	}
 	globalConfig := filepath.Join(home, ".gitconfig")
 	for attempt := 1; attempt <= 2; attempt++ {
-		output, err := runMakeGitHooks(t, root, home, globalConfig)
+		output, err := runHookSequence(t, root, home, globalConfig)
 		if err != nil {
-			t.Fatalf("make githooks attempt %d failed: %v\n%s", attempt, err, output)
+			t.Fatalf("hook sequence attempt %d failed: %v\n%s", attempt, err, output)
 		}
 	}
 
@@ -763,11 +807,11 @@ func TestMakeGitHooksBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T
 		t.Fatal(err)
 	}
 	if want := filepath.Join(physicalRoot, "git", "hooks.d") + "\n"; string(configuredPath) != want {
-		t.Errorf("make-configured core.hooksPath = %q, want %q", configuredPath, want)
+		t.Errorf("configured core.hooksPath = %q, want %q", configuredPath, want)
 	}
 }
 
-func TestMakeGitHooksForeignPreflightRunsBeforeBuildOrLinks(t *testing.T) {
+func TestGitHookSequenceForeignPreflightRunsBeforeBuildOrLinks(t *testing.T) {
 	root := temporaryDotfilesCopy(t)
 	home := filepath.Join(t.TempDir(), "foreign preflight home with spaces")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -779,12 +823,12 @@ func TestMakeGitHooksForeignPreflightRunsBeforeBuildOrLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output, err := runMakeGitHooks(t, root, home, globalConfig)
+	output, err := runHookSequence(t, root, home, globalConfig)
 	if err == nil {
-		t.Fatal("make githooks overwrote a foreign global path")
+		t.Fatal("the hook sequence overwrote a foreign global path")
 	}
 	if !strings.Contains(output, "refusing") || !strings.Contains(output, "core.hooksPath") {
-		t.Fatalf("make refusal is not actionable: %q", output)
+		t.Fatalf("refusal is not actionable: %q", output)
 	}
 	for _, path := range []string{
 		filepath.Join(home, "bin", "agents"),
