@@ -503,10 +503,15 @@ func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
 	}
 	// A skip nobody can see is indistinguishable from a phase that did its work,
 	// and the maintenance path is the whole reason skipping is acceptable.
-	if missing := saysAll(body[:invoke], "functions", "conf.d", "completions", "fisher update"); missing != nil {
+	if missing := saysAll(body[:invoke], "functions", "conf.d", "completions",
+		"fisher update", "fish_reset_all"); missing != nil {
 		t.Errorf("the skip never says %v; it must name the three directories it "+
-			"found files in and point at `fisher update` from an interactive shell, "+
-			"which is where fisher's record is visible", missing)
+			"found files in and point at BOTH remedies from an interactive shell, "+
+			"where fisher's record is visible: `fisher update` to reconcile, and "+
+			"`fish_reset_all` to start over. The reset is the one that resolves the "+
+			"collision this skip exists for -- it removes those three directories "+
+			"before calling install_fisher, which is the recovery a user in the "+
+			"field had to work out by hand", missing)
 	}
 	// Zero, and before the invocation. This is the correction: a machine whose
 	// plugins are already in place is one this phase has nothing to do to, so

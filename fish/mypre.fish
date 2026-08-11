@@ -38,8 +38,10 @@ function install_fisher
     #
     # The case this rule does NOT serve is a partially installed machine: it is
     # skipped exactly like a complete one, and its owner completes it with
-    # `fisher update`. Nothing here deletes or moves anything to find out which
-    # it is. Every file in those directories was plugin-owned on the machine that
+    # `fisher update`, or starts over with `fish_reset_all` below -- which
+    # removes these three directories BEFORE calling this function, so the skip
+    # never blocks a deliberate reset. Nothing here deletes or moves anything to
+    # find out which it is. Every file in those directories was plugin-owned on the machine that
     # hit this, but that is a fact about one machine, not a guarantee -- a
     # hand-written function there would be destroyed with no way back.
     #
@@ -49,7 +51,7 @@ function install_fisher
         $__fish_config_dir/conf.d/*.fish \
         $__fish_config_dir/completions/*.fish
     if set --query installed[1]
-        echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,conf.d,completions}; leaving them alone -- maintain them with 'fisher update' from an interactive shell."
+        echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,conf.d,completions}; leaving them alone -- maintain them with 'fisher update', or rebuild from nothing with 'fish_reset_all', from an interactive shell."
         return 0
     end
 
