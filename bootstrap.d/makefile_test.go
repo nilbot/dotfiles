@@ -32,6 +32,29 @@ func TestMakefileIsDeveloperTargetsOnly(t *testing.T) {
 	}
 }
 
+// buildCommand returns the one line of text that compiles the binary. Searching
+// a whole file or a whole `make -n` dump instead lets any other line answer for
+// the build command: dropping the flag from the recipe and naming it in the
+// target's @echo greens every guard below while producing an unstamped binary.
+//
+// Exactly one line, not the first: two would mean this repository grew a second
+// way to build the thing, and a guard that quietly checked one of them would be
+// making a claim it had stopped verifying.
+func buildCommand(t *testing.T, text, source string) string {
+	t.Helper()
+	var found []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "go build") {
+			found = append(found, line)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s has %d lines running `go build`, want exactly 1:\n%s",
+			source, len(found), text)
+	}
+	return found[0]
+}
+
 // The agents binary cannot work out which checkout it came from, so whoever
 // builds it has to say. Two things build it -- this target and ./bootstrap's
 // devtools phase -- and they sit in different files, in different languages, in
@@ -41,9 +64,10 @@ func TestMakefileIsDeveloperTargetsOnly(t *testing.T) {
 // the git hook chain runs no personal hooks and reports nothing.
 //
 // This asks make what the target emits rather than reading the recipe, because
-// the recipe is free to grow variables and the emitted command is what actually
-// builds the binary. -n is required, not a convenience: `make agents` writes
-// ~/bin/agents on the machine running the tests.
+// make has already expanded whatever variables the recipe is written in and the
+// emitted command is what actually builds the binary. -n is required, not a
+// convenience: `make agents` writes ~/bin/agents on the machine running the
+// tests.
 func TestMakeEmitsAnAgentsBuildStampedWithThisCheckout(t *testing.T) {
 	root := repoRoot(t)
 	makePath, err := exec.LookPath("make")
@@ -59,14 +83,20 @@ func TestMakeEmitsAnAgentsBuildStampedWithThisCheckout(t *testing.T) {
 	}
 
 	const marker = "-X main.dotfilesRoot="
-	_, after, found := strings.Cut(string(out), marker)
+	build := buildCommand(t, string(out), "make -n agents")
+	_, after, found := strings.Cut(build, marker)
 	if !found {
-		t.Fatalf("make -n agents emitted:\n%s\nwith no %q; the binary this builds "+
-			"falls back to ~/dotfiles whichever checkout it was built from",
-			out, marker)
+		t.Fatalf("make -n agents builds with:\n%s\ncarrying no %q; the binary this "+
+			"produces falls back to ~/dotfiles whichever checkout it was built from",
+			build, marker)
 	}
+	// To the closing quote, not to the first space: the flag is one shell-quoted
+	// argument, so a checkout whose path contains a space would otherwise fail
+	// this test rather than the Makefile.
 	stamped := after
-	if i := strings.IndexAny(stamped, "\" \n"); i >= 0 {
+	if i := strings.IndexByte(stamped, '"'); i >= 0 {
+		stamped = stamped[:i]
+	} else if i := strings.IndexAny(stamped, " \t"); i >= 0 {
 		stamped = stamped[:i]
 	}
 	if !filepath.IsAbs(stamped) {
@@ -95,20 +125,22 @@ func TestMakeEmitsAnAgentsBuildStampedWithThisCheckout(t *testing.T) {
 // stamp hardcoded to whatever path this machine happens to use would satisfy it
 // here and hand every other machine a binary naming a directory it does not
 // have. $(CURDIR) is what makes the value the checkout make was invoked in, and
-// only the file can say whether the value is derived or written down.
+// only the unexpanded file can say whether the value is derived or written down.
 //
-// Deliberately not scoped to the agents recipe: a variable holding the flags is
-// a fair way to write this Makefile, and the check above already establishes
-// that whatever holds it reaches the build command.
+// Read from the build command line rather than from anywhere in the file, for
+// the same reason as above: a Makefile with the path hardcoded in the recipe and
+// $(CURDIR) quoted in a comment explaining the stamp passes a whole-file search
+// while building the wrong thing.
 func TestMakefileDerivesTheAgentsStampRatherThanHardcodingIt(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Makefile"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "-X main.dotfilesRoot=$(CURDIR)"; !strings.Contains(string(data), want) {
-		t.Errorf("the Makefile does not contain %q; the stamp must be the directory "+
-			"make was invoked in, and a path written down here is right on exactly "+
-			"one machine", want)
+	build := buildCommand(t, string(data), "the Makefile")
+	if want := "-X main.dotfilesRoot=$(CURDIR)"; !strings.Contains(build, want) {
+		t.Errorf("the Makefile builds with:\n%s\nwhich does not carry %q; the stamp "+
+			"must be the directory make was invoked in, and a path written down "+
+			"here is right on exactly one machine", build, want)
 	}
 }
 
