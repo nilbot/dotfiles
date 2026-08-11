@@ -1,7 +1,12 @@
 # Spec 2 — dotfiles hygiene: a phased, cross-platform bootstrap
 
 **Date:** 2026-08-07 (scope) / 2026-08-10 (design; language reversed same day)
-**Status:** designed — not implemented
+**Status:** implemented — plan
+[2026-08-10-dotfiles-bootstrap](../../plans/2026-08-10-dotfiles-bootstrap.md),
+executed on branch `claude/spec-2-dotfiles-hygiene-5f92d4`.
+**Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
+that is not this one.** The first of the three is that **no phase of this design
+has ever run on Linux**.
 **Implementation language:** Go, with a shell shim for stage zero (§2.1). The
 first implementation was shell throughout and was reversed after one task; the
 evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
@@ -349,21 +354,21 @@ tracked files work unchanged from a worktree or a relocated clone.
 
 Three consequences:
 
-1. **Five `.gitignore` lines are deleted** — `fish/fish_variables`,
+1. **Five `.gitignore` lines were deleted** — `fish/fish_variables`,
    `fish/fish_plugins`, `fish/functions/`, `fish/completions/`, `fish/conf.d/`.
-   They exist only to hold back writes that will no longer arrive. `.gitignore`
-   stops being load-bearing.
-2. **Two tracked functions are built around the old layout and are rewritten,
-   not merely relinked.** `fish_reset_all` does
-   `rm -rf $HOME/dotfiles/fish/{functions,completions,conf.d}/` and must target
-   `$__fish_config_dir`; `install_fisher` reads `$HOME/dotfiles/fish/fishfile`
-   and must resolve it from `(status dirname)`.
-3. **`check` gains a real check.** If anything strips the `source` line from the
+   They existed only to hold back writes that no longer arrive. `.gitignore` has
+   stopped being load-bearing.
+2. **Two tracked functions were built around the old layout and were rewritten,
+   not merely relinked.** `fish_reset_all` did
+   `rm -rf $HOME/dotfiles/fish/{functions,completions,conf.d}/` and now targets
+   `$__fish_config_dir`; `install_fisher` read `$HOME/dotfiles/fish/fishfile`
+   and now resolves it from `(status dirname)`.
+3. **`check` gained a real check.** If anything strips the `source` line from the
    stub, the entire shared configuration goes dark with no error at all. That is
    a silent total failure and it is cheap to detect.
 
-The `# >>> grok installer >>>` block is lifted out of tracked `config.fish` into
-the local stub. The mamba block in `mypost.fish` goes entirely (§9).
+The `# >>> grok installer >>>` block was lifted out of tracked `config.fish` into
+the local stub. The mamba block in `mypost.fish` went entirely (§9).
 
 ## 8. The `.symlink` rename, and the migration hazard inside it
 
@@ -377,8 +382,8 @@ The suffix has stopped carrying information, and for two different reasons:
 
 **The first rename is a live hazard.** Every existing machine's `~/.gitconfig`
 contains `path = ~/dotfiles/git/gitconfig.symlink`. It is a `seed` row, so
-bootstrap will never overwrite it — the include would silently point at a
-missing file and *every shared git setting would disappear with no error*.
+bootstrap never overwrites it — the include would silently point at a missing
+file and *every shared git setting would disappear with no error*.
 
 Hence `migrate`, and hence a `check` for it.
 
@@ -390,7 +395,7 @@ and the code that knows about the past is quarantined where it can be pruned
 once no machine needs it.
 
 Migrations come in two kinds, and the kind determines whether a bare
-`./bootstrap migrate` will run it:
+`./bootstrap migrate` runs it:
 
 | kind | destroys untracked data | run by bare `migrate` |
 |---|---|---|
@@ -424,7 +429,7 @@ follows from the kind.
 
 ## 9. What is removed
 
-Each group gets **its own commit naming what was removed and why**. Git history
+Each group got **its own commit naming what was removed and why**. Git history
 is the archive — `git show <sha>:bin/rgr.bin` recovers any of this byte-for-byte
 forever — so the only real obligation is findability, and that is a
 commit-message obligation, not a working-tree one. Keeping dead files in the
@@ -448,9 +453,9 @@ reader must re-derive which files are live.
 `macOS/filebrowser/` stays: a self-contained opt-in launchd setup with its own
 script, claimed by no phase.
 
-Two side effects the removal commits must state: `~/.spacemacs` becomes a
-dangling symlink on this machine, and `~/.tmux/plugins/tpm` and `~/.vim` remain
-on disk. Dropping a target stops *managing* a thing; it does not delete it.
+Two side effects the removal commits state: `~/.spacemacs` becomes a dangling
+symlink on this machine, and `~/.tmux/plugins/tpm` and `~/.vim` remain on disk.
+Dropping a target stops *managing* a thing; it does not delete it.
 
 ### 9.1 Why `go.pre-commit` goes
 
@@ -568,16 +573,17 @@ This is the §4 invariant, checked exactly.
 
 **Honest limits.** Phases 10, 30 and 40 need network, `sudo`, and a package
 manager; their logic is covered by fakes and their real execution is not
-exercised end-to-end. **No Linux machine is available to verify against**, so
-Linux support ships written and unit-tested but unverified in practice. That is
-recorded in [Risks](#risks), not claimed as working. The shim itself is shell
-and gets a small integration test, but its Go-absent branch cannot be tested on
-a machine that has Go.
+exercised end-to-end. **No Linux machine was available to verify against**, so
+Linux support shipped written and unit-tested but never executed on Linux. That
+is recorded in [Known gaps](#known-gaps-2026-08-11) and in [Risks](#risks), not
+claimed as working. The shim itself is shell and has a small integration test,
+but its Go-absent branch cannot be tested on a machine that has Go.
 
 ## 12. Commit order
 
-Bootstrap lands **before** anything is removed, so the repo is never in a state
-where a machine cannot be provisioned:
+Bootstrap landed **before** anything was removed, so the repo was never in a
+state where a machine could not be provisioned. This is the order the plan
+executed in:
 
 1. `change.Interface` with both implementations, `manifest`, the shim, and the
    dispatcher. Nothing removed; both paths work.
@@ -756,6 +762,32 @@ being wrong is one clear message rather than a silent surprise.
 
 ---
 
+## Known gaps (2026-08-11)
+
+Measured at the end of implementation. These are facts about what was built, not
+caveats: each is stated here so that nobody has to rediscover it on a machine
+where it matters.
+
+**1. Linux is untested.** No phase in this design has run on Linux. The
+stage-zero package selection, the Homebrew prefix at `/home/linuxbrew/.linuxbrew`,
+and `chsh` under a different `/etc/shells` convention are all unexercised.
+`Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need cached
+sudo credentials or they fail with "no tty present".
+
+**2. `plan` exits 2 on a machine that lacks Homebrew or fish**, rather than
+previewing. `Planner` records a command without performing it, and nothing in
+`Machine` reports which happened, so a read that depends on a prior `Run` cannot
+tell "it ran and produced nothing" from "it was only recorded". Closing this
+needs a design decision about how `Planner` represents a command's effects.
+Accepted deliberately: the alternative is a per-operation mode signal every
+phase could branch on.
+
+**3. Linux has no managed nerd font.** `font-symbols-only-nerd-font` is a cask,
+casks do not exist on Linux, and Homebrew publishes no formula for it. Task 14
+removed the vendored `install-font-linux.sh` that used to cover this.
+
+---
+
 ## Rejected alternatives
 
 **Rebuilding the Makefile as the bootstrap interface** (`make plan`,
@@ -817,7 +849,9 @@ exchange for one convenience command.
 
 | Risk | Mitigation |
 |---|---|
-| Linux support is written but never executed on Linux | Stated plainly, not claimed as working. Plan-mode and stub tests cover the logic; end-to-end verification is owed before the Linux path is described as supported. |
+| Linux support is written but never executed on Linux — no phase of this design has run there | Not mitigated. Stated plainly rather than claimed as working: see [Known gaps](#known-gaps-2026-08-11) 1. Plan-mode and stub tests cover the logic; end-to-end verification is owed before the Linux path is described as supported. |
+| `plan` exits 2 on a machine that lacks Homebrew or fish, instead of previewing | Accepted deliberately, not mitigated. [Known gaps](#known-gaps-2026-08-11) 2 records why, and what closing it would cost. |
+| Linux has no managed nerd font | Not mitigated. The cask is macOS-only and the vendored Linux installer was removed. [Known gaps](#known-gaps-2026-08-11) 3. |
 | The `gitconfig.shared` rename silently empties shared git config on existing machines | `migrate` repoints the include; `check` #5 detects a stale one. |
 | The fish stub loses its `source` line, and the whole shared config goes dark | `check` #4. |
 | Editing `~/.config/fish/config.fish` silently produces untracked changes | The stub's header says so, mirroring `gitconfig.local.template`. Reduced, not eliminated. |

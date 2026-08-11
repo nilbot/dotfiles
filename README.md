@@ -1,0 +1,48 @@
+# dotfiles
+
+Configuration for this machine, and the provisioner that applies it.
+
+## Provisioning
+
+```sh
+./bootstrap plan  workstation    # what it would do, changing nothing
+./bootstrap apply workstation    # do it
+./bootstrap check                # is this machine still converged
+./bootstrap migrate              # what needs migrating, and how
+```
+
+`plan`, `apply` and `check` take a profile. `workstation` is the whole machine.
+`dotfiles` is preflight, config and verify only — no sudo, no network, no
+package manager, no login-shell change — which is what makes it safe in a
+container or on a machine whose packages are managed elsewhere.
+
+Exit codes: `0` ok, `1` advisory, `2` block, `3` malformed input, `4` not
+applicable. `./bootstrap --help` prints the full surface.
+
+`./bootstrap` is a small shell shim that builds `bootstrap.d/` and hands over to
+it. It installs nothing: on a machine without Go it refuses and names the exact
+command to run first.
+
+**Linux is untested.** No phase of this has ever run on Linux. The code is
+written and unit-tested for Debian/Ubuntu and Arch/Manjaro; nothing more than
+that is claimed. Two further gaps — `plan` refusing on a machine that lacks
+Homebrew or fish, and no managed nerd font on Linux — are recorded with the rest
+in [spec 2](docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11).
+
+## The Makefile
+
+`make agents` builds the `agents` binary to `~/bin/agents`. It is the only
+target left, and it is a developer convenience for inner-loop work on `agents/`
+— `./bootstrap apply workstation` builds the same binary in its devtools phase.
+Provisioning belongs to `./bootstrap`; `make dotfiles` is retired, not aliased.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `bootstrap`, `bootstrap.d/` | the provisioner: shim, phases, `links.manifest`, `Brewfile` |
+| `agents/` | the `agents` binary — repo-tracked agent context (spec 1) |
+| `fish/`, `git/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
+| `docs/superpowers/` | the specs and plans that carry the reasoning |
+
+Start with [the spec index](docs/superpowers/specs/agents/README.md).
