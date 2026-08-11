@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/record"
+	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
 func newRepo(t *testing.T) string {
@@ -280,5 +282,157 @@ func TestHookLaneFlagOverridesBranch(t *testing.T) {
 	// newRepo checks out sq-123/payments; an explicit lane must win over it.
 	if rec := readOnlyRecord(t, root); rec["lane"] != "hotfix-pay-7" {
 		t.Errorf("lane = %v, want hotfix-pay-7 (--lane must override the branch)", rec["lane"])
+	}
+}
+
+// Caching at the hook is what closes the window the whole feature exists for.
+//
+// A subagent transcript is complete when the child stops and is deleted later,
+// unpredictably, while the session that made it is still running -- 25 of 111
+// in one measured session, scattered rather than oldest-first. `agents trace
+// cache` run afterwards therefore arrives too late for whatever has already
+// gone, and no schedule fixes that, because the order is not one anything can
+// anticipate. The earliest moment a complete child transcript exists on disk is
+// this hook.
+//
+// Only subagent-stop. A session transcript is 12.9 MB against a subagent's
+// 424 KB mean, is still growing, and is named by ~30 stop events a day: copying
+// it here would be quadratic in session length on a path a harness is blocked
+// on.
+func TestHookCachesTheSubagentTranscriptItJustRecorded(t *testing.T) {
+	thisMachine(t)
+	root := newRepo(t)
+	t.Chdir(root)
+
+	transcript := filepath.Join(t.TempDir(), "agent-a9f1.jsonl")
+	const body = `{"type":"assistant","text":"what the subagent found"}` + "\n"
+	if err := os.WriteFile(transcript, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","agent_id":"a9f1",` +
+		`"cwd":"` + root + `","agent_transcript_path":"` + transcript + `"}`
+
+	var stderr bytes.Buffer
+	if code := runHook([]string{"subagent-stop", "--harness", "claude-code"}, strings.NewReader(payload), &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := trace.CachedPath(cacheRoot, record.Record{
+		Harness: "claude-code", Transcript: transcript,
+	})
+	b, err := os.ReadFile(cached)
+	if err != nil {
+		t.Fatalf("the hook recorded the pointer but did not cache the transcript (%v); "+
+			"by the time anyone runs `agents trace cache` it may be gone", err)
+	}
+	if string(b) != body {
+		t.Errorf("cached content = %q, want the transcript", b)
+	}
+}
+
+// The session transcript is the one that must NOT be copied here.
+func TestHookDoesNotCacheOnStopOrSessionStart(t *testing.T) {
+	for _, event := range []string{"stop", "session-start"} {
+		t.Run(event, func(t *testing.T) {
+			thisMachine(t)
+			root := newRepo(t)
+			t.Chdir(root)
+
+			// The session id must appear in the basename, because that is how the
+			// adapter verifies the pointer. Named otherwise, the record is
+			// unverified and Cache declines to copy it for that reason -- so the
+			// test passed with the event guard deleted, proving nothing. Measured:
+			// it did.
+			transcript := filepath.Join(t.TempDir(), "session-s1.jsonl")
+			if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			payload := `{"hook_event_name":"Stop","session_id":"s1","cwd":"` + root + `",` +
+				`"transcript_path":"` + transcript + `"}`
+
+			var stderr bytes.Buffer
+			if code := runHook([]string{event, "--harness", "claude-code"}, strings.NewReader(payload), &stderr); code != 0 {
+				t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr.String())
+			}
+			// The precondition, asserted rather than assumed: an unverified
+			// pointer would make the assertion below true for the wrong reason.
+			if rec := readOnlyRecord(t, root); rec["pointer_verified"] != true {
+				t.Fatalf("fixture is not discriminating: pointer_verified = %v, so Cache "+
+					"would decline this transcript whatever the event guard does; record: %v",
+					rec["pointer_verified"], rec)
+			}
+			cacheRoot, err := repo.TraceCacheDir(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(trace.CachedPath(cacheRoot, record.Record{
+				Harness: "claude-code", Transcript: transcript,
+			})); err == nil {
+				t.Errorf("%s copied the session transcript: it is still growing, so the "+
+					"copy is a prefix that skip-if-exists would freeze, and it is named "+
+					"by every turn", event)
+			}
+		})
+	}
+}
+
+// The hook is on a path the harness is blocked on, and its contract is that a
+// trace is worth strictly less than the dispatch. A cache failure must be
+// reported and must not change the exit code -- and the record must still be
+// there, because the pointer is the more important of the two.
+func TestHookStillRecordsWhenCachingCannotHappen(t *testing.T) {
+	thisMachine(t)
+	root := newRepo(t)
+	t.Chdir(root)
+
+	// Named but absent: the pointer is worth keeping even when the bytes are not
+	// there to copy.
+	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","agent_id":"a9f2",` +
+		`"cwd":"` + root + `","agent_transcript_path":"` + filepath.Join(t.TempDir(), "never-existed.jsonl") + `"}`
+
+	var stderr bytes.Buffer
+	if code := runHook([]string{"subagent-stop", "--harness", "claude-code"}, strings.NewReader(payload), &stderr); code != 0 {
+		t.Fatalf("exit = %d, want 0 even when the transcript cannot be copied; stderr: %s",
+			code, stderr.String())
+	}
+	if rec := readOnlyRecord(t, root); rec["agent_id"] != "a9f2" {
+		t.Errorf("the record must survive a failed cache: got %v", rec)
+	}
+}
+
+// Writing to disk on every subagent completion is not everyone's trade.
+func TestHookAutoCacheCanBeTurnedOff(t *testing.T) {
+	thisMachine(t)
+	root := newRepo(t)
+	t.Chdir(root)
+	t.Setenv("AGENTS_NO_AUTO_CACHE", "1")
+
+	transcript := filepath.Join(t.TempDir(), "agent-a9f3.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","agent_id":"a9f3",` +
+		`"cwd":"` + root + `","agent_transcript_path":"` + transcript + `"}`
+
+	var stderr bytes.Buffer
+	if code := runHook([]string{"subagent-stop", "--harness", "claude-code"}, strings.NewReader(payload), &stderr); code != 0 {
+		t.Fatalf("exit = %d: %s", code, stderr.String())
+	}
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(trace.CachedPath(cacheRoot, record.Record{
+		Harness: "claude-code", Transcript: transcript,
+	})); err == nil {
+		t.Error("AGENTS_NO_AUTO_CACHE was set and the transcript was cached anyway")
+	}
+	// The pointer is not the expensive part and is not what was opted out of.
+	if rec := readOnlyRecord(t, root); rec["agent_id"] != "a9f3" {
+		t.Errorf("opting out of caching must not stop recording: got %v", rec)
 	}
 }
