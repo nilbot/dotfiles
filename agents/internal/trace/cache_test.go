@@ -712,3 +712,100 @@ func TestMigrateLegacyCacheKeepsTheOldDirectoryWhenAMoveFails(t *testing.T) {
 		t.Errorf("content = %q, want it untouched", b)
 	}
 }
+
+// CachedPath must agree with where Cache actually wrote, or every reader looks
+// in the wrong place. Asserted against a real copy rather than against a second
+// copy of the naming rule, which would only prove the rule equals itself.
+func TestCachedPathNamesWhereCacheActuallyWrote(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-agree.jsonl"), "content\n")
+	rec := record.Record{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true}
+
+	if _, err := Cache(cacheRoot, "m1", []record.Record{rec}); err != nil {
+		t.Fatal(err)
+	}
+	got := CachedPath(cacheRoot, rec)
+	b, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatalf("CachedPath = %q, which is not what Cache wrote (%v); the cache holds %v",
+			got, err, cachedFiles(t, cacheRoot))
+	}
+	if string(b) != "content\n" {
+		t.Errorf("content at CachedPath = %q, want the transcript", b)
+	}
+}
+
+// The same cleaning Cache applies, so a record spelling its path differently
+// resolves to the one copy rather than to a name nothing wrote.
+func TestCachedPathCleansThePathTheSameWayCacheDoes(t *testing.T) {
+	cacheRoot := t.TempDir()
+	dir := t.TempDir()
+	src := write(t, filepath.Join(dir, "rollout-clean.jsonl"), "x\n")
+	messy := filepath.Join(dir, ".", "sub", "..", "rollout-clean.jsonl")
+
+	if _, err := Cache(cacheRoot, "m1", []record.Record{
+		{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := CachedPath(cacheRoot, record.Record{Machine: "m1", Harness: "codex", Transcript: messy})
+	if _, err := os.ReadFile(got); err != nil {
+		t.Errorf("CachedPath(%q) = %q, which does not resolve to the copy Cache made "+
+			"from the same file spelled plainly: %v", messy, got, err)
+	}
+}
+
+func TestResolvePrefersTheSourceAndFallsBackToTheCache(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-live.jsonl"), "live\n")
+	rec := record.Record{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true}
+	if _, err := Cache(cacheRoot, "m1", []record.Record{rec}); err != nil {
+		t.Fatal(err)
+	}
+
+	// While the harness still has it, the source is the answer: it is the one
+	// that is still growing, so a cached copy may be short.
+	path, origin, err := Resolve(cacheRoot, rec)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if origin != "source" || path != src {
+		t.Errorf("Resolve = (%q, %q), want the live source %q", path, origin, src)
+	}
+
+	// The case the whole cache exists for.
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+	path, origin, err = Resolve(cacheRoot, rec)
+	if err != nil {
+		t.Fatalf("Resolve after the harness deleted the source: %v", err)
+	}
+	if origin != "cache" {
+		t.Errorf("origin = %q, want %q", origin, "cache")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || string(b) != "live\n" {
+		t.Errorf("Resolve pointed at %q holding %q (%v), want the cached transcript", path, b, err)
+	}
+}
+
+// An error a reader can act on names both places that were tried; "not found"
+// alone leaves them unable to tell a missing cache from a missing record.
+func TestResolveNamesBothPathsWhenNeitherHoldsIt(t *testing.T) {
+	cacheRoot := t.TempDir()
+	rec := record.Record{
+		Machine: "m1", Harness: "codex",
+		Transcript: filepath.Join(t.TempDir(), "rollout-vanished.jsonl"), PointerVerified: true,
+	}
+	_, _, err := Resolve(cacheRoot, rec)
+	if err == nil {
+		t.Fatal("Resolve must fail when neither the source nor the cache holds it")
+	}
+	if !strings.Contains(err.Error(), rec.Transcript) {
+		t.Errorf("the error must name the source path; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), CachedPath(cacheRoot, rec)) {
+		t.Errorf("the error must name the cache path it looked in; got: %v", err)
+	}
+}

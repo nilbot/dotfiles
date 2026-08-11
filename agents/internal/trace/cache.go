@@ -83,7 +83,10 @@ func Cache(root, thisMachine string, recs []record.Record) (CacheReport, error) 
 			continue
 		}
 
-		dst := filepath.Join(root, harnessDir(r.Harness), cacheName(t.src))
+		// Through CachedPath rather than spelling the rule again here: a reader
+		// that computes the destination differently from the writer looks in a
+		// place nothing wrote, and neither side would fail on its own.
+		dst := CachedPath(root, r)
 		if _, err := os.Stat(dst); err == nil {
 			rep.Skipped++
 			continue
@@ -97,6 +100,50 @@ func Cache(root, thisMachine string, recs []record.Record) (CacheReport, error) 
 		rep.Copied++
 	}
 	return rep, nil
+}
+
+// CachedPath answers where the copy of rec's transcript lives, whether or not
+// one is there.
+//
+// The rule is deterministic from (harness, transcript path) and nothing else,
+// which is what lets a reader find a copy without consulting an index of what
+// was written. filepath.Clean matches what Cache applies to the source, so a
+// record spelling one path two ways resolves to the one copy rather than to a
+// name nothing ever wrote.
+func CachedPath(root string, rec record.Record) string {
+	return filepath.Join(root, harnessDir(rec.Harness), cacheName(filepath.Clean(rec.Transcript)))
+}
+
+// Resolve answers where rec's transcript can actually be read from, preferring
+// the harness's own copy and falling back to the cache.
+//
+// The source comes first because it is the one that may still be growing: a
+// session transcript is appended to for as long as the session lasts, so a copy
+// taken earlier is a prefix of it. Once the harness deletes the source -- which
+// it does to subagent transcripts partway through a session, unpredictably --
+// the cache holds the only copy there will ever be, and that is the case this
+// function exists for.
+//
+// origin is "source" or "cache", so a caller can say where the bytes came from
+// rather than leaving the reader to guess whether they are looking at live data.
+//
+// A pure lookup: no reading, no parsing, no harness-specific knowledge. Whatever
+// consumes transcripts later -- a distillation step, a reviewer, a person -- gets
+// a path and decides for itself what to do with it.
+func Resolve(root string, rec record.Record) (path, origin string, err error) {
+	src := filepath.Clean(rec.Transcript)
+	if rec.Transcript != "" {
+		if fi, serr := os.Lstat(src); serr == nil && fi.Mode().IsRegular() {
+			return src, "source", nil
+		}
+	}
+	cached := CachedPath(root, rec)
+	if fi, cerr := os.Lstat(cached); cerr == nil && fi.Mode().IsRegular() {
+		return cached, "cache", nil
+	}
+	// Both paths, because "not found" alone cannot tell a transcript that was
+	// never cached from one whose cache is somewhere else.
+	return "", "", fmt.Errorf("no transcript at %s and none cached at %s", src, cached)
 }
 
 // MigrateReport says what a move of the old cache did. Details names every file
