@@ -24,4 +24,9 @@ link    macOS/ghostty                     .config/ghostty                   darw
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
 seed    fish/config.fish.template         .config/fish/config.fish          *
+# fisher's record of what it installed. Seeded, not linked, because fisher
+# rewrites this path itself. Its source is not named *.template like the other
+# seed sources because install_fisher reads the same file straight out of the
+# checkout: one file, two readers, the same list -- which is the point.
+seed    fish/fishfile                     .config/fish/fish_plugins         *
 seed    git/gitconfig.local.template      .gitconfig                        *

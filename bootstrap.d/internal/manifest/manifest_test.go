@@ -79,6 +79,38 @@ func TestDuplicateTargets(t *testing.T) {
 	}
 }
 
+// fisher's own record of what it installed is a path fisher writes, so the
+// placement rule makes it a seed and never a link. Its source is the tracked
+// fishfile that install_fisher reads directly, which is what keeps the list
+// bootstrap seeds and the list the shell installs from being two lists.
+//
+// The whole row is asserted, not merely the pair: a row that named the right
+// files under kind `link` would publish fisher's writes back into the checkout,
+// which is the exact fault §1's placement rule exists to prevent.
+func TestRealManifestSeedsTheFisherRecordFromTheTrackedList(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "links.manifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := manifest.Parse(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := manifest.Row{
+		Kind:     manifest.KindSeed,
+		Source:   "fish/fishfile",
+		Target:   ".config/fish/fish_plugins",
+		Platform: "*",
+	}
+	for _, row := range rows {
+		if row == want {
+			return
+		}
+	}
+	t.Errorf("no row %+v in the shipped manifest; fisher's record would be "+
+		"whatever the machine happened to have:\n%+v", want, rows)
+}
+
 // The shipped manifest must parse and be conflict-free on both platforms.
 func TestRealManifestIsWellFormed(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "links.manifest"))

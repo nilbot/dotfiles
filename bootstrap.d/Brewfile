@@ -1,5 +1,4 @@
 brew "bazelisk"
-brew "bingrep"
 brew "fish"
 brew "go"
 brew "node"

@@ -56,10 +56,17 @@ func Devtools(c Context) error {
 	// on the installed toolchain: go1.26.5 accepts -C, and `go help build`
 	// documents it as a flag that must come first on the command line, which is
 	// where it is.
+	//
+	// The -X stamp is what tells the built binary which checkout it belongs to.
+	// c.Root is the only party that knows: an unstamped binary falls back to
+	// ~/dotfiles, which makes doctor fail three checks against a healthy machine
+	// and makes the git hook chain skip every personal hook without saying so.
+	// The repository Makefile's agents target carries the same flag.
 	c.logf("   agents      %s", binary)
 	if err := c.Change.Run("go", "build",
 		"-C", filepath.Join(c.Root, "agents"),
-		"-trimpath", "-o", binary, "."); err != nil {
+		"-trimpath", "-ldflags", "-X main.dotfilesRoot="+c.Root,
+		"-o", binary, "."); err != nil {
 		return err
 	}
 

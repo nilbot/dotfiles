@@ -67,6 +67,50 @@ func releaseFIFOAfter(path string, delay time.Duration, stop <-chan struct{}) <-
 	return done
 }
 
+// doctorCheckStatus returns the status mark doctor printed for one check, or
+// "<missing>" when it printed none. Remedy lines begin with "->" and so never
+// match a check name.
+func doctorCheckStatus(output, name string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[1] == name {
+			return fields[0]
+		}
+	}
+	return "<missing>"
+}
+
+// TestDoctorCommandNamesThisBinarysCheckoutInsteadOfAssumingHome pins the one
+// line that fixes the reported bug: the doctor command asking DotfilesRoot()
+// which checkout this binary belongs to, instead of letting doctor assume
+// ~/dotfiles and report three failures and a warning against a healthy machine.
+//
+// DotfilesRoot and DependenciesFor are each covered alone, but covering two
+// halves says nothing about whether they are joined. This builds the real
+// dependencies through the real constructor, so reverting that line to
+// DefaultDependencies() fails here -- which is the whole value of the pin.
+func TestDoctorCommandNamesThisBinarysCheckoutInsteadOfAssumingHome(t *testing.T) {
+	stampRoot(t, "")
+	root := filepath.Join(t.TempDir(), "src", "dotfiles")
+	home := t.TempDir()
+	t.Setenv("AGENTS_DOTFILES_ROOT", root)
+	t.Setenv("HOME", home)
+
+	deps := defaultDoctorCommandDependencies().DoctorDeps
+
+	for _, c := range []struct{ field, got, want string }{
+		{"HooksDir", deps.HooksDir, filepath.Join(root, "git", "hooks.d")},
+		{"AttributesSource", deps.AttributesSource, filepath.Join(root, "git", "gitattributes")},
+		{"SharedGitConfig", deps.SharedGitConfig, filepath.Join(root, "git", "gitconfig.shared")},
+	} {
+		if c.got != c.want {
+			t.Errorf("doctor command DoctorDeps.%s = %q, want %q; doctor compares this "+
+				"against what Git reports, so a binary that assumes %s instead fails "+
+				"its own check on a correctly provisioned machine",
+				c.field, c.got, c.want, filepath.Join(home, "dotfiles"))
+		}
+	}
+}
+
 func TestDoctorCommandExitContract(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -297,11 +341,17 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 
+	// AGENTS_DOTFILES_ROOT is dropped and never re-added: the child binary is
+	// built unstamped, so it must fall through to HOME to find the checkout this
+	// fixture laid out. A developer or CI runner with that variable exported
+	// would otherwise point the "fully isolated" child at the real checkout, and
+	// this test's name would be stating something untrue.
 	var environment []string
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
 		if key == "HOME" || key == "XDG_STATE_HOME" || key == "GIT_CONFIG_GLOBAL" ||
 			key == "GIT_CONFIG_NOSYSTEM" || key == "GIT_TERMINAL_PROMPT" || key == "PATH" ||
+			key == "AGENTS_DOTFILES_ROOT" ||
 			key == "GIT_DIR" || key == "GIT_WORK_TREE" || key == "GIT_INDEX_FILE" ||
 			key == "GIT_CONFIG_COUNT" || key == "GIT_CONFIG_PARAMETERS" ||
 			strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
@@ -335,7 +385,24 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 	if code, out := run("init"); code != exitcode.Advisory {
 		t.Fatalf("isolated init exit=%d want=1\n%s", code, out)
 	}
-	if code, out := run("doctor"); code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
+	code, out := run("doctor")
+	if code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
 		t.Fatalf("isolated doctor exit=%d want=1\n%s", code, out)
+	}
+	// This fixture provisions the checkout under its own HOME correctly, so the
+	// checks derived from the checkout root must come back ok -- they are exactly
+	// the ones the reported bug turned red on a healthy machine.
+	//
+	// The exit code cannot see them: doctor returns Advisory whenever any check
+	// is non-ok, and this fixture always carries warnings (nothing has recorded
+	// here yet). Without these assertions the environment sanitizing above is
+	// unfalsifiable -- an ambient AGENTS_DOTFILES_ROOT could point the child at
+	// the real checkout and every assertion here would still pass.
+	for _, name := range []string{"git-hooks:global", "git-hooks:effective", "git-hooks:links"} {
+		if status := doctorCheckStatus(out, name); status != "ok" {
+			t.Errorf("isolated doctor reported %q for %s, want ok; this fixture is "+
+				"provisioned correctly, so any other status means the child resolved "+
+				"a checkout other than the one under its own HOME\n%s", status, name, out)
+		}
 	}
 }

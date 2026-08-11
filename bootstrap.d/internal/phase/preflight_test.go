@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -321,14 +322,45 @@ func (f *fakeChange) record(op, path string) error {
 	return nil
 }
 
+// recordArgv renders a command the way the Ops assertions read it, with the
+// element boundaries still in it.
+//
+// Joining on a space alone erases them, and the phases pass arguments that
+// contain spaces -- a fish -c snippet, a /bin/sh -c script, the go build
+// -ldflags value. ["-ldflags", "-X main.dotfilesRoot=/repo"] and ["-ldflags",
+// "-X", "main.dotfilesRoot=/repo"] join to the same text, and the second is not
+// a command that works: go rejects it with `malformed import path`. Every
+// assertion in this package would have kept passing.
+//
+// Only elements a bare join would blur are quoted -- one containing a space, a
+// tab, a newline or a quote, or an empty one -- so operations whose arguments
+// are all ordinary words read exactly as they always did. Newlines are in that
+// set because the Ops assertions compare strings.Join(fake.Ops, "\n"): an
+// argument holding a newline would otherwise forge an operation boundary, and
+// two runs differing in how many commands they issued would compare equal.
+// That rule is what makes the rendering reversible: an element rendered bare
+// can hold no separator and no quote, so a token that opens with a quote is
+// always one quoted element, read
+// to its matching unescaped close.
+func recordArgv(name string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	for _, part := range append([]string{name}, args...) {
+		if part == "" || strings.ContainsAny(part, " \t\n\r\"") {
+			part = strconv.Quote(part)
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, " ")
+}
+
 func (f *fakeChange) Dir(p string) error     { return f.record("dir "+p, p) }
 func (f *fakeChange) Link(s, t string) error { return f.record("link "+t+" -> "+s, t) }
 func (f *fakeChange) Seed(s, t string) error { return f.record("seed "+t+" from "+s, t) }
 func (f *fakeChange) Run(n string, a ...string) error {
-	return f.record("run "+n+" "+strings.Join(a, " "), n)
+	return f.record("run "+recordArgv(n, a), n)
 }
 func (f *fakeChange) Sudo(n string, a ...string) error {
-	return f.record("sudo "+n+" "+strings.Join(a, " "), n)
+	return f.record("sudo "+recordArgv(n, a), n)
 }
 
 // The four migration operations. No phase calls them -- migrations are their own

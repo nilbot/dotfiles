@@ -83,10 +83,16 @@ type Context struct {
 	Platform string
 	Profile  string
 
-	// Shell is $SHELL, read by main and passed in exactly as Home is. Nothing
-	// in this package or in internal/phase can reach the environment on its
-	// own, which is the point: the login shell is machine state, and machine
-	// state arrives through the caller or through change.Interface.
+	// Shell is the account's login shell, read from the passwd database by main
+	// and passed in exactly as Home is. Nothing in this package or in
+	// internal/phase can reach the environment or that database on its own,
+	// which is the point: the login shell is machine state, and machine state
+	// arrives through the caller or through change.Interface.
+	//
+	// It is NOT $SHELL, which main falls back to only when the database cannot
+	// be read. $SHELL is inherited from whatever started the process, so a run
+	// begun in a zsh terminal reported /bin/zsh and made the check below fail on
+	// a machine whose login shell had been fish for months.
 	Shell string
 }
 

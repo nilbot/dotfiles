@@ -48,9 +48,14 @@ type Context struct {
 	Platform string
 	Profile  string
 
-	// Shell is $SHELL, supplied by main exactly as Home is. Nothing in this
-	// package can reach the environment on its own, and the verify phase needs
-	// the login shell to report on it.
+	// Shell is the account's login shell, read from the passwd database by main
+	// and supplied exactly as Home is. Nothing in this package can reach the
+	// environment or that database on its own, and the fish phase needs the
+	// login shell to know whether a chsh is due.
+	//
+	// It is NOT $SHELL, which main falls back to only when the database cannot
+	// be read: $SHELL is inherited from whatever started the process, so a run
+	// begun in another shell describes that session rather than this account.
 	Shell string
 
 	// User is the current user's login name, supplied by main exactly as Shell
