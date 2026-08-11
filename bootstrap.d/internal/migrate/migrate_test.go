@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -171,7 +172,7 @@ func named(t *testing.T, name string) Migration {
 
 func isPending(t *testing.T, c Context, name string) bool {
 	t.Helper()
-	got, err := named(t, name).Pending(c)
+	got, err := named(t, name).Pending(c.Query())
 	if err != nil {
 		t.Fatalf("%s Pending: %v", name, err)
 	}
@@ -182,6 +183,49 @@ func mustRun(t *testing.T, c Context, name string) {
 	t.Helper()
 	if err := named(t, name).Run(c); err != nil {
 		t.Fatalf("%s Run: %v", name, err)
+	}
+}
+
+// The other two of the three interfaces, pinned as phase.Machine and
+// check.Machine are.
+//
+// Machine is the WIDE one -- it is where the four destructive operations are
+// allowed to live -- so the assertion that matters is the opposite of the one
+// phase makes: change.Interface must satisfy it exactly, with nothing left over
+// on either side. A method added to change.Interface and not reflected here
+// would be a capability the migrations silently could not reach; one added here
+// and not there would not compile.
+//
+// Reader is the narrow one, and it is what makes preflight's question askable
+// by a phase that cannot destroy anything. Widening it would hand that
+// capability back through the door this split exists to close.
+func TestTheTwoMigrateInterfacesAreThirteenAndThree(t *testing.T) {
+	var _ Machine = change.Interface(nil)
+	var _ Reader = change.Interface(nil)
+
+	machine := reflect.TypeOf((*Machine)(nil)).Elem()
+	if machine.NumMethod() != 13 {
+		t.Errorf("migrate.Machine has %d methods, want 13 -- change.Interface entire",
+			machine.NumMethod())
+	}
+	iface := reflect.TypeOf((*change.Interface)(nil)).Elem()
+	if machine.NumMethod() != iface.NumMethod() {
+		t.Errorf("migrate.Machine has %d methods and change.Interface has %d; a "+
+			"migration cannot reach an operation that is not on both",
+			machine.NumMethod(), iface.NumMethod())
+	}
+
+	reader := reflect.TypeOf((*Reader)(nil)).Elem()
+	for _, method := range []string{"Copy", "Rename", "RemoveAll", "WriteFile",
+		"Dir", "Link", "Seed", "Run", "Sudo"} {
+		if _, found := reader.MethodByName(method); found {
+			t.Errorf("migrate.Reader exposes %s; deciding whether a migration "+
+				"applies is a read, and preflight asks that question", method)
+		}
+	}
+	if reader.NumMethod() != 3 {
+		t.Errorf("migrate.Reader has %d methods, want 3 (Lstat, Readlink, ReadFile)",
+			reader.NumMethod())
 	}
 }
 
@@ -654,7 +698,7 @@ func TestBareRunReconcilesEverything(t *testing.T) {
 	f.oldGitconfigMachine(t)
 	f.oldGitignoreMachine(t)
 
-	pend, err := Pending(f.ctx())
+	pend, err := Pending(f.ctx().Query())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +709,7 @@ func TestBareRunReconcilesEverything(t *testing.T) {
 	if err := Run(f.ctx(), ""); err != nil {
 		t.Fatalf("bare migrate: %v", err)
 	}
-	pend, err = Pending(f.ctx())
+	pend, err = Pending(f.ctx().Query())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -749,7 +793,7 @@ func TestBareRunListsReclaimingMigrationsAndRunsNone(t *testing.T) {
 	reclaiming := Migration{
 		Name:    "mambaforge",
 		Kind:    Reclaiming,
-		Pending: func(Context) (bool, error) { return true, nil },
+		Pending: func(Query) (bool, error) { return true, nil },
 		Run:     func(Context) error { ran = true; return nil },
 	}
 
@@ -772,7 +816,7 @@ func TestANamedReclaimingMigrationRuns(t *testing.T) {
 	reclaiming := Migration{
 		Name:    "mambaforge",
 		Kind:    Reclaiming,
-		Pending: func(Context) (bool, error) { return true, nil },
+		Pending: func(Query) (bool, error) { return true, nil },
 		Run:     func(Context) error { ran = true; return nil },
 	}
 	if err := run(f.ctx(), "mambaforge", []Migration{reclaiming}); err != nil {
@@ -790,7 +834,7 @@ func TestBareRunListsOnlyPendingReclaimingMigrations(t *testing.T) {
 	done := Migration{
 		Name:    "mambaforge",
 		Kind:    Reclaiming,
-		Pending: func(Context) (bool, error) { return false, nil },
+		Pending: func(Query) (bool, error) { return false, nil },
 		Run:     func(Context) error { t.Fatal("must not run"); return nil },
 	}
 	if err := run(f.ctx(), "", []Migration{done}); err != nil {

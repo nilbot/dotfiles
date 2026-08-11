@@ -13,8 +13,36 @@ import (
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 )
 
+// Machine is the part of change.Interface a PHASE is allowed to reach, and it
+// deliberately omits Copy, Rename, RemoveAll and WriteFile.
+//
+// Those four exist for internal/migrate, which is the only code in this design
+// that destroys anything. Leaving them on the interface a phase holds would
+// reopen, one layer up, the hole check.Machine closed below: the architecture
+// test constrains imports, not method calls, so nothing would catch a future
+// phase reaching for RemoveAll, and §5's "apply refuses, it never clobbers"
+// would rest on every phase happening to only converge.
+//
+// Nothing is given up. Converging a machine is Dir, Link and Seed, each of
+// which refuses rather than overwrite -- and no phase, present or planned, has
+// asked for any of the four.
+//
+// change.Interface satisfies this implicitly, so nothing at a call site changes.
+type Machine interface {
+	Lstat(path string) (change.FileInfo, error)
+	Readlink(path string) (string, error)
+	LookPath(name string) (string, error)
+	ReadFile(path string) ([]byte, error)
+
+	Dir(path string) error
+	Link(source, target string) error
+	Seed(source, target string) error
+	Run(name string, args ...string) error
+	Sudo(name string, args ...string) error
+}
+
 type Context struct {
-	Change   change.Interface
+	Change   Machine
 	Root     string
 	Home     string
 	Platform string

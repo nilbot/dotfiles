@@ -3,6 +3,7 @@ package phase_test
 import (
 	"bytes"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,6 +52,37 @@ func TestPreflightRefusesWithoutStageZeroTools(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "git") {
 		t.Errorf("refusal should name the tool: %v", err)
+	}
+}
+
+// The same guard internal/check keeps over its own Machine, one layer up.
+//
+// Task 9 gave change.Interface four destructive operations for the migrations,
+// and phase.Context.Change was that interface -- so every phase could suddenly
+// call RemoveAll, reopening at this layer exactly the hole check.Machine closed
+// at the one below. No phase declares a need for any of the four: converging a
+// machine is Dir, Link and Seed, each of which refuses rather than overwrite.
+// A capability nobody needs should be one nobody can reach.
+//
+// The count is pinned as well as the four names, because the failure this
+// guards against is a future WIDENING, and a widening does not have to use one
+// of today's names.
+func TestMachineCannotDestroy(t *testing.T) {
+	// change.Interface must satisfy Machine, or every call site would need a
+	// wrapper and the narrowing would not be free.
+	var _ phase.Machine = change.Interface(nil)
+
+	machine := reflect.TypeOf((*phase.Machine)(nil)).Elem()
+	for _, method := range []string{"Copy", "Rename", "RemoveAll", "WriteFile"} {
+		if _, found := machine.MethodByName(method); found {
+			t.Errorf("phase.Machine exposes %s; a phase must not be able to destroy "+
+				"anything -- apply refuses, it never clobbers", method)
+		}
+	}
+	if machine.NumMethod() != 9 {
+		t.Errorf("phase.Machine has %d methods, want 9 (Lstat, Readlink, LookPath, "+
+			"ReadFile, Dir, Link, Seed, Run, Sudo); widening it widens what a phase "+
+			"can do to a machine", machine.NumMethod())
 	}
 }
 

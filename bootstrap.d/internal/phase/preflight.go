@@ -55,8 +55,12 @@ func Preflight(c Context) error {
 // exists, and a bare migrate never runs one -- so refusing apply on a reclaiming
 // migration would be a deadlock whose named remedy does not clear it.
 func pendingMigrations(c Context) error {
-	due, err := migrate.Pending(migrate.Context{
-		Change: c.Change, Root: c.Root, Home: c.Home, Out: c.Out,
+	// A migrate.Query, not a migrate.Context: deciding whether a migration
+	// applies is a read, and a phase holds a Machine that cannot destroy
+	// anything. Preflight therefore cannot perform a migration even by mistake
+	// -- it can only ask whether one is due.
+	due, err := migrate.Pending(migrate.Query{
+		Read: c.Change, Root: c.Root, Home: c.Home,
 	})
 	if err != nil {
 		return err

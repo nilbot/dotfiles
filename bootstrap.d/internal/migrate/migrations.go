@@ -50,21 +50,21 @@ type fishFacts struct {
 	present []string // the fishState entries that are actually there
 }
 
-func fishInspect(c Context) (fishFacts, error) {
+func fishInspect(q Query) (fishFacts, error) {
 	f := fishFacts{
-		link:   filepath.Join(c.Home, ".config", "fish"),
-		source: filepath.Join(c.Root, "fish"),
+		link:   filepath.Join(q.Home, ".config", "fish"),
+		source: filepath.Join(q.Root, "fish"),
 	}
 	f.staging = f.link + ".bootstrap-migrating"
 
-	info, err := c.Change.Lstat(f.link)
+	info, err := q.Read.Lstat(f.link)
 	if err != nil {
 		return f, err
 	}
 	if !info.IsLink {
 		return f, nil
 	}
-	dest, err := c.Change.Readlink(f.link)
+	dest, err := q.Read.Readlink(f.link)
 	if err != nil {
 		return f, err
 	}
@@ -78,7 +78,7 @@ func fishInspect(c Context) (fishFacts, error) {
 	f.pending = true
 
 	for _, name := range fishState {
-		state, err := c.Change.Lstat(filepath.Join(f.source, name))
+		state, err := q.Read.Lstat(filepath.Join(f.source, name))
 		if err != nil {
 			return f, err
 		}
@@ -89,8 +89,8 @@ func fishInspect(c Context) (fishFacts, error) {
 	return f, nil
 }
 
-func fishPending(c Context) (bool, error) {
-	f, err := fishInspect(c)
+func fishPending(q Query) (bool, error) {
+	f, err := fishInspect(q)
 	return f.pending, err
 }
 
@@ -105,7 +105,7 @@ func fishPending(c Context) (bool, error) {
 // data is still in the checkout -- immediately followed by a rename, so the
 // window in which ~/.config/fish is absent is a single syscall wide.
 func fishRun(c Context) error {
-	f, err := fishInspect(c)
+	f, err := fishInspect(c.Query())
 	if err != nil {
 		return err
 	}
@@ -192,12 +192,12 @@ type gitconfigFacts struct {
 	pending bool
 }
 
-func gitconfigInspect(c Context) (gitconfigFacts, error) {
+func gitconfigInspect(q Query) (gitconfigFacts, error) {
 	g := gitconfigFacts{
-		path: filepath.Join(c.Home, ".gitconfig"),
-		want: filepath.Join(c.Root, newSharedGitconfig),
+		path: filepath.Join(q.Home, ".gitconfig"),
+		want: filepath.Join(q.Root, newSharedGitconfig),
 	}
-	info, err := c.Change.Lstat(g.path)
+	info, err := q.Read.Lstat(g.path)
 	if err != nil {
 		return g, err
 	}
@@ -208,7 +208,7 @@ func gitconfigInspect(c Context) (gitconfigFacts, error) {
 	if !info.IsRegular {
 		return g, nil
 	}
-	data, err := c.Change.ReadFile(g.path)
+	data, err := q.Read.ReadFile(g.path)
 	if err != nil {
 		return g, err
 	}
@@ -226,13 +226,13 @@ func gitconfigInspect(c Context) (gitconfigFacts, error) {
 	return g, nil
 }
 
-func gitconfigPending(c Context) (bool, error) {
-	g, err := gitconfigInspect(c)
+func gitconfigPending(q Query) (bool, error) {
+	g, err := gitconfigInspect(q)
 	return g.pending, err
 }
 
 func gitconfigRun(c Context) error {
-	g, err := gitconfigInspect(c)
+	g, err := gitconfigInspect(c.Query())
 	if err != nil {
 		return err
 	}
@@ -277,26 +277,26 @@ type gitignoreFacts struct {
 	wantExists bool
 }
 
-func gitignoreInspect(c Context) (gitignoreFacts, error) {
+func gitignoreInspect(q Query) (gitignoreFacts, error) {
 	g := gitignoreFacts{
-		link: filepath.Join(c.Home, ".gitignore"),
-		old:  filepath.Join(c.Root, oldGlobalIgnore),
-		want: filepath.Join(c.Root, newGlobalIgnore),
+		link: filepath.Join(q.Home, ".gitignore"),
+		old:  filepath.Join(q.Root, oldGlobalIgnore),
+		want: filepath.Join(q.Root, newGlobalIgnore),
 	}
-	source, err := c.Change.Lstat(g.want)
+	source, err := q.Read.Lstat(g.want)
 	if err != nil {
 		return g, err
 	}
 	g.wantExists = source.Exists
 
-	info, err := c.Change.Lstat(g.link)
+	info, err := q.Read.Lstat(g.link)
 	if err != nil {
 		return g, err
 	}
 	if !info.IsLink {
 		return g, nil
 	}
-	dest, err := c.Change.Readlink(g.link)
+	dest, err := q.Read.Readlink(g.link)
 	if err != nil {
 		return g, err
 	}
@@ -304,13 +304,13 @@ func gitignoreInspect(c Context) (gitignoreFacts, error) {
 	return g, nil
 }
 
-func gitignorePending(c Context) (bool, error) {
-	g, err := gitignoreInspect(c)
+func gitignorePending(q Query) (bool, error) {
+	g, err := gitignoreInspect(q)
 	return g.pending, err
 }
 
 func gitignoreRun(c Context) error {
-	g, err := gitignoreInspect(c)
+	g, err := gitignoreInspect(c.Query())
 	if err != nil {
 		return err
 	}

@@ -46,22 +46,79 @@ const (
 	Reclaiming Kind = "reclaiming"
 )
 
+// Machine is everything a migration may do, which is change.Interface entire --
+// the four destructive operations included. This package is the only consumer
+// that needs them, which is exactly why phase.Machine and check.Machine do not
+// have them.
+//
+// change.Interface satisfies it implicitly, so nothing at a call site changes.
+type Machine interface {
+	Lstat(path string) (change.FileInfo, error)
+	Readlink(path string) (string, error)
+	LookPath(name string) (string, error)
+	ReadFile(path string) ([]byte, error)
+
+	Dir(path string) error
+	Link(source, target string) error
+	Seed(source, target string) error
+	Run(name string, args ...string) error
+	Sudo(name string, args ...string) error
+
+	Copy(source, target string) error
+	Rename(source, target string) error
+	RemoveAll(path string) error
+	WriteFile(path string, data []byte) error
+}
+
+// Reader is what DECIDING whether a migration applies needs: three reads and
+// nothing else.
+//
+// It is separate from Machine because of where the question gets asked.
+// phase.Preflight refuses on a pending migration, and a phase holds a
+// phase.Machine, which cannot destroy anything -- so if Pending took a Context
+// carrying a full Machine, preflight could not ask the question without being
+// handed back the capability its own interface exists to withhold.
+//
+// Splitting it puts the distinction where it belongs anyway: deciding is a read,
+// performing is not, and the type of each now says so. A Pending that quietly
+// grew a RemoveAll would not compile.
+type Reader interface {
+	Lstat(path string) (change.FileInfo, error)
+	Readlink(path string) (string, error)
+	ReadFile(path string) ([]byte, error)
+}
+
 type Migration struct {
 	Name string
 	Kind Kind
 	// Pending reports whether this machine is in the state the migration
-	// reconciles. It reads and nothing more.
-	Pending func(Context) (bool, error)
+	// reconciles. Its argument is the read-only half of a Context, so it cannot
+	// do anything but read.
+	Pending func(Query) (bool, error)
 	// Run performs it, and is idempotent: a migration that is not pending
 	// reports so and changes nothing.
 	Run func(Context) error
 }
 
 type Context struct {
-	Change change.Interface
+	Change Machine
 	Root   string
 	Home   string
 	Out    io.Writer
+}
+
+// Query is Context's read-only half, and the whole of what Pending is given.
+type Query struct {
+	Read Reader
+	Root string
+	Home string
+}
+
+// Query narrows a Context for the inspect functions Run and Pending share. Both
+// therefore read the machine through the same three methods, which is what keeps
+// them from forming separate opinions about it.
+func (c Context) Query() Query {
+	return Query{Read: c.Change, Root: c.Root, Home: c.Home}
 }
 
 func (c Context) logf(format string, args ...any) {
@@ -99,12 +156,12 @@ func (e *UnknownError) Error() string {
 // pending for as long as the thing it would reclaim exists, and a bare migrate
 // never runs one -- so refusing apply on it would be a deadlock with no remedy,
 // which is the failure this package exists to avoid rather than create.
-func Pending(c Context) ([]Migration, error) { return pending(c, All()) }
+func Pending(q Query) ([]Migration, error) { return pending(q, All()) }
 
-func pending(c Context, all []Migration) ([]Migration, error) {
+func pending(q Query, all []Migration) ([]Migration, error) {
 	var out []Migration
 	for _, m := range all {
-		is, err := m.Pending(c)
+		is, err := m.Pending(q)
 		if err != nil {
 			return nil, fmt.Errorf("deciding whether the %s migration applies: %w", m.Name, err)
 		}
@@ -155,7 +212,7 @@ func run(c Context, name string, all []Migration) error {
 		return &UnknownError{Name: name, Known: known}
 	}
 
-	due, err := pending(c, all)
+	due, err := pending(c.Query(), all)
 	if err != nil {
 		return err
 	}
