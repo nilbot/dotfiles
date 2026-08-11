@@ -1,4 +1,5 @@
-# Global git attributes, linked to ~/.gitattributes by `make githooks`.
+# Global git attributes, linked to ~/.gitattributes by git/install-hooks.sh,
+# which bootstrap's devtools phase runs (`./bootstrap apply workstation`).
 #
 # Per-repository .gitattributes (written by `agents init`) takes precedence
 # over anything here.

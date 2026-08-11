@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# Stage zero, and the only shell in this design. Its whole job is to reach Go
+# and hand over -- it does no reconciliation and has no dry-run mode to keep
+# honest, which is why it can be shell when nothing else is.
+#
+# It installs nothing. An earlier version installed Go via Homebrew, but set -e
+# does not apply inside $( ), so a failed install was swallowed and reached the
+# build as an empty command. Refusing with the exact one-liner deletes that
+# whole class of bug instead of trying to be careful around it.
+#
+# See docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md §2.1
+
+set -euo pipefail
+
+# die and exec are the ONLY ways out of this script, which
+# TestShimHasExactlyTwoWaysOut in bootstrap.d/main_test.go enforces. Exit 2 is
+# "block" in the shared table; 1 is "advisory", which is how a CI job keying off
+# codes would read a hard stop. die is defined first so every later failure has
+# somewhere to go -- an earlier draft defined it below the root resolution,
+# which therefore exited 1.
+die() {
+	printf 'bootstrap: %s\n' "$1" >&2
+	exit 2
+}
+
+# CDPATH= and -- are load-bearing. Without them `cd` searches CDPATH for a
+# relative $0 and echoes the directory it resolved to, so BOOTSTRAP_ROOT can
+# silently become a same-named decoy directory AND arrive as two lines. That is
+# the "wrong tree" failure this whole redesign exists to prevent;
+# TestShimIgnoresAPoisonedCDPATH reproduces it.
+BOOTSTRAP_ROOT=$(CDPATH= cd -- "$(dirname "$0")" && pwd) ||
+	die "cannot resolve the repository root from '$0'"
+export BOOTSTRAP_ROOT
+
+src=$BOOTSTRAP_ROOT/bootstrap.d
+
+# Validate the OUTCOME, not each input to it. With `dirname` off PATH the
+# substitution yields "", and on bash 3.2.57 -- the macOS system bash this file
+# targets, and the only one on a machine that has not been provisioned yet --
+# `cd -- ""` SUCCEEDS as a no-op, so BOOTSTRAP_ROOT silently becomes the
+# caller's working directory. (Measured: bash 5.3.15 rejects it as "null
+# directory", where the || die above already catches it.) That is the third
+# distinct route to "wrong tree, silently" found in this file. Checking the
+# resolved root catches that route and every other one, including any neither
+# of us has found.
+[ -d "$src" ] ||
+	die "'$BOOTSTRAP_ROOT' does not look like a dotfiles checkout: $src is missing"
+
+# ...and that it is THIS checkout. -d alone passes whenever the wrong answer is
+# itself a checkout -- a caller whose working directory is another clone --
+# and measured, the shim then builds and runs that other tree and exits 0, with
+# no symptom at all. Same device and inode is the only test that settles it.
+[ "$BOOTSTRAP_ROOT/bootstrap" -ef "$0" ] ||
+	die "'$BOOTSTRAP_ROOT' is not where this script lives; refusing to provision from another tree"
+
+# The cache is keyed on the checkout. Without the key, a main clone and a git
+# worktree share one binary, and whichever built first wins -- old code against
+# a new tree, silently.
+key=$(printf '%s' "$BOOTSTRAP_ROOT" | cksum | tr -cd '0-9') ||
+	die "cannot derive a cache key; cksum and tr must be on PATH"
+
+# An explicit check, not ${HOME:?...}: a :? failure exits 1, measured on bash
+# 3.2.57 and 5.x. Exit 1 is "advisory" in the shared table, so a container with
+# neither variable set would report a hard stop as a soft warning.
+if [ -z "${XDG_CACHE_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+	die "neither XDG_CACHE_HOME nor HOME is set; there is nowhere to cache the build"
+fi
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles-bootstrap/$key
+binary=$cache/bootstrap
+
+# No auto-install: see spec §2.1. A helper called as go_bin=$(find_go) would
+# swallow the failure, because set -e does not apply inside $( ). A plain
+# assignment in an if-condition does not have that problem.
+if ! go_bin=$(command -v go); then
+	case "$(uname -s)" in
+		Darwin) hint='brew install go   (Homebrew itself: https://brew.sh)' ;;
+		Linux)  hint='sudo apt-get install -y golang-go   (or: sudo pacman -S go)' ;;
+		*)      hint='install Go from https://go.dev/dl/' ;;
+	esac
+	die "Go is required and was not found.
+  $hint
+Then re-run this command."
+fi
+
+needs_build=0
+if [ ! -x "$binary" ]; then
+	needs_build=1
+else
+	# Directories are included so a DELETED source counts: removing a .go file
+	# updates its parent's mtime but leaves every surviving file older.
+	sources=$(find "$src" \( -name '*.go' -o -name 'go.mod' -o -type d \) -print) ||
+		die "cannot scan $src for sources"
+	while IFS= read -r file; do
+		[ -n "$file" ] || continue
+		if [ "$file" -nt "$binary" ]; then
+			needs_build=1
+			break
+		fi
+	done <<EOF
+$sources
+EOF
+fi
+
+if [ "$needs_build" -eq 1 ]; then
+	printf 'bootstrap: building\n' >&2
+	mkdir -p "$cache" || die "cannot create the build cache at $cache"
+	( cd -- "$src" && "$go_bin" build -trimpath -o "$binary" . ) ||
+		die "the build failed; the compiler output is above"
+fi
+
+# The last check happens BEFORE the handover, because exec cannot report its own
+# failure: `exec cmd || die` is dead code for a path containing a slash. A failed
+# execve terminates the shell before the || arm runs -- measured as exit 1 on
+# bash 3.2.57 and 126/127 on 5.3.15, with and without shopt -s execfail.
+#
+# What remains uncoverable is a file that is executable but not a loadable
+# image: execve returns ENOEXEC and bash re-runs it as a shell script, so the
+# exit code is whatever that produces. Nothing in a shim can intercept that.
+[ -x "$binary" ] || die "no executable binary at $binary; remove $cache and retry"
+
+exec "$binary" "$@"

@@ -87,7 +87,7 @@ func DefaultDependencies() Dependencies {
 		AttributesSource:      filepath.Join(dotfiles, "git", "gitattributes"),
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
-		SharedGitConfig:       filepath.Join(dotfiles, "git", "gitconfig.symlink"),
+		SharedGitConfig:       filepath.Join(dotfiles, "git", "gitconfig.shared"),
 	}
 }
 

@@ -1,5 +1,12 @@
-source ~/.config/fish/alias.fish
-source ~/.config/fish/mypre.fish
+# Tracked, shared fish configuration. Sourced by the machine-local
+# ~/.config/fish/config.fish that bootstrap seeds from config.fish.template.
+#
+# Siblings are sourced through (status dirname) rather than ~/.config/fish, so
+# the clone location appears exactly ONCE on a machine -- in the seeded stub --
+# instead of in every tracked file. This directory is no longer the one fish
+# reads.
+source (status dirname)/alias.fish
+source (status dirname)/mypre.fish
 # if test -d ~/etc/extras.secret
 #     source ~/etc/extras.secret/gitconfig.extra.fish
 # end
@@ -34,12 +41,4 @@ set -g fish_color_valid_path --underline
 starship init fish | source
 
 # sourcing the post scripts
-source ~/.config/fish/mypost.fish
-
-# >>> grok installer >>>
-# Guarded: fish_add_path writes to a universal variable, so an unguarded call on a
-# machine without grok would persist a dead path into fish_variables permanently.
-if test -d $HOME/.grok/bin
-    fish_add_path $HOME/.grok/bin
-end
-# <<< grok installer <<<
+source (status dirname)/mypost.fish

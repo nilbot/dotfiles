@@ -18,8 +18,9 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 **This protection system is integrated into the dotfiles.**
 
-Run `make githooks` from the dotfiles checkout (or use `make links`, which
-includes it). The installer checks for existing Git-hook and global-attributes
+Run `./bootstrap apply workstation` from the dotfiles checkout. Its devtools
+phase runs the installer's preflight, builds `~/bin/agents`, then runs the
+installer. The installer checks for existing Git-hook and global-attributes
 ownership before it builds or changes anything. It refuses a foreign global
 `core.hooksPath` instead of replacing or implicitly chaining it.
 

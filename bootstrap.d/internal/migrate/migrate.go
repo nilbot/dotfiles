@@ -1,0 +1,279 @@
+// Package migrate holds the declared, idempotent, one-time operations that
+// reconcile a machine provisioned by an older layout with the one this
+// repository now describes.
+//
+// Keeping them out of apply is what preserves spec §5 intact: apply never
+// clobbers, and the code that knows about the past is quarantined where it can
+// be deleted once no machine needs it.
+//
+// Like internal/phase and internal/check it imports NO package capable of I/O.
+// Everything it does to the machine goes through change.Interface, and the
+// architecture test enforces it. That matters more here than anywhere else in
+// the design: this is the only code that touches data which does not exist in
+// git, so the one place that can destroy something is the one place a reader can
+// find it.
+//
+// # Pending and Run consult one account of the machine
+//
+// Every migration below is a pair of functions over a single inspect function
+// that gathers the facts once. Pending answers from those facts; Run refuses
+// unless the same facts say it should proceed. A migration whose Run decided
+// separately could destroy something Pending had already said was not its
+// business -- and Pending being exact in BOTH directions is load-bearing:
+// a false positive runs a migration twice, and a false negative leaves apply
+// refusing a path forever with no remedy at all.
+package migrate
+
+import (
+	"fmt"
+	"io"
+	"path/filepath"
+	"strings"
+
+	"github.com/nilbot/dotfiles/bootstrap/internal/change"
+)
+
+// Kind decides whether a bare `./bootstrap migrate` will run a migration. It is
+// the whole of the safety rule: declare the kind, and behaviour follows.
+type Kind string
+
+const (
+	// Reconciling moves or rewrites. Nothing is destroyed that cannot be
+	// reconstructed from the checkout, so a bare migrate runs it.
+	Reconciling Kind = "reconciling"
+	// Reclaiming destroys untracked data irreversibly. A bare migrate LISTS it
+	// and runs nothing; it happens only when named.
+	Reclaiming Kind = "reclaiming"
+)
+
+// Machine is everything a migration may do, which is change.Interface entire --
+// the four destructive operations included. This package is the only consumer
+// that needs them, which is exactly why phase.Machine and check.Machine do not
+// have them.
+//
+// change.Interface satisfies it implicitly, so nothing at a call site changes.
+type Machine interface {
+	Lstat(path string) (change.FileInfo, error)
+	Readlink(path string) (string, error)
+	LookPath(name string) (string, error)
+	ReadFile(path string) ([]byte, error)
+
+	Dir(path string) error
+	Link(source, target string) error
+	Seed(source, target string) error
+	Run(name string, args ...string) error
+	Sudo(name string, args ...string) error
+
+	Copy(source, target string) error
+	Rename(source, target string) error
+	RemoveAll(path string) error
+	WriteFile(path string, data []byte) error
+}
+
+// Reader is what DECIDING whether a migration applies needs: three reads and
+// nothing else.
+//
+// It is separate from Machine because of where the question gets asked.
+// phase.Preflight refuses on a pending migration, and a phase holds a
+// phase.Machine, which cannot destroy anything -- so if Pending took a Context
+// carrying a full Machine, preflight could not ask the question without being
+// handed back the capability its own interface exists to withhold.
+//
+// Splitting it puts the distinction where it belongs anyway: deciding is a read,
+// performing is not, and the type of each now says so. A Pending that quietly
+// grew a RemoveAll would not compile.
+type Reader interface {
+	Lstat(path string) (change.FileInfo, error)
+	Readlink(path string) (string, error)
+	ReadFile(path string) ([]byte, error)
+}
+
+type Migration struct {
+	Name string
+	Kind Kind
+	// Pending reports whether this machine is in the state the migration
+	// reconciles. Its argument is the read-only half of a Context, so it cannot
+	// do anything but read.
+	Pending func(Query) (bool, error)
+	// Run performs it, and is idempotent: a migration that is not pending
+	// reports so and changes nothing.
+	Run func(Context) error
+}
+
+type Context struct {
+	Change Machine
+	Root   string
+	Home   string
+	Out    io.Writer
+}
+
+// Query is Context's read-only half, and the whole of what Pending is given.
+type Query struct {
+	Read Reader
+	Root string
+	Home string
+}
+
+// Query narrows a Context for the inspect functions Run and Pending share. Both
+// therefore read the machine through the same three methods, which is what keeps
+// them from forming separate opinions about it.
+func (c Context) Query() Query {
+	return Query{Read: c.Change, Root: c.Root, Home: c.Home}
+}
+
+func (c Context) logf(format string, args ...any) {
+	fmt.Fprintf(c.Out, format+"\n", args...)
+}
+
+// All is the declared set, in the order a bare migrate runs them.
+//
+// The reclaiming one is last, and nothing depends on that -- a bare migrate runs
+// none of them, so its position is a matter of reading order only. What DOES
+// depend on the declaration is its Kind: that single word is what stops a
+// routine `./bootstrap migrate` from destroying 3.5 GB of untracked data.
+func All() []Migration {
+	return []Migration{
+		{"fish", Reconciling, fishPending, fishRun},
+		{"gitconfig", Reconciling, gitconfigPending, gitconfigRun},
+		{"gitignore", Reconciling, gitignorePending, gitignoreRun},
+		{"mambaforge", Reclaiming, mambaforgePending, mambaforgeRun},
+	}
+}
+
+// UnknownError is a name that matches no migration. It is malformed INPUT --
+// exit 3 -- not a machine bootstrap declined to touch, which is why it has its
+// own type rather than being a plain error the caller has to match on text.
+type UnknownError struct {
+	Name  string
+	Known []string
+}
+
+func (e *UnknownError) Error() string {
+	return fmt.Sprintf("unknown migration %q; known migrations are %s",
+		e.Name, strings.Join(e.Known, ", "))
+}
+
+// Pending reports every migration this machine is in the state for, of both
+// kinds, in All()'s order.
+//
+// Callers that act on the answer must filter by Kind themselves. Preflight
+// refuses on Reconciling only, and deliberately: a reclaiming migration is
+// pending for as long as the thing it would reclaim exists, and a bare migrate
+// never runs one -- so refusing apply on it would be a deadlock with no remedy,
+// which is the failure this package exists to avoid rather than create.
+func Pending(q Query) ([]Migration, error) { return pending(q, All()) }
+
+func pending(q Query, all []Migration) ([]Migration, error) {
+	var out []Migration
+	for _, m := range all {
+		is, err := m.Pending(q)
+		if err != nil {
+			return nil, fmt.Errorf("deciding whether the %s migration applies: %w", m.Name, err)
+		}
+		if is {
+			out = append(out, m)
+		}
+	}
+	return out, nil
+}
+
+// Names returns the names of the migrations of one kind, in order.
+//
+// It exists so that preflight's "refuse on reconciling migrations only" can be
+// tested here rather than only through the phase. Dropping the filter is a
+// deadlock: mambaforge is pending for as long as ~/sdk/mambaforge exists, which
+// may be forever, and preflight would refuse apply for something a bare migrate
+// deliberately never runs -- so the remedy the refusal names would not clear it.
+func Names(ms []Migration, kind Kind) []string {
+	var names []string
+	for _, m := range ms {
+		if m.Kind == kind {
+			names = append(names, m.Name)
+		}
+	}
+	return names
+}
+
+// Run performs one named migration, or -- given "" -- every pending reconciling
+// one, listing the reclaiming ones it is eligible to run without performing any.
+func Run(c Context, name string) error { return run(c, name, All()) }
+
+// run takes the migration set so a test can state the reclaiming rule over
+// migrations it constructs itself, independently of what All() happens to hold.
+// The rule is also exercised over the real mambaforge migration, through Run --
+// a mechanism proved only against a fake proves only the fake.
+func run(c Context, name string, all []Migration) error {
+	c.logf("== migrate")
+	// The root, named before a migration runs, in preflight's shape and for
+	// preflight's reason. This verb is reached by following the refusal preflight
+	// prints -- "run './bootstrap migrate', then retry" -- and the gitconfig
+	// migration then writes THIS checkout's absolute path into ~/.gitconfig's
+	// [include]. Run from a worktree, or from a second clone, that names a
+	// directory the machine is not provisioned from; and because the migration is
+	// no longer pending afterwards, apply cannot repair it either -- ~/.gitconfig
+	// is a seed row and Seed never overwrites a regular file. The recovery is a
+	// hand edit, so the checkout is worth one line before rather than a puzzle
+	// after.
+	c.logf("   repository  %s", c.Root)
+	if name != "" {
+		for _, m := range all {
+			if m.Name == name {
+				return runOne(c, m)
+			}
+		}
+		var known []string
+		for _, m := range all {
+			known = append(known, m.Name)
+		}
+		return &UnknownError{Name: name, Known: known}
+	}
+
+	due, err := pending(c.Query(), all)
+	if err != nil {
+		return err
+	}
+	var reclaimable []Migration
+	ran := 0
+	for _, m := range due {
+		if m.Kind == Reclaiming {
+			reclaimable = append(reclaimable, m)
+			continue
+		}
+		if err := runOne(c, m); err != nil {
+			return err
+		}
+		ran++
+	}
+	if ran == 0 && len(reclaimable) == 0 {
+		c.logf("   nothing to migrate")
+	}
+	if len(reclaimable) > 0 {
+		// Named rather than run, so nothing has to be remembered or
+		// rediscovered later while a routine invocation stays unable to destroy
+		// untracked data.
+		c.logf("")
+		c.logf("   these reclaim disk space by destroying untracked data, so a bare")
+		c.logf("   migrate never runs them. Run each by name when you want it:")
+		for _, m := range reclaimable {
+			c.logf("     ./bootstrap migrate %s", m.Name)
+		}
+	}
+	return nil
+}
+
+func runOne(c Context, m Migration) error {
+	c.logf("   %s", m.Name)
+	return m.Run(c)
+}
+
+// resolveLink is what a symlink's destination MEANS as a path. Readlink returns
+// the raw target, which may be relative -- git and fish both resolve such a
+// target against the directory holding the link, and a comparison against an
+// absolute path would otherwise report every relative link as pointing
+// somewhere else.
+func resolveLink(link, dest string) string {
+	if !filepath.IsAbs(dest) {
+		return filepath.Join(filepath.Dir(link), dest)
+	}
+	return filepath.Clean(dest)
+}

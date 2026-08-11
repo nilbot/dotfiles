@@ -1,0 +1,18 @@
+# Machine-local fish configuration. NOT tracked by dotfiles.
+#
+# Shareable settings belong in the tracked config this sources -- edits made
+# HERE are invisible to the repository and will not follow you to another
+# machine.
+#
+# This file exists so that installers which append managed blocks to
+# config.fish write to a machine-local file instead of into published content.
+# fish sources conf.d/*.fish before this file, so anything appended below lands
+# last and therefore wins -- the same ordering argument
+# git/gitconfig.local.template makes for [include].
+
+# Quoted, because fish splits an unquoted operand on whitespace: a checkout at a
+# path containing a space would otherwise source the wrong file, print to stderr,
+# and start the shell anyway with every shared setting missing.
+source "@DOTFILES_ROOT@/fish/config.fish"
+
+# --- installer-managed blocks appear below this line ---
