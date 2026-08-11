@@ -687,6 +687,35 @@ func fishSourceOperand(t *testing.T, stub string) string {
 	return ""
 }
 
+// fisher's record arrives byte-identical to the tracked list.
+//
+// Two things at once, and both are load-bearing. The row must actually seed --
+// a manifest entry nothing applies is a comment -- and fish/fishfile must reach
+// the machine UNCHANGED. It is the first seed source that is not a *.template,
+// because install_fisher reads the same file directly from the checkout, and it
+// names no @DOTFILES_ROOT@ token: byte-identity is the statement that Seed's
+// substitution passes a token-free source through untouched. A token added to
+// this file later would be rewritten on the way out and fail here, which is the
+// point -- fisher would fetch the substituted line as a plugin name.
+func TestApplySeedsTheFisherRecordFromTheTrackedList(t *testing.T) {
+	home := tempHome(t)
+	if stdout, stderr, code := runShim(t, home, "apply", "dotfiles"); code != 0 {
+		t.Fatalf("apply exit %d:\n%s%s", code, stdout, stderr)
+	}
+	want, err := os.ReadFile(filepath.Join(repoRoot(t), "fish", "fishfile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(home, ".config", "fish", "fish_plugins"))
+	if err != nil {
+		t.Fatalf("apply did not seed fisher's record, so a fresh machine starts with "+
+			"no record of what it is supposed to have: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("the seeded record is not the tracked list:\ngot  %q\nwant %q", got, want)
+	}
+}
+
 // A converged machine is healthy. This is the end-to-end statement the two
 // resolving guards exist for: apply seeds the templates with the checkout
 // substituted for @DOTFILES_ROOT@, and check then resolves every path they
