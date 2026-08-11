@@ -356,6 +356,55 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 	return deps, binary, legacyDir
 }
 
+// newGitFiles cannot see the constant it is checking.
+//
+// It feeds one sharedConfig value into BOTH the dependency and the fixture, so
+// every case built on it passes for any value -- including a value nothing in
+// this repository ships. That is not hypothetical: the gitconfig.symlink ->
+// gitconfig.shared rename on the bootstrap branch left doctor.go naming a file
+// that no longer existed, so `agents doctor` reported the git-attributes origin
+// failing on every healthy machine, and only install_hooks_test.go noticed.
+//
+// This case is deliberately written against neither the fixture nor the helper:
+//
+//   - the literal pins doctor.go itself, so a rename that updates the fixtures
+//     and forgets DefaultDependencies fails here;
+//   - the file check pins the repository, so a rename that forgets BOTH -- the
+//     shape the branch actually shipped -- fails here too. The include line in
+//     git/gitconfig.local.template names this same path, and bootstrap's
+//     gitconfig migration rewrites it; a file renamed underneath all three is
+//     the seam this test exists for.
+//
+// Reading a tracked file means the Go build cache does not know when the answer
+// changes: run this module's tests with -count=1 after any rename.
+func TestDefaultDependenciesNameTheSharedGitConfigThisRepositoryShips(t *testing.T) {
+	const relative = "git/gitconfig.shared"
+
+	got := filepath.ToSlash(DefaultDependencies().SharedGitConfig)
+	if !strings.HasSuffix(got, "/"+relative) {
+		t.Errorf("DefaultDependencies().SharedGitConfig = %q, want it to end in %q; "+
+			"doctor compares core.attributesFile's origin against this path, so a "+
+			"name no checkout carries makes the attributes check fail on every "+
+			"healthy machine", got, relative)
+	}
+
+	repoRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repoRoot, filepath.FromSlash(relative))
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatalf("%s is not in this checkout (%v); doctor names it, "+
+			"git/gitconfig.local.template includes it, and bootstrap's gitconfig "+
+			"migration rewrites that include -- renaming it silently breaks all three",
+			relative, err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("%s is %v, want a regular tracked file", relative, info.Mode())
+	}
+}
+
 func TestGitDiagnosticsCoverConfigLinksAttributesAndLegacy(t *testing.T) {
 	deps, binary, _ := newGitFiles(t)
 	repoRoot := t.TempDir()
