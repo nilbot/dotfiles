@@ -2906,7 +2906,59 @@ pip still resolves inside the directory."
 
 ---
 
-### Tasks 11 through 16
+### Task 11: The devtools phase
+
+**Files:**
+- Modify: `bootstrap.d/internal/phase/devtools.go` (replaces the Task 3 stub)
+- Test: `bootstrap.d/internal/phase/devtools_test.go`
+
+**Interfaces:** `phase.Devtools(Context) error`. No new types.
+
+Three steps, in order:
+
+1. **`uv`** — if `LookPath("uv")` succeeds, log and skip. Otherwise
+   `Run("brew", "install", "uv")`.
+2. **Build `agents`** — `Dir(<home>/bin)`, then build the sibling Go module to
+   `<home>/bin/agents`. The build needs a working directory, and `phase` has no
+   way to `cd`; use `Run("go", "build", "-C", <root>/agents, "-trimpath", "-o", <binary>, ".")`.
+   `go build -C` sets the directory without a shell and without the executor
+   needing a cwd concept. Verify `-C` is accepted by the installed Go before
+   relying on it; if not, report the measurement rather than reaching for
+   `sh -c`.
+3. **Global git hooks** — **delegate**, do not reimplement:
+   `Run("bash", <root>/git/install-hooks.sh, "install", <root>, <home>, <binary>)`.
+
+**The delegation is the point of this phase's test.** `git/install-hooks.sh`
+already validates `~/.gitconfig`, links `~/.gitattributes`, symlinks the four
+hook names, and writes `core.hooksPath` last so a partial install cannot
+activate an incomplete directory — and it has its own tests in the `agents`
+module. This phase's test asserts **the invocation and its arguments**, not hook
+installation. Re-testing the installer here would duplicate coverage that
+already exists in the module that owns it.
+
+Use the fake `Machine` to capture `Ops`; assert the three steps appear in order
+with exact arguments, and that `uv` is skipped when `LookPath` succeeds.
+
+**A test seam is permitted for the build.** Compiling the `agents` module in a
+unit test is slow and needs a real toolchain; `BOOTSTRAP_SKIP_BUILD` already
+exists from an earlier draft. If you use it, the seam must be visible in the
+phase's own output so a skipped build is never silent.
+
+```bash
+git add bootstrap.d/internal/phase
+git commit -m "feat(bootstrap): add the devtools phase
+
+Git hooks delegate to git/install-hooks.sh rather than being
+reimplemented, so this phase's test asserts the invocation and its
+arguments. That installer validates the global config, links the
+attributes file, symlinks four hook names and writes core.hooksPath last
+so a partial install cannot activate an incomplete directory -- and it is
+already tested in the module that owns it."
+```
+
+---
+
+### Tasks 12 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
