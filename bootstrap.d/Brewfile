@@ -1,5 +1,5 @@
 brew "bazelisk"
-brew "boost"
+brew "bingrep"
 brew "fish"
 brew "go"
 brew "node"
@@ -9,9 +9,11 @@ brew "yarn"
 
 brew "bat"
 brew "bingrep"
+brew "broot"
 brew "btop"
 brew "diff-so-fancy"
 brew "dua-cli"
+brew "duckdb"
 brew "fd"
 brew "fzf"
 brew "git-delta"
@@ -31,6 +33,5 @@ brew "zstd"
 
 if OS.mac?
   cask "macfuse"
-  cask "mactex"
   cask "font-symbols-only-nerd-font"
 end
