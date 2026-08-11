@@ -333,15 +333,19 @@ func (f *fakeChange) record(op, path string) error {
 // assertion in this package would have kept passing.
 //
 // Only elements a bare join would blur are quoted -- one containing a space, a
-// tab or a quote, or an empty one -- so operations whose arguments are all
-// ordinary words read exactly as they always did. That rule is what makes the
-// rendering reversible: an element rendered bare can hold no separator and no
-// quote, so a token that opens with a quote is always one quoted element, read
+// tab, a newline or a quote, or an empty one -- so operations whose arguments
+// are all ordinary words read exactly as they always did. Newlines are in that
+// set because the Ops assertions compare strings.Join(fake.Ops, "\n"): an
+// argument holding a newline would otherwise forge an operation boundary, and
+// two runs differing in how many commands they issued would compare equal.
+// That rule is what makes the rendering reversible: an element rendered bare
+// can hold no separator and no quote, so a token that opens with a quote is
+// always one quoted element, read
 // to its matching unescaped close.
 func recordArgv(name string, args []string) string {
 	parts := make([]string, 0, len(args)+1)
 	for _, part := range append([]string{name}, args...) {
-		if part == "" || strings.ContainsAny(part, " \t\"") {
+		if part == "" || strings.ContainsAny(part, " \t\n\r\"") {
 			part = strconv.Quote(part)
 		}
 		parts = append(parts, part)
