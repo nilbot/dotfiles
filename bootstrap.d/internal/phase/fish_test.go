@@ -155,7 +155,16 @@ func TestFishSkipsChshWhenTheLoginShellIsAlreadyFish(t *testing.T) {
 	}
 }
 
-func TestFishRefusesWhenTheLoginNameIsUnknown(t *testing.T) {
+// The refusal, and the assertion that it is a refusal rather than a partial
+// application.
+//
+// NOTHING may be recorded, not merely no chsh. The check used to sit inside
+// loginShell, which runs after registerShell has already issued
+// `sudo /bin/sh -c '... >> /etc/shells'` -- so a run that could not proceed had
+// changed the machine under sudo before saying so. The append is idempotent and
+// harmless in itself; the property it breaks is the one this whole design rests
+// on, that a refusal means nothing was performed.
+func TestFishRefusesAnUnknownLoginNameBeforePerformingAnything(t *testing.T) {
 	fake := &fakeChange{}
 	var out bytes.Buffer
 	ctx := fishContext(fake, &out, "/bin/bash")
@@ -165,9 +174,26 @@ func TestFishRefusesWhenTheLoginNameIsUnknown(t *testing.T) {
 		t.Fatal("an empty login name must refuse: `sudo chsh -s <shell>` with no " +
 			"user argument changes root's shell")
 	}
+	if len(fake.Ops) != 0 {
+		t.Errorf("a refused run performed %v; the /etc/shells append is privileged "+
+			"and must not happen on a run that cannot proceed", fake.Ops)
+	}
+}
+
+// The other direction, and the reason the check is not simply "c.User == ''" at
+// the top of the phase: a machine already running fish issues no chsh, so it
+// needs no login name and must not be refused for lacking one.
+func TestFishNeedsNoLoginNameWhenTheShellIsAlreadyFish(t *testing.T) {
+	fake := &fakeChange{}
+	var out bytes.Buffer
+	ctx := fishContext(fake, &out, "/opt/homebrew/bin/fish")
+	ctx.User = ""
+	if err := phase.Fish(ctx); err != nil {
+		t.Fatalf("no name is needed when no chsh is due: %v", err)
+	}
 	for _, op := range fake.Ops {
 		if strings.Contains(op, "chsh") {
-			t.Errorf("no chsh may be recorded without a login name: %s", op)
+			t.Errorf("must not plan a shell change: %s", op)
 		}
 	}
 }

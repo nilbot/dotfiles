@@ -34,6 +34,20 @@ func Fish(c Context) error {
 	}
 	c.logf("   fish        %s", fishPath)
 
+	// Validated BEFORE the first step, because the first step is a privileged
+	// append to /etc/shells. A refusal is supposed to mean nothing was performed;
+	// checking this inside loginShell, where it used to live, left a line in
+	// /etc/shells on a run that could not proceed -- a partial application under
+	// sudo, and the ordering that produced it was arbitrary.
+	//
+	// It asks the same question loginShell does, through the same predicate: a
+	// machine already running fish needs no name, because no chsh is issued.
+	if !isFish(c.Shell) && c.User == "" {
+		return fmt.Errorf("cannot change the login shell: neither the passwd " +
+			"database nor $USER names the current user, and `sudo chsh` without " +
+			"a name would change root's shell")
+	}
+
 	if err := registerShell(c, fishPath); err != nil {
 		return err
 	}
@@ -68,15 +82,19 @@ func registerShell(c Context, fishPath string) error {
 	return c.Change.Sudo("/bin/sh", "-c", appendShell, "sh", fishPath)
 }
 
+// isFish is the one place this package decides whether a login shell is already
+// fish. Fish and loginShell both need the answer -- one to know whether a name is
+// required before anything is written, the other to know whether to write -- and
+// two spellings of it could disagree.
+func isFish(shell string) bool { return filepath.Base(shell) == "fish" }
+
+// loginShell trusts Fish to have established that c.User is non-empty whenever a
+// chsh is due. The check lives there rather than here so that a run which cannot
+// proceed has not already appended to /etc/shells.
 func loginShell(c Context, fishPath string) error {
-	if filepath.Base(c.Shell) == "fish" {
+	if isFish(c.Shell) {
 		c.logf("   chsh        login shell is already fish (%s)", c.Shell)
 		return nil
-	}
-	if c.User == "" {
-		return fmt.Errorf("cannot change the login shell: neither the passwd " +
-			"database nor $USER names the current user, and `sudo chsh` without " +
-			"a name would change root's shell")
 	}
 	c.logf("   chsh        %s -> %s for %s", c.Shell, fishPath, c.User)
 	return c.Change.Sudo("chsh", "-s", fishPath, c.User)
