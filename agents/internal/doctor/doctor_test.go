@@ -368,8 +368,8 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 // This case is deliberately written against neither the fixture nor the helper:
 //
 //   - the literal pins doctor.go itself, so a rename that updates the fixtures
-//     and forgets DependenciesFor -- which DefaultDependencies delegates to, and
-//     where the path is actually built -- fails here;
+//     and forgets DependenciesFor -- where the path is actually built -- fails
+//     here;
 //   - the file check pins the repository, so a rename that forgets BOTH -- the
 //     shape the branch actually shipped -- fails here too. The include line in
 //     git/gitconfig.local.template names this same path, and bootstrap's
@@ -378,12 +378,12 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 //
 // Reading a tracked file means the Go build cache does not know when the answer
 // changes: run this module's tests with -count=1 after any rename.
-func TestDefaultDependenciesNameTheSharedGitConfigThisRepositoryShips(t *testing.T) {
+func TestDependenciesNameTheSharedGitConfigThisRepositoryShips(t *testing.T) {
 	const relative = "git/gitconfig.shared"
 
-	got := filepath.ToSlash(DefaultDependencies().SharedGitConfig)
+	got := filepath.ToSlash(DependenciesFor(filepath.Join("any", "checkout")).SharedGitConfig)
 	if !strings.HasSuffix(got, "/"+relative) {
-		t.Errorf("DefaultDependencies().SharedGitConfig = %q, want it to end in %q; "+
+		t.Errorf("DependenciesFor(...).SharedGitConfig = %q, want it to end in %q; "+
 			"doctor compares core.attributesFile's origin against this path, so a "+
 			"name no checkout carries makes the attributes check fail on every "+
 			"healthy machine", got, relative)

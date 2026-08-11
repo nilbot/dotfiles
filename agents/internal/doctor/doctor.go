@@ -97,14 +97,6 @@ func DependenciesFor(root string) Dependencies {
 	}
 }
 
-// DefaultDependencies assumes the historical ~/dotfiles checkout. Callers that
-// know which checkout the running binary belongs to should name it through
-// DependenciesFor instead.
-func DefaultDependencies() Dependencies {
-	home, _ := os.UserHomeDir()
-	return DependenciesFor(filepath.Join(home, "dotfiles"))
-}
-
 func runGit(dir string, args ...string) GitResult {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -134,10 +126,6 @@ func sanitizedGitEnvironment(environment []string) []string {
 		out = append(out, item)
 	}
 	return append(out, "GIT_TERMINAL_PROMPT=0")
-}
-
-func Run(repoRoot, agentsDir, thisMachine, binary string, th Thresholds, now time.Time) ([]Check, error) {
-	return RunWithDeps(repoRoot, agentsDir, thisMachine, binary, th, now, DefaultDependencies())
 }
 
 func RunWithDeps(repoRoot, agentsDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {
