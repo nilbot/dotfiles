@@ -87,7 +87,19 @@ func Cache(root, thisMachine string, recs []record.Record) (CacheReport, error) 
 		// that computes the destination differently from the writer looks in a
 		// place nothing wrote, and neither side would fail on its own.
 		dst := CachedPath(root, r)
-		if _, err := os.Stat(dst); err == nil {
+		// Size, not mere presence. Skipping whenever the destination existed
+		// froze whatever was copied first: a transcript cached while the harness
+		// was still writing stayed a prefix forever, under a name saying it was
+		// the whole thing. That became reachable the moment the hook started
+		// caching at subagent-stop, where a tail flushed after the hook fires
+		// arrives too late for the copy.
+		//
+		// Only when the source is LARGER. A shorter one is the dangerous
+		// direction -- a truncated or replaced transcript must not overwrite the
+		// fuller copy, which may be the only thing that still holds the missing
+		// part. And not mtime: a restored or touched file would trigger a
+		// pointless re-read of several megabytes on a blocked hook.
+		if info, err := os.Stat(dst); err == nil && info.Size() >= fi.Size() {
 			rep.Skipped++
 			continue
 		}

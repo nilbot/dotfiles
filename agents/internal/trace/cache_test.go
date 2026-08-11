@@ -809,3 +809,90 @@ func TestResolveNamesBothPathsWhenNeitherHoldsIt(t *testing.T) {
 		t.Errorf("the error must name the cache path it looked in; got: %v", err)
 	}
 }
+
+// Skip-if-present froze a partial copy forever.
+//
+// Latent until the hook began caching at subagent-stop, and live from that
+// moment: if the harness flushes the tail after the hook fires, the copy taken
+// there is short, and every later run saw a destination that existed and left
+// it alone. The cache would then hold a truncated transcript under a name that
+// says it is the whole thing -- worse than holding nothing, because nothing
+// prompts a second look.
+func TestCacheReplacesACopyWhoseSourceHasGrown(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-growing.jsonl"), `{"line":1}`+"\n")
+	rec := record.Record{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true}
+
+	if _, err := Cache(cacheRoot, "m1", []record.Record{rec}); err != nil {
+		t.Fatal(err)
+	}
+	// The harness appends after the copy was taken.
+	f, err := os.OpenFile(src, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(`{"line":2}` + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	rep, err := Cache(cacheRoot, "m1", []record.Record{rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Copied != 1 {
+		t.Errorf("Copied = %d, want 1: the source grew, so the cached copy is a prefix", rep.Copied)
+	}
+	b, err := os.ReadFile(CachedPath(cacheRoot, rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"line":1}` + "\n" + `{"line":2}` + "\n"; string(b) != want {
+		t.Errorf("cached content = %q, want the whole transcript %q", b, want)
+	}
+}
+
+// A source that did not grow must not be re-read. This runs on a hook the
+// harness is blocked on, and the cache holds files of several megabytes.
+func TestCacheDoesNotRecopyASourceOfTheSameSize(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-settled.jsonl"), "{}\n")
+	rec := record.Record{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true}
+
+	if _, err := Cache(cacheRoot, "m1", []record.Record{rec}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := Cache(cacheRoot, "m1", []record.Record{rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Copied != 0 || rep.Skipped != 1 {
+		t.Errorf("Copied/Skipped = %d/%d, want 0/1", rep.Copied, rep.Skipped)
+	}
+}
+
+// A source SHORTER than the copy is the dangerous direction: a transcript that
+// was replaced or truncated must not overwrite the fuller copy we hold, because
+// ours may be the only one that still has the missing part.
+func TestCacheKeepsTheFullerCopyWhenTheSourceShrinks(t *testing.T) {
+	cacheRoot := t.TempDir()
+	src := write(t, filepath.Join(t.TempDir(), "rollout-shrunk.jsonl"), "{\"a\":1}\n{\"b\":2}\n")
+	rec := record.Record{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true}
+
+	if _, err := Cache(cacheRoot, "m1", []record.Record{rec}); err != nil {
+		t.Fatal(err)
+	}
+	write(t, src, "{}\n") // truncated behind our back
+
+	if _, err := Cache(cacheRoot, "m1", []record.Record{rec}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(CachedPath(cacheRoot, rec))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != "{\"a\":1}\n{\"b\":2}\n" {
+		t.Errorf("cached content = %q; a shrunken source must not replace the fuller "+
+			"copy -- ours may be the only one that still holds what was dropped", b)
+	}
+}
