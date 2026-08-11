@@ -29,6 +29,24 @@ func Devtools(c Context) error {
 	}
 
 	binary := filepath.Join(c.Home, "bin", "agents")
+	installer := filepath.Join(c.Root, "git", "install-hooks.sh")
+
+	// The hooks preflight runs BEFORE the build, and the reason is cost, not
+	// symmetry with the Makefile. It validates the global config, the hooks
+	// directory and the attributes link, refuses without touching anything, and
+	// returns in about a second. `install` re-runs all of it internally, so
+	// nothing goes unchecked either way -- but a machine whose ~/.gitconfig is
+	// a symlink, or whose core.hooksPath already points somewhere else, should
+	// find that out before it compiles a Go module rather than after.
+	//
+	// It is safe this early precisely because preflight mode does NOT validate
+	// the binary; only install does, after the build has produced one.
+	c.logf("   git hooks   git/install-hooks.sh")
+	if err := c.Change.Run("bash", installer,
+		"preflight", c.Root, c.Home, binary); err != nil {
+		return err
+	}
+
 	if err := c.Change.Dir(filepath.Dir(binary)); err != nil {
 		return err
 	}
@@ -51,7 +69,5 @@ func Devtools(c Context) error {
 	// hooks directory -- and it is tested in the module that owns it.
 	// Reimplementing it here would be a second copy of that ordering, subject to
 	// drifting out of step with the one the Makefile and its tests exercise.
-	c.logf("   git hooks   git/install-hooks.sh")
-	return c.Change.Run("bash", filepath.Join(c.Root, "git", "install-hooks.sh"),
-		"install", c.Root, c.Home, binary)
+	return c.Change.Run("bash", installer, "install", c.Root, c.Home, binary)
 }

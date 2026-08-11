@@ -11,9 +11,10 @@ import (
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
 
-// The three operations the phase owes a machine, in the only order that works.
+// The operations the phase owes a machine, in the only order that works.
 const (
 	opInstallUv    = "run brew install uv"
+	opCheckHooks   = "run bash /repo/git/install-hooks.sh preflight /repo /home /home/bin/agents"
 	opMakeBinDir   = "dir /home/bin"
 	opBuildAgents  = "run go build -C /repo/agents -trimpath -o /home/bin/agents ."
 	opInstallHooks = "run bash /repo/git/install-hooks.sh install /repo /home /home/bin/agents"
@@ -32,12 +33,12 @@ func devtoolsCtx(uvOnPath bool) (*fakeChange, phase.Context, *bytes.Buffer) {
 	}, out
 }
 
-func TestDevtoolsRunsItsThreeStepsInOrder(t *testing.T) {
+func TestDevtoolsRunsItsStepsInOrder(t *testing.T) {
 	fake, ctx, _ := devtoolsCtx(false)
 	if err := phase.Devtools(ctx); err != nil {
 		t.Fatalf("Devtools: %v", err)
 	}
-	want := []string{opInstallUv, opMakeBinDir, opBuildAgents, opInstallHooks}
+	want := []string{opInstallUv, opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
@@ -69,6 +70,22 @@ func TestDevtoolsBuildsTheBinaryBeforePointingHooksAtIt(t *testing.T) {
 		t.Errorf("%s must be created before the build writes into it; ops: %v",
 			opMakeBinDir, fake.Ops)
 	}
+
+	// The hooks preflight is a check that costs nothing and refuses without
+	// touching anything, so its whole value is in WHERE it sits. Running it
+	// after the build would still catch a bad ~/.gitconfig, a foreign
+	// core.hooksPath or a hooks link pointing somewhere else -- but only after
+	// compiling a Go module, which is the one part of this phase that takes
+	// real time. Position, not presence, is what is asserted.
+	check := slices.Index(fake.Ops, opCheckHooks)
+	if check < 0 {
+		t.Fatalf("the hooks preflight must run; ops: %v", fake.Ops)
+	}
+	if check > build {
+		t.Errorf("the hooks preflight ran at %d, after the build at %d; a machine "+
+			"whose global git config is unusable should learn that in a second, "+
+			"not after compiling the agents module", check, build)
+	}
 }
 
 // The delegation is the point of this phase. git/install-hooks.sh validates the
@@ -82,9 +99,11 @@ func TestDevtoolsDelegatesHooksRatherThanInstallingThem(t *testing.T) {
 	if err := phase.Devtools(ctx); err != nil {
 		t.Fatalf("Devtools: %v", err)
 	}
-	if !slices.Contains(fake.Ops, opInstallHooks) {
-		t.Errorf("the exact delegation is missing; ops:\n%s\nwant:\n%s",
-			strings.Join(fake.Ops, "\n"), opInstallHooks)
+	for _, want := range []string{opCheckHooks, opInstallHooks} {
+		if !slices.Contains(fake.Ops, want) {
+			t.Errorf("the exact delegation is missing; ops:\n%s\nwant:\n%s",
+				strings.Join(fake.Ops, "\n"), want)
+		}
 	}
 	for _, op := range fake.Ops {
 		switch {
@@ -106,7 +125,7 @@ func TestDevtoolsSkipsUvWhenItIsAlreadyOnPath(t *testing.T) {
 	if err := phase.Devtools(ctx); err != nil {
 		t.Fatalf("Devtools: %v", err)
 	}
-	want := []string{opMakeBinDir, opBuildAgents, opInstallHooks}
+	want := []string{opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
@@ -123,11 +142,14 @@ func TestDevtoolsSkipsUvWhenItIsAlreadyOnPath(t *testing.T) {
 // written.
 //
 // Which refusal comes back is asserted, not just that one did. Absence of the
-// later operations is not enough on its own: the ~/bin case fails on a substring
-// the build command also contains, so a swallowed Dir error would produce an
-// identical Ops list and a refusal from the build one step later. The fake
-// names the failing operation -- the path for Dir, the command for Run -- so
-// that is what tells the two apart.
+// later operations is not enough on its own: ~/bin is a PREFIX of the binary
+// path every later step names, so a swallowed Dir error would produce an
+// identical Ops list and a refusal from the next step instead. The fake names
+// the failing operation -- the path for Dir, the command for Run -- so that is
+// what tells the two apart.
+//
+// Each failOn below names exactly one recorded operation, which is why the fake
+// matches against the operation as recorded rather than against a bare path.
 func TestDevtoolsStopsAtTheFirstFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -135,10 +157,16 @@ func TestDevtoolsStopsAtTheFirstFailure(t *testing.T) {
 		wantPath string
 		mustNot  []string
 	}{
-		{"uv", "install uv", "brew", []string{opMakeBinDir, opBuildAgents, opInstallHooks}},
-		{"bin directory", "/home/bin", "/home/bin", []string{opBuildAgents, opInstallHooks}},
-		{"build", "-trimpath", "go", []string{opInstallHooks}},
-		{"hooks", "install-hooks.sh", "bash", nil},
+		{"uv", "run brew install uv", "brew",
+			[]string{opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}},
+		// The reason the preflight moved ahead of the build: a machine that
+		// cannot take the hooks must not pay for a compile to find out.
+		{"hooks preflight", "install-hooks.sh preflight", "bash",
+			[]string{opMakeBinDir, opBuildAgents, opInstallHooks}},
+		{"bin directory", "dir /home/bin", "/home/bin",
+			[]string{opBuildAgents, opInstallHooks}},
+		{"build", "run go build", "go", []string{opInstallHooks}},
+		{"hooks install", "install-hooks.sh install", "bash", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, ctx, _ := devtoolsCtx(false)

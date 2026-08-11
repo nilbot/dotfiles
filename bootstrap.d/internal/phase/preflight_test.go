@@ -223,48 +223,44 @@ func (f *fakeChange) LookPath(n string) (string, error) {
 	}
 	return "/usr/bin/" + n, nil
 }
-func (f *fakeChange) Dir(p string) error {
-	if f.failOn != "" && strings.Contains(p, f.failOn) {
-		return &change.Refusal{Path: p, Problem: "test", Remediation: "test"}
-	}
-	f.Ops = append(f.Ops, "dir "+p)
-	return nil
-}
-func (f *fakeChange) Link(s, t string) error {
-	if f.failOn != "" && strings.Contains(t, f.failOn) {
-		return &change.Refusal{Path: t, Problem: "test", Remediation: "test"}
-	}
-	f.Ops = append(f.Ops, "link "+t+" -> "+s)
-	return nil
-}
-func (f *fakeChange) Seed(s, t string) error {
-	if f.failOn != "" && strings.Contains(t, f.failOn) {
-		return &change.Refusal{Path: t, Problem: "test", Remediation: "test"}
-	}
-	f.Ops = append(f.Ops, "seed "+t+" from "+s)
-	return nil
-}
 
-// failOn covers Run and Sudo as well as the three converging operations.
-// Running a command is a mutation like any other, and a phase whose steps are
+// record is every mutating operation: it either refuses or appends, and failOn
+// decides which.
+//
+// failOn is matched against the operation AS RECORDED -- "dir /home/bin",
+// "run go build ...", "link /home/x -> /repo/y" -- rather than against the bare
+// target. The devtools phase is why: it creates ~/bin and then names
+// ~/bin/agents in three separate commands, and ~/bin is a prefix of all of
+// them, so no substring of the directory path can select the directory step
+// alone. Matching the recorded form lets a case name exactly one operation, and
+// a case that cannot say which operation it failed cannot tell a propagated
+// error from a swallowed one.
+//
+// Run and Sudo are covered as well as the three converging operations. Running
+// a command is a mutation like any other, and a phase whose steps are
 // preconditions for each other -- devtools builds the binary its last step
 // points four git hooks at -- can only be shown to stop at the first failure if
 // a command can be made to fail.
-func (f *fakeChange) Run(n string, a ...string) error {
-	command := n + " " + strings.Join(a, " ")
-	if f.failOn != "" && strings.Contains(command, f.failOn) {
-		return &change.Refusal{Path: n, Problem: "test", Remediation: "test"}
+//
+// path is what the Refusal names: the target for the converging operations, the
+// command for the two that execute something. That is what lets a test assert
+// WHICH step refused.
+func (f *fakeChange) record(op, path string) error {
+	if f.failOn != "" && strings.Contains(op, f.failOn) {
+		return &change.Refusal{Path: path, Problem: "test", Remediation: "test"}
 	}
-	f.Ops = append(f.Ops, "run "+command)
+	f.Ops = append(f.Ops, op)
 	return nil
 }
+
+func (f *fakeChange) Dir(p string) error     { return f.record("dir "+p, p) }
+func (f *fakeChange) Link(s, t string) error { return f.record("link "+t+" -> "+s, t) }
+func (f *fakeChange) Seed(s, t string) error { return f.record("seed "+t+" from "+s, t) }
+func (f *fakeChange) Run(n string, a ...string) error {
+	return f.record("run "+n+" "+strings.Join(a, " "), n)
+}
 func (f *fakeChange) Sudo(n string, a ...string) error {
-	command := n + " " + strings.Join(a, " ")
-	if f.failOn != "" && strings.Contains(command, f.failOn) {
-		return &change.Refusal{Path: n, Problem: "test", Remediation: "test"}
-	}
-	f.Ops = append(f.Ops, "sudo "+command)
-	return nil
+	return f.record("sudo "+n+" "+strings.Join(a, " "), n)
 }
 
 // The four migration operations. No phase calls them -- migrations are their own
