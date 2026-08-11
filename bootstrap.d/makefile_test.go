@@ -45,7 +45,7 @@ func buildCommand(t *testing.T, text, source string) string {
 	var found []string
 	for _, line := range strings.Split(text, "\n") {
 		if strings.Contains(line, "go build") {
-			found = append(found, line)
+			found = append(found, stripMakeComment(line))
 		}
 	}
 	if len(found) != 1 {
@@ -53,6 +53,31 @@ func buildCommand(t *testing.T, text, source string) string {
 			source, len(found), text)
 	}
 	return found[0]
+}
+
+// stripMakeComment removes a trailing comment so the assertions read the command
+// and not prose about it.
+//
+// Anchoring to the build line closed the case where an explanation elsewhere in
+// the file answered for the recipe. It left the same trick one line shorter: a
+// recipe with the path hardcoded and `# stamp: -X main.dotfilesRoot=$(CURDIR)`
+// after it satisfied a search of that very line while building the wrong thing.
+// Verified -- it passed before this existed.
+//
+// Quote-aware, because a `#` inside the -ldflags string is part of the command.
+func stripMakeComment(line string) string {
+	quoted := false
+	for i, r := range line {
+		switch r {
+		case '"':
+			quoted = !quoted
+		case '#':
+			if !quoted {
+				return strings.TrimRight(line[:i], " \t")
+			}
+		}
+	}
+	return line
 }
 
 // The agents binary cannot work out which checkout it came from, so whoever
