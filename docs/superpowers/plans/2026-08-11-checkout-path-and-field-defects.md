@@ -111,9 +111,23 @@ Go's `os/user.User` exposes no shell field, so this reads the platform's user da
 - [ ] **Step 4:** Use it for `Context.Shell` in both places `main.go` builds a context. Fall back to `os.Getenv("SHELL")`.
 - [ ] **Step 5:** Both suites, `-count=1`. Commit.
 
-### Task 4: Fisher's record becomes a seeded file
+### Task 4: Refuse the collision fisher cannot reconcile, and seed its record
 
 **Files:** `fish/fishfile`, `fish/mypre.fish`, `bootstrap.d/links.manifest`, `bootstrap.d/internal/manifest/manifest_test.go` (if it counts rows), `bootstrap.d/internal/check/checks.go` if a check enumerates manifest kinds
+
+**Corrected premise.** This task was planned as "seed `fish_plugins` and the conflict goes away". That is wrong, and the correction is the point of the task. Fisher classifies each plugin as install-vs-update from the **universal variable** `_fisher_plugins`, never from the `fish_plugins` file:
+
+```fish
+set --local old_plugins $_fisher_plugins
+contains -- "$plugin" $old_plugins && set --append update_plugins $plugin
+                                   || set --append install_plugins $plugin
+```
+
+The conflict branch runs only for plugins in `install_plugins`. So the failure state is **files present on disk while `_fisher_plugins` is empty**, and seeding the file does not touch it. Confirmed in the field: the machine was recovered by deleting `~/.config/fish/{functions,conf.d,completions}`, not by restoring the file.
+
+Seeding is still correct — `fish_plugins` is a well-known path another program writes to, exactly what the placement rule covers, and `fisher update` with no arguments reads it. It is just not the fix.
+
+**The fix is to refuse before fisher runs.** When nothing installs, fisher reaches `command rm -f $fish_plugins` and deletes its own record, which is what made every retry fail identically. A guard that runs first never lets fisher get there, so the loop cannot start.
 
 - [ ] **Step 1:** Add `jorgebucaran/fisher` to `fish/fishfile` as the first line, so the tracked list and fisher's record are the same list.
 - [ ] **Step 2:** `install_fisher` becomes `fisher install $plugins` — it no longer names fisher separately, because `fishfile` now does.
@@ -125,7 +139,10 @@ seed    fish/fishfile                     .config/fish/fish_plugins         *
 
 - [ ] **Step 4:** Write the test first, before the row: a case asserting the manifest carries a `seed` row whose source is `fish/fishfile` and whose target is `.config/fish/fish_plugins`, and one asserting `fishfile` names `jorgebucaran/fisher`. Any test asserting a manifest row count must be updated in the same commit.
 - [ ] **Step 5:** Confirm `Seed` does not substitute `@DOTFILES_ROOT@` into a file that has no such token — it should pass through unchanged. Add a case if none covers a token-free source.
-- [ ] **Step 6:** Both suites, `-count=1`, plus `umask 077`. Commit.
+- [ ] **Step 6: The guard.** In `install_fisher`, before calling `fisher`: if `_fisher_plugins` is empty **and** any of `functions/`, `conf.d/`, `completions/` under `$__fish_config_dir` holds a `.fish` file, print a refusal and return non-zero without invoking fisher. The message must name the three directories and say the files are fisher's to reinstall. Do **not** delete anything — refuse, never clobber.
+- [ ] **Step 7:** Both suites, `-count=1`, plus `umask 077`. Commit.
+
+**Deliberately not done: bootstrap does not remove the files itself.** Every file in those directories was plugin-owned on the machine that hit this, but that is a fact about one machine, not a guarantee. A hand-written function there would be destroyed with no way back, so the remediation is stated and left to the operator.
 
 ---
 
@@ -133,6 +150,8 @@ seed    fish/fishfile                     .config/fish/fish_plugins         *
 
 **Coverage.** doctor.go:79 → Task 1; main.go:41 → Task 2; both build sites → Task 2; `$SHELL` → Task 3; fisher idempotence → Task 4.
 
-**Not covered, deliberately.** A *stale* `fish_plugins` — one that exists but omits a plugin whose files are present — still produces fisher's conflict error. Seeding fixes the absent case, which is the one observed and the one a fresh machine hits. The stale case leaves an actionable message and no data loss, and detecting it properly means asking fisher what it owns, which is fisher's job rather than bootstrap's.
+**Corrected after Task 3.** This section originally claimed seeding `fish_plugins` fixed the observed conflict and left only a "stale file" case uncovered. Both halves were wrong: fisher reads `_fisher_plugins`, not the file, when deciding install-vs-update, so the file's contents never affect whether the conflict fires. Task 4 was rewritten accordingly — see its corrected premise.
+
+**Not covered, deliberately.** Bootstrap does not remove the colliding files. Doing so would be the only thing that makes the failure self-healing, and it is also the one action that can destroy a hand-written fish function with no way back. The guard states the remediation and stops.
 
 **Ordering.** Task 2 depends on Task 1's `DotfilesRoot()`. Tasks 3 and 4 are independent of both and of each other.
