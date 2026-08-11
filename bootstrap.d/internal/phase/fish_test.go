@@ -313,8 +313,9 @@ func functionBody(t *testing.T, name string) []string {
 			}
 			return body
 		}
+		line = stripComment(line)
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if trimmed == "" {
 			continue
 		}
 		if continued {
@@ -331,6 +332,37 @@ func functionBody(t *testing.T, name string) []string {
 	t.Fatalf("%s is never closed by an `end` at column 0", name)
 	return nil
 }
+
+// stripComment removes a trailing fish comment, so no assertion below can be
+// satisfied by a comment rather than by what the line does. A trailing
+// `# themes is left alone` was measured to satisfy a `strings.Contains` rule
+// while the code beside it did the opposite -- the sixth time on this branch
+// that a match loose enough to survive its own edit went unnoticed.
+//
+// Quote-aware, because a `#` inside a quoted message is text. The skip's message
+// carries none today; one that gained one would otherwise lose half of itself
+// here and fail for a reason that is not true.
+func stripComment(line string) string {
+	var quote rune
+	for i, r := range line {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return strings.TrimRight(line[:i], " \t")
+		}
+	}
+	return line
+}
+
+// indent is a line's leading whitespace width, which is how these cases read
+// fish's block structure: a statement nested inside an `if` is indented past the
+// function's own level, and one that runs unconditionally is not.
+func indent(line string) int { return len(line) - len(strings.TrimLeft(line, " \t")) }
 
 // indexOf returns the position of the first line in body containing want, or -1.
 func indexOf(body []string, want string) int {
@@ -367,12 +399,24 @@ func conditionIndex(body []string, want string) int {
 // It is located by `/functions/` rather than by the whole operand, so a renamed
 // configuration-directory variable is reported as a wrong operand -- naming what
 // is wrong -- instead of vanishing into "no such statement".
+//
+// Anchored to a `set` statement, because `/functions/` alone also matches the
+// installer URL on the curl line: without the anchor, deleting the glob entirely
+// would silently retarget every assertion here at that URL and report something
+// other than the fault.
 func globOperands(t *testing.T, body []string) (int, map[string]bool) {
 	t.Helper()
-	i := conditionIndex(body, "/functions/")
+	i := -1
+	for n, line := range body {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "set" &&
+			strings.Contains(line, "/functions/") {
+			i = n
+			break
+		}
+	}
 	if i < 0 {
-		t.Fatalf("nothing globs a functions/ directory, so the skip can never fire:\n%s",
-			strings.Join(body, "\n"))
+		t.Fatalf("no `set` statement globs a functions/ directory, so the skip can "+
+			"never fire:\n%s", strings.Join(body, "\n"))
 	}
 	operands := map[string]bool{}
 	for _, field := range strings.Fields(body[i]) {
@@ -384,6 +428,22 @@ func globOperands(t *testing.T, body []string) (int, map[string]bool) {
 		t.Fatalf("the glob statement passes no paths at all: %q", strings.TrimSpace(body[i]))
 	}
 	return i, operands
+}
+
+// fieldIndex is conditionIndex for an EXACT whitespace-delimited field. A
+// substring search for `--force` is equally true of `--forcefully`, and a flag
+// the function does not actually accept is a flag its one caller passes in vain.
+func fieldIndex(body []string, want string) int {
+	for i, line := range body {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "echo ") || strings.HasPrefix(trimmed, "printf ") {
+			continue
+		}
+		if slices.Contains(strings.Fields(line), want) {
+			return i
+		}
+	}
+	return -1
 }
 
 // saysAll reports whether the output statements in body name every one of want.
@@ -626,34 +686,95 @@ func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
 	}
 }
 
-// The skip's message names fish_reset_all as the way out, and that promise has
-// to hold: the reset removes fisher's generated state and then calls
-// install_fisher to rebuild it, so it must clear EVERY directory the skip globs.
-// Leave one populated and the reset destroys the others, install_fisher skips on
-// the one still standing, and the machine cannot be rebuilt at all -- strictly
-// worse than the collision this guard exists for.
+// --force is the guard's opt-out, and the reason the skip is safe to have at all.
 //
-// The directories are read out of install_fisher's own glob rather than listed
-// again here, so the two cannot drift: widening the guard without widening the
-// reset fails immediately.
-func TestFishResetAllClearsEveryDirectoryTheSkipGlobs(t *testing.T) {
-	_, operands := globOperands(t, installFisherBody(t))
+// It exists for fish_reset_all, which has already removed the directories by the
+// time it calls back in. Everything this asserts is structural: the guard is
+// nested inside the --force test, so passing the flag reaches past it, and the
+// invocation is NOT nested, so the forced path still installs. Without the last
+// one, --force could skip the guard and the installation both, and
+// fish_reset_all would destroy three directories and rebuild nothing -- exactly
+// the failure this design replaced.
+func TestInstallFisherForceOptsOutOfTheSkip(t *testing.T) {
+	body := installFisherBody(t)
+	invoke := indexOf(body, "fisher install")
+	if invoke < 0 {
+		t.Fatalf("install_fisher never invokes `fisher install`:\n%s", strings.Join(body, "\n"))
+	}
+	force := fieldIndex(body, "--force")
+	if force < 0 {
+		t.Fatalf("install_fisher accepts no --force; fish_reset_all passes it, and a "+
+			"flag the function does not read is a reset that skips instead of "+
+			"rebuilding:\n%s", strings.Join(body, "\n"))
+	}
+	glob, _ := globOperands(t, body)
+	if force > glob {
+		t.Errorf("--force is read at line %d, after the glob at line %d, so it cannot "+
+			"opt out of it", force, glob)
+	}
+	// The guard is inside the --force test; the invocation is not inside
+	// anything. fish's blocks are indentation-free, so this reads the layout the
+	// author committed rather than the parse -- see the report.
+	top := indent(body[0])
+	if indent(body[glob]) <= top {
+		t.Errorf("the glob is at indent %d and the function's own level is %d, so the "+
+			"guard is not nested inside the --force test and --force skips nothing",
+			indent(body[glob]), top)
+	}
+	if indent(body[invoke]) != top {
+		t.Errorf("`fisher install` is at indent %d, not the function's own level %d, "+
+			"so it is nested inside a conditional: --force would skip the "+
+			"installation along with the guard, and fish_reset_all would never "+
+			"rebuild", indent(body[invoke]), top)
+	}
+}
+
+// The skip's message names fish_reset_all as the way out, and this is that
+// promise, held BY CONSTRUCTION.
+//
+// The reset removes fisher's generated state and rebuilds it. It forces past the
+// guard rather than clearing everything the guard globs, so the two cannot
+// disagree: there is no second list here to drift from the guard's, and no
+// directory the reset could leave standing that would then stop the rebuild.
+// themes/ is exactly that case -- fish's own user-theme directory, which the
+// guard must watch because fisher may write there, and which the reset must not
+// delete because the theme may be the user's.
+func TestFishResetAllRebuildsByForcingPastTheSkip(t *testing.T) {
 	reset := functionBody(t, "fish_reset_all")
-	i := indexOf(reset, "rm -rf")
-	if i < 0 {
-		t.Fatalf("fish_reset_all removes nothing, so it cannot rebuild anything:\n%s",
+	remove := indexOf(reset, "rm -rf")
+	if remove < 0 {
+		t.Fatalf("fish_reset_all removes nothing, so it resets nothing:\n%s",
 			strings.Join(reset, "\n"))
 	}
-	for operand := range operands {
-		// "$__fish_config_dir/conf.d/*" -> "conf.d"
-		dir := strings.TrimSuffix(operand, "/*")
-		dir = dir[strings.LastIndex(dir, "/")+1:]
-		if !strings.Contains(reset[i], dir) {
-			t.Errorf("install_fisher globs %s/ but fish_reset_all does not clear it: "+
-				"a file left there survives the reset, install_fisher then skips, and "+
-				"the reset has destroyed the rest for nothing -- %q",
-				dir, strings.TrimSpace(reset[i]))
+	rebuild := -1
+	for i, line := range reset {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "install_fisher" {
+			rebuild = i
+			break
 		}
+	}
+	if rebuild < 0 {
+		t.Fatalf("fish_reset_all never calls install_fisher, so it destroys fisher's "+
+			"state and rebuilds none of it:\n%s", strings.Join(reset, "\n"))
+	}
+	if !slices.Contains(strings.Fields(reset[rebuild]), "--force") {
+		t.Errorf("the rebuild is %q; without --force the guard sees whatever the rm "+
+			"did not clear -- a user's theme in themes/, say -- and skips, leaving "+
+			"the machine with three directories destroyed and nothing rebuilt",
+			strings.TrimSpace(reset[rebuild]))
+	}
+	if remove > rebuild {
+		t.Errorf("fish_reset_all rebuilds at line %d and only removes at line %d, so "+
+			"it deletes what it just installed", rebuild, remove)
+	}
+	// themes/ is fish's own user-theme directory. A .theme placed there by hand
+	// shows up in `fish_config theme list`, and a plugin reset has no business
+	// deleting it -- which is precisely why the rebuild forces rather than the rm
+	// widening.
+	if strings.Contains(reset[remove], "themes") {
+		t.Errorf("the reset clears themes/: %q -- that is fish's user-theme "+
+			"directory, not fisher's to empty. The rebuild forces past the guard "+
+			"instead", strings.TrimSpace(reset[remove]))
 	}
 }
 

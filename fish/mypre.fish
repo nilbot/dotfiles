@@ -38,14 +38,22 @@ function install_fisher
     #
     # The case this rule does NOT serve is a partially installed machine: it is
     # skipped exactly like a complete one, and its owner completes it with
-    # `fisher update`, or starts over with `fish_reset_all` below -- which
-    # removes these directories BEFORE calling this function, so the skip never
-    # blocks a deliberate reset. That is a promise the reset has to keep: it
-    # clears exactly the set globbed here, and a test pins the two together.
-    # Nothing here deletes or moves anything to find out which case it is. Every
-    # file in those directories was plugin-owned on the machine that hit this,
-    # but that is a fact about one machine, not a guarantee -- a hand-written
-    # function there would be destroyed with no way back.
+    # `fisher update`, or starts over with `fish_reset_all` below. Nothing here
+    # deletes or moves anything to find out which case it is. Every file in those
+    # directories was plugin-owned on the machine that hit this, but that is a
+    # fact about one machine, not a guarantee -- a hand-written function there
+    # would be destroyed with no way back.
+    #
+    # --force is the opt-out, and it exists for fish_reset_all: that function has
+    # already removed the directories, so the guard has nothing left to tell it.
+    # It is deliberately NOT advertised in the message below. Forcing past a
+    # genuine collision is the one thing that reproduces the field failure -- it
+    # hands fisher exactly the state it cannot reconcile -- so the remedy a user
+    # is pointed at is the reset, which removes the files first.
+    #
+    # It is also what makes recovery hold BY CONSTRUCTION rather than by two
+    # lists agreeing: the reset forces past this guard, so it cannot fail to
+    # rebuild whatever the guard globs, and there is no second list to drift.
     #
     # Four directories, and every file in them rather than *.fish alone, because
     # that is exactly what fisher's own conflict test looks at:
@@ -54,21 +62,22 @@ function install_fisher
     #
     # A guard examining less than fisher does would pass a machine straight
     # through to a collision fisher then hits.
-    #
-    # For `set`, a glob matching nothing expands to zero arguments instead of
-    # erroring the way it would for any other command.
-    set --local installed $__fish_config_dir/functions/* \
-        $__fish_config_dir/themes/* \
-        $__fish_config_dir/conf.d/* \
-        $__fish_config_dir/completions/*
-    # The [1] is load-bearing. `set --local installed <globs>` CREATES the
-    # variable even when every glob expands to nothing, so `set --query installed`
-    # without the index is constantly true: the skip would fire on every machine,
-    # bootstrap would never install a plugin -- silently, at status 0 -- and
-    # fish_reset_all would never rebuild after its own rm -rf.
-    if set --query installed[1]
-        echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,themes,conf.d,completions}; leaving them alone -- maintain them with 'fisher update', or rebuild from nothing with 'fish_reset_all', from an interactive shell."
-        return 0
+    if not contains -- --force $argv
+        # For `set`, a glob matching nothing expands to zero arguments instead of
+        # erroring the way it would for any other command.
+        set --local installed $__fish_config_dir/functions/* \
+            $__fish_config_dir/themes/* \
+            $__fish_config_dir/conf.d/* \
+            $__fish_config_dir/completions/*
+        # The [1] is load-bearing. `set --local installed <globs>` CREATES the
+        # variable even when every glob expands to nothing, so
+        # `set --query installed` without the index is constantly true: the skip
+        # would fire on every machine and bootstrap would never install a plugin,
+        # silently, at status 0.
+        if set --query installed[1]
+            echo "install_fisher: plugin files are already present under $__fish_config_dir/{functions,themes,conf.d,completions}; leaving them alone -- maintain them with 'fisher update', or rebuild from nothing with 'fish_reset_all', from an interactive shell."
+            return 0
+        end
     end
 
     curl -sL https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish | source && fisher install $plugins
@@ -255,16 +264,23 @@ end
 # is. It used to point inside the checkout, because ~/.config/fish was a symlink
 # to it; that is what this reset exists to stop being true.
 #
-# themes/ is in the list because install_fisher's skip globs it, and fisher
-# creates and fills it like the other three. Clearing three of the four would
-# leave a machine this function can no longer rebuild: the reset would destroy
-# what it removed, install_fisher would skip on the one directory left standing,
-# and there would be no way back. A test pins the two lists together.
+# themes/ is deliberately NOT cleared. It is fish's OWN user-theme directory --
+# a hand-placed .theme there shows up in `fish_config theme list` -- which fisher
+# may also write to. Both facts matter, and they point opposite ways: the theme
+# file can collide, which is why install_fisher's guard watches themes/, and the
+# theme file can be the user's, which is why this reset leaves it alone. Deleting
+# somebody's saved theme is not what a plugin reset is for.
+#
+# The rebuild is therefore `install_fisher --force`, not a wider rm. That is what
+# makes recovery hold BY CONSTRUCTION: this function cannot fail to rebuild,
+# whatever the guard globs, because it does not ask the guard. Matching the two
+# lists instead would leave a property held by two lists agreeing, and a machine
+# with an uncleared directory would be reset into a state nothing could rebuild.
 function fish_reset_all
     echo '' >$__fish_config_dir/fish_plugins
     echo '' >$__fish_config_dir/fish_variables
-    rm -rf $__fish_config_dir/{functions,themes,completions,conf.d}/
-    install_fisher
+    rm -rf $__fish_config_dir/{functions,completions,conf.d}/
+    install_fisher --force
     reload
 end
 
