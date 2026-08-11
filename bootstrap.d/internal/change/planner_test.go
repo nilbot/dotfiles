@@ -584,6 +584,116 @@ func TestWriteFileRefusesASymlinkedTargetOnBothPaths(t *testing.T) {
 	}
 }
 
+// WriteFile must never truncate its target in place.
+//
+// os.WriteFile is O_CREATE|O_TRUNC|O_WRONLY: the file is emptied first and
+// filled second, so ENOSPC, EIO or the process dying in between leaves it empty
+// or half-written. Its one caller rewrites ~/.gitconfig, which is the file the
+// design calls unrecoverable -- it accumulates whatever `git config --global`
+// wrote, and there is no copy of it anywhere. fish got a whole staging protocol
+// for the same reason; this had nothing.
+//
+// So the bytes go to a temp file in the SAME directory and are renamed over the
+// target. os.Rename is atomic on POSIX: a concurrent reader sees the old file
+// or the new one, never a partial one, and a crash leaves the old one intact.
+//
+// Asserted on INODE IDENTITY rather than on timing. A rename replaces the
+// target with a different file; a truncating write keeps the same one. That is
+// the mechanism itself, it is deterministic, and os.SameFile compares exactly
+// the device and inode that distinguish them.
+func TestWriteFileReplacesRatherThanTruncates(t *testing.T) {
+	home := tempHome(t)
+	target := filepath.Join(home, ".gitconfig")
+	const old = "[include]\n\tpath = /old/git/gitconfig.shared\n"
+	// 0600, so the mode-preservation claim is exercised too. A temp file starts
+	// 0600 by luck here, so the fixture would not catch a lost chmod -- hence
+	// the explicit assertion against 0640 below rather than against the default.
+	if err := os.WriteFile(target, []byte(old), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const want = "[include]\n\tpath = /new/git/gitconfig.shared\n"
+	if err := change.NewApplier(&bytes.Buffer{}, unusedRoot).WriteFile(target, []byte(want)); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Error("~/.gitconfig was rewritten in place; a truncating write leaves it " +
+			"empty or partial if the write fails, and there is no copy of it anywhere")
+	}
+	if got := readFileString(t, target); got != want {
+		t.Errorf("target = %q, want %q", got, want)
+	}
+	if got := after.Mode().Perm(); got != 0o640 {
+		t.Errorf("mode = %v, want 0640; the rewrite must not widen a file the user "+
+			"restricted -- it names the path to their secrets", got)
+	}
+	// The temp file is renamed, never left lying next to the target.
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != ".gitconfig" {
+			t.Errorf("WriteFile left %s behind in %s", entry.Name(), home)
+		}
+	}
+}
+
+// The other half, and the property the inode test implies: a write that cannot
+// complete leaves the OLD content, not a truncated one.
+//
+// A read-only directory is the deterministic way to make it fail -- creating the
+// temp file needs write permission on the directory, while opening an existing
+// file for truncation does not. That difference is the tradeoff this design
+// accepts knowingly: an atomic write refuses where a truncating one would have
+// succeeded. $HOME is writable, and a ~/.gitconfig that is still the old file is
+// strictly better than one that is half a file.
+func TestWriteFileLeavesTheOldContentWhenItCannotComplete(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root writes into a read-only directory regardless, so this cannot be exercised")
+	}
+	home := tempHome(t)
+	dir := filepath.Join(home, "locked")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, ".gitconfig")
+	const old = "[user]\n\tname = A Real Person\n"
+	if err := os.WriteFile(target, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+
+	err := change.NewApplier(&bytes.Buffer{}, unusedRoot).WriteFile(target, []byte("[user]\n"))
+	if err == nil {
+		t.Fatal("the write could not have completed; reporting success hides that")
+	}
+	if got := readFileString(t, target); got != old {
+		t.Errorf("target = %q after a failed write, want the old content %q", got, old)
+	}
+}
+
+func readFileString(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 // Removing what is not there is a silent no-op, not a reported removal.
 // os.RemoveAll returns nil either way, so without the shared verdict an Applier
 // announces "removed" for a path that never existed -- and a Planner, which

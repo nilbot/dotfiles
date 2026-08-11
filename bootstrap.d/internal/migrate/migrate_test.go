@@ -455,6 +455,89 @@ func TestFishLeavesTheOldStateIntactWhenACopyFails(t *testing.T) {
 	}
 }
 
+// The release window, which is the one interruption the staging protocol does
+// not by itself survive.
+//
+// A run that dies after RemoveAll(link) and before Rename leaves no
+// ~/.config/fish at all. Keyed on the symlink alone, Pending answers false
+// there: `migrate` prints "nothing to migrate" and exits 0, preflight passes,
+// apply makes a fresh directory and seeds the stub, and BOTH copies of fisher's
+// state -- the checkout's and the staging directory's -- are orphaned with
+// nothing reporting it. check calls the machine healthy.
+//
+// fishRun's refusal was already written for exactly this state and could never
+// be reached, because Pending never let the question be asked.
+func TestFishPendingSeesAnAbandonedStagingDirectory(t *testing.T) {
+	// The release window, reproduced exactly: staging is complete, the symlink
+	// is gone, and ~/.config/fish does not exist.
+	window := func(t *testing.T) *fixture {
+		t.Helper()
+		f := newFixture(t)
+		f.oldFishMachine(t)
+		staging := filepath.Join(f.home, ".config", "fish.bootstrap-migrating")
+		writeFile(t, filepath.Join(staging, "fish_variables"), "SETUVAR fish_color_normal:normal\n")
+		if err := os.Remove(filepath.Join(f.home, ".config", "fish")); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	t.Run("an abandoned staging directory is pending", func(t *testing.T) {
+		f := window(t)
+		if !isPending(t, f.ctx(), "fish") {
+			t.Error("a machine interrupted in the release window must be pending; " +
+				"otherwise both copies of fisher's state are orphaned in silence")
+		}
+	})
+	t.Run("no staging directory is not pending", func(t *testing.T) {
+		f := window(t)
+		if err := os.RemoveAll(filepath.Join(f.home, ".config", "fish.bootstrap-migrating")); err != nil {
+			t.Fatal(err)
+		}
+		if isPending(t, f.ctx(), "fish") {
+			t.Error("with no staging directory and no symlink there is nothing to migrate")
+		}
+	})
+
+	// The refusal fishRun already carried, now reachable. It must name both
+	// places fisher's state can be, because deciding what to keep needs both.
+	t.Run("run refuses and names both locations", func(t *testing.T) {
+		f := window(t)
+		before := tree(t, f.home)
+
+		err := named(t, "fish").Run(f.ctx())
+		var refusal *change.Refusal
+		if !errors.As(err, &refusal) {
+			t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+		}
+		staging := filepath.Join(f.home, ".config", "fish.bootstrap-migrating")
+		for _, want := range []string{staging, filepath.Join(f.root, "fish")} {
+			if !strings.Contains(refusal.Error(), want) {
+				t.Errorf("the refusal must name %s:\n%s", want, refusal.Error())
+			}
+		}
+		// Refusing is the whole job. Renaming staging into place would be a guess
+		// about whether it is complete, on data that is not in git.
+		if after := tree(t, f.home); after != before {
+			t.Errorf("a refused migration changed the home:\nbefore:\n%s\nafter:\n%s",
+				before, after)
+		}
+	})
+
+	// And the verb surfaces it, rather than reporting nothing to do.
+	t.Run("a bare migrate surfaces it", func(t *testing.T) {
+		f := window(t)
+		err := Run(f.ctx(), "")
+		if err == nil {
+			t.Fatalf("a bare migrate must not report success here:\n%s", f.out.String())
+		}
+		if strings.Contains(f.out.String(), "nothing to migrate") {
+			t.Errorf("a bare migrate reported nothing to do over orphaned state:\n%s",
+				f.out.String())
+		}
+	})
+}
+
 // A machine that already has a real ~/.config/fish full of its own state must
 // not be touched at all. This is the catastrophic case: RemoveAll on a real
 // directory here would take fish_variables and the whole plugin set with it.

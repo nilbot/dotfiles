@@ -46,6 +46,7 @@ type fishFacts struct {
 	link    string // ~/.config/fish
 	source  string // <root>/fish, where the state has been accumulating
 	staging string
+	staged  bool // an earlier run left a staging copy behind
 	pending bool
 	present []string // the fishState entries that are actually there
 }
@@ -56,6 +57,24 @@ func fishInspect(q Query) (fishFacts, error) {
 		source: filepath.Join(q.Root, "fish"),
 	}
 	f.staging = f.link + ".bootstrap-migrating"
+
+	// Asked FIRST, and independently of the symlink, because of the one window
+	// the staging protocol does not by itself survive: between RemoveAll(link)
+	// and Rename there is no ~/.config/fish at all. Keyed on the symlink alone
+	// this reports not-pending there, so `migrate` says "nothing to migrate",
+	// preflight passes, apply makes a fresh directory and seeds the stub, and
+	// BOTH copies of fisher's state -- the checkout's and the staging one -- are
+	// orphaned with nothing reporting it. check calls the machine healthy.
+	//
+	// fishRun's refusal was written for exactly that state and could never be
+	// reached, because Pending never let the question be asked. Making the state
+	// VISIBLE is the whole job here; see fishRun for why it is not repaired.
+	staged, err := q.Read.Lstat(f.staging)
+	if err != nil {
+		return f, err
+	}
+	f.staged = staged.Exists
+	f.pending = f.staged
 
 	info, err := q.Read.Lstat(f.link)
 	if err != nil {
@@ -114,19 +133,24 @@ func fishRun(c Context) error {
 		return nil
 	}
 
-	staged, err := c.Change.Lstat(f.staging)
-	if err != nil {
-		return err
-	}
-	if staged.Exists {
-		// Refused rather than cleared. It holds a copy of data that is not in
-		// git, made by a run that did not finish, and this design does not
-		// delete such a thing on a guess.
+	// Read from the same facts Pending answered from, not re-asked here: one
+	// account of the machine, which is what stops the two forming separate
+	// opinions about it.
+	//
+	// Refused, and deliberately NOT repaired. Renaming staging into place would
+	// finish the job when the run died in the release window -- and would
+	// silently install a HALF-COPIED directory when it died mid-copy instead.
+	// Those two states are indistinguishable from here, and guessing wrong
+	// destroys data that is not in git. Both locations are named so a human can
+	// tell them apart, which is something this code cannot do.
+	if f.staged {
 		return &change.Refusal{
-			Path:    f.staging,
-			Problem: "an interrupted migration left this staging copy behind",
+			Path: f.staging,
+			Problem: "an interrupted migration left this staging copy behind, so " +
+				"fisher's state may be in two places and only you can tell whether " +
+				"the copy finished",
 			Remediation: "compare it with " + f.source +
-				", remove it once you are satisfied nothing is only there, then retry",
+				"; keep whichever is complete, remove " + f.staging + ", then retry",
 		}
 	}
 	if err := c.Change.Dir(f.staging); err != nil {

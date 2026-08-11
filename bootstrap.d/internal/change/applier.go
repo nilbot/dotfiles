@@ -259,6 +259,18 @@ func (a *Applier) RemoveAll(path string) error {
 // design -- it never overwrites -- and the gitconfig migration must, because the
 // file it repoints is the one `git config --global` has been writing to.
 //
+// It is ATOMIC: the bytes go to a temp file beside the target and are renamed
+// over it. os.WriteFile would have been O_CREATE|O_TRUNC|O_WRONLY -- the file
+// emptied first and filled second -- so ENOSPC, EIO or the process dying between
+// the two leaves ~/.gitconfig empty or half-written, and there is no copy of it
+// anywhere. fish gets a whole staging protocol for the same reason; this file
+// deserves no less, and a rename costs nothing.
+//
+// Same directory, so the rename is same-filesystem and therefore a rename rather
+// than a copy. This does NOT go through the Rename primitive: that one's verdict
+// deliberately refuses an occupied target, which is the whole point of the call
+// being made here.
+//
 // No parent directory is created. Its one caller rewrites a file that is already
 // there, and a migration that invented a path would be doing something other
 // than reconciling.
@@ -270,12 +282,47 @@ func (a *Applier) WriteFile(path string, data []byte) error {
 	if err := writeVerdict(info, path); err != nil {
 		return err
 	}
-	// 0o644 applies only when the file is CREATED: os.WriteFile passes perm to
-	// OpenFile with O_CREATE, and the kernel ignores it for a file that already
-	// exists. So a ~/.gitconfig the user chmodded 0600 -- plausible, it names
-	// the path to their secrets -- keeps that mode through the rewrite rather
-	// than being quietly widened.
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// The mode-preservation that os.WriteFile used to get for free: it passed
+	// perm to OpenFile with O_CREATE and the kernel ignored it for an existing
+	// file. A fresh temp file has no such history, so the target's mode is read
+	// and reapplied -- a ~/.gitconfig the user chmodded 0600 names the path to
+	// their secrets, and a rewrite must not quietly widen it.
+	mode := os.FileMode(0o644)
+	if info.Exists {
+		st, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		mode = st.Mode().Perm()
+	}
+
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".bootstrap-*")
+	if err != nil {
+		return err
+	}
+	// Every failure past here removes the temp file, so a refused or failed
+	// rewrite leaves the directory exactly as it found it.
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	// Flushed before the rename, so a machine that loses power just after it
+	// finds the new contents rather than a correctly-named empty file.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
 	report(a.out, "ok    rewrote %s", path)
