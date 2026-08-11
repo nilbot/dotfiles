@@ -16,7 +16,7 @@ const (
 	opInstallUv    = "run brew install uv"
 	opCheckHooks   = "run bash /repo/git/install-hooks.sh preflight /repo /home /home/bin/agents"
 	opMakeBinDir   = "dir /home/bin"
-	opBuildAgents  = "run go build -C /repo/agents -trimpath -ldflags -X main.dotfilesRoot=/repo -o /home/bin/agents ."
+	opBuildAgents  = `run go build -C /repo/agents -trimpath -ldflags "-X main.dotfilesRoot=/repo" -o /home/bin/agents .`
 	opInstallHooks = "run bash /repo/git/install-hooks.sh install /repo /home /home/bin/agents"
 )
 
@@ -128,6 +128,11 @@ func TestDevtoolsDelegatesHooksRatherThanInstallingThem(t *testing.T) {
 // those report "ops differ" for any drift at all. Provisioning a checkout that
 // is not ~/dotfiles is the reason the flag exists, so the value asserted is
 // c.Root and not a fixed path.
+//
+// The quotes are load-bearing. -ldflags takes ONE argument, and splitting the
+// value into "-X" and "main.dotfilesRoot=<root>" produces a command go rejects
+// outright with `malformed import path`. The fake quotes any element holding a
+// space, so requiring them here is how this case can tell the two apart.
 func TestDevtoolsStampsTheCheckoutIntoTheBinaryItBuilds(t *testing.T) {
 	fake, ctx, _ := devtoolsCtx(true)
 	if err := phase.Devtools(ctx); err != nil {
@@ -142,7 +147,7 @@ func TestDevtoolsStampsTheCheckoutIntoTheBinaryItBuilds(t *testing.T) {
 	if build == "" {
 		t.Fatalf("the phase did not build the binary at all; ops: %v", fake.Ops)
 	}
-	if want := "-ldflags -X main.dotfilesRoot=" + ctx.Root; !strings.Contains(build, want) {
+	if want := `-ldflags "-X main.dotfilesRoot=` + ctx.Root + `"`; !strings.Contains(build, want) {
 		t.Errorf("build command:\n%s\nis missing %q; the binary it produces would fall "+
 			"back to ~/dotfiles, so on a checkout provisioned anywhere else doctor "+
 			"fails checks that are fine and the git hook chain runs no personal hooks "+

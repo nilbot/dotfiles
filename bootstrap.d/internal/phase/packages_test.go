@@ -17,11 +17,15 @@ import (
 // it. Nothing here runs a package manager: fakeChange appends a string and
 // returns, so a test that "installs Homebrew" installs a line in a slice.
 const (
-	opAptUpdate   = "sudo apt-get update"
-	opAptInstall  = "sudo apt-get install -y build-essential curl file git"
-	opPacman      = "sudo pacman -S --needed --noconfirm base-devel curl file git"
-	opInstallBrew = `run /bin/bash -c /bin/bash -c ` +
-		`"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+	opAptUpdate  = "sudo apt-get update"
+	opAptInstall = "sudo apt-get install -y build-essential curl file git"
+	opPacman     = "sudo pacman -S --needed --noconfirm base-devel curl file git"
+	// The installer script is one argv element, and the fake quotes it because a
+	// bare join could not say so: `-c` takes the whole `/bin/bash -c "$(curl
+	// ...)"` string, and an implementation that split it into words would render
+	// identically here while passing the outer bash a command it cannot run.
+	opInstallBrew = `run /bin/bash -c ` +
+		`"/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""`
 )
 
 // brewOnPath is what fakeChange.LookPath answers for a command it can resolve,

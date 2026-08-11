@@ -22,10 +22,13 @@ func TestFishRegistersTheShellThenChangesItThenInstallsPlugins(t *testing.T) {
 	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// The quotes are the fake saying where each argv element ends. They matter
+	// most on the two -c arguments: the script and the fish snippet are each one
+	// element, and /repo is the element after the snippet rather than part of it.
 	want := []string{
-		`sudo /bin/sh -c printf '%s\n' "$1" >> /etc/shells sh /usr/bin/fish`,
+		`sudo /bin/sh -c "printf '%s\\n' \"$1\" >> /etc/shells" sh /usr/bin/fish`,
 		"sudo chsh -s /usr/bin/fish someone",
-		"run fish --no-config -c source $argv[1]/fish/mypre.fish; install_fisher /repo",
+		`run fish --no-config -c "source $argv[1]/fish/mypre.fish; install_fisher" /repo`,
 	}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\n\nwant:\n%s",
@@ -74,10 +77,14 @@ func TestFishPassesTheShellPathAsAnArgumentNotInsideTheScript(t *testing.T) {
 			op = o
 		}
 	}
-	if !strings.Contains(op, `printf '%s\n' "$1" >> /etc/shells`) {
+	// Written in the fake's quoted rendering, which is what makes the second
+	// assertion say what it means: the quote closing before `sh` is the script
+	// element ending there, so $0 and $1 are separate arguments and not text the
+	// shell would parse.
+	if !strings.Contains(op, `printf '%s\\n' \"$1\" >> /etc/shells`) {
 		t.Errorf("the script must use the positional $1: %s", op)
 	}
-	if !strings.HasSuffix(op, `>> /etc/shells sh /usr/bin/fish`) {
+	if !strings.HasSuffix(op, `>> /etc/shells" sh /usr/bin/fish`) {
 		t.Errorf("the path must follow the script as $0 and $1: %s", op)
 	}
 }
