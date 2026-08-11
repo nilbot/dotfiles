@@ -74,20 +74,26 @@ func DefaultThresholds() Thresholds {
 	}
 }
 
-func DefaultDependencies() Dependencies {
+// DependenciesFor builds the diagnostic against a named dotfiles checkout.
+//
+// The checkout root is a caller's answer, not doctor's guess: doctor compares
+// HooksDir and SharedGitConfig against what Git reports, so a wrong root makes
+// those checks fail on a correctly provisioned machine. The remaining paths
+// stay home-relative because Git reads them from the home directory wherever
+// the checkout lives.
+func DependenciesFor(root string) Dependencies {
 	home, _ := os.UserHomeDir()
-	dotfiles := filepath.Join(home, "dotfiles")
 	return Dependencies{
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
 		LegacyHooksPath:       repo.LegacyHooksPath,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
-		HooksDir:              filepath.Join(dotfiles, "git", "hooks.d"),
+		HooksDir:              filepath.Join(root, "git", "hooks.d"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
-		AttributesSource:      filepath.Join(dotfiles, "git", "gitattributes"),
+		AttributesSource:      filepath.Join(root, "git", "gitattributes"),
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
-		SharedGitConfig:       filepath.Join(dotfiles, "git", "gitconfig.shared"),
+		SharedGitConfig:       filepath.Join(root, "git", "gitconfig.shared"),
 	}
 }
 
@@ -120,10 +126,6 @@ func sanitizedGitEnvironment(environment []string) []string {
 		out = append(out, item)
 	}
 	return append(out, "GIT_TERMINAL_PROMPT=0")
-}
-
-func Run(repoRoot, agentsDir, thisMachine, binary string, th Thresholds, now time.Time) ([]Check, error) {
-	return RunWithDeps(repoRoot, agentsDir, thisMachine, binary, th, now, DefaultDependencies())
 }
 
 func RunWithDeps(repoRoot, agentsDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {

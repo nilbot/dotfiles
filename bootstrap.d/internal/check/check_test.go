@@ -508,11 +508,21 @@ func TestLoginShellFailsWhenFishIsNotInEtcShells(t *testing.T) {
 	}
 }
 
-func TestLoginShellFailsWhenShellIsUnset(t *testing.T) {
+// An empty Shell means main could not answer AT ALL: the passwd database
+// refused and $SHELL, its fallback, was empty too. The detail is asserted as
+// well as the status because this one has to name the right thing to go and
+// look at. It used to read "SHELL is unset", written when the environment was
+// the only source, and it sent a reader to set a variable that is no longer
+// what this check measures.
+func TestLoginShellFailsWhenTheShellCannotBeDetermined(t *testing.T) {
 	c := ctx(healthy(), "workstation")
 	c.Shell = ""
 
-	assertStatus(t, all(t, c), "login-shell", check.Fail)
+	got := assertStatus(t, all(t, c), "login-shell", check.Fail)
+	if !strings.Contains(got.Detail, "passwd database") {
+		t.Errorf("the finding must name the source that failed to answer, which is "+
+			"the passwd database first and $SHELL only as the fallback: %s", got.Detail)
+	}
 }
 
 func TestAgentsFailsWhenNotOnPath(t *testing.T) {

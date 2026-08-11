@@ -35,7 +35,7 @@ func defaultDoctorCommandDependencies() doctorCommandDependencies {
 		ReadID:     machine.ReadID,
 		BinaryPath: binaryPath,
 		Now:        func() time.Time { return time.Now().UTC() },
-		DoctorDeps: doctor.DefaultDependencies(),
+		DoctorDeps: doctor.DependenciesFor(DotfilesRoot()),
 		Run:        doctor.RunWithDeps,
 	}
 }

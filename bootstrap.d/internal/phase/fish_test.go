@@ -3,6 +3,7 @@ package phase_test
 import (
 	"bytes"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,10 +23,13 @@ func TestFishRegistersTheShellThenChangesItThenInstallsPlugins(t *testing.T) {
 	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	// The quotes are the fake saying where each argv element ends. They matter
+	// most on the two -c arguments: the script and the fish snippet are each one
+	// element, and /repo is the element after the snippet rather than part of it.
 	want := []string{
-		`sudo /bin/sh -c printf '%s\n' "$1" >> /etc/shells sh /usr/bin/fish`,
+		`sudo /bin/sh -c "printf '%s\\n' \"$1\" >> /etc/shells" sh /usr/bin/fish`,
 		"sudo chsh -s /usr/bin/fish someone",
-		"run fish --no-config -c source $argv[1]/fish/mypre.fish; install_fisher /repo",
+		`run fish --no-config -c "source $argv[1]/fish/mypre.fish; install_fisher" /repo`,
 	}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\n\nwant:\n%s",
@@ -74,10 +78,14 @@ func TestFishPassesTheShellPathAsAnArgumentNotInsideTheScript(t *testing.T) {
 			op = o
 		}
 	}
-	if !strings.Contains(op, `printf '%s\n' "$1" >> /etc/shells`) {
+	// Written in the fake's quoted rendering, which is what makes the second
+	// assertion say what it means: the quote closing before `sh` is the script
+	// element ending there, so $0 and $1 are separate arguments and not text the
+	// shell would parse.
+	if !strings.Contains(op, `printf '%s\\n' \"$1\" >> /etc/shells`) {
 		t.Errorf("the script must use the positional $1: %s", op)
 	}
-	if !strings.HasSuffix(op, `>> /etc/shells sh /usr/bin/fish`) {
+	if !strings.HasSuffix(op, `>> /etc/shells" sh /usr/bin/fish`) {
 		t.Errorf("the path must follow the script as $0 and $1: %s", op)
 	}
 }
@@ -255,20 +263,532 @@ func TestFishStopsAtTheFirstFailure(t *testing.T) {
 	}
 }
 
+// mypre reads the file the fish phase sources. Every case below reads it from
+// disk rather than from a fixture, because the thing under test is the tracked
+// file itself -- these are the only assertions this suite can make about a fish
+// function it is forbidden to execute.
+func mypre(t *testing.T) string {
+	t.Helper()
+	body, err := os.ReadFile("../../../fish/mypre.fish")
+	if err != nil {
+		t.Fatalf("the fish phase invokes install_fisher from this file: %v", err)
+	}
+	return string(body)
+}
+
+// installFisherBody returns the CODE lines between `function install_fisher`
+// and the `end` that closes it -- comments and blanks dropped, because every
+// assertion below is about what the function does. A comment quoting the fisher
+// source it guards against would otherwise satisfy those assertions on its own.
+//
+// The scan fails loudly on a missing header or a missing terminator: an empty
+// body would let every assertion pass over nothing, which is how a guard rots
+// into decoration.
+func installFisherBody(t *testing.T) []string {
+	t.Helper()
+	return functionBody(t, "install_fisher")
+}
+
+// functionBody is installFisherBody over any function in mypre.fish.
+//
+// Backslash continuations are JOINED, so one statement is one element. The
+// guard's glob spans four lines, and its operands have to be compared as a set
+// against what fisher itself looks at -- which cannot be done while each line is
+// a separate haystack for a substring search.
+func functionBody(t *testing.T, name string) []string {
+	t.Helper()
+	var body []string
+	inside, continued := false, false
+	for _, line := range strings.Split(mypre(t), "\n") {
+		if strings.HasPrefix(line, "function "+name) {
+			inside = true
+			continue
+		}
+		if !inside {
+			continue
+		}
+		if line == "end" {
+			if len(body) == 0 {
+				t.Fatalf("%s has no body at all", name)
+			}
+			return body
+		}
+		line = stripComment(line)
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if continued {
+			joined := strings.TrimSuffix(strings.TrimRight(body[len(body)-1], " \t"), `\`)
+			body[len(body)-1] = strings.TrimRight(joined, " \t") + " " + trimmed
+		} else {
+			body = append(body, line)
+		}
+		continued = strings.HasSuffix(trimmed, `\`)
+	}
+	if !inside {
+		t.Fatalf("mypre.fish defines no %s", name)
+	}
+	t.Fatalf("%s is never closed by an `end` at column 0", name)
+	return nil
+}
+
+// stripComment removes a trailing fish comment, so no assertion below can be
+// satisfied by a comment rather than by what the line does. A trailing
+// `# themes is left alone` was measured to satisfy a `strings.Contains` rule
+// while the code beside it did the opposite -- the sixth time on this branch
+// that a match loose enough to survive its own edit went unnoticed.
+//
+// Quote-aware, because a `#` inside a quoted message is text. The skip's message
+// carries none today; one that gained one would otherwise lose half of itself
+// here and fail for a reason that is not true.
+func stripComment(line string) string {
+	var quote rune
+	for i, r := range line {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		case r == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t'):
+			return strings.TrimRight(line[:i], " \t")
+		}
+	}
+	return line
+}
+
+// indent is a line's leading whitespace width, which is how these cases read
+// fish's block structure: a statement nested inside an `if` is indented past the
+// function's own level, and one that runs unconditionally is not.
+func indent(line string) int { return len(line) - len(strings.TrimLeft(line, " \t")) }
+
+// indexOf returns the position of the first line in body containing want, or -1.
+func indexOf(body []string, want string) int {
+	for i, line := range body {
+		if strings.Contains(line, want) {
+			return i
+		}
+	}
+	return -1
+}
+
+// conditionIndex is indexOf over the lines that DECIDE something -- output
+// statements skipped. A refusal message naturally quotes the variable it read
+// and the directories it looked in, so without this a guard that printed the
+// right words while testing nothing would satisfy every assertion about it.
+func conditionIndex(body []string, want string) int {
+	for i, line := range body {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "echo ") || strings.HasPrefix(trimmed, "printf ") {
+			continue
+		}
+		if strings.Contains(line, want) {
+			return i
+		}
+	}
+	return -1
+}
+
+// globOperands finds the statement that collects the plugin files and returns
+// its index together with the set of glob operands it passes. Operands are the
+// fields beginning with `$`, which is every path in this statement and nothing
+// else in it.
+//
+// It is located by `/functions/` rather than by the whole operand, so a renamed
+// configuration-directory variable is reported as a wrong operand -- naming what
+// is wrong -- instead of vanishing into "no such statement".
+//
+// Anchored to a `set` statement, because `/functions/` alone also matches the
+// installer URL on the curl line: without the anchor, deleting the glob entirely
+// would silently retarget every assertion here at that URL and report something
+// other than the fault.
+func globOperands(t *testing.T, body []string) (int, map[string]bool) {
+	t.Helper()
+	i := -1
+	for n, line := range body {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "set" &&
+			strings.Contains(line, "/functions/") {
+			i = n
+			break
+		}
+	}
+	if i < 0 {
+		t.Fatalf("no `set` statement globs a functions/ directory, so the skip can "+
+			"never fire:\n%s", strings.Join(body, "\n"))
+	}
+	operands := map[string]bool{}
+	for _, field := range strings.Fields(body[i]) {
+		if strings.HasPrefix(field, "$") {
+			operands[field] = true
+		}
+	}
+	if len(operands) == 0 {
+		t.Fatalf("the glob statement passes no paths at all: %q", strings.TrimSpace(body[i]))
+	}
+	return i, operands
+}
+
+// fieldIndex is conditionIndex for an EXACT whitespace-delimited field. A
+// substring search for `--force` is equally true of `--forcefully`, and a flag
+// the function does not actually accept is a flag its one caller passes in vain.
+func fieldIndex(body []string, want string) int {
+	for i, line := range body {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "echo ") || strings.HasPrefix(trimmed, "printf ") {
+			continue
+		}
+		if slices.Contains(strings.Fields(line), want) {
+			return i
+		}
+	}
+	return -1
+}
+
+// saysAll reports whether the output statements in body name every one of want.
+func saysAll(body []string, want ...string) (missing []string) {
+	var said strings.Builder
+	for _, line := range body {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "echo ") || strings.HasPrefix(trimmed, "printf ") {
+			said.WriteString(line)
+		}
+	}
+	for _, w := range want {
+		if !strings.Contains(said.String(), w) {
+			missing = append(missing, w)
+		}
+	}
+	return missing
+}
+
+// fishfile is the tracked plugin list, and as of the fish_plugins seed row it is
+// also what fisher's own record starts out as. Two readers, one file.
+//
+// fisher reads fish_plugins with `string match --regex '^[^\s]+$'`, so EVERY
+// non-blank line without whitespace is taken as a plugin name -- a `#` comment
+// would be fetched as a repository. The file therefore carries plugin specs and
+// nothing else, and that is a constraint on the file rather than a convention.
+func TestFishfileIsNothingButPluginSpecs(t *testing.T) {
+	data, err := os.ReadFile("../../../fish/fishfile")
+	if err != nil {
+		t.Fatalf("install_fisher reads this file from the checkout: %v", err)
+	}
+	var plugins []string
+	for i, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if line != strings.TrimSpace(line) || strings.HasPrefix(line, "#") || line == "" {
+			t.Errorf("line %d is %q; fisher would fetch that as a plugin name", i+1, line)
+			continue
+		}
+		plugins = append(plugins, line)
+	}
+	if len(plugins) == 0 {
+		t.Fatal("fishfile is empty; seeding it as fish_plugins would record nothing")
+	}
+	// First, because a plugin manager that is not in its own record is a plugin
+	// manager the next `fisher update` removes.
+	if plugins[0] != "jorgebucaran/fisher" {
+		t.Errorf("the first plugin is %q, want jorgebucaran/fisher: fisher must "+
+			"name itself in the list that becomes its record", plugins[0])
+	}
+}
+
+// The other half of the same statement. fishfile names fisher, so the command
+// must not: `fisher install jorgebucaran/fisher $plugins` names it twice, and
+// the tracked list stops being the whole list the moment the command carries an
+// entry the file does not.
+func TestInstallFisherTakesItsWholePluginListFromTheFile(t *testing.T) {
+	body := installFisherBody(t)
+	i := indexOf(body, "fisher install")
+	if i < 0 {
+		t.Fatalf("install_fisher never invokes `fisher install`:\n%s", strings.Join(body, "\n"))
+	}
+	// The arguments after the verb, not the whole line: the installer's URL on
+	// the same line names jorgebucaran/fisher too, and a substring search would
+	// read that as the command naming it.
+	_, args, _ := strings.Cut(body[i], "fisher install")
+	if strings.TrimSpace(args) != "$plugins" {
+		t.Errorf("`fisher install%s` installs something other than exactly the "+
+			"file's list; naming a plugin here means the tracked list is no longer "+
+			"the whole list", args)
+	}
+}
+
+// The guard, pinned as far as a Go test can pin a fish function it must not
+// execute: this asserts the guard's TEXT and its ORDER, not its behaviour. See
+// the report for what that leaves uncovered.
+//
+// The rule is install onto a machine with no plugin files, and leave an existing
+// installation alone. Under --no-config -- which is how the fish phase calls this
+// function, and which disables universal variables outright -- fisher's record
+// $_fisher_plugins is invisible, so bootstrap cannot tell "already installed"
+// from "half installed" and must not guess. Letting fisher run anyway is what
+// broke the machine in the field: it classifies install-vs-update from that
+// invisible record, refuses every plugin as a conflict, installs nothing, and --
+// because nothing installed -- reaches `command rm -f $fish_plugins` and deletes
+// its own record, which made every retry identical.
+//
+// The skip is status 0, and that is the assertion this case exists for. Every
+// phase must be safe to re-run; a refusal here fails `apply workstation` on a
+// perfectly healthy machine, which is why the first version of this guard was
+// wrong.
+func TestInstallFisherSkipsAMachineThatAlreadyHasPluginFiles(t *testing.T) {
+	body := installFisherBody(t)
+	invoke := indexOf(body, "fisher install")
+	if invoke < 0 {
+		t.Fatalf("install_fisher never invokes `fisher install`:\n%s", strings.Join(body, "\n"))
+	}
+	// The glob operands, compared as a SET against what fisher itself looks at.
+	//
+	// A substring search was not enough and had already let two edits through:
+	// `conditionIndex(body, dir+"/*.fish")` is satisfied by
+	// $__fish_cfg_dir/functions/*.fish and by */*.fishy alike -- either of which
+	// globs nothing at all, so the guard never fires and the field bug returns
+	// with every assertion here still green.
+	glob, operands := globOperands(t, body)
+	if glob > invoke {
+		t.Errorf("the glob is at line %d and fisher runs at line %d", glob, invoke)
+	}
+	// fisher's own conflict test is
+	// `$fisher_path/{functions,themes,conf.d,completions}/*` (fisher.fish:173) --
+	// four directories, EVERY file, not just *.fish. A guard that looks at less
+	// than fisher does can pass a machine through to a collision fisher hits.
+	want := []string{
+		"$__fish_config_dir/functions/*",
+		"$__fish_config_dir/themes/*",
+		"$__fish_config_dir/conf.d/*",
+		"$__fish_config_dir/completions/*",
+	}
+	for _, w := range want {
+		if !operands[w] {
+			t.Errorf("the guard never globs %s; fisher's conflict test covers it, so "+
+				"a file there is a collision this skip does not see", w)
+		}
+	}
+	for got := range operands {
+		if !slices.Contains(want, got) {
+			t.Errorf("the guard globs %s, which fisher's conflict test does not cover", got)
+		}
+	}
+	// The skip has to be CONDITIONAL on what the glob found. Without this, a
+	// guard whose condition had been replaced by a constant would satisfy every
+	// other assertion here -- the glob, the message and the return would all
+	// still be present -- while either skipping every machine or none.
+	var name string
+	for _, field := range strings.Fields(body[glob])[1:] {
+		if !strings.HasPrefix(field, "-") {
+			name = field
+			break
+		}
+	}
+	if name == "" {
+		t.Fatalf("cannot tell what the glob is assigned to: %q", strings.TrimSpace(body[glob]))
+	}
+	tested := -1
+	for i, line := range body[:invoke] {
+		if i == glob || conditionIndex([]string{line}, name) < 0 {
+			continue
+		}
+		tested = i
+		break
+	}
+	if tested < 0 {
+		t.Fatalf("nothing tests %s after the glob fills it, so the skip does not "+
+			"depend on whether any plugin file was actually found", name)
+	}
+	// Three shapes that would satisfy every assertion above while inverting or
+	// disabling the rule. These are checks on the CONDITION'S TEXT -- whether it
+	// evaluates as intended is the part no Go test can reach.
+	cond := strings.TrimSpace(body[tested])
+	// The index, not merely the name. `set --local installed <globs>` CREATES
+	// the variable even when every glob expands to nothing, so
+	// `set --query installed` without [1] is constantly true: the skip fires on
+	// every machine, bootstrap never installs a plugin -- silently, at status 0 --
+	// and fish_reset_all never rebuilds after its own rm -rf. Measured on fish
+	// 4.8.1; dropping the [1] left this whole suite green.
+	if !strings.Contains(cond, name+"[1]") {
+		t.Errorf("the condition is %q; it must test %s[1], because `set --local %s "+
+			"<globs>` creates the variable even when every glob matches nothing -- "+
+			"so without the index it is constantly true and nothing is ever installed",
+			cond, name, name)
+	}
+	// The skip fires when the glob found something. Negated, it would install
+	// onto exactly the machines it exists to leave alone, and skip the fresh
+	// ones it exists to provision.
+	if strings.HasPrefix(cond, "if not ") || strings.HasPrefix(cond, "if !") {
+		t.Errorf("the skip is conditioned on %q; inverted, it installs onto a "+
+			"machine that already has plugin files and skips the fresh one", cond)
+	}
+	// A constant conjunct switches the whole guard off in place. The semicolon
+	// is trimmed because `if false; and set --query installed[1]` is how that is
+	// spelled on one line, and it is the shape a plausible edit takes -- the
+	// variable is still tested, so nothing else here notices.
+	for _, word := range strings.Fields(cond) {
+		if word = strings.Trim(word, ";"); word == "false" || word == "true" {
+			t.Errorf("the condition %q carries the constant %q, so it no longer "+
+				"depends on what the glob found", cond, word)
+		}
+	}
+	// A skip nobody can see is indistinguishable from a phase that did its work,
+	// and the remedies are the whole reason skipping is acceptable.
+	if missing := saysAll(body[:invoke], "functions", "themes", "conf.d", "completions",
+		"fisher update", "fish_reset_all"); missing != nil {
+		t.Errorf("the skip never says %v; it must name the four directories it "+
+			"found files in and point at BOTH remedies from an interactive shell, "+
+			"where fisher's record is visible: `fisher update` to reconcile, and "+
+			"`fish_reset_all` to start over. The reset is the one that resolves the "+
+			"collision this skip exists for -- it removes those directories "+
+			"before calling install_fisher, which is the recovery a user in the "+
+			"field had to work out by hand", missing)
+	}
+	// Zero, and before the invocation. This is the correction: a machine whose
+	// plugins are already in place is one this phase has nothing to do to, so
+	// `apply workstation` must stay green on it.
+	ret := indexOf(body[:invoke], "return")
+	if ret < 0 {
+		t.Fatalf("nothing returns before `fisher install`, so an existing "+
+			"installation is handed to fisher:\n%s", strings.Join(body, "\n"))
+	}
+	if got := strings.TrimSpace(body[ret]); got != "return 0" {
+		t.Errorf("the skip is %q, want `return 0`; a non-zero skip fails "+
+			"`apply workstation` on a healthy machine, and a bare `return` leaves "+
+			"the status to whatever ran last", got)
+	}
+	// The message has to come BEFORE the return, or it is never reached. saysAll
+	// above only proves the words are somewhere in the function; swapping the two
+	// lines leaves them there and makes the skip silent, which is the one thing
+	// that assertion exists to prevent.
+	say := -1
+	for i, line := range body[:invoke] {
+		if strings.HasPrefix(strings.TrimSpace(line), "echo ") {
+			say = i
+			break
+		}
+	}
+	if say < 0 {
+		t.Error("the skip prints nothing at all")
+	} else if say > ret {
+		t.Errorf("the skip returns at line %d and only speaks at line %d, so it never "+
+			"speaks: a silent skip is indistinguishable from a phase that did its work",
+			ret, say)
+	}
+	// Never clobber. Every file in those directories was plugin-owned on the
+	// machine that hit this, but that is a fact about one machine: a hand-written
+	// function there would be destroyed with no way back. It is also what makes
+	// skipping the only available verdict -- bootstrap cannot inspect its way to
+	// a better one.
+	for _, destructive := range []string{"rm ", "rm -", "mv "} {
+		if i := indexOf(body, destructive); i >= 0 {
+			t.Errorf("install_fisher line %d runs %q; an existing installation is "+
+				"left exactly as it was found: %q", i, destructive, strings.TrimSpace(body[i]))
+		}
+	}
+}
+
+// --force is the guard's opt-out, and the reason the skip is safe to have at all.
+//
+// It exists for fish_reset_all, which has already removed the directories by the
+// time it calls back in. Everything this asserts is structural: the guard is
+// nested inside the --force test, so passing the flag reaches past it, and the
+// invocation is NOT nested, so the forced path still installs. Without the last
+// one, --force could skip the guard and the installation both, and
+// fish_reset_all would destroy three directories and rebuild nothing -- exactly
+// the failure this design replaced.
+func TestInstallFisherForceOptsOutOfTheSkip(t *testing.T) {
+	body := installFisherBody(t)
+	invoke := indexOf(body, "fisher install")
+	if invoke < 0 {
+		t.Fatalf("install_fisher never invokes `fisher install`:\n%s", strings.Join(body, "\n"))
+	}
+	force := fieldIndex(body, "--force")
+	if force < 0 {
+		t.Fatalf("install_fisher accepts no --force; fish_reset_all passes it, and a "+
+			"flag the function does not read is a reset that skips instead of "+
+			"rebuilding:\n%s", strings.Join(body, "\n"))
+	}
+	glob, _ := globOperands(t, body)
+	if force > glob {
+		t.Errorf("--force is read at line %d, after the glob at line %d, so it cannot "+
+			"opt out of it", force, glob)
+	}
+	// The guard is inside the --force test; the invocation is not inside
+	// anything. fish's blocks are indentation-free, so this reads the layout the
+	// author committed rather than the parse -- see the report.
+	top := indent(body[0])
+	if indent(body[glob]) <= top {
+		t.Errorf("the glob is at indent %d and the function's own level is %d, so the "+
+			"guard is not nested inside the --force test and --force skips nothing",
+			indent(body[glob]), top)
+	}
+	if indent(body[invoke]) != top {
+		t.Errorf("`fisher install` is at indent %d, not the function's own level %d, "+
+			"so it is nested inside a conditional: --force would skip the "+
+			"installation along with the guard, and fish_reset_all would never "+
+			"rebuild", indent(body[invoke]), top)
+	}
+}
+
+// The skip's message names fish_reset_all as the way out, and this is that
+// promise, held BY CONSTRUCTION.
+//
+// The reset removes fisher's generated state and rebuilds it. It forces past the
+// guard rather than clearing everything the guard globs, so the two cannot
+// disagree: there is no second list here to drift from the guard's, and no
+// directory the reset could leave standing that would then stop the rebuild.
+// themes/ is exactly that case -- fish's own user-theme directory, which the
+// guard must watch because fisher may write there, and which the reset must not
+// delete because the theme may be the user's.
+func TestFishResetAllRebuildsByForcingPastTheSkip(t *testing.T) {
+	reset := functionBody(t, "fish_reset_all")
+	remove := indexOf(reset, "rm -rf")
+	if remove < 0 {
+		t.Fatalf("fish_reset_all removes nothing, so it resets nothing:\n%s",
+			strings.Join(reset, "\n"))
+	}
+	rebuild := -1
+	for i, line := range reset {
+		if fields := strings.Fields(line); len(fields) > 0 && fields[0] == "install_fisher" {
+			rebuild = i
+			break
+		}
+	}
+	if rebuild < 0 {
+		t.Fatalf("fish_reset_all never calls install_fisher, so it destroys fisher's "+
+			"state and rebuilds none of it:\n%s", strings.Join(reset, "\n"))
+	}
+	if !slices.Contains(strings.Fields(reset[rebuild]), "--force") {
+		t.Errorf("the rebuild is %q; without --force the guard sees whatever the rm "+
+			"did not clear -- a user's theme in themes/, say -- and skips, leaving "+
+			"the machine with three directories destroyed and nothing rebuilt",
+			strings.TrimSpace(reset[rebuild]))
+	}
+	if remove > rebuild {
+		t.Errorf("fish_reset_all rebuilds at line %d and only removes at line %d, so "+
+			"it deletes what it just installed", rebuild, remove)
+	}
+	// themes/ is fish's own user-theme directory. A .theme placed there by hand
+	// shows up in `fish_config theme list`, and a plugin reset has no business
+	// deleting it -- which is precisely why the rebuild forces rather than the rm
+	// widening.
+	if strings.Contains(reset[remove], "themes") {
+		t.Errorf("the reset clears themes/: %q -- that is fish's user-theme "+
+			"directory, not fisher's to empty. The rebuild forces past the guard "+
+			"instead", strings.TrimSpace(reset[remove]))
+	}
+}
+
 // git.io is GitHub's retired URL shortener. Measured 2026-08-11: it still
 // answers 301 to
 // https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish
 // -- so this is hardening, not a repair. Provisioning a new machine should not
 // route through a service its owner has already announced the end of.
 func TestMypreNamesTheFisherInstallerDirectly(t *testing.T) {
-	body, err := os.ReadFile("../../../fish/mypre.fish")
-	if err != nil {
-		t.Fatalf("the fish phase invokes install_fisher from this file: %v", err)
-	}
-	if strings.Contains(string(body), "git.io") {
+	body := mypre(t)
+	if strings.Contains(body, "git.io") {
 		t.Error("git.io is a retired shortener; name the raw URL it redirects to")
 	}
-	if !strings.Contains(string(body),
+	if !strings.Contains(body,
 		"https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish") {
 		t.Error("install_fisher must fetch the installer from its canonical URL")
 	}

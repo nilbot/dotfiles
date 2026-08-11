@@ -368,7 +368,8 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 // This case is deliberately written against neither the fixture nor the helper:
 //
 //   - the literal pins doctor.go itself, so a rename that updates the fixtures
-//     and forgets DefaultDependencies fails here;
+//     and forgets DependenciesFor -- where the path is actually built -- fails
+//     here;
 //   - the file check pins the repository, so a rename that forgets BOTH -- the
 //     shape the branch actually shipped -- fails here too. The include line in
 //     git/gitconfig.local.template names this same path, and bootstrap's
@@ -377,12 +378,12 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 //
 // Reading a tracked file means the Go build cache does not know when the answer
 // changes: run this module's tests with -count=1 after any rename.
-func TestDefaultDependenciesNameTheSharedGitConfigThisRepositoryShips(t *testing.T) {
+func TestDependenciesNameTheSharedGitConfigThisRepositoryShips(t *testing.T) {
 	const relative = "git/gitconfig.shared"
 
-	got := filepath.ToSlash(DefaultDependencies().SharedGitConfig)
+	got := filepath.ToSlash(DependenciesFor(filepath.Join("any", "checkout")).SharedGitConfig)
 	if !strings.HasSuffix(got, "/"+relative) {
-		t.Errorf("DefaultDependencies().SharedGitConfig = %q, want it to end in %q; "+
+		t.Errorf("DependenciesFor(...).SharedGitConfig = %q, want it to end in %q; "+
 			"doctor compares core.attributesFile's origin against this path, so a "+
 			"name no checkout carries makes the attributes check fail on every "+
 			"healthy machine", got, relative)
@@ -402,6 +403,52 @@ func TestDefaultDependenciesNameTheSharedGitConfigThisRepositoryShips(t *testing
 	}
 	if !info.Mode().IsRegular() {
 		t.Errorf("%s is %v, want a regular tracked file", relative, info.Mode())
+	}
+}
+
+// TestDependenciesForDeriveTheCheckoutPathsFromTheRootItIsGiven pins the
+// distinction the ~/dotfiles assumption erased.
+//
+// doctor compares the checkout-relative paths against what Git actually
+// reports, so a binary that guesses the wrong checkout reports
+// git-hooks:global, git-hooks:links and git-attributes failing -- and
+// git-hooks:effective warning -- against a machine that is correctly
+// provisioned. The remaining paths are genuinely home-relative: they must not
+// follow the root, or a relocated checkout would look inside itself for files
+// Git only ever reads from the home directory.
+func TestDependenciesForDeriveTheCheckoutPathsFromTheRootItIsGiven(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "src", "dotfiles")
+	deps := DependenciesFor(root)
+
+	for _, c := range []struct{ field, got, want string }{
+		{"HooksDir", deps.HooksDir, filepath.Join(root, "git", "hooks.d")},
+		{"AttributesSource", deps.AttributesSource, filepath.Join(root, "git", "gitattributes")},
+		{"SharedGitConfig", deps.SharedGitConfig, filepath.Join(root, "git", "gitconfig.shared")},
+	} {
+		if c.got != c.want {
+			t.Errorf("DependenciesFor(%q).%s = %q, want %q", root, c.field, c.got, c.want)
+		}
+	}
+
+	prefix := root + string(filepath.Separator)
+	for _, c := range []struct{ field, got string }{
+		{"CodexConfig", deps.CodexConfig},
+		{"AttributesLink", deps.AttributesLink},
+		{"GlobalGitConfig", deps.GlobalGitConfig},
+	} {
+		if strings.HasPrefix(c.got, prefix) {
+			t.Errorf("DependenciesFor(%q).%s = %q, want a path outside the checkout; "+
+				"this one lives in the home directory wherever the checkout is", root, c.field, c.got)
+		}
+	}
+
+	if deps.AttributesConfigValue != "~/.gitattributes" {
+		t.Errorf("DependenciesFor(%q).AttributesConfigValue = %q, want %q; doctor "+
+			"compares core.attributesFile against this literal", root, deps.AttributesConfigValue, "~/.gitattributes")
+	}
+	if deps.LookPath == nil || deps.Git == nil || deps.LegacyHooksPath == nil {
+		t.Error("DependenciesFor left a runner nil; doctor then reports its git " +
+			"checks unavailable instead of running them")
 	}
 }
 

@@ -786,6 +786,32 @@ phase could branch on.
 casks do not exist on Linux, and Homebrew publishes no formula for it. Task 14
 removed the vendored `install-font-linux.sh` that used to cover this.
 
+### Found in the field, 2026-08-11, on the first real provisioning run
+
+Both were hit on the repository owner's machine immediately after merge. Neither
+was visible to the test suite, because every test drives the fake `Machine` and
+`install_fisher` is never really executed.
+
+**4. The fish phase is not idempotent, and its failure destroys the record that
+would fix it.** `install_fisher` runs `fisher install` unconditionally on every
+apply. Where fisher's own record — `$__fish_config_dir/fish_plugins` — does not
+list plugins whose files are already on disk, fisher refuses each with "please
+remove or move conflicting files first" and the phase exits 1, taking devtools and
+verify with it. It then makes the next run fail identically: with nothing
+successfully installed, `fisher.fish` reaches `command rm -f $fish_plugins` and
+**deletes the record**, so the machine cannot recover by retrying. Recovery is to
+write `fish_plugins` listing the plugins whose files are present, after which
+fisher treats them as updates. The phase should establish that state itself rather
+than requiring an operator to know this.
+
+**5. The login-shell check trusts `$SHELL`.** `check`'s `login-shell` and the fish
+phase's `chsh` decision both read `Context.Shell`, which `main.go` takes from
+`os.Getenv("SHELL")`. That is inherited and need not describe the account: run from
+a process started under another shell, `check` reports "the login shell is /bin/zsh,
+not fish" on a machine whose passwd entry says `/opt/homebrew/bin/fish`, and the
+phase would plan a `sudo chsh` that is not needed. The passwd database is the
+authority; `$SHELL` is a hint.
+
 ---
 
 ## Rejected alternatives
@@ -858,7 +884,7 @@ exchange for one convenience command.
 | `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
 | A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
 | Bootstrap grows into an unmaintainable program | One package per concern; all machine access through `change.Interface`; an architecture test on the phase package's import set. |
-| Go is a stage-zero dependency the old design did not have | The shim installs it via Homebrew when present, and otherwise refuses with the exact command. One manual step on a machine that has neither. §2.1. |
+| Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go; spec 5's published artifact is what removes it. §2.1, §2.2. |
 | The shim is shell, so it inherits the defects that motivated the switch | It is ~40 lines, does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 

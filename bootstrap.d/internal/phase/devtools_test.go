@@ -16,7 +16,7 @@ const (
 	opInstallUv    = "run brew install uv"
 	opCheckHooks   = "run bash /repo/git/install-hooks.sh preflight /repo /home /home/bin/agents"
 	opMakeBinDir   = "dir /home/bin"
-	opBuildAgents  = "run go build -C /repo/agents -trimpath -o /home/bin/agents ."
+	opBuildAgents  = `run go build -C /repo/agents -trimpath -ldflags "-X main.dotfilesRoot=/repo" -o /home/bin/agents .`
 	opInstallHooks = "run bash /repo/git/install-hooks.sh install /repo /home /home/bin/agents"
 )
 
@@ -115,6 +115,43 @@ func TestDevtoolsDelegatesHooksRatherThanInstallingThem(t *testing.T) {
 				"writes it last so a partial install cannot activate an "+
 				"incomplete hooks directory", op)
 		}
+	}
+}
+
+// The binary has to be told which checkout it belongs to, and this phase is one
+// of only two places that can tell it -- the builder is the only party that
+// knows. An unstamped binary falls back to ~/dotfiles, where doctor reports
+// three failures against a machine that is fine and the git hook chain finds no
+// personal hooks directory and silently runs none of them.
+//
+// Asserted on its own rather than left to the exact-argv cases above, because
+// those report "ops differ" for any drift at all. Provisioning a checkout that
+// is not ~/dotfiles is the reason the flag exists, so the value asserted is
+// c.Root and not a fixed path.
+//
+// The quotes are load-bearing. -ldflags takes ONE argument, and splitting the
+// value into "-X" and "main.dotfilesRoot=<root>" produces a command go rejects
+// outright with `malformed import path`. The fake quotes any element holding a
+// space, so requiring them here is how this case can tell the two apart.
+func TestDevtoolsStampsTheCheckoutIntoTheBinaryItBuilds(t *testing.T) {
+	fake, ctx, _ := devtoolsCtx(true)
+	if err := phase.Devtools(ctx); err != nil {
+		t.Fatalf("Devtools: %v", err)
+	}
+	build := ""
+	for _, op := range fake.Ops {
+		if strings.HasPrefix(op, "run go build") {
+			build = op
+		}
+	}
+	if build == "" {
+		t.Fatalf("the phase did not build the binary at all; ops: %v", fake.Ops)
+	}
+	if want := `-ldflags "-X main.dotfilesRoot=` + ctx.Root + `"`; !strings.Contains(build, want) {
+		t.Errorf("build command:\n%s\nis missing %q; the binary it produces would fall "+
+			"back to ~/dotfiles, so on a checkout provisioned anywhere else doctor "+
+			"fails checks that are fine and the git hook chain runs no personal hooks "+
+			"and reports nothing", build, want)
 	}
 }
 

@@ -17,11 +17,15 @@ import (
 // it. Nothing here runs a package manager: fakeChange appends a string and
 // returns, so a test that "installs Homebrew" installs a line in a slice.
 const (
-	opAptUpdate   = "sudo apt-get update"
-	opAptInstall  = "sudo apt-get install -y build-essential curl file git"
-	opPacman      = "sudo pacman -S --needed --noconfirm base-devel curl file git"
-	opInstallBrew = `run /bin/bash -c /bin/bash -c ` +
-		`"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`
+	opAptUpdate  = "sudo apt-get update"
+	opAptInstall = "sudo apt-get install -y build-essential curl file git"
+	opPacman     = "sudo pacman -S --needed --noconfirm base-devel curl file git"
+	// The installer script is one argv element, and the fake quotes it because a
+	// bare join could not say so: `-c` takes the whole `/bin/bash -c "$(curl
+	// ...)"` string, and an implementation that split it into words would render
+	// identically here while passing the outer bash a command it cannot run.
+	opInstallBrew = `run /bin/bash -c ` +
+		`"/bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\""`
 )
 
 // brewOnPath is what fakeChange.LookPath answers for a command it can resolve,
@@ -504,41 +508,31 @@ func TestPackagesStopsAtTheFirstFailure(t *testing.T) {
 	}
 }
 
-// wantFormulae and wantCasks are the Brewfile's complete expected contents.
+// requiredFormulae are the formulae something else in this repo calls. Each is
+// here because code breaks without it, and carries the reason why.
 //
-// The whole set is pinned, not only the audit's deltas, because the brew/*.list
-// files that used to be the record were deleted in the same commit that created
-// this file. The Brewfile is now the only record of what this workstation
-// installs, and a test that checked four decisions would pass while `brew "fish"`
-// quietly disappeared -- taking the login shell the fish phase requires with it.
-var (
-	wantFormulae = []string{
-		// Languages, runtimes and build tools.
-		"bazelisk", "boost", "fish", "go", "node", "rustup-init", "tmux", "yarn",
-		// Command-line utilities.
-		"bat", "bingrep", "btop", "diff-so-fancy", "dua-cli", "fd", "fzf",
-		"git-delta", "git-interactive-rebase-tool", "gitleaks", "jql", "jump",
-		"lsd", "procs", "re2", "ripgrep", "starship", "tokei", "uv", "yt-dlp",
-		"zstd",
-	}
-	wantCasks = []string{"macfuse", "mactex", "font-symbols-only-nerd-font"}
-)
+// This is deliberately NOT the Brewfile's full contents. The Brewfile is the
+// record of what this workstation installs and is meant to be edited directly;
+// pinning every line would mean editing Go in another module to add a CLI tool,
+// and would report an unimportant addition with the same shape and urgency as
+// dropping the login shell -- training the reader to sync the list without
+// reading it, which is how the change that mattered would get waved through.
+var requiredFormulae = []struct{ name, why string }{
+	{"fish", "the fish phase installs plugins with it and makes it the login shell"},
+	{"gitleaks", "`agents guard --staged` shells out to it"},
+	{"uv", "the devtools phase calls it"},
+}
 
-// The Brewfile is an AUDIT of brew/*.list, not a translation of it. Its complete
-// contents are pinned first; the four decisions that make it an audit are then
-// asserted separately, because those assertions carry the REASON each decision
-// was made and a set comparison cannot.
+// The Brewfile is an AUDIT of the deleted brew/*.list files. What this pins is
+// what the audit DECIDED -- the couplings that must hold and the retirements
+// that must not silently reverse -- each with the reason it was decided, which
+// a set comparison cannot carry.
 func TestBrewfileCarriesTheAudit(t *testing.T) {
 	body := readBrewfile(t)
 
-	assertSameSet(t, "formulae", body.brews, wantFormulae)
-	assertSameSet(t, "casks", body.casks, wantCasks)
-
-	for _, want := range []string{"gitleaks", "uv"} {
-		if !slices.Contains(body.brews, want) {
-			t.Errorf("%q is missing; it is required by tooling that never declared it "+
-				"-- gitleaks by 'agents guard --staged', uv by the devtools phase. "+
-				"brews: %v", want, body.brews)
+	for _, req := range requiredFormulae {
+		if !slices.Contains(body.brews, req.name) {
+			t.Errorf("%q is missing: %s. brews: %v", req.name, req.why, body.brews)
 		}
 	}
 	for _, gone := range []string{"micromamba", "youtube-dl"} {
@@ -572,35 +566,31 @@ func TestBrewfileGuardsEveryCaskWithOSMac(t *testing.T) {
 	}
 }
 
-// assertSameSet reports what was added and what went missing, rather than
-// printing two lists and leaving the reader to diff them. A Brewfile change is
-// almost always one or two names, and naming them is the difference between a
-// failure that explains itself and one that has to be investigated.
-func assertSameSet(t *testing.T, what string, got, want []string) {
-	t.Helper()
-	var missing, unexpected []string
-	for _, name := range want {
-		if !slices.Contains(got, name) {
-			missing = append(missing, name)
+// A formula declared twice is harmless to `brew bundle`, but it is always a
+// mistake and it is invisible to any check that compares sets -- the duplicate
+// collapses into the set and only a count notices, which is not what a count is
+// read for. One reached master this way: an edit meant to drop a formula
+// replaced it with the name of one already declared below.
+func TestBrewfileDeclaresNothingTwice(t *testing.T) {
+	body := readBrewfile(t)
+	for _, group := range []struct {
+		what  string
+		names []string
+	}{
+		{"formula", body.brews},
+		{"cask", body.casks},
+	} {
+		if len(group.names) == 0 {
+			t.Fatalf("no %s lines parsed; this guard would pass without checking anything",
+				group.what)
 		}
-	}
-	for _, name := range got {
-		if !slices.Contains(want, name) {
-			unexpected = append(unexpected, name)
+		seen := make(map[string]bool, len(group.names))
+		for _, name := range group.names {
+			if seen[name] {
+				t.Errorf("%s %q is declared more than once", group.what, name)
+			}
+			seen[name] = true
 		}
-	}
-	if len(missing) > 0 {
-		t.Errorf("%s missing from the Brewfile: %v\nthe brew/*.list files that used "+
-			"to record this were deleted; this file is now the only record",
-			what, missing)
-	}
-	if len(unexpected) > 0 {
-		t.Errorf("%s in the Brewfile but not in the audit: %v\nadd them here "+
-			"deliberately, with the reason, or drop them", what, unexpected)
-	}
-	if len(got) != len(want) {
-		t.Errorf("%s: the Brewfile declares %d, the audit expects %d",
-			what, len(got), len(want))
 	}
 }
 

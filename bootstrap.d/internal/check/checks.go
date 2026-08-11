@@ -271,18 +271,26 @@ func gitconfigInclude(c Context) Result {
 		", so every shared git setting is silently inactive; run './bootstrap migrate'"}
 }
 
-// loginShell answers spec §10's check 6: $SHELL is fish, and that same path is
-// registered in /etc/shells.
+// loginShell answers spec §10's check 6: the account's login shell is fish, and
+// that same path is registered in /etc/shells.
 //
-// $SHELL describes the session, not the account, so immediately after the fish
-// phase runs chsh this still reports the old shell until the next login. The
-// detail says so rather than the status softening, because the two cases -- chsh
-// never ran, and chsh ran a minute ago -- are indistinguishable from here and
-// only one of them is fine.
+// c.Shell is the passwd record, read by main; $SHELL is only what main falls
+// back to when the database cannot answer. That distinction is this check's
+// whole history: reading $SHELL, which describes the SESSION and is inherited
+// from whatever started the run, made this row report a failure on a machine
+// whose account had been fish for months, because the run happened to start in
+// a zsh terminal.
+//
+// The database reports what chsh wrote, and reports it at once, so a login shell
+// changed by an apply is visible to the next run rather than only after the next
+// login. Not within one run, though: main resolves the shell once, before any
+// phase executes, so the verify phase at the end of an apply that ran chsh still
+// reports the value that run began with.
 func loginShell(c Context) Result {
 	if c.Shell == "" {
 		return Result{Fail, "login-shell",
-			"SHELL is unset, so the login shell cannot be determined"}
+			"the login shell cannot be determined: neither the passwd database " +
+				"nor $SHELL answered"}
 	}
 	// Base, not a suffix test: "/usr/local/bin/notfish" ends in the letters
 	// without being fish.
