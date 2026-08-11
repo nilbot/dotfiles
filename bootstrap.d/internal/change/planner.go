@@ -177,9 +177,23 @@ func (p *Planner) Seed(source, target string) error {
 // assertion at the one call site that needs them, and an assertion is a runtime
 // failure where this is a compile-time one.
 //
-// Each consults the same verdict its Applier counterpart does, so the two cannot
-// disagree about what is refused. That is the rule five defects in this design
-// came from breaking.
+// Each consults the same verdict its Applier counterpart does. That is the rule
+// five defects in this design came from breaking, and it holds exactly for
+// Rename, RemoveAll and WriteFile.
+//
+// Copy is a declared exception, the second in this package alongside Run/Sudo
+// below. copyVerdict is shared, but Applier.Copy then walks the tree through
+// copyTree, which refuses a socket, fifo or device node (applier.go) -- and
+// Planner.Copy has no counterpart for that, because deciding it means reading
+// every node under the source rather than the two this method Lstats. So for a
+// source containing one, the plan reports a copy the apply would refuse.
+//
+// Unreachable today: no verb plans a migration, `migrate` always carries an
+// Applier, and the one migration that copies walks a fish configuration
+// directory. Stated rather than silently tolerated because the whole point of
+// the rule is that a divergence is written down where the next reader looks --
+// closing it means hoisting the node-type test into a shared verdict that both
+// consult over the same walk.
 
 func (p *Planner) Copy(source, target string) error {
 	srcInfo, err := p.Lstat(source)

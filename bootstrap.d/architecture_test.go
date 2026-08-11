@@ -55,8 +55,12 @@ func nonTestImports(t *testing.T, dir string) map[string][]string {
 // behavioural test would necessarily catch it.
 //
 // The shell version could only approximate this by scanning for command names
-// like "rm" at statement starts -- a heuristic that was written wrong twice. An
-// import set is exact.
+// like "rm" at statement starts -- a heuristic that was written wrong twice.
+// Imports are structural rather than textual, so this is exact about every name
+// it names. It is a DENYLIST of nine, though, not an allowlist: a standard
+// library package that can reach the filesystem and is absent from the list
+// below passes. Inverting it is the standing improvement, and the honest reading
+// until then is "these nine cannot appear", not "nothing that can do I/O can".
 //
 // The whole module-internal closure is walked, not just the direct imports of
 // each package: a phase that imported a helper which imported os would
@@ -79,9 +83,18 @@ func TestPhasePackageCannotPerformIO(t *testing.T) {
 		"io/fs": true, "io/ioutil": true, "syscall": true,
 		"net": true, "net/http": true,
 	}
-	// path/filepath is pure string manipulation and is allowed; io is allowed
-	// for the Writer interface, regexp for matching text already read. None of
-	// them can reach the filesystem on its own.
+	// io is allowed for the Writer interface and regexp for matching text
+	// already read; neither can open anything.
+	//
+	// path/filepath is allowed on a narrower claim than it once carried here.
+	// Most of it is pure string manipulation, but Glob, Walk, WalkDir,
+	// EvalSymlinks and Abs do reach the filesystem or the process's working
+	// directory. What is true is that no non-test file the walk below reaches
+	// calls any of them (checked); what is NOT true is that importing
+	// the package cannot reach the filesystem. The denylist above works at
+	// import granularity and cannot tell those apart, so this one is held by
+	// reading rather than by the guard -- which is the reason to say so here
+	// rather than to leave a sentence a future reader would rely on.
 
 	stop := map[string]bool{"internal/change": true}
 
