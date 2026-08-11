@@ -100,23 +100,28 @@ const stubLoginShell = "/bin/bash"
 // the cases that turn on the login shell would pass or fail accordingly.
 //
 // migrate and --help build no context and never resolve a shell, which is what
-// makes three cases here hermetic in spite of themselves: each supplies its own
+// makes four cases here hermetic in spite of themselves: each supplies its own
 // PATH in extraEnv, built from the TEST PROCESS's PATH, which does not contain
 // this directory -- so the entry runShimIn set is replaced and these stubs are
-// dropped. Those three are the migrate-mambaforge case and the two --help cases
-// that go through misresolvingPATH. That is load-bearing, not trivia: a case
-// added later that supplied its own PATH under plan, apply or check would reach
-// the real tools, and nothing would say so. The one such case that exists today
-// (the packages verdict) puts stubToolDir back in deliberately.
+// dropped. Those four are the migrate-mambaforge case, the two --help cases that
+// go through misresolvingPATH, and TestMissingGoRefusesWithTheInstallCommand.
+// That is load-bearing, not trivia: a case added later that supplied its own
+// PATH under plan, apply or check would reach the real tools, and nothing would
+// say so. The one such case that exists today (the packages verdict) puts
+// stubToolDir back in deliberately.
 //
 // Both stubs REJECT an argv they do not recognise, with exit 64, rather than
 // answering anyway. A stub that replies to any question cannot tell a correct
 // command from a broken one: with an unconditional printf, dropping every
 // argument from the exec call left the whole login-shell suite green while the
 // resolver silently fell back to $SHELL on a real machine -- which is the defect
-// this task exists to fix. Otherwise they answer stubLoginShell in the shape the
-// real tools use: `UserShell: <path>` for dscl, a seven-field passwd line for
-// getent.
+// this task exists to fix. The account is pinned too, not just the shape around
+// it: a stub matching /Users/?* answers for any account, so asking about the
+// wrong one read as correct. It is `id -un` rather than $USER because one case
+// exports USER=somebodyelse, and currentUser prefers the passwd database over
+// the environment -- which is the whole reason that case exists. Otherwise they
+// answer stubLoginShell in the shape the real tools use: `UserShell: <path>` for
+// dscl, a seven-field passwd line for getent.
 //
 // brew is EXECUTED. It only ever answers `brew bundle check`, which reads and
 // reports. Exit 0 -- "every Brewfile entry is installed" -- is the choice that
@@ -148,12 +153,12 @@ func stubToolDir(t *testing.T) string {
 			"[ \"$1\" = \".\" ] || exit 64\n" +
 			"[ \"$2\" = \"-read\" ] || exit 64\n" +
 			"[ \"$4\" = \"UserShell\" ] || exit 64\n" +
-			"case \"$3\" in /Users/?*) ;; *) exit 64 ;; esac\n" +
+			"[ \"$3\" = \"/Users/$(id -un)\" ] || exit 64\n" +
 			"printf 'UserShell: %s\\n' " + stubLoginShell + "\n",
 		"getent": "#!/bin/sh\n" +
 			"[ $# -eq 2 ] || exit 64\n" +
 			"[ \"$1\" = \"passwd\" ] || exit 64\n" +
-			"[ -n \"$2\" ] || exit 64\n" +
+			"[ \"$2\" = \"$(id -un)\" ] || exit 64\n" +
 			"printf 'stub:x:1000:1000::/home/stub:%s\\n' " + stubLoginShell + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
