@@ -52,6 +52,14 @@ by construction rather than by review.
   through `die` (exit 2). `${var:?}` exits 1, a failing pipeline exits its own
   status, and a failed `exec` exits 126/127 — all of which escape the shared
   table and read to CI as something other than a block.
+- **A mode given to a file-*creating* call is masked by the umask; a mode given
+  to `Chmod` is not.** So a test fixture that asserts a mode must `Chmod` after
+  creating it — `os.WriteFile(p, b, 0o640)` yields `0600` under `umask 077`, and
+  the test then fails on a machine that is not yours. Product code wanting an
+  exact mode must `Chmod` too; product code wanting a umask-respecting default
+  must *not*. Three separate instances of this appeared in Task 9 alone, two of
+  them in tests written to pin other fixes. **Run the suite under `umask 077` as
+  well as your own** before claiming it passes.
 - A `pre-commit` hook runs `agents guard --staged`. It should pass. If it blocks, report BLOCKED with its output rather than using `--no-verify`.
 
 ## File Structure
@@ -2424,6 +2432,33 @@ declares its own narrow interface — `Lstat`, `Readlink`, `ReadFile`, `LookPath
 `Run` — which `change.Interface` satisfies implicitly, so no call site changes
 and the invariant is a property of the type rather than of everyone's care.
 
+**Each consumer declares the narrowest interface it needs.** Task 9 adds
+`Copy`, `Rename`, `RemoveAll` and `WriteFile` to `change` because the migrations
+cannot be written without them — but those four can destroy data that is not in
+git, and only `migrate` has any business with them. Without narrowing, adding
+them hands every phase a `RemoveAll`, reopening one layer up the hole
+`check.Machine` closed.
+
+| Consumer | Interface | Methods |
+|---|---|---|
+| `check` | `check.Machine` | the 5 read-ish ones |
+| `phase` | `phase.Machine` | the 9 non-destructive ones |
+| `migrate` | `migrate.Machine` | all 13 |
+| `migrate` detection | `migrate.Reader` | the 3 needed to *notice* |
+
+`change.Applier` and `change.Planner` satisfy all of these implicitly, so no
+call site changes. This is the design's standing answer to "who may do what": a
+capability nobody declares a need for is one nobody can reach.
+
+**The fourth interface is what the narrowing taught.** Preflight must ask
+whether a migration is pending, but preflight holds nine methods and running a
+migration needs thirteen — so a `Pending` taking the same `Context` as `Run`
+would hand every phase back the four destructive methods, defeating the point.
+Detection and execution are different capabilities and get different inputs:
+`Pending` takes a `Reader`, `Run` takes the full `Machine`. A `Pending` that
+grew a `RemoveAll` would not compile, which is stronger than the convention it
+replaces.
+
 **A guard that matches a path string must also confirm the path resolves.**
 `gitconfig-include` and `fish-source` both read a file and pattern-match a path
 out of it. On a clone that is not at `~/dotfiles`, the seeded `~/.gitconfig`
@@ -2814,7 +2849,64 @@ rather than letting apply hit a refusal that explains nothing."
 
 ---
 
-### Tasks 10 through 16
+### Task 10: `migrate` — the reclaiming kind
+
+**Files:**
+- Modify: `bootstrap.d/internal/migrate/migrations.go`, `migrate.go`
+- Test: `bootstrap.d/internal/migrate/migrate_test.go`, `bootstrap.d/main_test.go`
+
+**Interfaces:** no new types. `migrate.Reclaiming` and the listing mechanism
+already exist from Task 9 and are already tested with a fake; this task supplies
+the first real one.
+
+**One reclaiming migration: `mambaforge`.** It removes `~/sdk/mambaforge`,
+measured at 3.5 GB on 2026-08-10. Python environments are managed by `uv` now;
+`micromamba` is not on `PATH`, so the mamba block in `fish/mypost.fish` is
+already inert, and the directory's four environments are named by Python version
+alone (`3_9`–`3_12`) — exactly what `uv python install` provides.
+
+**The kind is the whole point.** A reclaiming migration destroys data that is
+not in git and cannot be recovered, so:
+
+- It **never** runs from a bare `./bootstrap migrate`. That verb lists it with
+  the exact command and performs nothing.
+- It runs only when named: `./bootstrap migrate mambaforge`.
+- **Preflight does not refuse when it is pending.** Task 9 already filters
+  preflight to `Reconciling` only, and the reason is sharper here: a reclaiming
+  migration is pending until someone deliberately runs it, possibly forever, so
+  refusing on it would deadlock `apply` on a machine that is otherwise perfectly
+  healthy.
+
+**It refuses if anything on `PATH` still resolves inside the directory** —
+`conda`, `mamba`, `micromamba`, `python`, `python3`, `pip`. Deleting 3.5 GB out
+from under a live toolchain is the failure this guard exists for, and the check
+is cheap. Use `LookPath` and compare against the resolved target.
+
+Tests: pending both directions; a bare `migrate` lists it and deletes nothing
+(assert the directory still exists); the named form removes it; the `PATH` guard
+refuses with the tool named and **deletes nothing**. Mutation-test the guard by
+removing it and confirming the refusal test fails.
+
+**Do not run this against the repo owner's real `~/sdk/mambaforge`.** It exists,
+it is 3.5 GB, and it is not in git. Every test constructs its own tree under a
+temp `HOME`.
+
+```bash
+git add bootstrap.d/internal/migrate bootstrap.d/main_test.go
+git commit -m "feat(bootstrap): add the reclaiming migrations, starting with mambaforge
+
+Reclaiming migrations destroy untracked data irreversibly, so a bare
+migrate lists them with the exact command and runs none of them. Nothing
+has to be rediscovered later, and a routine invocation can never delete
+anything.
+
+mambaforge refuses if any of conda, mamba, micromamba, python, python3 or
+pip still resolves inside the directory."
+```
+
+---
+
+### Tasks 11 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
