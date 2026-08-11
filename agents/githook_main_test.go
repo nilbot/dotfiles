@@ -123,6 +123,12 @@ func newLiveHookRepo(t *testing.T, binary string) liveHookRepo {
 	if out, err := gitAttempt(root, "config", "core.hooksPath", hooksPath); err != nil {
 		t.Fatalf("configure local core.hooksPath: %v\n%s", err, out)
 	}
+	// The personal hooks this fixture lays out are found through DotfilesRoot,
+	// which consults AGENTS_DOTFILES_ROOT before falling back to HOME. Exported
+	// in the shell running the tests, it would send the dispatcher to the real
+	// checkout instead -- these cases would fail for a reason that has nothing to
+	// do with them, after running whatever personal hooks that checkout holds.
+	t.Setenv("AGENTS_DOTFILES_ROOT", "")
 	extras := filepath.Join(home, "dotfiles", "git", "hooks")
 	if err := os.MkdirAll(extras, 0o755); err != nil {
 		t.Fatal(err)
@@ -303,6 +309,77 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 	})
 }
 
+// TestRunGitHookRunsPersonalHooksFromThisBinarysCheckout pins the silent half of
+// the relocated-checkout defect. githook treats a missing extras directory as
+// "no personal hooks" and carries on at exit 0, so a dispatcher looking under
+// $HOME/dotfiles on a machine checked out anywhere else runs none of them and
+// reports nothing -- no failure, no warning, no output at all.
+//
+// The decoy under HOME is what makes this falsifiable in the useful direction.
+// Asserting only that the checkout's hook ran would also pass for a dispatcher
+// that ran both; asserting that nothing ran under HOME would pass for one that
+// ran neither.
+//
+// post-merge rather than pre-commit: the chain is identical, and pre-commit
+// additionally runs the guard, whose scanner and staging machinery has nothing
+// to do with which directory the personal hooks were found in.
+//
+// Both ways of naming the checkout are exercised. The build stamp case is not
+// redundant with root_test.go: it is the only place a consumer proves it honours
+// the stamp, and the two builders that set it landed with this change.
+func TestRunGitHookRunsPersonalHooksFromThisBinarysCheckout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// nameCheckout points the binary at checkout the way one builder or one
+		// operator would, and leaves the other way empty so each case pins one
+		// branch of DotfilesRoot on its own.
+		nameCheckout func(t *testing.T, checkout string)
+	}{
+		{"build stamp", func(t *testing.T, checkout string) {
+			stampRoot(t, checkout)
+			t.Setenv("AGENTS_DOTFILES_ROOT", "")
+		}},
+		{"environment", func(t *testing.T, checkout string) {
+			stampRoot(t, "")
+			t.Setenv("AGENTS_DOTFILES_ROOT", checkout)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newRepo(t)
+			checkout := t.TempDir()
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			tc.nameCheckout(t, checkout)
+
+			ran := filepath.Join(t.TempDir(), "ran")
+			t.Setenv("PERSONAL_HOOK_RAN", ran)
+			writeLiveFile(t, checkout, "git/hooks/a.post-merge",
+				"#!/bin/sh\nprintf 'checkout\\n' >> \"$PERSONAL_HOOK_RAN\"\n", 0o755)
+			writeLiveFile(t, home, "dotfiles/git/hooks/a.post-merge",
+				"#!/bin/sh\nprintf 'home\\n' >> \"$PERSONAL_HOOK_RAN\"\n", 0o755)
+
+			t.Chdir(root)
+			var stdout, stderr bytes.Buffer
+			if code := runGitHook("post-merge", nil, strings.NewReader(""), &stdout, &stderr); code != exitcode.OK {
+				t.Fatalf("runGitHook exit=%d want=%d stdout=%q stderr=%q",
+					code, exitcode.OK, stdout.String(), stderr.String())
+			}
+
+			got, err := os.ReadFile(ran)
+			if err != nil {
+				t.Fatalf("no personal hook ran at all (%v); a missing extras directory "+
+					"is not an error to githook, so this is exactly how a relocated "+
+					"checkout loses its hooks without a word", err)
+			}
+			if string(got) != "checkout\n" {
+				t.Errorf("personal hooks that ran = %q, want %q; the dispatcher looked "+
+					"under HOME instead of the checkout this binary belongs to",
+					got, "checkout\n")
+			}
+		})
+	}
+}
+
 func TestRunGitHookMapsGuardExitClassesExactly(t *testing.T) {
 	gitBinary, err := exec.LookPath("git")
 	if err != nil {
@@ -355,6 +432,11 @@ func TestRunGitHookMapsGuardExitClassesExactly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newRepo(t)
 			t.Setenv("HOME", t.TempDir())
+			// Empty HOME is how this case says "no personal hooks". Since the
+			// dispatcher asks DotfilesRoot, an exported AGENTS_DOTFILES_ROOT
+			// would answer first and run the real checkout's personal hooks
+			// against this fixture's staged content.
+			t.Setenv("AGENTS_DOTFILES_ROOT", "")
 			installHookTestPath(t, gitBinary, tc.scannerBody)
 			tc.seed(t, root)
 			stageLive(t, root)
