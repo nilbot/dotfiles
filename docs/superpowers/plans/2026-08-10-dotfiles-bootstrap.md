@@ -3800,6 +3800,229 @@ reads those, so the paths are asserted here."
 
 ---
 
+### Task 15: Reduce the Makefile
+
+**Files:**
+- Modify: `Makefile`
+- Test: `bootstrap.d/makefile_test.go`
+
+**Interfaces:**
+- Consumes: `repoRoot(t)` from `bootstrap.d/main_test.go`.
+- Produces: the `agents` target only.
+
+**`make dotfiles` is retired, not aliased.** Keeping it as an alias would
+preserve an interface this work exists to remove and leave two apparent entry
+points to provisioning. After this task there is exactly one: `./bootstrap`.
+
+Task 14 already broke three targets by deleting what they named — `dotfiles`
+calls `./softlinks.sh` and links `spacemacs/dotspacemacs`, `omz` links paths
+under `zsh/custom/`, and `binaries := $(wildcard bin/*.bin)` now expands to
+nothing so `bins` links nothing. Task 12 broke `dep`, which calls two deleted
+scripts. This task removes them rather than repairing them.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `bootstrap.d/makefile_test.go`, package `main_test` — the same package as
+`main_test.go`, which is where `repoRoot` lives.
+
+```go
+package main_test
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The Makefile is a developer convenience now. Provisioning is ./bootstrap's,
+// and a second entry point that half works is worse than none.
+func TestMakefileIsDeveloperTargetsOnly(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	for _, gone := range []string{
+		"all:", "dep:", "links:", "bins:", "omz:", "editors:", "extra:",
+		"tmux:", "dotfiles:", "githooks:", "fishshell:", "starship:",
+	} {
+		if strings.Contains(content, gone) {
+			t.Errorf("Makefile still defines the %q target; ./bootstrap owns provisioning now", gone)
+		}
+	}
+	if !strings.Contains(content, "agents:") {
+		t.Error("the agents build target stays; it is the inner-loop convenience")
+	}
+	if !strings.Contains(content, "./bootstrap") {
+		t.Error("the Makefile should say where provisioning went")
+	}
+}
+
+// Every one of these was a way the Makefile could damage a machine. They are
+// asserted individually rather than as "the file got shorter", because a later
+// edit that reintroduces one is exactly what this pins.
+func TestMakefileDoesNothingDestructive(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(repoRoot(t), "Makefile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"rm -rf", "sudo", "chsh", "git clone", "ln -s"} {
+		if strings.Contains(string(data), gone) {
+			t.Errorf("Makefile still contains %q; the phases own that, and they refuse rather than clobber", gone)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cd bootstrap.d && go test ./... -run Makefile`
+Expected: FAIL on nearly every listed target and on all five destructive
+patterns.
+
+- [ ] **Step 3: Replace the Makefile**
+
+The whole file, replacing all 96 lines:
+
+```makefile
+.PHONY: agents
+
+# Provisioning lives in ./bootstrap, not here:
+#
+#     ./bootstrap plan  workstation    # what it would do, changing nothing
+#     ./bootstrap apply workstation    # do it
+#     ./bootstrap check                # is this machine still converged
+#     ./bootstrap migrate              # what needs migrating, and how
+#
+# Everything this Makefile used to provision is now a phase. The targets were
+# not aliased to ./bootstrap: an alias would keep an interface this work exists
+# to remove and leave two apparent entry points.
+#
+# What remains is a developer convenience for the agents module during
+# inner-loop work. `./bootstrap apply workstation` builds the same binary in
+# its devtools phase, so this target is a shortcut, not a separate mechanism.
+
+agents:
+	mkdir -p "$(HOME)/bin"
+	cd "$(CURDIR)/agents" && go build -trimpath -o "$(HOME)/bin/agents" .
+	@echo "built $(HOME)/bin/agents"
+```
+
+- [ ] **Step 4: Verify without installing anything**
+
+Run: `make -n agents`
+Expected: the three recipe lines print with `$(HOME)` and `$(CURDIR)` expanded.
+**Do not run `make agents` itself** — it would install a binary built from this
+worktree over `~/bin/agents`, which the machine's global git hooks point at.
+
+Run: `cd agents && go build -trimpath -o "$TMPDIR/agents-check" . && rm -f "$TMPDIR/agents-check"`
+Expected: builds clean. This proves the recipe's command works without
+overwriting the installed binary.
+
+Run: `cd bootstrap.d && go test -count=1 ./...`
+Expected: PASS, all six packages. Then again under `umask 077`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add Makefile bootstrap.d/makefile_test.go
+git commit -m "refactor: reduce the Makefile to the agents target
+
+make dotfiles is retired rather than aliased: an alias would preserve an
+interface this work removes and leave two apparent entry points to
+provisioning.
+
+Most of what goes was already broken. dotfiles called ./softlinks.sh and
+linked spacemacs/dotspacemacs, omz linked paths under zsh/custom/, bins
+expanded \$(wildcard bin/*.bin) to nothing and dep called two deleted
+scripts -- all removed earlier in this spec. editors rm -rf'd ~/.vim and
+~/.emacs.d on every run. omz's chsh was guarded by 'sudo -v || if [ -z \$? ]',
+which skips on both branches, so it never ran.
+
+extra linked \$(CURDIR)/extras.secret at ~/crypt/extras.secret, while
+everything that actually reads it -- gitconfig.shared, the local template,
+fish/config.fish -- names ~/etc/extras.secret. Three locations, no
+agreement; nothing consumed what it made.
+
+githooks is the devtools phase's now, which delegates to the same
+git/install-hooks.sh."
+```
+
+---
+
+### Task 16: Update the specs
+
+**Files:**
+- Modify: `docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md`
+- Modify: `docs/superpowers/specs/agents/README.md`
+- Modify: `README.md`
+
+**Interfaces:** documentation only. No test.
+
+This task records what was built, and — more importantly — what is known to be
+untested. Do not soften either.
+
+- [ ] **Step 1: Mark the spec implemented**
+
+In `2026-08-07-spec-2-dotfiles-hygiene.md`, set the status line to implemented,
+naming the plan file and this branch. Every section that describes a decision in
+the future tense ("bootstrap will…") becomes past tense where the code now does
+it. Sections describing accepted limitations stay as they are.
+
+- [ ] **Step 2: Record the three known gaps, in the spec's own words**
+
+These are measured facts, not caveats to be smoothed over:
+
+1. **Linux is untested.** No phase in this design has run on Linux. The stage-zero
+   package selection, the Homebrew prefix at `/home/linuxbrew/.linuxbrew`, and
+   `chsh` under a different `/etc/shells` convention are all unexercised.
+   `Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need cached
+   sudo credentials or they fail with "no tty present".
+2. **`plan` exits 2 on a machine that lacks Homebrew or fish**, rather than
+   previewing. `Planner` records a command without performing it, and nothing in
+   `Machine` reports which happened, so a read that depends on a prior `Run`
+   cannot tell "it ran and produced nothing" from "it was only recorded". Closing
+   this needs a design decision about how `Planner` represents a command's
+   effects. Accepted deliberately: the alternative is a per-operation mode signal
+   every phase could branch on.
+3. **Linux has no managed nerd font.** `font-symbols-only-nerd-font` is a cask,
+   casks do not exist on Linux, and Homebrew publishes no formula for it. Task 14
+   removed the vendored `install-font-linux.sh` that used to cover this.
+
+- [ ] **Step 3: Add the plan row to the specs README**
+
+In `docs/superpowers/specs/agents/README.md`, add spec 2's row to the table in
+the same shape spec 1's uses, naming
+`docs/superpowers/plans/2026-08-10-dotfiles-bootstrap.md`.
+
+- [ ] **Step 4: Update the repository README**
+
+`README.md` documents `make dotfiles`, which no longer exists. Replace the
+provisioning section with the four `./bootstrap` verbs, and say plainly that the
+Makefile is now a developer convenience for the `agents` build. Keep it short —
+the spec carries the reasoning.
+
+- [ ] **Step 5: Verify no document still instructs a reader to run a deleted thing**
+
+Run: `grep -rn 'make dotfiles\|make links\|make omz\|softlinks.sh\|install-font-linux' README.md docs/ --include='*.md'`
+Expected: matches only inside the specs and plans that describe the removal as
+history. Any match that reads as an instruction to the user is a defect — fix it.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add README.md docs/superpowers/specs/agents/README.md \
+        docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md
+git commit -m "docs(spec-2): mark implemented and record what is untested
+
+Three gaps are named rather than smoothed over: Linux has run no phase of
+this design, plan exits 2 on a machine lacking Homebrew or fish, and Linux
+has no managed nerd font now that the vendored installer is gone."
+```
+
+---
+
 ### Tasks 13 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
