@@ -74,21 +74,35 @@ func DefaultThresholds() Thresholds {
 	}
 }
 
-func DefaultDependencies() Dependencies {
+// DependenciesFor builds the diagnostic against a named dotfiles checkout.
+//
+// The checkout root is a caller's answer, not doctor's guess: doctor compares
+// HooksDir and SharedGitConfig against what Git reports, so a wrong root makes
+// those checks fail on a correctly provisioned machine. The remaining paths
+// stay home-relative because Git reads them from the home directory wherever
+// the checkout lives.
+func DependenciesFor(root string) Dependencies {
 	home, _ := os.UserHomeDir()
-	dotfiles := filepath.Join(home, "dotfiles")
 	return Dependencies{
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
 		LegacyHooksPath:       repo.LegacyHooksPath,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
-		HooksDir:              filepath.Join(dotfiles, "git", "hooks.d"),
+		HooksDir:              filepath.Join(root, "git", "hooks.d"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
-		AttributesSource:      filepath.Join(dotfiles, "git", "gitattributes"),
+		AttributesSource:      filepath.Join(root, "git", "gitattributes"),
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
-		SharedGitConfig:       filepath.Join(dotfiles, "git", "gitconfig.shared"),
+		SharedGitConfig:       filepath.Join(root, "git", "gitconfig.shared"),
 	}
+}
+
+// DefaultDependencies assumes the historical ~/dotfiles checkout. Callers that
+// know which checkout the running binary belongs to should name it through
+// DependenciesFor instead.
+func DefaultDependencies() Dependencies {
+	home, _ := os.UserHomeDir()
+	return DependenciesFor(filepath.Join(home, "dotfiles"))
 }
 
 func runGit(dir string, args ...string) GitResult {
