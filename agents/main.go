@@ -102,7 +102,8 @@ func usage() {
   index                       regenerate memory and handoff indexes
   save [-m msg]               commit .agents/ paths and nothing else
   handoff write|prune         lane-scoped handoff management
-  trace ls|cache              query records; copy reachable transcripts locally
+  trace ls|show|cache         query records; read one back; copy reachable ones
+  trace cache prune --lane    remove one lane's cached copies (never the records)
   ls [--prune]                list the fleet on this machine
   update --all [--apply]      rewire every registered repo (dry run by default)
   guard --staged              pre-commit checks (the only command that blocks)

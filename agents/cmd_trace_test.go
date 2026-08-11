@@ -14,6 +14,7 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
 // seedTraces writes two records that differ in every filterable field, so a
@@ -332,12 +333,16 @@ func TestTraceCacheCopiesLocalAndNamesTheMachineHoldingTheRest(t *testing.T) {
 		}
 	}
 
-	cached, err := filepath.Glob(filepath.Join(repo.AgentsDir(root), ".trace-cache", "codex", "*"))
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := filepath.Glob(filepath.Join(cacheRoot, "codex", "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cached) != 1 {
-		t.Fatalf(".trace-cache/codex holds %v, want the one reachable transcript", cached)
+		t.Fatalf("the cache's codex directory holds %v, want the one reachable transcript", cached)
 	}
 	if !strings.HasPrefix(filepath.Base(cached[0]), "rollout-local-") {
 		t.Errorf("cached file %q must still be recognisable as %q", filepath.Base(cached[0]), "rollout-local.jsonl")
@@ -357,13 +362,17 @@ func git(t *testing.T, root string, args ...string) string {
 }
 
 // The premise of this tool is that it records where transcripts live and never
-// what they say. The cache is transcript content in the working tree, and the
-// only thing that used to keep it out of a commit was an entry in
-// .git/info/exclude written by `agents init` -- a file that is per-clone and is
-// never cloned. This repo is a plain `git init` where init has never run, which
-// is the state of every fresh clone and every CI checkout: measured before the
-// fix, `git status` offered `.agents/.trace-cache/` and `git add -A` staged the
-// transcript, content and all.
+// what they say, so transcript content must be unstageable in a repo where
+// `agents init` has never run -- the state of every fresh clone and every CI
+// checkout.
+//
+// The guarantee used to be maintained: the cache sat in the working tree, and
+// what kept it out of a commit was first an entry in .git/info/exclude (written
+// by init, so absent here) and then a .gitignore the cache wrote beside its own
+// content. Now it is structural. The cache lives in the git common directory,
+// and git does not track its own directory -- there is no ignore rule to write,
+// forget, or truncate. This test is the proof of that claim, so it asserts the
+// same outcome by the same means and only the location has moved.
 func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
 	mid := thisMachine(t)
 	const secret = `{"line":"secret api key sk-live-abc"}` + "\n"
@@ -382,7 +391,11 @@ func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
 	}
 	// Without this the rest of the test passes on a cache that was never
 	// written, which is the wrong reason to see nothing in git.
-	cached, err := filepath.Glob(filepath.Join(repo.AgentsDir(root), ".trace-cache", "codex", "*"))
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := filepath.Glob(filepath.Join(cacheRoot, "codex", "*"))
 	if err != nil || len(cached) != 1 {
 		t.Fatalf("the cache must hold the transcript for this test to mean anything; got %v (%v)", cached, err)
 	}
@@ -390,21 +403,33 @@ func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
 		t.Fatalf("cached content = %q (%v), want the transcript", b, err)
 	}
 
+	// The secret itself, not a path fragment: matching on "trace-cache" would
+	// pass if the cache were renamed and still written into the working tree.
+	// What must never be stageable is the content.
+	staged := func(what string) {
+		t.Helper()
+		for _, line := range strings.Split(strings.TrimSpace(git(t, root, "ls-files", "--cached")), "\n") {
+			if line == "" {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(root, line))
+			if err == nil && strings.Contains(string(b), "sk-live-abc") {
+				t.Errorf("%s: transcript content is staged for commit in %q", what, line)
+			}
+		}
+	}
+
 	// --untracked-files=all, because the default collapses an untracked
 	// directory to one entry and would hide the file inside it.
 	status := git(t, root, "status", "--porcelain", "--untracked-files=all")
 	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
-		if strings.Contains(line, ".trace-cache") {
+		if strings.Contains(line, "trace-cache") {
 			t.Errorf("git offers the cache: %q\nfull status:\n%s", line, status)
 		}
 	}
-	// The harm was not that git mentioned it, but that `git add -A` took it.
+	// The harm was never that git mentioned it, but that `git add -A` took it.
 	git(t, root, "add", "-A")
-	for _, line := range strings.Split(strings.TrimSpace(git(t, root, "ls-files", "--cached")), "\n") {
-		if strings.Contains(line, ".trace-cache") {
-			t.Errorf("transcript content is staged for commit: %q", line)
-		}
-	}
+	staged("after git add -A")
 }
 
 // A transcript this machine cannot read is one transcript. Returning on the
@@ -702,5 +727,195 @@ func TestInitStillScaffoldsWhereThereIsNoAgentsDir(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(root, ".agents", "memory")); err != nil || !fi.IsDir() {
 		t.Fatalf(".agents/memory/ must exist after init: %v; output:\n%s", err, out.String())
+	}
+}
+
+// The command that makes the cache worth having.
+//
+// Everything else in this feature writes: the hook records a pointer, `trace
+// cache` copies bytes. Until something reads them back, a cached transcript is
+// a file nobody can reach through the tool that saved it, and the agent_id a
+// memory entry cites in its sources: is a dead reference the moment the harness
+// cleans up.
+func TestTraceShowReadsFromTheSourceThenFromTheCache(t *testing.T) {
+	mid := thisMachine(t)
+	const body = `{"type":"assistant","text":"the finding"}` + "\n"
+	src := filepath.Join(t.TempDir(), "agent-a1b2c3d4e5f60718.jsonl")
+	if err := os.WriteFile(src, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "claude-code", Machine: mid, Event: "subagent-stop",
+		AgentID: "a1b2c3d4e5f60718", SessionID: "11111111-2222-3333-4444-555555555555",
+		Transcript: src, PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	// While the harness still holds it.
+	var out bytes.Buffer
+	if code := runTrace([]string{"show", "a1b2c3d4"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d, want OK; output:\n%s", code, out.String())
+	}
+	if out.String() != body {
+		t.Errorf("stdout = %q, want exactly the transcript so it pipes", out.String())
+	}
+
+	// Cache it, then take the source away -- the state this whole feature is for.
+	var discard bytes.Buffer
+	if code := runTrace([]string{"cache"}, &discard); code != exitcode.OK {
+		t.Fatalf("cache exit = %d:\n%s", code, discard.String())
+	}
+	if err := os.Remove(src); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if code := runTrace([]string{"show", "a1b2c3d4"}, &out); code != exitcode.OK {
+		t.Fatalf("after the harness deleted the source, exit = %d; the cached copy "+
+			"is the only one left and reading it is the point:\n%s", code, out.String())
+	}
+	if out.String() != body {
+		t.Errorf("stdout = %q, want the cached transcript", out.String())
+	}
+}
+
+// A session id must work as well as an agent id: the pointer a reader has in
+// hand depends on which record they were looking at.
+func TestTraceShowAcceptsASessionIDAndCanPrintThePathInstead(t *testing.T) {
+	mid := thisMachine(t)
+	src := localTranscript(t, "rollout-session.jsonl")
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "codex", Machine: mid, Event: "stop",
+		SessionID:  "019ff17a-585a-7e11-8bc7-5be760346670",
+		Transcript: src, PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"show", "--path", "019ff17a"}, &out); code != exitcode.OK {
+		t.Fatalf("exit = %d:\n%s", code, out.String())
+	}
+	if got := strings.TrimSpace(out.String()); got != src {
+		t.Errorf("--path printed %q, want the resolved path %q", got, src)
+	}
+}
+
+// Neither place holds it: NoRecord, because the operation could not be
+// completed. Not Advisory -- a script that pipes this would otherwise treat an
+// empty stdout as an empty transcript.
+func TestTraceShowReportsWhenNeitherSourceNorCacheHoldsIt(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "codex", Machine: mid, Event: "stop",
+		SessionID:  "deadbeef-0000-0000-0000-000000000000",
+		Transcript: filepath.Join(t.TempDir(), "rollout-vanished.jsonl"), PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	code := runTrace([]string{"show", "deadbeef"}, &out)
+	if code != exitcode.NoRecord {
+		t.Errorf("exit = %d, want NoRecord (%d); output:\n%s", code, exitcode.NoRecord, out.String())
+	}
+	if !strings.Contains(out.String(), "rollout-vanished.jsonl") {
+		t.Errorf("the failure must name the transcript it looked for; got:\n%s", out.String())
+	}
+}
+
+// Guessing between two records would hand back one transcript while the reader
+// believes they asked for the other.
+func TestTraceShowRefusesAnAmbiguousPrefixAndListsTheCandidates(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid,
+		record.Record{Harness: "codex", Machine: mid, AgentID: "aa11111111111111",
+			Transcript: localTranscript(t, "one.jsonl"), PointerVerified: true},
+		record.Record{Harness: "codex", Machine: mid, AgentID: "aa22222222222222",
+			Transcript: localTranscript(t, "two.jsonl"), PointerVerified: true},
+	)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"show", "aa"}, &out); code != exitcode.Malformed {
+		t.Errorf("exit = %d, want Malformed (%d) for an ambiguous prefix", code, exitcode.Malformed)
+	}
+	for _, want := range []string{"aa11111111111111", "aa22222222222222"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the candidates must be listed so the reader can choose; %q missing from:\n%s",
+				want, out.String())
+		}
+	}
+}
+
+func TestTraceShowNeedsAnIdentifier(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid)
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runTrace([]string{"show"}, &out); code != exitcode.Malformed {
+		t.Errorf("exit = %d, want Malformed (%d)", code, exitcode.Malformed)
+	}
+}
+
+// The destructive command, and the two things that keep it safe: it is a dry
+// run unless asked, and it never touches the index.
+func TestTraceCachePruneIsADryRunUntilAskedAndNeverTouchesTheIndex(t *testing.T) {
+	mid := thisMachine(t)
+	src := localTranscript(t, "rollout-throwaway.jsonl")
+	root := seedCacheRepo(t, mid, record.Record{
+		Harness: "codex", Machine: mid, Lane: "throwaway", SessionID: "rollout-throwaway",
+		Transcript: src, PointerVerified: true,
+	})
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache"}, &out); code != exitcode.OK {
+		t.Fatalf("cache exit = %d:\n%s", code, out.String())
+	}
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached := trace.CachedPath(cacheRoot, record.Record{Harness: "codex", Transcript: src})
+	if _, err := os.Stat(cached); err != nil {
+		t.Fatalf("nothing was cached, so this test would prove nothing: %v", err)
+	}
+
+	// Dry run.
+	out.Reset()
+	if code := runTrace([]string{"cache", "prune", "--lane", "throwaway"}, &out); code != exitcode.Advisory {
+		t.Errorf("dry-run exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	if _, err := os.Stat(cached); err != nil {
+		t.Fatalf("the dry run deleted the copy: %v", err)
+	}
+
+	// And for real.
+	out.Reset()
+	if code := runTrace([]string{"cache", "prune", "--lane", "throwaway", "--yes"}, &out); code != exitcode.OK {
+		t.Errorf("exit = %d, want OK; output:\n%s", code, out.String())
+	}
+	if _, err := os.Stat(cached); !os.IsNotExist(err) {
+		t.Errorf("the copy survived a confirmed prune: %v", err)
+	}
+
+	// The index is the record that anything existed. It must be untouched.
+	out.Reset()
+	if code := runTrace([]string{"ls"}, &out); code != exitcode.OK {
+		t.Fatalf("ls exit = %d:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "throwaway") {
+		t.Errorf("pruning the cache removed the record too; `trace ls` no longer lists "+
+			"the lane, so nothing says a transcript ever existed:\n%s", out.String())
+	}
+}
+
+func TestTraceCachePruneRefusesWithoutALane(t *testing.T) {
+	mid := thisMachine(t)
+	root := seedCacheRepo(t, mid)
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runTrace([]string{"cache", "prune"}, &out); code != exitcode.Malformed {
+		t.Errorf("exit = %d, want Malformed (%d): pruning every lane is not on offer",
+			code, exitcode.Malformed)
 	}
 }

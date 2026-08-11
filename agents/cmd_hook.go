@@ -14,6 +14,7 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
 // runHook records one hook firing.
@@ -87,7 +88,7 @@ func recordHook(args []string, stdin io.Reader) error {
 	}
 
 	tr := harness.Build(adapter, event, p)
-	return record.NewWriter(agentsDir).Append(record.Record{
+	rec := record.Record{
 		When:            time.Now().UTC(),
 		Harness:         adapter.Name(),
 		Machine:         mid,
@@ -101,5 +102,56 @@ func recordHook(args []string, stdin io.Reader) error {
 		Description:     tr.Description,
 		Transcript:      tr.Transcript,
 		PointerVerified: tr.PointerVerified,
-	})
+	}
+	if err := record.NewWriter(agentsDir).Append(rec); err != nil {
+		return err
+	}
+	return cacheSubagentTranscript(rc.Root, mid, event, rec)
+}
+
+// cacheSubagentTranscript copies the child transcript this hook just recorded.
+//
+// The pointer alone is not enough. A subagent transcript is complete when the
+// child stops and is deleted later, part-way through the session that made it:
+// 25 of 111 in one measured session, scattered rather than oldest-first, so no
+// schedule can anticipate which. `agents trace cache` run afterwards is
+// therefore already too late for whatever has gone, and this hook is the
+// earliest moment the finished file is on disk.
+//
+// Only for subagent-stop. A session transcript is 12.9 MB against a subagent's
+// 424 KB mean, is still being appended to, and is named by every stop event --
+// roughly thirty a day. Copying it here would be quadratic in session length on
+// a path a harness is blocked on, and skip-if-exists would freeze the first
+// partial copy forever.
+//
+// The error is returned so runHook can print it, never so it can fail: the
+// caller turns every error into a line on stderr and exit 0, because a trace is
+// worth strictly less than the dispatch it would interrupt. The record is
+// already written by the time this runs, so a failure here costs the copy and
+// not the pointer.
+func cacheSubagentTranscript(root, mid, event string, rec record.Record) error {
+	if event != harness.SubagentStop {
+		return nil
+	}
+	// Writing to disk on every subagent completion is a trade, not a given.
+	if os.Getenv("AGENTS_NO_AUTO_CACHE") != "" {
+		return nil
+	}
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		return err
+	}
+	// Through Cache with a single record rather than a copy of its own: every
+	// rule that makes copying safe -- Lstat rather than Stat so a symlinked
+	// pointer cannot materialise its target, the regular-file check, the
+	// harness-name sanitising, the write-then-rename -- lives there, and a
+	// second implementation here would be a second place for them to be wrong.
+	rep, err := trace.Cache(cacheRoot, mid, []record.Record{rec})
+	if err != nil {
+		return err
+	}
+	if rep.Copied == 0 && len(rep.Details) > 0 {
+		return errors.New(rep.Details[0])
+	}
+	return nil
 }

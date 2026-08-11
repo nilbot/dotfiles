@@ -90,11 +90,20 @@ Following a pointer has three defined operations:
 
 | Operation | Command | Behaviour |
 |---|---|---|
-| **Check** | `agents doctor` | Report which pointers are unreachable from this machine and which machine holds them |
-| **Materialize** | `agents trace cache` | Copy transcripts that *are* reachable into a git-ignored `.trace-cache/` |
+| **Check** | `agents doctor` | Report which pointers are unreachable from this machine, which are gone but cached, and which machine holds the rest |
+| **Materialize** | `agents trace cache`, and the `subagent-stop` hook | Copy reachable transcripts into the cache in the git **common** directory |
+| **Read** | `agents trace show <id>` | Resolve one record to content — the harness's copy if it is still there, otherwise ours |
 | **Distil** | `agents distill` (**spec 3**) | On the machine that owns the material, read it and draft curated memory entries |
 
-Spec 1 delivers Check and Materialize. Distil is deferred, but the pointer format
+Materialize was originally a `.trace-cache/` inside the working tree, kept out of
+commits by an ignore rule. It is now `<git-common-dir>/agents/trace-cache`: one
+cache per repository rather than one per worktree, outliving any of them, and
+unstageable structurally because git does not track its own directory. It is also
+no longer only manual — the `subagent-stop` hook caches the child transcript as it
+records the pointer, because subagent transcripts are deleted part-way through the
+session that made them, on a schedule nothing can anticipate.
+
+Spec 1 delivers Check, Materialize and Read. Distil is deferred, but the pointer format
 that makes it possible is specified here, because records written without
 provenance can never be repaired retroactively.
 
@@ -330,7 +339,8 @@ agents doctor                         wiring live? trusted? what is unreachable?
 agents index                          regenerate memory/INDEX.md and handoff/INDEX.md
 agents save                           scoped commit of .agents/ paths only
 agents handoff [write|prune]          lane-scoped handoff management
-agents trace ls|cache                 query records; copy reachable transcripts to .trace-cache/
+agents trace ls|show|cache            query records; read one back; copy reachable ones
+agents trace cache prune --lane <n>   remove that lane's cached copies (dry run without --yes)
 agents ls | update [--all]            fleet (update is --dry-run by default)
 agents hook <event> --harness <name>  harness hook entrypoints
 agents githook                        git hook entrypoint (multicall, see §8)

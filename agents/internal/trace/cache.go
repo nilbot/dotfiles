@@ -3,6 +3,7 @@ package trace
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,23 +28,24 @@ type CacheReport struct {
 	Details     []string
 }
 
-// Cache copies transcripts that are reachable from here into a git-ignored
-// directory inside .agents/. It never copies a transcript belonging to another
-// machine, and never one whose pointer did not verify.
+// Cache copies transcripts that are reachable from here into root, which the
+// caller resolves with repo.TraceCacheDir. It never copies a transcript
+// belonging to another machine, and never one whose pointer did not verify.
+//
+// root is passed in rather than derived from .agents/ because the cache is not
+// tracked context: it is machine-local content whose only copy may be the one
+// here, and it belongs in the git common directory, shared by every worktree
+// and outside all of them. See repo.TraceCacheDir for why.
 //
 // One unusable record is not a failed run. Anything that stops this one
 // transcript -- another machine, a deleted file, a permission, a source that is
 // not a regular file, a copy that fails halfway -- is counted, detailed, and the
 // run continues. The error return is reserved for what stops every record, so a
 // caller that gets one knows the report is not merely incomplete but absent.
-func Cache(agentsDir, thisMachine string, recs []record.Record) (CacheReport, error) {
+func Cache(root, thisMachine string, recs []record.Record) (CacheReport, error) {
 	var rep CacheReport
 
-	root := filepath.Join(agentsDir, ".trace-cache")
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return rep, err
-	}
-	if err := writeCacheIgnore(root); err != nil {
 		return rep, err
 	}
 
@@ -82,8 +84,23 @@ func Cache(agentsDir, thisMachine string, recs []record.Record) (CacheReport, er
 			continue
 		}
 
-		dst := filepath.Join(root, harnessDir(r.Harness), cacheName(t.src))
-		if _, err := os.Stat(dst); err == nil {
+		// Through CachedPath rather than spelling the rule again here: a reader
+		// that computes the destination differently from the writer looks in a
+		// place nothing wrote, and neither side would fail on its own.
+		dst := CachedPath(root, r)
+		// Size, not mere presence. Skipping whenever the destination existed
+		// froze whatever was copied first: a transcript cached while the harness
+		// was still writing stayed a prefix forever, under a name saying it was
+		// the whole thing. That became reachable the moment the hook started
+		// caching at subagent-stop, where a tail flushed after the hook fires
+		// arrives too late for the copy.
+		//
+		// Only when the source is LARGER. A shorter one is the dangerous
+		// direction -- a truncated or replaced transcript must not overwrite the
+		// fuller copy, which may be the only thing that still holds the missing
+		// part. And not mtime: a restored or touched file would trigger a
+		// pointless re-read of several megabytes on a blocked hook.
+		if info, err := os.Stat(dst); err == nil && info.Size() >= fi.Size() {
 			rep.Skipped++
 			continue
 		}
@@ -98,29 +115,235 @@ func Cache(agentsDir, thisMachine string, recs []record.Record) (CacheReport, er
 	return rep, nil
 }
 
-// cacheIgnoreBody makes the cache directory ignore itself, contents and all.
-const cacheIgnoreBody = "*\n"
-
-// writeCacheIgnore puts that ignore file inside the cache directory.
+// CachedPath answers where the copy of rec's transcript lives, whether or not
+// one is there.
 //
-// The exclusion `agents init` writes lives in .git/info/exclude, which is
-// per-clone and is never cloned. In any checkout where init has not run -- a
-// fresh clone, a colleague's machine, CI -- the first `agents trace cache` used
-// to write transcript content straight into the working tree, where `git status`
-// offers it and `git add -A` stages it: transcript text committed, by the tool
-// whose premise is that it records where transcripts are and never what they
-// say. An ignore file inside the cache needs no init, is written whenever the
-// directory is, and says nothing about the repository's own .gitignore, which
-// belongs to its maintainers -- which is why the generated harness configs stay
-// in info/exclude. This one is about content.
-func writeCacheIgnore(dir string) error {
-	path := filepath.Join(dir, ".gitignore")
-	// Rewrite anything else, including a truncated or hand-edited file: the
-	// guarantee is worth more than a local edit to a two-byte file this tool owns.
-	if b, err := os.ReadFile(path); err == nil && string(b) == cacheIgnoreBody {
-		return nil
+// The rule is deterministic from (harness, transcript path) and nothing else,
+// which is what lets a reader find a copy without consulting an index of what
+// was written. filepath.Clean matches what Cache applies to the source, so a
+// record spelling one path two ways resolves to the one copy rather than to a
+// name nothing ever wrote.
+func CachedPath(root string, rec record.Record) string {
+	return filepath.Join(root, harnessDir(rec.Harness), cacheName(filepath.Clean(rec.Transcript)))
+}
+
+// Resolve answers where rec's transcript can actually be read from, preferring
+// the harness's own copy and falling back to the cache.
+//
+// The source comes first because it is the one that may still be growing: a
+// session transcript is appended to for as long as the session lasts, so a copy
+// taken earlier is a prefix of it. Once the harness deletes the source -- which
+// it does to subagent transcripts partway through a session, unpredictably --
+// the cache holds the only copy there will ever be, and that is the case this
+// function exists for.
+//
+// origin is "source" or "cache", so a caller can say where the bytes came from
+// rather than leaving the reader to guess whether they are looking at live data.
+//
+// A pure lookup: no reading, no parsing, no harness-specific knowledge. Whatever
+// consumes transcripts later -- a distillation step, a reviewer, a person -- gets
+// a path and decides for itself what to do with it.
+func Resolve(root string, rec record.Record) (path, origin string, err error) {
+	src := filepath.Clean(rec.Transcript)
+	if rec.Transcript != "" {
+		if fi, serr := os.Lstat(src); serr == nil && fi.Mode().IsRegular() {
+			return src, "source", nil
+		}
 	}
-	return os.WriteFile(path, []byte(cacheIgnoreBody), 0o644)
+	cached := CachedPath(root, rec)
+	if fi, cerr := os.Lstat(cached); cerr == nil && fi.Mode().IsRegular() {
+		return cached, "cache", nil
+	}
+	// Both paths, because "not found" alone cannot tell a transcript that was
+	// never cached from one whose cache is somewhere else.
+	return "", "", fmt.Errorf("no transcript at %s and none cached at %s", src, cached)
+}
+
+// PruneReport says what pruning a lane took, or would take. Bytes is reported
+// because "12 files" does not tell anyone whether it is worth doing, and this
+// is the one operation here that cannot be undone.
+type PruneReport struct {
+	Removed int
+	Bytes   int64
+	Details []string
+}
+
+// PruneLane removes cached copies belonging to one named lane.
+//
+// It removes COPIES and never records. The cache holds duplicates of what a
+// harness wrote; the index is the tracked, merged, cross-machine statement that
+// a transcript existed at all. Deleting an index entry loses the knowledge that
+// there was ever anything to look for, so this takes records as input and only
+// ever unlinks files beneath root.
+//
+// The lane is named by the caller and never inferred. "The branch is gone" does
+// not mean "the content is irrelevant": a deleted branch is usually a merged
+// one, and a throwaway worktree is often exactly where the interesting
+// investigation happened. Nothing here consults git.
+//
+// apply=false reports what would go without touching anything, because this
+// deletes the only remaining copy of things and the destructive form should have
+// to be asked for.
+func PruneLane(root string, recs []record.Record, lane string, apply bool) (PruneReport, error) {
+	var rep PruneReport
+	if lane == "" {
+		return rep, errors.New("a lane must be named; pruning every lane is not something this offers")
+	}
+
+	seen := map[string]bool{}
+	for _, r := range recs {
+		if r.Lane != lane || r.Transcript == "" {
+			continue
+		}
+		dst := CachedPath(root, r)
+		if seen[dst] {
+			continue
+		}
+		seen[dst] = true
+
+		// Only what is actually here: one session writes many records, most of
+		// which were never copied, and counting those would make a lane whose
+		// transcripts are all still live read as a large saving.
+		info, err := os.Lstat(dst)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		rep.Removed++
+		rep.Bytes += info.Size()
+		rep.Details = append(rep.Details, dst)
+		if !apply {
+			continue
+		}
+		if err := os.Remove(dst); err != nil {
+			rep.Removed--
+			rep.Bytes -= info.Size()
+			rep.Details[len(rep.Details)-1] = fmt.Sprintf("could not remove (%v): %s", err, dst)
+		}
+	}
+	return rep, nil
+}
+
+// MigrateReport says what a move of the old cache did. Details names every file
+// it could not move, for the same reason CacheReport does: a count alone leaves
+// the reader unable to go and look.
+type MigrateReport struct {
+	Moved   int
+	Skipped int // the destination already holds it
+	Failed  int
+	Details []string
+}
+
+// MigrateLegacyCache moves a pre-common-directory cache into the current one.
+//
+// The old location was <root>/.agents/.trace-cache, one per worktree. Content
+// there is not stale duplicate data to be discarded: it is often the only
+// surviving copy of a transcript the harness has since deleted, which is the
+// whole reason the cache exists. So this moves rather than removes, and refuses
+// to delete anything it could not move.
+//
+// Names carry over unchanged: cacheName hashes the SOURCE transcript path, not
+// the cache location, so a file keeps the name it already had and two worktrees
+// that cached the same transcript produce the same name with identical bytes.
+// That is why a collision is Skipped rather than a conflict.
+func MigrateLegacyCache(oldRoot, newRoot string) (MigrateReport, error) {
+	var rep MigrateReport
+
+	entries, err := os.ReadDir(oldRoot)
+	if err != nil {
+		// Absent is the steady state: every `agents trace cache` calls this,
+		// forever, long after the last old cache is gone.
+		if os.IsNotExist(err) {
+			return rep, nil
+		}
+		return rep, err
+	}
+
+	for _, harness := range entries {
+		if !harness.IsDir() {
+			// The old layout wrote a .gitignore beside the content to hide it.
+			// It is infrastructure, not a transcript, and the new location does
+			// not need one -- drop it with the directory.
+			continue
+		}
+		dir := filepath.Join(oldRoot, harness.Name())
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			rep.Failed++
+			rep.Details = append(rep.Details, fmt.Sprintf("unreadable (%v): %s", err, dir))
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			src := filepath.Join(dir, f.Name())
+			dst := filepath.Join(newRoot, harness.Name(), f.Name())
+			if _, err := os.Stat(dst); err == nil {
+				rep.Skipped++
+				continue
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				rep.Failed++
+				// The SOURCE, not the destination directory that could not be
+				// made: the source is the file still sitting somewhere the tool
+				// will stop looking, and it is what the reader has to go and
+				// rescue by hand.
+				rep.Details = append(rep.Details, fmt.Sprintf("cannot move (%v): %s", err, src))
+				continue
+			}
+			// Rename first: within one filesystem it is atomic and free. The two
+			// roots are usually both under the repository, but a worktree can
+			// live on another volume, where rename fails with EXDEV -- so fall
+			// back to the copy that Cache already uses, then remove the source.
+			if err := os.Rename(src, dst); err != nil {
+				if cerr := copyFile(src, dst); cerr != nil {
+					rep.Failed++
+					rep.Details = append(rep.Details, fmt.Sprintf("cannot move (%v): %s", cerr, src))
+					continue
+				}
+				if rerr := os.Remove(src); rerr != nil {
+					// The content is safe; only the old copy lingers. Counting
+					// this as failed would be wrong -- nothing was lost -- but
+					// it must be said, because the old directory will survive.
+					rep.Details = append(rep.Details, fmt.Sprintf("copied but could not remove (%v): %s", rerr, src))
+				}
+			}
+			rep.Moved++
+		}
+	}
+
+	// Only when everything is out. os.Remove on the directory, not RemoveAll:
+	// it succeeds exactly when the directory is empty, which is the check.
+	// RemoveAll here would delete a transcript that failed to move -- the one
+	// outcome this function exists to prevent.
+	if rep.Failed == 0 {
+		removeIfEmpty(oldRoot)
+	}
+	return rep, nil
+}
+
+// removeIfEmpty clears the old cache from the bottom up, stopping at anything
+// that still holds a file. Best effort: a directory left behind costs a second
+// migration that finds nothing, while deleting one that still has content costs
+// the content.
+func removeIfEmpty(root string) {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		path := filepath.Join(root, e.Name())
+		if e.IsDir() {
+			removeIfEmpty(path)
+			continue
+		}
+		// The old .gitignore is this tool's own two-byte file and the only
+		// non-transcript the old layout wrote.
+		if e.Name() == ".gitignore" {
+			_ = os.Remove(path)
+		}
+	}
+	_ = os.Remove(root)
 }
 
 // target is one transcript to consider, and the record that speaks for it.

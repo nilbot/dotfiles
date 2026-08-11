@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/machine"
+	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safetext"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
@@ -18,12 +21,14 @@ import (
 
 func runTrace(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: agents trace ls|cache [flags]")
+		fmt.Fprintln(stdout, "usage: agents trace ls|show|cache [flags]")
 		return exitcode.Malformed
 	}
 	switch args[0] {
 	case "ls":
 		return runTraceLS(args[1:], stdout)
+	case "show":
+		return runTraceShow(args[1:], stdout)
 	case "cache":
 		return runTraceCache(args[1:], stdout)
 	default:
@@ -144,6 +149,110 @@ func runTraceLS(args []string, stdout io.Writer) int {
 // use, so the three cannot drift apart.
 func tableCell(s string) string { return safetext.Flatten(s) }
 
+// runTraceShow reads one transcript back, from the harness's copy or from ours.
+//
+// This is what stops the cache being write-only. `trace cache` preserves bytes;
+// without a way to read them, a cached transcript is a file no part of this tool
+// can reach, and the agent_id a memory entry cites in its sources: stops
+// resolving the moment the harness cleans up -- leaving the entry's derivation
+// uncheckable, which is the one thing sources: exists to prevent.
+//
+// The transcript goes to stdout unflattened and unannotated, because it is data
+// rather than a table: whoever asked for it is piping it somewhere. Everything
+// about the retrieval goes to stderr, which is also why the origin is reported
+// there -- a reader must be able to tell live data from a copy, without that
+// note ending up in the file they redirected.
+func runTraceShow(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("trace show", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	pathOnly := fs.Bool("path", false, "print the resolved path instead of the content")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Malformed
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(stdout, "usage: agents trace show [--path] <agent-id or session-id prefix>")
+		return exitcode.Malformed
+	}
+	want := fs.Arg(0)
+
+	rc, dir, code := repoHere(stdout)
+	if code != exitcode.OK {
+		return code
+	}
+	cacheRoot, err := repo.TraceCacheDir(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// No window: a transcript worth reading back is usually an old one, and a
+	// default --since would silently answer "not found" for it.
+	res, err := trace.Query(dir, trace.Filter{}, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	// One entry per transcript, keyed on the identifier that matched: a session
+	// writes many records naming one file, and reporting that as ambiguous
+	// would make the common case an error.
+	matches := map[string]record.Record{}
+	for _, r := range res.Records {
+		for _, id := range []string{r.AgentID, r.SessionID} {
+			if id != "" && strings.HasPrefix(id, want) {
+				if prev, seen := matches[id]; !seen || (!prev.PointerVerified && r.PointerVerified) {
+					matches[id] = r
+				}
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		fmt.Fprintf(stdout, "agents trace show: no record with an agent or session id starting %q\n", want)
+		return exitcode.NoRecord
+	case 1:
+	default:
+		ids := make([]string, 0, len(matches))
+		for id := range matches {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		// Listed rather than guessed: handing back one transcript while the
+		// reader believes they asked for another is worse than refusing.
+		fmt.Fprintf(stdout, "agents trace show: %q matches %d records:\n", want, len(ids))
+		for _, id := range ids {
+			fmt.Fprintf(stdout, "  %s\t%s\n", id, tableCell(matches[id].Transcript))
+		}
+		return exitcode.Malformed
+	}
+
+	var rec record.Record
+	for _, r := range matches {
+		rec = r
+	}
+	path, origin, err := trace.Resolve(cacheRoot, rec)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if *pathOnly {
+		fmt.Fprintln(stdout, path)
+		return exitcode.OK
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	defer f.Close()
+	fmt.Fprintf(os.Stderr, "reading from the %s: %s\n", origin, path)
+	if _, err := io.Copy(stdout, f); err != nil {
+		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
+		return exitcode.NoRecord
+	}
+	return exitcode.OK
+}
+
 // runTraceCache materialises the transcripts this machine can still reach.
 //
 // The ways a transcript fails to arrive are reported apart, because they ask for
@@ -153,7 +262,79 @@ func tableCell(s string) string { return safetext.Flatten(s) }
 // record can tie to a session. Each of them raises the exit code, since the
 // whole point of running this is to find out what is not here -- a class that is
 // counted but exits 0 is one a script will never look at.
+// runTraceCachePrune removes cached copies for one named lane.
+//
+// Spelled `trace cache prune` rather than `trace prune`, because the noun is
+// what makes it safe. Two things here could be pruned and only one ever may:
+// the cache holds copies, while the index is the tracked, merged record that a
+// transcript existed at all -- lose that and you lose the knowledge that there
+// was anything to look for. A bare `trace prune` does not say which it touches.
+//
+// The lane is named by a human and never inferred from git. "The branch is
+// gone" does not mean "the content is irrelevant": a deleted branch is usually
+// a merged one, and a throwaway worktree is often exactly where the interesting
+// investigation happened.
+func runTraceCachePrune(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("trace cache prune", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	lane := fs.String("lane", "", "the lane whose cached copies to remove (required)")
+	apply := fs.Bool("yes", false, "actually remove them; without this it only reports")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Malformed
+	}
+	if *lane == "" {
+		fmt.Fprintln(stdout, "usage: agents trace cache prune --lane <name> [--yes]")
+		return exitcode.Malformed
+	}
+
+	rc, dir, code := repoHere(stdout)
+	if code != exitcode.OK {
+		return code
+	}
+	cacheRoot, err := repo.TraceCacheDir(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// Every record, not a window: a lane worth pruning is usually an old one.
+	res, err := trace.Query(dir, trace.Filter{}, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	rep, err := trace.PruneLane(cacheRoot, res.Records, *lane, *apply)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
+		return exitcode.Malformed
+	}
+	if rep.Removed == 0 {
+		fmt.Fprintf(stdout, "no cached transcripts for lane %q\n", *lane)
+		return exitcode.OK
+	}
+	verb := "would remove"
+	if *apply {
+		verb = "removed"
+	}
+	fmt.Fprintf(stdout, "%s %d cached transcript(s), %.1f MB, for lane %q\n",
+		verb, rep.Removed, float64(rep.Bytes)/(1024*1024), *lane)
+	for _, d := range rep.Details {
+		fmt.Fprintln(stdout, "  "+tableCell(d))
+	}
+	if !*apply {
+		// Advisory, not OK: there is something here to look at and decide about,
+		// and a script must be able to tell "nothing to do" from "did nothing".
+		fmt.Fprintln(stdout, "nothing was removed; re-run with --yes to remove them")
+		return exitcode.Advisory
+	}
+	fmt.Fprintln(stdout, "the trace index is unchanged; `agents trace ls` still lists these records")
+	return exitcode.OK
+}
+
 func runTraceCache(args []string, stdout io.Writer) int {
+	if len(args) > 0 && args[0] == "prune" {
+		return runTraceCachePrune(args[1:], stdout)
+	}
 	fs := flag.NewFlagSet("trace cache", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	lane := fs.String("lane", "", "only this lane")
@@ -167,7 +348,7 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 
-	dir, code := agentsDirHere(stdout)
+	rc, dir, code := repoHere(stdout)
 	if code != exitcode.OK {
 		return code
 	}
@@ -176,13 +357,36 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord
 	}
+	// The index is read from .agents/, which is per-worktree and tracked; the
+	// copies go to the common directory, which every worktree shares. Two
+	// different questions, so two different roots.
+	cacheRoot, err := repo.TraceCacheDir(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	// Before anything else, and reported rather than silent: the old
+	// per-worktree cache holds transcripts that are often the only surviving
+	// copy, and after the move to the common directory nothing else would ever
+	// look there again.
+	if mrep, err := trace.MigrateLegacyCache(filepath.Join(dir, ".trace-cache"), cacheRoot); err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: migrating the previous cache: %v\n", err)
+		return exitcode.NoRecord
+	} else if mrep.Moved > 0 || mrep.Skipped > 0 || mrep.Failed > 0 {
+		fmt.Fprintf(stdout, "migrated the previous cache: moved %d, already here %d, failed %d\n",
+			mrep.Moved, mrep.Skipped, mrep.Failed)
+		for _, d := range mrep.Details {
+			fmt.Fprintln(stdout, "  "+tableCell(d))
+		}
+	}
 
 	res, err := trace.Query(dir, trace.Filter{Lane: *lane, Since: d}, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord
 	}
-	rep, err := trace.Cache(dir, mid, res.Records)
+	rep, err := trace.Cache(cacheRoot, mid, res.Records)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord

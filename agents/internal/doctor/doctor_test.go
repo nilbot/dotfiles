@@ -11,6 +11,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/record"
+	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
 func checkByName(t *testing.T, checks []Check, name string) Check {
@@ -711,13 +712,13 @@ func TestPointerClassesAndMissingMachineIdentity(t *testing.T) {
 		{Transcript: "/remote/a", PointerVerified: true, Machine: "m2"},
 		{Transcript: "/remote/b", PointerVerified: true, Machine: "m2"},
 	}
-	checks := checkPointers(recs, "m1")
+	checks := checkPointers(recs, "m1", t.TempDir())
 	if !strings.Contains(checkByName(t, checks, "pointers:unverified").Detail, "2") ||
 		!strings.Contains(checkByName(t, checks, "pointers:local-unreachable").Detail, "1") ||
 		!strings.Contains(checkByName(t, checks, "pointers:remote").Detail, "m2=2") {
 		t.Fatalf("pointer classes = %+v", checks)
 	}
-	withoutID := checkPointers(recs, "")
+	withoutID := checkPointers(recs, "", t.TempDir())
 	for _, name := range []string{"pointers:local-unreachable", "pointers:remote"} {
 		for _, check := range withoutID {
 			if check.Name == name {
@@ -919,5 +920,75 @@ func TestRunWithIncompleteDependenciesReturnsDiagnosticsInsteadOfPanicking(t *te
 	}
 	if got := checkByName(t, checks, "git-attributes"); got.Status != Fail {
 		t.Fatalf("missing Git dependency = %+v", got)
+	}
+}
+
+// The remedy that could not clear the warning.
+//
+// This check stat'd the harness's own path and nothing else, so a transcript
+// successfully copied into the cache stayed "unreachable" forever. Its remedy
+// reads "cache reachable transcripts before harness cleanup" -- advice that,
+// followed perfectly, changed the number not at all. A guard whose remedy does
+// not move it teaches the reader to stop reading it.
+//
+// Three classes now, because they call for different things: still at the
+// source, gone but saved, gone for good. Only the last is anyone's problem.
+func TestPointersCountACachedTranscriptAsSavedRatherThanUnreachable(t *testing.T) {
+	cacheRoot := t.TempDir()
+	live := filepath.Join(t.TempDir(), "still-here.jsonl")
+	if err := os.WriteFile(live, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Deleted by the harness, but copied first: exactly what the cache is for.
+	rescued := record.Record{
+		Transcript:      filepath.Join(t.TempDir(), "agent-rescued.jsonl"),
+		PointerVerified: true, Machine: "m1", Harness: "claude-code",
+	}
+	saveTo := trace.CachedPath(cacheRoot, rescued)
+	if err := os.MkdirAll(filepath.Dir(saveTo), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(saveTo, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lost := record.Record{
+		Transcript:      filepath.Join(t.TempDir(), "agent-lost.jsonl"),
+		PointerVerified: true, Machine: "m1", Harness: "claude-code",
+	}
+
+	checks := checkPointers([]record.Record{
+		{Transcript: live, PointerVerified: true, Machine: "m1", Harness: "claude-code"},
+		rescued,
+		lost,
+	}, "m1", cacheRoot)
+
+	unreachable := checkByName(t, checks, "pointers:local-unreachable")
+	if !strings.Contains(unreachable.Detail, "1") {
+		t.Errorf("local-unreachable = %q, want only the one transcript that is "+
+			"genuinely gone; a cached copy is not lost", unreachable.Detail)
+	}
+	saved := checkByName(t, checks, "pointers:cached")
+	if saved.Status != OK {
+		t.Errorf("pointers:cached = %+v, want OK: caching worked, and a warning "+
+			"here would say the opposite of what happened", saved)
+	}
+	if !strings.Contains(saved.Detail, "1") {
+		t.Errorf("pointers:cached detail = %q, want it to count the rescued transcript", saved.Detail)
+	}
+}
+
+// With nothing cached the check must not appear at all: a permanent "0 saved"
+// row is noise on every healthy machine.
+func TestPointersReportNoCachedRowWhenNothingWasSaved(t *testing.T) {
+	checks := checkPointers([]record.Record{
+		{Transcript: filepath.Join(t.TempDir(), "gone.jsonl"), PointerVerified: true, Machine: "m1", Harness: "codex"},
+	}, "m1", t.TempDir())
+	for _, c := range checks {
+		if c.Name == "pointers:cached" {
+			t.Errorf("pointers:cached appeared with nothing cached: %+v", c)
+		}
+	}
+	if !strings.Contains(checkByName(t, checks, "pointers:local-unreachable").Detail, "1") {
+		t.Errorf("the genuinely lost transcript must still be reported: %+v", checks)
 	}
 }
