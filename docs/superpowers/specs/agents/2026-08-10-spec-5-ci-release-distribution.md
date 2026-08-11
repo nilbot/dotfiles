@@ -200,13 +200,32 @@ So CI must treat these codes as a contract it consumes: decide which codes fail 
 job, which annotate, and which are skips — and any later change to the table becomes
 a change to a CI interface, not a local refactor.
 
-### The checkout is not necessarily `~/dotfiles`
+### The checkout is not necessarily `~/dotfiles` — **resolved 2026-08-11**
 
-`agents/internal/doctor/doctor.go:79` is
-`dotfiles := filepath.Join(home, "dotfiles")`, and it feeds three dependencies:
-`HooksDir` (line 85), `AttributesSource` (87), and `SharedGitConfig` (90). On a
-correctly provisioned machine whose checkout is anywhere else, `agents doctor`
-reports three failures and one warning against a healthy machine:
+**Fixed before this spec was started, in the plan
+[checkout path and field defects](../../plans/2026-08-11-checkout-path-and-field-defects.md).**
+The root now comes from a build-time stamp with an explicit fallback chain —
+`-X main.dotfilesRoot` → `AGENTS_DOTFILES_ROOT` → `$HOME/dotfiles` — and both
+builders pass it. Inferring the root from `core.hooksPath` was rejected
+deliberately: `git-hooks:global` *compares* those two, so deriving one from the
+other would make the check pass by construction.
+
+The description below is kept because it names what this spec still has to
+decide. **What remains open for CI is narrower than it looks:** a released
+binary is not built from anyone's checkout, so it has no root to stamp, and the
+fallback it lands on is `$HOME/dotfiles` — exactly the assumption that was just
+removed. Deciding what a *distributed* binary stamps, or whether it should
+instead resolve at runtime, is this spec's problem and is not solved by the fix
+above.
+
+One live hazard it introduced, documented in the Makefile and the README:
+`make agents` stamps `$(CURDIR)` and writes the single global `~/bin/agents`, so
+running it from a linked worktree publishes a binary stamped to a path that will
+not survive. A doctor check on whether the resolved root still exists is the
+obvious guard and belongs here or in a spec 1 amendment.
+
+For the record, the failure this produced — `agents doctor` on a correctly
+provisioned machine whose checkout was elsewhere:
 
 | Check | Result | Because |
 |---|---|---|
@@ -281,10 +300,15 @@ a checkout the runner placed.
 - Add a content-safe version surface for users and support reports.
 - Decide what `agents doctor` should compare: installed release, repository source,
   hook-link target, or some explicit combination.
-- Resolve the checkout location rather than assuming `~/dotfiles`, or record that it
-  belongs to a spec 1 amendment and track it there. Today's assumption makes three
-  doctor checks fail on a correctly provisioned machine whose checkout sits
-  elsewhere.
+- Decide what a **released** binary stamps as its checkout root. The
+  `~/dotfiles` assumption was removed on 2026-08-11 by stamping the root at
+  build time, but a binary built by CI belongs to no checkout, so it falls back
+  to `$HOME/dotfiles` — the very assumption that was removed. Either the
+  installer supplies the root, or a distributed binary resolves it at runtime,
+  or `AGENTS_DOTFILES_ROOT` becomes part of the documented install.
+- Decide whether doctor should verify the stamped root still exists. Nothing
+  does today, and a binary stamped to a deleted worktree runs no personal git
+  hooks at exit 0.
 - Make stale-binary reporting actionable without silently downloading, upgrading,
   rewiring repositories, or granting harness trust.
 
@@ -330,5 +354,8 @@ a checkout the runner placed.
 - Which Linux distributions does a CI runner actually verify? Spec 2 targets
   Debian/Ubuntu and Arch/Manjaro on paper and leaves the question open; a runner
   image answers it in practice, which makes this spec's choice the de facto one.
-- Does the `~/dotfiles` assumption in `agents` belong to this spec or to a spec 1
-  amendment?
+- ~~Does the `~/dotfiles` assumption in `agents` belong to this spec or to a spec 1
+  amendment?~~ **Answered 2026-08-11: neither — it was a defect and was fixed
+  outright** by stamping the root at build time. What this spec inherits is the
+  narrower question above: what a binary that CI built, belonging to no checkout,
+  should stamp instead.
