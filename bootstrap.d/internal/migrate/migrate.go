@@ -125,13 +125,18 @@ func (c Context) logf(format string, args ...any) {
 	fmt.Fprintf(c.Out, format+"\n", args...)
 }
 
-// All is the declared set, in the order a bare migrate runs them. Task 10 adds
-// the first reclaiming migration.
+// All is the declared set, in the order a bare migrate runs them.
+//
+// The reclaiming one is last, and nothing depends on that -- a bare migrate runs
+// none of them, so its position is a matter of reading order only. What DOES
+// depend on the declaration is its Kind: that single word is what stops a
+// routine `./bootstrap migrate` from destroying 3.5 GB of untracked data.
 func All() []Migration {
 	return []Migration{
 		{"fish", Reconciling, fishPending, fishRun},
 		{"gitconfig", Reconciling, gitconfigPending, gitconfigRun},
 		{"gitignore", Reconciling, gitignorePending, gitignoreRun},
+		{"mambaforge", Reclaiming, mambaforgePending, mambaforgeRun},
 	}
 }
 
@@ -175,11 +180,10 @@ func pending(q Query, all []Migration) ([]Migration, error) {
 // Names returns the names of the migrations of one kind, in order.
 //
 // It exists so that preflight's "refuse on reconciling migrations only" can be
-// tested here, where a reclaiming migration can be supplied. Inline in preflight
-// the filter was reachable by no test at all until Task 10 landed a real
-// reclaiming migration -- and dropping it is a deadlock: preflight would refuse
-// apply for something a bare migrate deliberately never runs, so the remedy it
-// names would not clear the refusal.
+// tested here rather than only through the phase. Dropping the filter is a
+// deadlock: mambaforge is pending for as long as ~/sdk/mambaforge exists, which
+// may be forever, and preflight would refuse apply for something a bare migrate
+// deliberately never runs -- so the remedy the refusal names would not clear it.
 func Names(ms []Migration, kind Kind) []string {
 	var names []string
 	for _, m := range ms {
@@ -194,9 +198,10 @@ func Names(ms []Migration, kind Kind) []string {
 // one, listing the reclaiming ones it is eligible to run without performing any.
 func Run(c Context, name string) error { return run(c, name, All()) }
 
-// run takes the migration set so a test can exercise the reclaiming mechanism
-// before Task 10 supplies a real reclaiming migration. Wiring a safety property
-// and testing it in a later commit is how one ships untested.
+// run takes the migration set so a test can state the reclaiming rule over
+// migrations it constructs itself, independently of what All() happens to hold.
+// The rule is also exercised over the real mambaforge migration, through Run --
+// a mechanism proved only against a fake proves only the fake.
 func run(c Context, name string, all []Migration) error {
 	c.logf("== migrate")
 	if name != "" {

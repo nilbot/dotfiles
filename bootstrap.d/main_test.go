@@ -611,6 +611,108 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	}
 }
 
+// mambaforgeHome builds a temp $HOME holding a ~/sdk/mambaforge in the shape
+// the repo owner's machine really has it -- four environments named by Python
+// version alone -- and returns both.
+//
+// The repo owner's own ~/sdk/mambaforge is 3.5 GB and is not in git. Every case
+// below runs the shim with HOME pointed here, which is the only reason any of
+// them may invoke a verb that deletes it.
+func mambaforgeHome(t *testing.T) (home, dir string) {
+	t.Helper()
+	home = tempHome(t)
+	dir = filepath.Join(home, "sdk", "mambaforge")
+	for _, rel := range []string{
+		filepath.Join("conda-meta", "history"),
+		filepath.Join("envs", "3_9", "lib", "python.so"),
+		filepath.Join("envs", "3_12", "lib", "python.so"),
+	} {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("# created 2024-05\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return home, dir
+}
+
+// The reclaiming rule, end to end and in order: apply is NOT blocked while the
+// reclamation is pending, a bare migrate lists it and deletes nothing, and only
+// the named form removes it.
+//
+// The first step is the one that would rot silently. Preflight refuses on
+// reconciling migrations only, and a reclaiming one is pending until somebody
+// deliberately runs it -- possibly never -- so refusing here would deadlock
+// apply on a machine that is otherwise perfectly healthy, with a remedy that a
+// bare migrate deliberately does not perform.
+func TestReclaimingMambaforgeIsListedThenNamed(t *testing.T) {
+	home, dir := mambaforgeHome(t)
+
+	if _, stderr, code := runShim(t, home, "apply", "dotfiles"); code != 0 {
+		t.Fatalf("apply exit %d with a reclamation pending, want 0; preflight must "+
+			"not refuse on a reclaiming migration: %s", code, stderr)
+	}
+
+	stdout, stderr, code := runShim(t, home, "migrate")
+	if code != 0 {
+		t.Fatalf("bare migrate exit %d:\n%s%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "./bootstrap migrate mambaforge") {
+		t.Errorf("a bare migrate must list the exact command:\n%s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conda-meta", "history")); err != nil {
+		t.Fatalf("a bare migrate destroyed untracked data: %v", err)
+	}
+
+	stdout, stderr, code = runShim(t, home, "migrate", "mambaforge")
+	if code != 0 {
+		t.Fatalf("migrate mambaforge exit %d:\n%s%s", code, stdout, stderr)
+	}
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s survived being named (%v)", dir, err)
+	}
+}
+
+// The guard, through the real binary and a real PATH. Deleting 3.5 GB out from
+// under a live toolchain is the failure it exists for, so the refusal must
+// block (2), name the tool, and leave every byte in place.
+func TestMigrateMambaforgeRefusesWhileItIsOnPATH(t *testing.T) {
+	home, dir := mambaforgeHome(t)
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	python := filepath.Join(bin, "python3")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Set rather than requested: os.WriteFile's mode is masked by the umask, and
+	// exec.LookPath rejects a file it cannot execute -- under a umask that
+	// cleared the x bits this case would pass while exercising nothing.
+	if err := os.Chmod(python, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Prepended, not replacing PATH: the shim needs go, dirname, cksum and find.
+	env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	stdout, stderr, code := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"), home, env,
+		"migrate", "mambaforge")
+	if code != 2 {
+		t.Fatalf("exit %d, want 2 (block):\n%s%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "python3") {
+		t.Errorf("the refusal must name the tool that is still live: %s", stderr)
+	}
+	if !strings.Contains(stderr, "remedy:") {
+		t.Errorf("a refusal must surface its remediation: %s", stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conda-meta", "history")); err != nil {
+		t.Errorf("a refused reclamation deleted data anyway: %v", err)
+	}
+}
+
 // An unknown migration name is bad INPUT, and answers 3 like every other
 // malformed argument. Reporting it as 2 would say this machine is in a state
 // bootstrap will not touch, which is not what happened.

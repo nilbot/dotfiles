@@ -357,3 +357,177 @@ func gitignoreRun(c Context) error {
 	}
 	return c.Change.Link(g.want, g.link)
 }
+
+// ------------------------------------------------------------- mambaforge
+//
+// The first RECLAIMING migration, and the only code in this design whose entire
+// purpose is destroying something irrecoverable. ~/sdk/mambaforge is 3.5 GB,
+// survives from May 2024, and is in no repository: `git show` recovers nothing.
+//
+// It is reclaimable because uv replaced it. The installation's four environments
+// are named by Python version alone (3_9 through 3_12), which is exactly what
+// `uv python install` provides, and micromamba is not on PATH -- so the mamba
+// block in fish/mypost.fish is already inert.
+//
+// The KIND is what makes this safe, not the code below: a bare
+// `./bootstrap migrate` lists it and runs nothing, so a routine invocation
+// cannot reach any of it. The guard is the second line, for the one invocation
+// that does.
+
+// mambaforgeTools are the commands whose resolving inside the installation means
+// it is still LIVE. Deleting 3.5 GB out from under a working toolchain is the
+// failure the guard exists for, and every one of these would break silently
+// afterwards -- an interpreter that is simply gone produces "command not found"
+// in a shell nobody connects to a reclamation they ran last week.
+//
+// python and python3 are here even though they are the two most likely to
+// resolve somewhere harmless. The cost of listing them is one LookPath; the cost
+// of omitting one is unrecoverable.
+var mambaforgeTools = []string{"conda", "mamba", "micromamba", "python", "python3", "pip"}
+
+type mambaforgeFacts struct {
+	dir     string // ~/sdk/mambaforge
+	exists  bool
+	pending bool
+}
+
+func mambaforgeInspect(q Query) (mambaforgeFacts, error) {
+	m := mambaforgeFacts{dir: filepath.Join(q.Home, "sdk", "mambaforge")}
+	info, err := q.Read.Lstat(m.dir)
+	if err != nil {
+		return m, err
+	}
+	m.exists = info.Exists
+	// A REAL directory, so a symlink there is not pending. Removing a symlink
+	// reclaims no disk at all, and what it points at is data this migration knows
+	// nothing about. Run refuses that shape rather than treating it as done --
+	// see mambaforgeRun.
+	m.pending = info.IsDir
+	return m, nil
+}
+
+func mambaforgePending(q Query) (bool, error) {
+	m, err := mambaforgeInspect(q)
+	return m.pending, err
+}
+
+// mambaforgeRun refuses far more readily than it removes, which is the right
+// asymmetry for an operation with no undo.
+//
+// The PATH guard is deliberately NOT part of Pending. A live toolchain does not
+// mean there is nothing to reclaim -- it means the reclamation cannot happen
+// yet -- so hiding the directory from the listing would make 3.5 GB invisible
+// until somebody rediscovered it. Pending answers "is it there"; Run answers
+// "may it go". Reader has no LookPath either, so the split is enforced by the
+// type rather than by discipline.
+func mambaforgeRun(c Context) error {
+	m, err := mambaforgeInspect(c.Query())
+	if err != nil {
+		return err
+	}
+	if !m.pending {
+		if m.exists {
+			return &change.Refusal{
+				Path: m.dir,
+				Problem: "exists and is not a real directory, so it is not the " +
+					"installation this reclaims; removing it would free nothing and " +
+					"destroy something this migration knows nothing about",
+				Remediation: "remove it yourself if you meant to, or reclaim whatever " +
+					"it stands for directly",
+			}
+		}
+		c.logf("      already reclaimed: %s is not there", m.dir)
+		return nil
+	}
+	if err := mambaforgeInUse(c.Change, m.dir); err != nil {
+		return err
+	}
+	// Said before it happens rather than after, because there is nothing to say
+	// afterwards that would help.
+	c.logf("      reclaiming %s; this destroys untracked data and cannot be undone", m.dir)
+	return c.Change.RemoveAll(m.dir)
+}
+
+// mambaforgeInUse refuses when any guarded tool leads into dir.
+//
+// It is the load-bearing part of this migration -- the removal itself is one
+// call -- so it names both the tool and where it resolves. "refusing to remove
+// ~/sdk/mambaforge" without those is a dead end for whoever reads it, and the
+// remedy differs completely depending on which tool fired.
+func mambaforgeInUse(mach Machine, dir string) error {
+	for _, tool := range mambaforgeTools {
+		at, inside, err := resolvesInto(mach, tool, dir)
+		if err != nil {
+			return err
+		}
+		if inside {
+			return &change.Refusal{
+				Path: dir,
+				Problem: fmt.Sprintf("%q on PATH resolves to %s, inside it, so this "+
+					"toolchain is still live", tool, at),
+				Remediation: "take it off PATH -- or move whatever still needs it to " +
+					"uv -- then retry",
+			}
+		}
+	}
+	return nil
+}
+
+// maxLinkHops bounds the symlink chain resolvesInto will follow. It is Linux's
+// MAXSYMLINKS and above darwin's 32, so any chain the kernel can resolve this
+// one can too -- and a chain longer than the kernel's own limit answers ELOOP,
+// which is not a tool anything is currently running.
+const maxLinkHops = 40
+
+// resolvesInto reports whether looking up name leads into dir, and where.
+//
+// Every hop is tested, not just the final destination. exec.LookPath answers
+// with the entry it found ON PATH and does not resolve symlinks, so a
+// ~/.local/bin/python pointing into the installation reads as a path outside it
+// -- and comparing LookPath's answer directly would let the removal proceed
+// against a live interpreter AND break the link on the way past.
+//
+// A tool that is not on PATH is not in use, so a LookPath error is not an error
+// here. exec.LookPath reports both "no such name" and "found but not
+// executable" that way, and neither is something about to be deleted out from
+// under a running process.
+//
+// The comparison is between absolute paths. A relative PATH entry cannot be
+// resolved without a working directory, which this package deliberately cannot
+// read -- and a PATH holding one is not a shape any machine here has.
+func resolvesInto(m Machine, name, dir string) (string, bool, error) {
+	path, err := m.LookPath(name)
+	if err != nil {
+		return "", false, nil
+	}
+	for hop := 0; hop < maxLinkHops; hop++ {
+		if within(dir, path) {
+			return path, true, nil
+		}
+		info, err := m.Lstat(path)
+		if err != nil {
+			return "", false, err
+		}
+		if !info.IsLink {
+			return "", false, nil
+		}
+		dest, err := m.Readlink(path)
+		if err != nil {
+			return "", false, err
+		}
+		path = resolveLink(path, dest)
+	}
+	return "", false, nil
+}
+
+// within reports whether path is dir or below it.
+//
+// The separator is part of the prefix, and that is the whole of this function's
+// reason to exist: ~/sdk/mambaforge-old begins with ~/sdk/mambaforge and is a
+// different directory. Without it the guard refuses over a sibling forever and
+// the 3.5 GB is never reclaimed, with a message naming a directory that has
+// nothing to do with the tool it found.
+func within(dir, path string) bool {
+	dir, path = filepath.Clean(dir), filepath.Clean(path)
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
+}

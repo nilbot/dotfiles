@@ -119,6 +119,32 @@ func symlink(t *testing.T, target, link string) {
 	}
 }
 
+// writeExecutable writes a file exec.LookPath will accept, which is what the
+// mambaforge guard is tested through: the real Applier's LookPath, over a real
+// PATH, rather than a double that could agree with a wrong implementation.
+//
+// The Chmod is not redundant with the mode os.WriteFile is given. A mode handed
+// to a file-CREATING call is masked by the umask and a mode handed to Chmod is
+// not, so under `umask 077` the requested 0755 arrives as 0700. That is still
+// executable by the owner and so would pass here -- but the same confusion
+// produced three defects in Task 9, so the mode is set rather than requested.
+func writeExecutable(t *testing.T, path string) {
+	t.Helper()
+	writeFile(t, path, "#!/bin/sh\nexit 0\n")
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// onlyPATH replaces PATH for one case. Without it the developer's own python3
+// decides whether the guard fires, so the suite would answer differently on two
+// machines -- and the case that proves the removal PROCEEDS would silently stop
+// proving it on a machine with conda installed.
+func onlyPATH(t *testing.T, dirs ...string) {
+	t.Helper()
+	t.Setenv("PATH", strings.Join(dirs, string(os.PathListSeparator)))
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -248,7 +274,7 @@ func TestEveryMigrationIsWellFormed(t *testing.T) {
 			t.Errorf("%s is missing Pending or Run", m.Name)
 		}
 	}
-	for _, want := range []string{"fish", "gitconfig", "gitignore"} {
+	for _, want := range []string{"fish", "gitconfig", "gitignore", "mambaforge"} {
 		if !seen[want] {
 			t.Errorf("the %s migration is missing", want)
 		}
@@ -768,6 +794,294 @@ func TestGitignoreRefusesWhenTheRenamedSourceIsMissing(t *testing.T) {
 	}
 	if after := tree(t, f.home); after != before {
 		t.Errorf("a refused migration changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// ----------------------------------------------------------- mambaforge
+
+// The six tools §8.1 names, stated HERE rather than read from the
+// implementation's own list. A guard tested against the list it consults would
+// pass with any five of them, which is the mutation this spelling catches.
+var mambaforgeGuarded = []string{"conda", "mamba", "micromamba", "python", "python3", "pip"}
+
+// mambaforgeMachine builds ~/sdk/mambaforge in the shape the repo owner's really
+// has it: four environments named by Python version alone -- exactly what
+// `uv python install` provides, which is why this is reclaimable at all.
+//
+// bin/ is deliberately EMPTY of anything the guard looks for, so each case
+// decides for itself which tool is on PATH and where it resolves. The real one
+// is 3.5 GB and none of it is in git; every case builds its own under a temp
+// HOME and none may touch the machine's.
+func (f *fixture) mambaforgeMachine(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(f.home, "sdk", "mambaforge")
+	writeExecutable(t, filepath.Join(dir, "bin", "activate"))
+	writeFile(t, filepath.Join(dir, "conda-meta", "history"), "# created 2024-05\n")
+	for _, env := range []string{"3_9", "3_10", "3_11", "3_12"} {
+		writeFile(t, filepath.Join(dir, "envs", env, "lib", "python.so"), "not really\n")
+	}
+	return dir
+}
+
+// The kind is the whole safety story, and it is declared in exactly one place.
+// A mambaforge declared Reconciling would be run by a bare migrate -- the one
+// thing this migration must never do -- and nothing else in the design would
+// notice.
+func TestMambaforgeIsTheOnlyReclaimingMigration(t *testing.T) {
+	if got := named(t, "mambaforge").Kind; got != Reclaiming {
+		t.Errorf("mambaforge is %q, want %q; a reconciling migration is run by a bare migrate",
+			got, Reclaiming)
+	}
+	if got := strings.Join(Names(All(), Reclaiming), ","); got != "mambaforge" {
+		t.Errorf("reclaiming = %q, want \"mambaforge\"", got)
+	}
+	// The other three are unchanged, so preflight still refuses on exactly what
+	// it refused on before -- see TestPendingReclamationDoesNotBlockApply.
+	if got := strings.Join(Names(All(), Reconciling), ","); got != "fish,gitconfig,gitignore" {
+		t.Errorf("reconciling = %q, want \"fish,gitconfig,gitignore\"", got)
+	}
+}
+
+func TestMambaforgePendingBothDirections(t *testing.T) {
+	t.Run("the directory is pending", func(t *testing.T) {
+		f := newFixture(t)
+		f.mambaforgeMachine(t)
+		if !isPending(t, f.ctx(), "mambaforge") {
+			t.Error("a ~/sdk/mambaforge holding 3.5 GB of untracked data is reclaimable")
+		}
+	})
+	t.Run("an absent directory is not pending", func(t *testing.T) {
+		f := newFixture(t)
+		if isPending(t, f.ctx(), "mambaforge") {
+			t.Error("a machine with no ~/sdk/mambaforge has nothing to reclaim")
+		}
+	})
+	t.Run("a reclaimed machine is not pending", func(t *testing.T) {
+		f := newFixture(t)
+		f.mambaforgeMachine(t)
+		onlyPATH(t, t.TempDir())
+		mustRun(t, f.ctx(), "mambaforge")
+		if isPending(t, f.ctx(), "mambaforge") {
+			t.Error("the migration must not still be pending after it ran; a bare " +
+				"migrate would advertise a reclamation that already happened")
+		}
+	})
+	t.Run("a regular file is not pending", func(t *testing.T) {
+		f := newFixture(t)
+		writeFile(t, filepath.Join(f.home, "sdk", "mambaforge"), "not an installation\n")
+		if isPending(t, f.ctx(), "mambaforge") {
+			t.Error("a regular file at that path is not the installation this reclaims")
+		}
+	})
+	t.Run("a symlink is not pending", func(t *testing.T) {
+		f := newFixture(t)
+		elsewhere := filepath.Join(t.TempDir(), "mambaforge")
+		mkdirAll(t, elsewhere)
+		symlink(t, elsewhere, filepath.Join(f.home, "sdk", "mambaforge"))
+		if isPending(t, f.ctx(), "mambaforge") {
+			t.Error("removing a symlink reclaims no disk at all, so a machine that " +
+				"has one is not what this migration is for")
+		}
+	})
+}
+
+// The removal itself, and the case that proves the guard is not a blanket
+// refusal: a python on PATH that resolves OUTSIDE the directory must not stop
+// it, or the migration could never run on any real machine.
+func TestMambaforgeReclaimsTheDirectory(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mambaforgeMachine(t)
+	keep := filepath.Join(f.home, ".config", "starship.toml")
+	writeFile(t, keep, "# machine-local\n")
+
+	system := filepath.Join(t.TempDir(), "bin")
+	for _, tool := range mambaforgeGuarded {
+		writeExecutable(t, filepath.Join(system, tool))
+	}
+	onlyPATH(t, system)
+
+	mustRun(t, f.ctx(), "mambaforge")
+
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s is still there (%v); nothing was reclaimed", dir, err)
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Errorf("the migration took %s with it: %v", keep, err)
+	}
+}
+
+// The guard, one case per tool. Deleting 3.5 GB out from under a live toolchain
+// is the failure it exists for, and the tool must be NAMED: "refusing to remove
+// ~/sdk/mambaforge" with no reason is a dead end for whoever reads it.
+//
+// Each subtest puts exactly one tool inside the directory, so the refusal names
+// the tool the case is about rather than whichever the loop happened to reach
+// first.
+func TestMambaforgeRefusesWhileAGuardedToolResolvesInsideIt(t *testing.T) {
+	for _, tool := range mambaforgeGuarded {
+		t.Run(tool, func(t *testing.T) {
+			f := newFixture(t)
+			dir := f.mambaforgeMachine(t)
+			live := filepath.Join(dir, "bin", tool)
+			writeExecutable(t, live)
+			onlyPATH(t, filepath.Join(dir, "bin"))
+			before := tree(t, f.home)
+
+			err := named(t, "mambaforge").Run(f.ctx())
+			var refusal *change.Refusal
+			if !errors.As(err, &refusal) {
+				t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+			}
+			for _, want := range []string{tool, live, dir} {
+				if !strings.Contains(refusal.Error(), want) {
+					t.Errorf("the refusal must name %s:\n%s", want, refusal.Error())
+				}
+			}
+			if refusal.Remediation == "" {
+				t.Error("a refusal must name its remediation")
+			}
+			// The whole point. A guard that refused and deleted anyway would be
+			// worse than no guard, because the message would say it had not.
+			if after := tree(t, f.home); after != before {
+				t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s",
+					before, after)
+			}
+		})
+	}
+}
+
+// exec.LookPath does not resolve symlinks: it answers with the entry it found on
+// PATH. So a ~/bin/python pointing into the installation reads as a path outside
+// it, and a guard comparing LookPath's answer directly would let the removal
+// proceed against a toolchain that is live -- and break the link as well.
+func TestMambaforgeRefusesThroughASymlinkOnPATH(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mambaforgeMachine(t)
+	inside := filepath.Join(dir, "bin", "python3")
+	writeExecutable(t, inside)
+
+	bin := filepath.Join(f.home, "bin")
+	symlink(t, inside, filepath.Join(bin, "python3"))
+	onlyPATH(t, bin)
+	before := tree(t, f.home)
+
+	err := named(t, "mambaforge").Run(f.ctx())
+	var refusal *change.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+	}
+	if !strings.Contains(refusal.Error(), inside) {
+		t.Errorf("the refusal must name where the tool actually resolves:\n%s", refusal.Error())
+	}
+	if after := tree(t, f.home); after != before {
+		t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// A sibling whose name merely BEGINS with the target's is not inside it.
+// strings.HasPrefix without the separator says otherwise, and the machine then
+// keeps 3.5 GB forever with a refusal naming a directory that has nothing to do
+// with it.
+func TestMambaforgeIgnoresASimilarlyNamedSibling(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mambaforgeMachine(t)
+	sibling := filepath.Join(f.home, "sdk", "mambaforge-old", "bin")
+	writeExecutable(t, filepath.Join(sibling, "conda"))
+	onlyPATH(t, sibling)
+
+	mustRun(t, f.ctx(), "mambaforge")
+
+	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
+		t.Errorf("%s survived (%v); a sibling directory blocked the reclamation", dir, err)
+	}
+	if _, err := os.Stat(filepath.Join(sibling, "conda")); err != nil {
+		t.Errorf("the migration removed the sibling's conda: %v", err)
+	}
+}
+
+// Named on a machine that has nothing to reclaim: a no-op that succeeds, so
+// `./bootstrap migrate mambaforge` twice is not an error the second time.
+func TestMambaforgeOnAReclaimedMachineSaysSo(t *testing.T) {
+	f := newFixture(t)
+	onlyPATH(t, t.TempDir())
+	mustRun(t, f.ctx(), "mambaforge")
+	if !strings.Contains(f.out.String(), "already reclaimed") {
+		t.Errorf("a reclamation with nothing to do must say so:\n%s", f.out.String())
+	}
+}
+
+// A symlink at that path is refused rather than removed. RemoveAll would take
+// the LINK, reclaim nothing, and report success -- a silent wrong outcome on the
+// one verb in this design whose job is destroying something.
+func TestMambaforgeRefusesAPathThatIsNotADirectory(t *testing.T) {
+	f := newFixture(t)
+	elsewhere := filepath.Join(t.TempDir(), "mambaforge")
+	writeFile(t, filepath.Join(elsewhere, "conda-meta", "history"), "# created 2024-05\n")
+	link := filepath.Join(f.home, "sdk", "mambaforge")
+	symlink(t, elsewhere, link)
+	onlyPATH(t, t.TempDir())
+	before := tree(t, f.home)
+
+	err := named(t, "mambaforge").Run(f.ctx())
+	var refusal *change.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("want a *change.Refusal, got %T: %v", err, err)
+	}
+	if !strings.Contains(refusal.Error(), link) {
+		t.Errorf("the refusal must name the path:\n%s", refusal.Error())
+	}
+	if after := tree(t, f.home); after != before {
+		t.Errorf("a refused reclamation changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "conda-meta", "history")); err != nil {
+		t.Errorf("the migration followed the symlink and destroyed what it pointed at: %v", err)
+	}
+}
+
+// The rule, over the REAL migration rather than the fake Task 9 wired the
+// mechanism with: a bare migrate lists it, with the exact command, and deletes
+// nothing.
+func TestBareMigrateListsMambaforgeAndDeletesNothing(t *testing.T) {
+	f := newFixture(t)
+	dir := f.mambaforgeMachine(t)
+	// A PATH with nothing on it, so the listing cannot be mistaken for the guard
+	// quietly declining to run: only the kind may stop this.
+	onlyPATH(t, t.TempDir())
+	before := tree(t, f.home)
+
+	if err := Run(f.ctx(), ""); err != nil {
+		t.Fatalf("bare migrate: %v", err)
+	}
+	if !strings.Contains(f.out.String(), "./bootstrap migrate mambaforge") {
+		t.Errorf("a bare migrate must name the exact command:\n%s", f.out.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "conda-meta", "history")); err != nil {
+		t.Fatalf("a bare migrate destroyed untracked data: %v", err)
+	}
+	if after := tree(t, f.home); after != before {
+		t.Errorf("a bare migrate changed the home:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// Preflight refuses on RECONCILING migrations only, and that filter was
+// exercised by nothing but a fake until now. A reclaiming migration is pending
+// until someone deliberately runs it -- possibly forever -- so refusing on one
+// would deadlock apply on a machine that is otherwise perfectly healthy, with a
+// remedy that does not clear it.
+func TestPendingReclamationDoesNotBlockApply(t *testing.T) {
+	f := newFixture(t)
+	f.mambaforgeMachine(t)
+
+	due, err := Pending(f.ctx().Query())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(Names(due, Reclaiming)) != 1 {
+		t.Fatalf("mambaforge is not pending on this fixture, so this case proves nothing: %v", due)
+	}
+	if names := Names(due, Reconciling); len(names) != 0 {
+		t.Errorf("preflight would refuse this machine over %v; nothing reconciling is due",
+			names)
 	}
 }
 
