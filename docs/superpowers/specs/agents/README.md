@@ -32,6 +32,8 @@ this catalog.
 | Spec | Plan | Status |
 |---|---|---|
 | 1 | [repo-tracked agent context](../../plans/2026-08-07-agents-repo-context.md) | executed |
+| 1, 2 | [checkout path and field defects](../../plans/2026-08-11-checkout-path-and-field-defects.md) | executed |
+| 1 | [trace cache preservation](../../plans/2026-08-11-trace-cache-preservation.md) | executed |
 | 2 | [dotfiles bootstrap](../../plans/2026-08-10-dotfiles-bootstrap.md) | executed |
 
 Spec 1's plan is phased: the record loop on Claude Code (Phase 1), Codex
@@ -43,6 +45,13 @@ Spec 2's plan is sixteen tasks: `change.Interface` and the shim first, then the
 phases, then the removals, and the Makefile reduced to the `agents` target last.
 Bootstrap landed before anything was removed, so provisioning never broke
 mid-plan.
+
+The two 2026-08-11 plans are corrective rather than new surface, and both came
+out of running the thing on a real machine. The first stopped `agents` assuming
+its checkout is `~/dotfiles` and fixed two defects a first provisioning run
+exposed. The second closed four gaps in the transcript cache, the largest being
+that it was write-only: nothing could read a cached transcript back, so a
+`sources:` citation died the moment the harness cleaned up.
 
 ## Supporting material
 

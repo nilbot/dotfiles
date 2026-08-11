@@ -36,6 +36,14 @@ target left, and it is a developer convenience for inner-loop work on `agents/`
 — `./bootstrap apply workstation` builds the same binary in its devtools phase.
 Provisioning belongs to `./bootstrap`; `make dotfiles` is retired, not aliased.
 
+**Run it from the main checkout, not a linked worktree.** The binary is stamped
+with the checkout it was built from, and this target writes the single global
+`~/bin/agents` — so from a worktree it publishes a binary stamped to a temporary
+path. Delete that worktree and the stamp names nothing: `doctor` still passes,
+because it compares paths that agree with each other, while the git hook chain
+finds no extras directory and silently runs none of your personal hooks, at exit
+0. Rebuild from the main checkout to repair.
+
 ## Layout
 
 | Path | What |
