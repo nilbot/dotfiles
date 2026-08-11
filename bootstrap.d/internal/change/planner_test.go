@@ -605,10 +605,18 @@ func TestWriteFileReplacesRatherThanTruncates(t *testing.T) {
 	home := tempHome(t)
 	target := filepath.Join(home, ".gitconfig")
 	const old = "[include]\n\tpath = /old/git/gitconfig.shared\n"
-	// 0600, so the mode-preservation claim is exercised too. A temp file starts
-	// 0600 by luck here, so the fixture would not catch a lost chmod -- hence
-	// the explicit assertion against 0640 below rather than against the default.
+	// 0640, so the mode-preservation claim is exercised: CreateTemp makes its
+	// file 0600, so a fixture at 0600 would pass with the Chmod removed.
+	//
+	// Chmod after WriteFile, because WriteFile's perm is masked by the UMASK.
+	// Measured: under 022 the fixture lands 0640 and this case passes, under 077
+	// it lands 0600, the product code correctly preserves 0600, and the
+	// assertion below fails -- a suite that passes only on the machine that
+	// wrote it. Chmod is not masked, so the fixture's mode is what it says.
 	if err := os.WriteFile(target, []byte(old), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o640); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.Stat(target)
@@ -728,6 +736,15 @@ func TestCopyReproducesShapeContentsAndModes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(source, "hook"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Chmod after WriteFile, for the reason spelled out in
+	// TestWriteFileReplacesRatherThanTruncates: WriteFile's perm is masked by
+	// the umask, so under 077 this file lands 0700 and the 0755 assertion below
+	// fails on a machine that is not the one this was written on. Chmod is not
+	// masked. The 0600 file above needs no such fixing -- it has no group or
+	// other bits for a umask to take.
+	if err := os.Chmod(filepath.Join(source, "hook"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	// A read-only directory with contents. Setting a directory's mode before
