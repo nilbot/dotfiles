@@ -688,18 +688,26 @@ comparison is where insight about the vendors themselves would come from. That i
 a research payoff, not an engineering one, and it should be undertaken knowingly
 rather than smuggled in as premature abstraction.
 
-### Spec 5 — CI, releases, and binary distribution
+### Specs 5 and 6 — verification, then releases
 
 The implemented local loop builds the current checkout directly to
-`~/bin/agents`; it does not provide pull-request CI, release artifacts, or a way to
-install and upgrade a published binary. Those concerns must be designed together,
-because artifact format determines the installation and rollback contract.
+`~/bin/agents`; it provides neither pull-request verification nor a way to
+install and upgrade a published binary.
 
-The likely publishing direction is a Homebrew-installable release, but the full
-design must first settle platform support, versioning, checksums and provenance,
-GitHub Actions verification, artifact or bottle production, safe activation, and
-how an installed binary reports or detects drift from the checked-out source. See
-[the Spec 5 scope](2026-08-10-spec-5-ci-release-distribution.md).
+These were one scope note until 2026-08-11, when they were split because only the
+first needed no open decisions. **[Spec 5](2026-08-11-spec-5-verification-gate.md)
+is the verification gate** — the first automated build, test, `vet` and `gofmt`
+gate this repository has ever run, plus the invariants it enforces: generated
+indexes, the exit-code table, help coverage, and documentation derived from a
+command registry. It also owns the doctor check that the stamped checkout root
+still exists (§8), which is a defect in this spec's surface.
+
+**[Spec 6](2026-08-11-spec-6-releases-and-distribution.md) is releases and
+distribution** — platform support, versioning, checksums and provenance, artifact
+or bottle production, safe activation, and how an installed binary reports drift
+from the checked-out source. Its hardest open problem belongs to this spec's
+surface too: a binary built by CI belongs to no checkout, so it has no root to
+stamp.
 
 ---
 

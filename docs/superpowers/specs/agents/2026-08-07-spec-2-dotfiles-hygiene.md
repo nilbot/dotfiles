@@ -103,19 +103,22 @@ directory is newer than the binary (directories, so a deletion counts), then
 **Building from the checkout, not installing a release.** The binary always
 matches the tree you cloned: no release-version coordination, no drift between
 an installed tool and the configuration it applies, and no dependency on
-[spec 5](2026-08-10-spec-5-ci-release-distribution.md), which is unwritten.
+[spec 6](2026-08-11-spec-6-releases-and-distribution.md), which is unwritten.
 
 **The honest cost:** a machine without Go needs one manual command before
 `./bootstrap` runs. That is deliberate, and it is the same call spec 1 §9 made
 about Codex hook trust: the design's job is to make a required manual step *one
 obvious step* rather than a silent failure.
 
-### 2.2 The seam where spec 5 removes Go as a dependency
+### 2.2 The seam where spec 6 removes Go as a dependency
 
 Recorded now because it is the actual answer to §2.1's manual step, and because
 a future reader will otherwise re-litigate the auto-install branch.
 
-**If [spec 5](2026-08-10-spec-5-ci-release-distribution.md) publishes verified
+*(This seam was scoped under spec 5 until 2026-08-11, when spec 5 was narrowed
+to the verification gate and distribution became spec 6.)*
+
+**If [spec 6](2026-08-11-spec-6-releases-and-distribution.md) publishes verified
 release binaries, the shim stops needing Go at all.** Its structure becomes:
 
 1. A released binary matching this checkout is cached and verified → `exec` it.
@@ -125,10 +128,10 @@ release binaries, the shim stops needing Go at all.** Its structure becomes:
 4. Otherwise refuse.
 
 Steps 3 and 4 are exactly today's shim, so this is an extension, not a rewrite,
-and **spec 2 still does not depend on spec 5** — build-from-source remains the
+and **spec 2 still does not depend on spec 6** — build-from-source remains the
 floor. The design constraint that matters is the one already in place: the shim
 must never `exec` a binary it cannot attribute to the current checkout. Today
-that is the cache key; under spec 5 it becomes the checksum plus a version the
+that is the cache key; under spec 6 it becomes the checksum plus a version the
 binary reports back. Whichever mechanism, the property is the same, and it is
 the property finding 2 below was raised against.
 
@@ -468,7 +471,7 @@ with `.go` files at the root. Three defects, any one of which is disqualifying:
   fix silently fails to be committed.
 - `go test` on a large module makes every commit slow.
 
-This is CI's job, and CI is [spec 5](2026-08-10-spec-5-ci-release-distribution.md).
+This is CI's job, and CI is [spec 5](2026-08-11-spec-5-verification-gate.md).
 
 ### 9.2 Why the `bin/` scripts have no reference value
 
@@ -542,7 +545,7 @@ match the directory name.
 
 **No `go.work`, and no shared helper package with `agents/`.** Two independent
 `go test ./...` invocations mean a bootstrap failure can never block an `agents`
-binary release, which matters because spec 5 builds release CI around that
+binary release, which matters because spec 6 builds release CI around that
 module specifically. Phase 40 *delegates* git-hook installation to the
 already-tested `git/install-hooks.sh`, so its test only asserts the invocation
 arguments — which is why none of `agents`' git-specific test helpers are needed.
@@ -826,7 +829,7 @@ demonstrates. It would improve on today without being the right shape.
 Note this is *not* the same as §2.1's build-from-checkout, which was adopted.
 Distribution via Homebrew requires Homebrew *before* bootstrap can start, must
 locate or embed the dotfiles it configures, creates release-version coordination
-between binary and repository, and couples this spec to the unimplemented spec 5.
+between binary and repository, and couples this spec to the unimplemented spec 6.
 Building from the checkout has none of those properties. Publishing a release
 binary may still be worthwhile later; it is the wrong *stage-zero* mechanism.
 
@@ -865,7 +868,7 @@ behaviour drift; §4.
 
 **Extracting a shared Go test-helper package**, or a tracked `go.work`. The
 former makes `agents` export a package solely for a consumer outside itself; the
-latter alters module resolution during builds, so spec 5's release path would
+latter alters module resolution during builds, so spec 6's release path would
 have to remember `GOWORK=off` — a footgun handed to an unwritten spec in
 exchange for one convenience command.
 
