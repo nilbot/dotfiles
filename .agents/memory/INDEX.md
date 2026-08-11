@@ -9,4 +9,4 @@ regenerates this file and blocks the commit if it differs.
 
 ## reference
 
-- [harness-transcript-retention](harness-transcript-retention.md) — Claude Code deletes subagent transcripts while the session is still running, so trace pointers must be cached promptly and never on an age heuristic _(sources: 1)_
+- [harness-transcript-retention](harness-transcript-retention.md) — Claude Code deletes subagent transcripts mid-session on a rule nothing can predict, so capture must be immediate and unconditional rather than scheduled _(sources: 1)_
