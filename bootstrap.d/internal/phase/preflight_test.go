@@ -244,12 +244,26 @@ func (f *fakeChange) Seed(s, t string) error {
 	f.Ops = append(f.Ops, "seed "+t+" from "+s)
 	return nil
 }
+
+// failOn covers Run and Sudo as well as the three converging operations.
+// Running a command is a mutation like any other, and a phase whose steps are
+// preconditions for each other -- devtools builds the binary its last step
+// points four git hooks at -- can only be shown to stop at the first failure if
+// a command can be made to fail.
 func (f *fakeChange) Run(n string, a ...string) error {
-	f.Ops = append(f.Ops, "run "+n+" "+strings.Join(a, " "))
+	command := n + " " + strings.Join(a, " ")
+	if f.failOn != "" && strings.Contains(command, f.failOn) {
+		return &change.Refusal{Path: n, Problem: "test", Remediation: "test"}
+	}
+	f.Ops = append(f.Ops, "run "+command)
 	return nil
 }
 func (f *fakeChange) Sudo(n string, a ...string) error {
-	f.Ops = append(f.Ops, "sudo "+n+" "+strings.Join(a, " "))
+	command := n + " " + strings.Join(a, " ")
+	if f.failOn != "" && strings.Contains(command, f.failOn) {
+		return &change.Refusal{Path: n, Problem: "test", Remediation: "test"}
+	}
+	f.Ops = append(f.Ops, "sudo "+command)
 	return nil
 }
 
