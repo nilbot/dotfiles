@@ -786,6 +786,32 @@ phase could branch on.
 casks do not exist on Linux, and Homebrew publishes no formula for it. Task 14
 removed the vendored `install-font-linux.sh` that used to cover this.
 
+### Found in the field, 2026-08-11, on the first real provisioning run
+
+Both were hit on the repository owner's machine immediately after merge. Neither
+was visible to the test suite, because every test drives the fake `Machine` and
+`install_fisher` is never really executed.
+
+**4. The fish phase is not idempotent, and its failure destroys the record that
+would fix it.** `install_fisher` runs `fisher install` unconditionally on every
+apply. Where fisher's own record — `$__fish_config_dir/fish_plugins` — does not
+list plugins whose files are already on disk, fisher refuses each with "please
+remove or move conflicting files first" and the phase exits 1, taking devtools and
+verify with it. It then makes the next run fail identically: with nothing
+successfully installed, `fisher.fish` reaches `command rm -f $fish_plugins` and
+**deletes the record**, so the machine cannot recover by retrying. Recovery is to
+write `fish_plugins` listing the plugins whose files are present, after which
+fisher treats them as updates. The phase should establish that state itself rather
+than requiring an operator to know this.
+
+**5. The login-shell check trusts `$SHELL`.** `check`'s `login-shell` and the fish
+phase's `chsh` decision both read `Context.Shell`, which `main.go` takes from
+`os.Getenv("SHELL")`. That is inherited and need not describe the account: run from
+a process started under another shell, `check` reports "the login shell is /bin/zsh,
+not fish" on a machine whose passwd entry says `/opt/homebrew/bin/fish`, and the
+phase would plan a `sudo chsh` that is not needed. The passwd database is the
+authority; `$SHELL` is a hint.
+
 ---
 
 ## Rejected alternatives
