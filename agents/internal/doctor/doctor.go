@@ -55,6 +55,7 @@ type Dependencies struct {
 	LookPath              func(string) (string, error)
 	Git                   func(dir string, args ...string) GitResult
 	LegacyHooksPath       func(string) (string, error)
+	TraceCacheDir         func(string) (string, error)
 	CodexConfig           string
 	HooksDir              string
 	AttributesLink        string
@@ -87,6 +88,7 @@ func DependenciesFor(root string) Dependencies {
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
 		LegacyHooksPath:       repo.LegacyHooksPath,
+		TraceCacheDir:         repo.TraceCacheDir,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
 		HooksDir:              filepath.Join(root, "git", "hooks.d"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
@@ -159,7 +161,14 @@ func RunWithDeps(repoRoot, agentsDir, thisMachine, binary string, th Thresholds,
 	} else {
 		checks = append(checks, Check{Name: "trace-index", Status: OK, Detail: "all trace index lines are readable"})
 	}
-	checks = append(checks, checkPointers(traceResult.Records, thisMachine)...)
+	// An unresolvable cache root is not a reason to skip the pointer checks: an
+	// empty root simply makes every gone transcript count as lost, which is what
+	// the check said before the cache existed at all.
+	var cacheRoot string
+	if deps.TraceCacheDir != nil {
+		cacheRoot, _ = deps.TraceCacheDir(repoRoot)
+	}
+	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
 	checks = append(checks, checkMemorySources(agentsDir, thisMachine)...)
 	checks = append(checks, checkScaffoldInstruction(repoRoot))
 	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
@@ -533,7 +542,7 @@ func hasExactLine(contents []byte, want string) bool {
 	return false
 }
 
-func checkPointers(recs []record.Record, thisMachine string) []Check {
+func checkPointers(recs []record.Record, thisMachine, cacheRoot string) []Check {
 	unverified := 0
 	for _, rec := range recs {
 		if rec.Transcript == "" || !rec.PointerVerified {
@@ -551,6 +560,7 @@ func checkPointers(recs []record.Record, thisMachine string) []Check {
 		return checks
 	}
 	localUnreachable := 0
+	cached := 0
 	remote := map[string]int{}
 	unknownOwnership := 0
 	for _, rec := range recs {
@@ -563,13 +573,25 @@ func checkPointers(recs []record.Record, thisMachine string) []Check {
 		case rec.Machine != thisMachine:
 			remote[rec.Machine]++
 		default:
-			if _, err := os.Stat(rec.Transcript); err != nil {
+			// Three answers, not two. Asking only whether the harness still has
+			// it counted a transcript we had successfully copied as lost, so the
+			// remedy this check prints could be followed perfectly and never
+			// move the number -- which teaches the reader to ignore the row.
+			if _, _, err := trace.Resolve(cacheRoot, rec); err != nil {
 				localUnreachable++
+			} else if _, serr := os.Stat(rec.Transcript); serr != nil {
+				cached++
 			}
 		}
 	}
+	if cached > 0 {
+		// ok, not a warning: the harness dropped these and the copy is why they
+		// still exist. Reported rather than silent because it is the only
+		// evidence that caching is doing anything.
+		checks = append(checks, Check{Name: "pointers:cached", Status: OK, Detail: fmt.Sprintf("%d transcript(s) survive only in the local cache", cached)})
+	}
 	if localUnreachable > 0 {
-		checks = append(checks, Check{Name: "pointers:local-unreachable", Status: Warn, Detail: fmt.Sprintf("%d verified local pointer(s) are unreachable", localUnreachable), Remedy: "cache reachable transcripts before harness cleanup"})
+		checks = append(checks, Check{Name: "pointers:local-unreachable", Status: Warn, Detail: fmt.Sprintf("%d verified local pointer(s) are unreachable and uncached", localUnreachable), Remedy: "run `agents trace cache` sooner; subagent transcripts are deleted mid-session"})
 	}
 	if len(remote) > 0 {
 		machines := make([]string, 0, len(remote))
