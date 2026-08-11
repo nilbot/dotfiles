@@ -359,7 +359,6 @@ func TestCreateAlwaysExcludesGeneratedHarnessConfigs(t *testing.T) {
 		"/.claude/.agents-wire.lock",
 		"/.codex/hooks.json",
 		"/.codex/.agents-wire.lock",
-		"/.agents/.trace-cache/",
 	} {
 		if !strings.Contains(exclude, want) {
 			t.Errorf("exclude missing %q:\n%s", want, exclude)

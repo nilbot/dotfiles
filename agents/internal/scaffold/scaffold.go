@@ -71,7 +71,6 @@ var excludeLines = []string{
 	"/.codex/hooks.json",
 	"/.codex/.agents-wire.lock",
 	"/.codex/skills",
-	"/.agents/.trace-cache/",
 }
 
 var dirs = []string{

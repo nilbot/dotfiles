@@ -27,23 +27,24 @@ type CacheReport struct {
 	Details     []string
 }
 
-// Cache copies transcripts that are reachable from here into a git-ignored
-// directory inside .agents/. It never copies a transcript belonging to another
-// machine, and never one whose pointer did not verify.
+// Cache copies transcripts that are reachable from here into root, which the
+// caller resolves with repo.TraceCacheDir. It never copies a transcript
+// belonging to another machine, and never one whose pointer did not verify.
+//
+// root is passed in rather than derived from .agents/ because the cache is not
+// tracked context: it is machine-local content whose only copy may be the one
+// here, and it belongs in the git common directory, shared by every worktree
+// and outside all of them. See repo.TraceCacheDir for why.
 //
 // One unusable record is not a failed run. Anything that stops this one
 // transcript -- another machine, a deleted file, a permission, a source that is
 // not a regular file, a copy that fails halfway -- is counted, detailed, and the
 // run continues. The error return is reserved for what stops every record, so a
 // caller that gets one knows the report is not merely incomplete but absent.
-func Cache(agentsDir, thisMachine string, recs []record.Record) (CacheReport, error) {
+func Cache(root, thisMachine string, recs []record.Record) (CacheReport, error) {
 	var rep CacheReport
 
-	root := filepath.Join(agentsDir, ".trace-cache")
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return rep, err
-	}
-	if err := writeCacheIgnore(root); err != nil {
 		return rep, err
 	}
 
@@ -96,31 +97,6 @@ func Cache(agentsDir, thisMachine string, recs []record.Record) (CacheReport, er
 		rep.Copied++
 	}
 	return rep, nil
-}
-
-// cacheIgnoreBody makes the cache directory ignore itself, contents and all.
-const cacheIgnoreBody = "*\n"
-
-// writeCacheIgnore puts that ignore file inside the cache directory.
-//
-// The exclusion `agents init` writes lives in .git/info/exclude, which is
-// per-clone and is never cloned. In any checkout where init has not run -- a
-// fresh clone, a colleague's machine, CI -- the first `agents trace cache` used
-// to write transcript content straight into the working tree, where `git status`
-// offers it and `git add -A` stages it: transcript text committed, by the tool
-// whose premise is that it records where transcripts are and never what they
-// say. An ignore file inside the cache needs no init, is written whenever the
-// directory is, and says nothing about the repository's own .gitignore, which
-// belongs to its maintainers -- which is why the generated harness configs stay
-// in info/exclude. This one is about content.
-func writeCacheIgnore(dir string) error {
-	path := filepath.Join(dir, ".gitignore")
-	// Rewrite anything else, including a truncated or hand-edited file: the
-	// guarantee is worth more than a local edit to a two-byte file this tool owns.
-	if b, err := os.ReadFile(path); err == nil && string(b) == cacheIgnoreBody {
-		return nil
-	}
-	return os.WriteFile(path, []byte(cacheIgnoreBody), 0o644)
 }
 
 // target is one transcript to consider, and the record that speaks for it.

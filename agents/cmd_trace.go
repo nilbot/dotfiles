@@ -167,11 +167,19 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 
-	dir, code := agentsDirHere(stdout)
+	rc, dir, code := repoHere(stdout)
 	if code != exitcode.OK {
 		return code
 	}
 	mid, err := machine.ID()
+	if err != nil {
+		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// The index is read from .agents/, which is per-worktree and tracked; the
+	// copies go to the common directory, which every worktree shares. Two
+	// different questions, so two different roots.
+	cacheRoot, err := repo.TraceCacheDir(rc.Root)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord
@@ -182,7 +190,7 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord
 	}
-	rep, err := trace.Cache(dir, mid, res.Records)
+	rep, err := trace.Cache(cacheRoot, mid, res.Records)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord

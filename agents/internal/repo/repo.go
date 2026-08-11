@@ -50,6 +50,29 @@ func InfoExcludePath(dir string) (string, error) {
 	return filepath.Join(common, "info", "exclude"), nil
 }
 
+// TraceCacheDir resolves where copied transcripts live for a repo.
+//
+// The common directory, for two reasons that both come from what the cache
+// holds. Once a harness deletes a transcript the cached copy is the only one
+// that will ever exist, so it must not be filed anywhere a worktree takes with
+// it: <root>/.agents/.trace-cache gave every linked worktree its own, and
+// `git worktree remove` then deleted the only surviving copies. And transcript
+// content must never be committed by the tool whose premise is that it records
+// where transcripts are, never what they say -- inside the common directory git
+// does not track it, structurally, rather than because something remembered to
+// write an ignore file next to it.
+//
+// Not $XDG_CACHE_HOME, whose contract is non-essential data that can be
+// regenerated: cleaners act on that, and this cannot be regenerated. The cache
+// is also per-repository, which the common directory gives for free.
+func TraceCacheDir(dir string) (string, error) {
+	common, err := gitPath(dir, "--git-common-dir")
+	if err != nil {
+		return "", ErrNotARepo
+	}
+	return filepath.Join(common, "agents", "trace-cache"), nil
+}
+
 // LegacyHooksPath resolves the repository-owned hooks directory that a global
 // core.hooksPath shadows. It asks Git for the common directory so linked
 // worktrees do not incorrectly append hooks below their regular .git file.

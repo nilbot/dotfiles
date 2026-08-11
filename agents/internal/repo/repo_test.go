@@ -368,3 +368,64 @@ func TestDiscoverDetachedHead(t *testing.T) {
 		t.Errorf("Branch = %q, want empty string for detached HEAD", rc.Branch)
 	}
 }
+
+// The whole reason the cache moves here: every worktree of one repository must
+// answer with ONE cache directory.
+//
+// While the cache lived at <root>/.agents/.trace-cache, each linked worktree had
+// its own. Measured on the machine this was written for: the main checkout held
+// 3 transcripts, one worktree held 58, another none -- and the 58 were the only
+// surviving copies of transcripts the harness had already deleted, sitting in a
+// directory that `git worktree remove` would take with it.
+func TestTraceCacheDirIsSharedByEveryWorktree(t *testing.T) {
+	main := initRepo(t)
+	if err := os.WriteFile(filepath.Join(main, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, main, "add", "f.txt")
+	git(t, main, "-c", "commit.gpgsign=false", "commit", "-m", "init", "--no-verify")
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	git(t, main, "worktree", "add", "-b", "cache-test", linked)
+	if fi, err := os.Lstat(filepath.Join(linked, ".git")); err != nil || fi.IsDir() {
+		t.Fatalf("fixture is not a linked worktree: %v", err)
+	}
+	sub := filepath.Join(linked, "deep", "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	fromMain, err := TraceCacheDir(main)
+	if err != nil {
+		t.Fatalf("TraceCacheDir(main): %v", err)
+	}
+	// Standing in the linked worktree, and standing below it, must not change
+	// the answer -- a cache keyed on where the caller happened to be is the
+	// per-worktree split all over again.
+	for _, from := range []string{linked, sub} {
+		got, err := TraceCacheDir(from)
+		if err != nil {
+			t.Fatalf("TraceCacheDir(%s): %v", from, err)
+		}
+		if got != fromMain {
+			t.Errorf("TraceCacheDir(%s) = %q, want the main checkout's %q; a worktree "+
+				"with its own cache loses every transcript in it when the worktree "+
+				"is removed", from, got, fromMain)
+		}
+	}
+
+	// Inside the common git directory, which no working tree tracks. That is
+	// what replaces the .gitignore the cache used to have to write for itself.
+	common := filepath.Join(resolved(t, main), ".git")
+	if !strings.HasPrefix(fromMain, common+string(filepath.Separator)) {
+		t.Errorf("TraceCacheDir = %q, want it under the common git dir %q; outside "+
+			"it, transcript content sits in a working tree where `git add -A` "+
+			"stages it", fromMain, common)
+	}
+}
+
+func TestTraceCacheDirRefusesOutsideARepository(t *testing.T) {
+	if _, err := TraceCacheDir(t.TempDir()); !errors.Is(err, ErrNotARepo) {
+		t.Fatalf("TraceCacheDir outside a repo: err = %v, want ErrNotARepo", err)
+	}
+}

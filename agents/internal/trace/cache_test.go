@@ -36,30 +36,24 @@ func write(t *testing.T, path, body string) string {
 	return path
 }
 
-// cachedFiles lists every cached transcript under agentsDir, relative to it, so
+// cachedFiles lists every cached transcript under cacheRoot, relative to it, so
 // a test can assert on the whole of what a run produced rather than only on the
-// one path it went looking for. The cache's own .gitignore is infrastructure
-// rather than a transcript and is left out; TestCacheIgnoresItsOwnContents is
-// what holds it in place.
-func cachedFiles(t *testing.T, agentsDir string) []string {
+// one path it went looking for.
+func cachedFiles(t *testing.T, cacheRoot string) []string {
 	t.Helper()
 	var out []string
-	err := filepath.WalkDir(agentsDir, func(p string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(cacheRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		rel, rerr := filepath.Rel(agentsDir, p)
+		rel, rerr := filepath.Rel(cacheRoot, p)
 		if rerr != nil {
 			return rerr
 		}
-		rel = filepath.ToSlash(rel)
-		if rel == ".trace-cache/.gitignore" {
-			return nil
-		}
-		out = append(out, rel)
+		out = append(out, filepath.ToSlash(rel))
 		return nil
 	})
 	if err != nil {
@@ -69,7 +63,7 @@ func cachedFiles(t *testing.T, agentsDir string) []string {
 }
 
 func TestCacheCopiesOnlyReachableLocalTranscripts(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := t.TempDir()
 
 	here := write(t, filepath.Join(src, "rollout-here.jsonl"), `{"line":1}`+"\n")
@@ -80,7 +74,7 @@ func TestCacheCopiesOnlyReachableLocalTranscripts(t *testing.T) {
 		{When: time.Now(), Machine: "m2", Harness: "codex", Transcript: "/elsewhere/rollout.jsonl", PointerVerified: true},
 	}
 
-	rep, err := Cache(agentsDir, "m1", recs)
+	rep, err := Cache(cacheRoot, "m1", recs)
 	if err != nil {
 		t.Fatalf("Cache: %v", err)
 	}
@@ -97,15 +91,15 @@ func TestCacheCopiesOnlyReachableLocalTranscripts(t *testing.T) {
 		t.Errorf("Elsewhere = %d, want 1 (another machine holds it)", rep.Elsewhere)
 	}
 
-	dst := filepath.Join(agentsDir, ".trace-cache", "codex", wantName(here))
+	dst := filepath.Join(cacheRoot, "codex", wantName(here))
 	b, err := os.ReadFile(dst)
 	if err != nil {
-		t.Fatalf("expected %s: %v\ncache holds: %v", dst, err, cachedFiles(t, agentsDir))
+		t.Fatalf("expected %s: %v\ncache holds: %v", dst, err, cachedFiles(t, cacheRoot))
 	}
 	if string(b) != `{"line":1}`+"\n" {
 		t.Errorf("cached content = %q", b)
 	}
-	if got := cachedFiles(t, agentsDir); len(got) != 1 {
+	if got := cachedFiles(t, cacheRoot); len(got) != 1 {
 		t.Errorf("cache holds %v, want exactly the one reachable transcript", got)
 	}
 }
@@ -114,14 +108,14 @@ func TestCacheCopiesOnlyReachableLocalTranscripts(t *testing.T) {
 // transcript another machine holds is that machine's name. A report that says
 // "1 elsewhere" without saying where is not actionable.
 func TestCacheDetailsNameTheHoldingMachineAndTheMissingPath(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := t.TempDir()
 
 	recs := []record.Record{
 		{Machine: "m1", Harness: "codex", Transcript: filepath.Join(src, "gone.jsonl"), PointerVerified: true},
 		{Machine: "laptop-7f3a", Harness: "codex", Transcript: "/elsewhere/rollout.jsonl", PointerVerified: true},
 	}
-	rep, err := Cache(agentsDir, "m1", recs)
+	rep, err := Cache(cacheRoot, "m1", recs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,21 +137,21 @@ func TestCacheDetailsNameTheHoldingMachineAndTheMissingPath(t *testing.T) {
 }
 
 func TestCacheIsIdempotent(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := write(t, filepath.Join(t.TempDir(), "rollout-x.jsonl"), "{}\n")
 	recs := []record.Record{{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true}}
 
-	if _, err := Cache(agentsDir, "m1", recs); err != nil {
+	if _, err := Cache(cacheRoot, "m1", recs); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := Cache(agentsDir, "m1", recs)
+	rep, err := Cache(cacheRoot, "m1", recs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rep.Copied != 0 || rep.Skipped != 1 {
 		t.Fatalf("second run: Copied=%d Skipped=%d, want 0 and 1", rep.Copied, rep.Skipped)
 	}
-	if got := cachedFiles(t, agentsDir); len(got) != 1 {
+	if got := cachedFiles(t, cacheRoot); len(got) != 1 {
 		t.Errorf("cache holds %v after two runs, want one file", got)
 	}
 }
@@ -170,12 +164,12 @@ func TestCacheIsIdempotent(t *testing.T) {
 // reads as "nothing to do" while the transcripts sit readable on this disk. It
 // is also the only class the report used to drop; every other one is counted.
 func TestCacheCountsUnverifiedPointersInsteadOfDroppingThem(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	dir := t.TempDir()
 	unverified := write(t, filepath.Join(dir, "rollout-y.jsonl"), "{}\n")
 	verified := write(t, filepath.Join(dir, "rollout-z.jsonl"), "{}\n")
 
-	rep, err := Cache(agentsDir, "m1", []record.Record{
+	rep, err := Cache(cacheRoot, "m1", []record.Record{
 		{Machine: "m1", Harness: "codex", Transcript: unverified, PointerVerified: false},
 		{Machine: "m1", Harness: "codex", Transcript: verified, PointerVerified: true},
 	})
@@ -198,7 +192,7 @@ func TestCacheCountsUnverifiedPointersInsteadOfDroppingThem(t *testing.T) {
 		t.Errorf("Details must not mention the transcript that was copied; got:\n%s", joined)
 	}
 	// Not copying it is the part that must not change.
-	for _, f := range cachedFiles(t, agentsDir) {
+	for _, f := range cachedFiles(t, cacheRoot) {
 		if strings.Contains(f, wantName(unverified)) {
 			t.Errorf("cache holds %s: an unverified pointer must still not be copied", f)
 		}
@@ -222,8 +216,8 @@ func TestCacheLetsAVerifiedSightingWinOverAnUnverifiedOne(t *testing.T) {
 		{"unverified first", []record.Record{unverified, verified}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agentsDir := t.TempDir()
-			rep, err := Cache(agentsDir, "m1", tc.recs)
+			cacheRoot := t.TempDir()
+			rep, err := Cache(cacheRoot, "m1", tc.recs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -231,7 +225,7 @@ func TestCacheLetsAVerifiedSightingWinOverAnUnverifiedOne(t *testing.T) {
 				t.Fatalf("Copied=%d Unverified=%d, want 1 and 0: one record confirmed this pointer, so it is confirmed",
 					rep.Copied, rep.Unverified)
 			}
-			if got := cachedFiles(t, agentsDir); len(got) != 1 {
+			if got := cachedFiles(t, cacheRoot); len(got) != 1 {
 				t.Errorf("cache holds %v, want the one transcript", got)
 			}
 		})
@@ -258,8 +252,8 @@ func TestCacheKeepsOnePathApartPerMachineWhicheverOrderTheyArriveIn(t *testing.T
 		{"local record newer", []record.Record{local, remote}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agentsDir := t.TempDir()
-			rep, err := Cache(agentsDir, "m1", tc.recs)
+			cacheRoot := t.TempDir()
+			rep, err := Cache(cacheRoot, "m1", tc.recs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -272,9 +266,9 @@ func TestCacheKeepsOnePathApartPerMachineWhicheverOrderTheyArriveIn(t *testing.T
 			if !strings.Contains(strings.Join(rep.Details, "\n"), "laptop-7f3a") {
 				t.Errorf("Details must still name the machine holding the other session; got: %v", rep.Details)
 			}
-			b, err := os.ReadFile(filepath.Join(agentsDir, ".trace-cache", "codex", wantName(src)))
+			b, err := os.ReadFile(filepath.Join(cacheRoot, "codex", wantName(src)))
 			if err != nil {
-				t.Fatalf("expected the local transcript in the cache: %v\ncache holds: %v", err, cachedFiles(t, agentsDir))
+				t.Fatalf("expected the local transcript in the cache: %v\ncache holds: %v", err, cachedFiles(t, cacheRoot))
 			}
 			if string(b) != "local bytes\n" {
 				t.Errorf("cached content = %q", b)
@@ -283,76 +277,19 @@ func TestCacheKeepsOnePathApartPerMachineWhicheverOrderTheyArriveIn(t *testing.T
 	}
 }
 
-// The exclusion `agents init` writes lives in .git/info/exclude, which is
-// per-clone and is never cloned: on a fresh checkout the cache is not ignored by
-// anything the repository carries. An ignore file inside the cache directory is
-// written by whoever creates the directory, so it is there in every clone --
-// see TestTraceCacheContentIsNotStageable for the git-level proof.
-func TestCacheIgnoresItsOwnContents(t *testing.T) {
-	ignorePath := func(agentsDir string) string {
-		return filepath.Join(agentsDir, ".trace-cache", ".gitignore")
-	}
-
-	t.Run("written beside the content it must hide", func(t *testing.T) {
-		agentsDir := t.TempDir()
-		src := write(t, filepath.Join(t.TempDir(), "rollout-ig.jsonl"), "{}\n")
-		if _, err := Cache(agentsDir, "m1", []record.Record{
-			{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true},
-		}); err != nil {
-			t.Fatal(err)
-		}
-		b, err := os.ReadFile(ignorePath(agentsDir))
-		if err != nil {
-			t.Fatalf("the cache directory must carry its own .gitignore: %v", err)
-		}
-		if strings.TrimSpace(string(b)) != "*" {
-			t.Errorf(".gitignore = %q, want a pattern that hides everything under the cache", b)
-		}
-	})
-
-	// The upgrade case: a cache filled by an older build has content and no
-	// ignore file, and a later run copies nothing new. Writing the ignore file
-	// only alongside a copy would leave that repo exposed forever.
-	t.Run("repaired when a run copies nothing", func(t *testing.T) {
-		agentsDir := t.TempDir()
-		write(t, filepath.Join(agentsDir, ".trace-cache", "codex", "rollout-old-abc123abc123.jsonl"), "old content\n")
-		if _, err := Cache(agentsDir, "m1", nil); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.ReadFile(ignorePath(agentsDir)); err != nil {
-			t.Fatalf("a cache that already holds content must still be ignored: %v", err)
-		}
-	})
-
-	t.Run("repaired when truncated", func(t *testing.T) {
-		agentsDir := t.TempDir()
-		write(t, ignorePath(agentsDir), "")
-		if _, err := Cache(agentsDir, "m1", nil); err != nil {
-			t.Fatal(err)
-		}
-		b, err := os.ReadFile(ignorePath(agentsDir))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.TrimSpace(string(b)) != "*" {
-			t.Errorf(".gitignore = %q, want it restored", b)
-		}
-	})
-}
-
 // The harness is a path component, not decoration: a cache that files every
 // transcript under one name loses the only cheap way to tell a Codex rollout
 // from a Claude Code session file. The empty case is the one a hand-written or
 // pre-harness record produces, and it must not collapse the directory level.
 func TestCacheFilesEachTranscriptUnderItsHarness(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := t.TempDir()
 
 	codex := write(t, filepath.Join(src, "rollout-codex.jsonl"), "codex\n")
 	claude := write(t, filepath.Join(src, "session-claude.jsonl"), "claude\n")
 	nameless := write(t, filepath.Join(src, "rollout-nameless.jsonl"), "nameless\n")
 
-	rep, err := Cache(agentsDir, "m1", []record.Record{
+	rep, err := Cache(cacheRoot, "m1", []record.Record{
 		{Machine: "m1", Harness: "codex", Transcript: codex, PointerVerified: true},
 		{Machine: "m1", Harness: "claude-code", Transcript: claude, PointerVerified: true},
 		{Machine: "m1", Harness: "", Transcript: nameless, PointerVerified: true},
@@ -361,7 +298,7 @@ func TestCacheFilesEachTranscriptUnderItsHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 	if rep.Copied != 3 {
-		t.Fatalf("Copied = %d, want 3; cache holds %v", rep.Copied, cachedFiles(t, agentsDir))
+		t.Fatalf("Copied = %d, want 3; cache holds %v", rep.Copied, cachedFiles(t, cacheRoot))
 	}
 
 	for _, tc := range []struct{ dir, src, body string }{
@@ -369,10 +306,10 @@ func TestCacheFilesEachTranscriptUnderItsHarness(t *testing.T) {
 		{"claude-code", claude, "claude\n"},
 		{"unknown", nameless, "nameless\n"},
 	} {
-		dst := filepath.Join(agentsDir, ".trace-cache", tc.dir, wantName(tc.src))
+		dst := filepath.Join(cacheRoot, tc.dir, wantName(tc.src))
 		b, err := os.ReadFile(dst)
 		if err != nil {
-			t.Errorf("expected %s: %v\ncache holds: %v", dst, err, cachedFiles(t, agentsDir))
+			t.Errorf("expected %s: %v\ncache holds: %v", dst, err, cachedFiles(t, cacheRoot))
 			continue
 		}
 		if string(b) != tc.body {
@@ -391,13 +328,13 @@ func TestCacheFilesEachTranscriptUnderItsHarness(t *testing.T) {
 // The destination is therefore keyed on the whole source path, so two sources
 // can never claim one name.
 func TestCacheKeepsTwoTranscriptsWithOneBasenameApart(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := t.TempDir()
 
 	first := write(t, filepath.Join(src, "morning", "rollout.jsonl"), "first session\n")
 	second := write(t, filepath.Join(src, "evening", "rollout.jsonl"), "second session\n")
 
-	rep, err := Cache(agentsDir, "m1", []record.Record{
+	rep, err := Cache(cacheRoot, "m1", []record.Record{
 		{Machine: "m1", Harness: "codex", Transcript: first, PointerVerified: true},
 		{Machine: "m1", Harness: "codex", Transcript: second, PointerVerified: true},
 	})
@@ -406,20 +343,20 @@ func TestCacheKeepsTwoTranscriptsWithOneBasenameApart(t *testing.T) {
 	}
 	if rep.Copied != 2 || rep.Skipped != 0 {
 		t.Fatalf("Copied=%d Skipped=%d, want 2 and 0; cache holds %v",
-			rep.Copied, rep.Skipped, cachedFiles(t, agentsDir))
+			rep.Copied, rep.Skipped, cachedFiles(t, cacheRoot))
 	}
 	for _, tc := range []struct{ src, body string }{{first, "first session\n"}, {second, "second session\n"}} {
-		dst := filepath.Join(agentsDir, ".trace-cache", "codex", wantName(tc.src))
+		dst := filepath.Join(cacheRoot, "codex", wantName(tc.src))
 		b, err := os.ReadFile(dst)
 		if err != nil {
-			t.Errorf("expected %s: %v\ncache holds: %v", dst, err, cachedFiles(t, agentsDir))
+			t.Errorf("expected %s: %v\ncache holds: %v", dst, err, cachedFiles(t, cacheRoot))
 			continue
 		}
 		if string(b) != tc.body {
 			t.Errorf("%s content = %q, want %q -- one session's transcript is filed under the other's name", dst, b, tc.body)
 		}
 	}
-	if got := cachedFiles(t, agentsDir); len(got) != 2 {
+	if got := cachedFiles(t, cacheRoot); len(got) != 2 {
 		t.Errorf("cache holds %v, want two distinct files", got)
 	}
 }
@@ -429,10 +366,10 @@ func TestCacheKeepsTwoTranscriptsWithOneBasenameApart(t *testing.T) {
 // record is wasted work that also inflates the number the command reports, so
 // "copied 4" would describe four transcripts that do not exist.
 func TestCacheCopiesOneTranscriptOncePerRun(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := write(t, filepath.Join(t.TempDir(), "rollout-dup.jsonl"), "{}\n")
 
-	rep, err := Cache(agentsDir, "m1", []record.Record{
+	rep, err := Cache(cacheRoot, "m1", []record.Record{
 		{Machine: "m1", Harness: "codex", Event: "subagent-stop", Transcript: src, PointerVerified: true},
 		{Machine: "m1", Harness: "codex", Event: "stop", Transcript: src, PointerVerified: true},
 	})
@@ -445,7 +382,7 @@ func TestCacheCopiesOneTranscriptOncePerRun(t *testing.T) {
 	if rep.Copied != 1 || rep.Skipped != 0 {
 		t.Fatalf("Copied=%d Skipped=%d, want 1 and 0 for one transcript named twice", rep.Copied, rep.Skipped)
 	}
-	if got := cachedFiles(t, agentsDir); len(got) != 1 {
+	if got := cachedFiles(t, cacheRoot); len(got) != 1 {
 		t.Errorf("cache holds %v, want one file", got)
 	}
 }
@@ -482,10 +419,10 @@ func TestCacheResolvesAnyHarnessToOneComponentInsideTheCache(t *testing.T) {
 		{"absolute", "/etc/passwd"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agentsDir := filepath.Join(t.TempDir(), "repo", ".agents")
+			cacheRoot := filepath.Join(t.TempDir(), "repo", "cache")
 			src := write(t, filepath.Join(t.TempDir(), "rollout-hostile.jsonl"), "payload\n")
 
-			rep, err := Cache(agentsDir, "m1", []record.Record{
+			rep, err := Cache(cacheRoot, "m1", []record.Record{
 				{Machine: "m1", Harness: tc.harness, Transcript: src, PointerVerified: true},
 			})
 			if err != nil {
@@ -495,22 +432,22 @@ func TestCacheResolvesAnyHarnessToOneComponentInsideTheCache(t *testing.T) {
 				t.Fatalf("Copied = %d, want 1: a strange harness name is not a reason to lose the transcript", rep.Copied)
 			}
 
-			got := cachedFiles(t, agentsDir)
+			got := cachedFiles(t, cacheRoot)
 			if len(got) != 1 {
 				t.Fatalf("the cache holds %v; a run that reports a copy nobody can find under %s wrote it somewhere else",
-					got, filepath.Join(agentsDir, ".trace-cache"))
+					got, cacheRoot)
 			}
 			parts := strings.Split(got[0], "/")
-			if len(parts) != 3 || parts[0] != ".trace-cache" {
-				t.Fatalf("resolved destination %q, want .trace-cache/<one harness component>/<file>", got[0])
+			if len(parts) != 2 {
+				t.Fatalf("resolved destination %q, want <one harness component>/<file>", got[0])
 			}
-			if parts[1] == "" || parts[1] == "." || parts[1] == ".." {
-				t.Errorf("harness component = %q, which is not a directory name", parts[1])
+			if parts[0] == "" || parts[0] == "." || parts[0] == ".." {
+				t.Errorf("harness component = %q, which is not a directory name", parts[0])
 			}
-			if parts[2] != wantName(src) {
-				t.Errorf("file = %q, want %q", parts[2], wantName(src))
+			if parts[1] != wantName(src) {
+				t.Errorf("file = %q, want %q", parts[1], wantName(src))
 			}
-			b, err := os.ReadFile(filepath.Join(agentsDir, got[0]))
+			b, err := os.ReadFile(filepath.Join(cacheRoot, got[0]))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -572,7 +509,7 @@ func TestCacheKeepsGoingWhenOneSourceCannotBeCopied(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agentsDir := t.TempDir()
+			cacheRoot := t.TempDir()
 			dir := t.TempDir()
 			bad := tc.build(t, dir)
 			// One good transcript each side of the bad one: the second is what
@@ -580,7 +517,7 @@ func TestCacheKeepsGoingWhenOneSourceCannotBeCopied(t *testing.T) {
 			first := write(t, filepath.Join(dir, "rollout-first.jsonl"), "first\n")
 			second := write(t, filepath.Join(dir, "rollout-second.jsonl"), "second\n")
 
-			rep, err := Cache(agentsDir, "m1", []record.Record{
+			rep, err := Cache(cacheRoot, "m1", []record.Record{
 				{Machine: "m1", Harness: "codex", Transcript: first, PointerVerified: true},
 				{Machine: "m1", Harness: "codex", Transcript: bad, PointerVerified: true},
 				{Machine: "m1", Harness: "codex", Transcript: second, PointerVerified: true},
@@ -600,12 +537,12 @@ func TestCacheKeepsGoingWhenOneSourceCannotBeCopied(t *testing.T) {
 				t.Errorf("Details must name the transcript that could not be copied; got:\n%s", joined)
 			}
 
-			files := cachedFiles(t, agentsDir)
+			files := cachedFiles(t, cacheRoot)
 			if len(files) != 2 {
 				t.Errorf("cache holds %v, want only the two readable transcripts", files)
 			}
 			for _, f := range files {
-				b, err := os.ReadFile(filepath.Join(agentsDir, f))
+				b, err := os.ReadFile(filepath.Join(cacheRoot, f))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -628,13 +565,13 @@ func TestCacheKeepsGoingWhenOneSourceCannotBeCopied(t *testing.T) {
 // opened without O_TRUNC, the tail of the longer old file survives past the new
 // content and the cached transcript ends in bytes from a different session.
 func TestCacheOverwritesAStaleTemporaryFile(t *testing.T) {
-	agentsDir := t.TempDir()
+	cacheRoot := t.TempDir()
 	src := write(t, filepath.Join(t.TempDir(), "rollout-stale.jsonl"), "new\n")
 
-	dst := filepath.Join(agentsDir, ".trace-cache", "codex", wantName(src))
+	dst := filepath.Join(cacheRoot, "codex", wantName(src))
 	write(t, dst+".partial", "stale bytes from an interrupted run\n")
 
-	rep, err := Cache(agentsDir, "m1", []record.Record{
+	rep, err := Cache(cacheRoot, "m1", []record.Record{
 		{Machine: "m1", Harness: "codex", Transcript: src, PointerVerified: true},
 	})
 	if err != nil {
@@ -652,7 +589,7 @@ func TestCacheOverwritesAStaleTemporaryFile(t *testing.T) {
 	}
 	// Nothing half-written may remain under a name a later run would trust or a
 	// person would mistake for a transcript.
-	for _, f := range cachedFiles(t, agentsDir) {
+	for _, f := range cachedFiles(t, cacheRoot) {
 		if strings.HasSuffix(f, ".partial") {
 			t.Errorf("a successful run left %s behind", f)
 		}

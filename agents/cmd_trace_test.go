@@ -332,12 +332,16 @@ func TestTraceCacheCopiesLocalAndNamesTheMachineHoldingTheRest(t *testing.T) {
 		}
 	}
 
-	cached, err := filepath.Glob(filepath.Join(repo.AgentsDir(root), ".trace-cache", "codex", "*"))
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := filepath.Glob(filepath.Join(cacheRoot, "codex", "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(cached) != 1 {
-		t.Fatalf(".trace-cache/codex holds %v, want the one reachable transcript", cached)
+		t.Fatalf("the cache's codex directory holds %v, want the one reachable transcript", cached)
 	}
 	if !strings.HasPrefix(filepath.Base(cached[0]), "rollout-local-") {
 		t.Errorf("cached file %q must still be recognisable as %q", filepath.Base(cached[0]), "rollout-local.jsonl")
@@ -357,13 +361,17 @@ func git(t *testing.T, root string, args ...string) string {
 }
 
 // The premise of this tool is that it records where transcripts live and never
-// what they say. The cache is transcript content in the working tree, and the
-// only thing that used to keep it out of a commit was an entry in
-// .git/info/exclude written by `agents init` -- a file that is per-clone and is
-// never cloned. This repo is a plain `git init` where init has never run, which
-// is the state of every fresh clone and every CI checkout: measured before the
-// fix, `git status` offered `.agents/.trace-cache/` and `git add -A` staged the
-// transcript, content and all.
+// what they say, so transcript content must be unstageable in a repo where
+// `agents init` has never run -- the state of every fresh clone and every CI
+// checkout.
+//
+// The guarantee used to be maintained: the cache sat in the working tree, and
+// what kept it out of a commit was first an entry in .git/info/exclude (written
+// by init, so absent here) and then a .gitignore the cache wrote beside its own
+// content. Now it is structural. The cache lives in the git common directory,
+// and git does not track its own directory -- there is no ignore rule to write,
+// forget, or truncate. This test is the proof of that claim, so it asserts the
+// same outcome by the same means and only the location has moved.
 func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
 	mid := thisMachine(t)
 	const secret = `{"line":"secret api key sk-live-abc"}` + "\n"
@@ -382,7 +390,11 @@ func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
 	}
 	// Without this the rest of the test passes on a cache that was never
 	// written, which is the wrong reason to see nothing in git.
-	cached, err := filepath.Glob(filepath.Join(repo.AgentsDir(root), ".trace-cache", "codex", "*"))
+	cacheRoot, err := repo.TraceCacheDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cached, err := filepath.Glob(filepath.Join(cacheRoot, "codex", "*"))
 	if err != nil || len(cached) != 1 {
 		t.Fatalf("the cache must hold the transcript for this test to mean anything; got %v (%v)", cached, err)
 	}
@@ -390,21 +402,33 @@ func TestTraceCacheContentIsNotStageableWhereInitNeverRan(t *testing.T) {
 		t.Fatalf("cached content = %q (%v), want the transcript", b, err)
 	}
 
+	// The secret itself, not a path fragment: matching on "trace-cache" would
+	// pass if the cache were renamed and still written into the working tree.
+	// What must never be stageable is the content.
+	staged := func(what string) {
+		t.Helper()
+		for _, line := range strings.Split(strings.TrimSpace(git(t, root, "ls-files", "--cached")), "\n") {
+			if line == "" {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(root, line))
+			if err == nil && strings.Contains(string(b), "sk-live-abc") {
+				t.Errorf("%s: transcript content is staged for commit in %q", what, line)
+			}
+		}
+	}
+
 	// --untracked-files=all, because the default collapses an untracked
 	// directory to one entry and would hide the file inside it.
 	status := git(t, root, "status", "--porcelain", "--untracked-files=all")
 	for _, line := range strings.Split(strings.TrimSpace(status), "\n") {
-		if strings.Contains(line, ".trace-cache") {
+		if strings.Contains(line, "trace-cache") {
 			t.Errorf("git offers the cache: %q\nfull status:\n%s", line, status)
 		}
 	}
-	// The harm was not that git mentioned it, but that `git add -A` took it.
+	// The harm was never that git mentioned it, but that `git add -A` took it.
 	git(t, root, "add", "-A")
-	for _, line := range strings.Split(strings.TrimSpace(git(t, root, "ls-files", "--cached")), "\n") {
-		if strings.Contains(line, ".trace-cache") {
-			t.Errorf("transcript content is staged for commit: %q", line)
-		}
-	}
+	staged("after git add -A")
 }
 
 // A transcript this machine cannot read is one transcript. Returning on the
