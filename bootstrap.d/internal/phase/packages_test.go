@@ -253,6 +253,118 @@ func TestPackagesRefusesWhenBrewCannotBeResolvedAfterInstalling(t *testing.T) {
 	}
 }
 
+// An unreadable prefix must not end the search.
+//
+// Returning on the first Lstat error means an EACCES on /opt -- which a hardened
+// Linux box can have, and which is an error rather than an "absent" answer --
+// stops the walk before it ever reaches /home/linuxbrew, on the platform where
+// that is the only prefix that can be right. The failure is total (the phase
+// refuses) on a machine where Homebrew is installed and findable, which makes it
+// worth a case of its own.
+func TestPackagesProbesPastAnUnreadablePrefix(t *testing.T) {
+	// Every case puts the unreadable prefix BEFORE the one holding brew. A prefix
+	// after the winner is never probed at all, so it would prove nothing.
+	for _, tc := range []struct {
+		name       string
+		unreadable []string
+		installed  string
+		want       string
+	}{
+		{"EACCES on /opt, brew under linuxbrew",
+			[]string{brewAppleSilicon}, brewLinux, brewLinux},
+		{"EACCES on the first two, brew under linuxbrew",
+			[]string{brewAppleSilicon, brewIntel}, brewLinux, brewLinux},
+		{"EACCES on /opt, brew at the very next prefix",
+			[]string{brewAppleSilicon}, brewIntel, brewIntel},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, ctx, out := packagesCtx("linux", "brew", "pacman")
+			fake.lstatErr = map[string]bool{}
+			for _, path := range tc.unreadable {
+				fake.lstatErr[path] = true
+			}
+			installedAt(fake, tc.installed)
+			if err := phase.Packages(ctx); err != nil {
+				t.Fatalf("an unreadable prefix must not end the search: %v", err)
+			}
+			if last := fake.Ops[len(fake.Ops)-1]; last != opBundleVia(tc.want) {
+				t.Errorf("bundle ran as %q, want %q", last, opBundleVia(tc.want))
+			}
+			// Not lost, either. A prefix bootstrap could not read is something the
+			// operator should be able to see, even on a run that succeeded.
+			for _, path := range tc.unreadable {
+				if !strings.Contains(out.String(), path) {
+					t.Errorf("the unreadable prefix %s must be reported:\n%s",
+						path, out.String())
+				}
+			}
+		})
+	}
+}
+
+// Every prefix unreadable is still a refusal: an error is not evidence that brew
+// is there.
+func TestPackagesRefusesWhenEveryPrefixIsUnreadable(t *testing.T) {
+	fake, ctx, _ := packagesCtx("linux", "brew", "pacman")
+	fake.lstatErr = map[string]bool{
+		brewAppleSilicon: true, brewIntel: true, brewLinux: true,
+	}
+	err := phase.Packages(ctx)
+	if err == nil {
+		t.Fatal("three unreadable prefixes are not three usable brews")
+	}
+	for _, op := range fake.Ops {
+		if strings.Contains(op, "bundle") {
+			t.Errorf("the bundle ran through an unverified path: %q", op)
+		}
+	}
+}
+
+// ACCEPTED LIMITATION, pinned deliberately so a later change cannot flip it
+// silently.
+//
+// `plan` cannot preview a machine that has no Homebrew yet. This fixture is that
+// machine exactly: no brew on PATH, none of the three prefixes populated, and --
+// under `plan` -- an installer that Planner.Run records without executing. The
+// phase then finds nothing to resolve and stops with exit 2, where before it
+// would have printed a plan.
+//
+// This is not an oversight and must not be "fixed" by falling back to the bare
+// name. The phase cannot distinguish "the installer ran and produced nothing"
+// from "the installer was recorded, not run"; the only general way to tell them
+// apart is a per-operation "was this performed" signal on Machine, which is a
+// mode flag every phase could then branch on -- the erosion the dry-run
+// invariant exists to prevent. The message is worded to be true either way, and
+// naming all three prefixes is what lets a reader tell a moved prefix from a
+// machine that simply has no Homebrew.
+func TestPackagesRefusesUnderPlanOnAMachineWithNoHomebrew(t *testing.T) {
+	// darwin, so stage zero is not what stops the run: the only thing missing
+	// here is Homebrew itself.
+	fake, ctx, _ := packagesCtx("darwin", "brew")
+
+	err := phase.Packages(ctx)
+	if err == nil {
+		t.Fatal("a machine with no resolvable Homebrew must stop the phase; " +
+			"planning a bundle against a brew that does not exist reports work " +
+			"that cannot happen")
+	}
+	for _, path := range []string{brewAppleSilicon, brewIntel, brewLinux} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("the message must name %s so a moved prefix is "+
+				"distinguishable from an absent Homebrew: %v", path, err)
+		}
+	}
+	// The installer was reached -- this is the fresh-machine path, not an early
+	// exit somewhere above it.
+	if !slices.Contains(fake.Ops, opInstallBrew) {
+		t.Errorf("the installer step must have been reached; ops: %v", fake.Ops)
+	}
+	if slices.Contains(fake.Ops, opBundleVia(brewOnPath)) {
+		t.Error("the bundle must not run through the bare name; that is the defect " +
+			"this refusal replaced")
+	}
+}
+
 // The already-installed path must NOT probe. PATH is the machine's own answer to
 // "which brew", and a fixed list could disagree with it -- a Homebrew under
 // /opt/homebrew on a machine deliberately using /usr/local would be silently
@@ -392,11 +504,35 @@ func TestPackagesStopsAtTheFirstFailure(t *testing.T) {
 	}
 }
 
-// The Brewfile is an AUDIT of brew/*.list, not a translation of it, so the four
-// decisions that make it an audit are asserted rather than left to a reader
-// diffing two files by eye.
+// wantFormulae and wantCasks are the Brewfile's complete expected contents.
+//
+// The whole set is pinned, not only the audit's deltas, because the brew/*.list
+// files that used to be the record were deleted in the same commit that created
+// this file. The Brewfile is now the only record of what this workstation
+// installs, and a test that checked four decisions would pass while `brew "fish"`
+// quietly disappeared -- taking the login shell the fish phase requires with it.
+var (
+	wantFormulae = []string{
+		// Languages, runtimes and build tools.
+		"bazelisk", "boost", "fish", "go", "node", "rustup-init", "tmux", "yarn",
+		// Command-line utilities.
+		"bat", "bingrep", "btop", "diff-so-fancy", "dua-cli", "fd", "fzf",
+		"git-delta", "git-interactive-rebase-tool", "gitleaks", "jql", "jump",
+		"lsd", "procs", "re2", "ripgrep", "starship", "tokei", "uv", "yt-dlp",
+		"zstd",
+	}
+	wantCasks = []string{"macfuse", "mactex", "font-symbols-only-nerd-font"}
+)
+
+// The Brewfile is an AUDIT of brew/*.list, not a translation of it. Its complete
+// contents are pinned first; the four decisions that make it an audit are then
+// asserted separately, because those assertions carry the REASON each decision
+// was made and a set comparison cannot.
 func TestBrewfileCarriesTheAudit(t *testing.T) {
 	body := readBrewfile(t)
+
+	assertSameSet(t, "formulae", body.brews, wantFormulae)
+	assertSameSet(t, "casks", body.casks, wantCasks)
 
 	for _, want := range []string{"gitleaks", "uv"} {
 		if !slices.Contains(body.brews, want) {
@@ -433,6 +569,38 @@ func TestBrewfileGuardsEveryCaskWithOSMac(t *testing.T) {
 	for _, line := range body.unguardedCasks {
 		t.Errorf("cask line %q is outside the `if OS.mac?` guard; on Linux it does "+
 			"not merely fail, it aborts the entire bundle", line)
+	}
+}
+
+// assertSameSet reports what was added and what went missing, rather than
+// printing two lists and leaving the reader to diff them. A Brewfile change is
+// almost always one or two names, and naming them is the difference between a
+// failure that explains itself and one that has to be investigated.
+func assertSameSet(t *testing.T, what string, got, want []string) {
+	t.Helper()
+	var missing, unexpected []string
+	for _, name := range want {
+		if !slices.Contains(got, name) {
+			missing = append(missing, name)
+		}
+	}
+	for _, name := range got {
+		if !slices.Contains(want, name) {
+			unexpected = append(unexpected, name)
+		}
+	}
+	if len(missing) > 0 {
+		t.Errorf("%s missing from the Brewfile: %v\nthe brew/*.list files that used "+
+			"to record this were deleted; this file is now the only record",
+			what, missing)
+	}
+	if len(unexpected) > 0 {
+		t.Errorf("%s in the Brewfile but not in the audit: %v\nadd them here "+
+			"deliberately, with the reason, or drop them", what, unexpected)
+	}
+	if len(got) != len(want) {
+		t.Errorf("%s: the Brewfile declares %d, the audit expects %d",
+			what, len(got), len(want))
 	}
 }
 

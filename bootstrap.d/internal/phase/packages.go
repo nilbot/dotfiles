@@ -151,6 +151,18 @@ func homebrew(c Context) (string, error) {
 // LookPath is retried first anyway: it costs nothing, and it is right in the one
 // case the probe list cannot cover -- a machine whose PATH already contained a
 // Homebrew prefix that had no brew in it until just now.
+//
+// ACCEPTED LIMITATION: `plan` cannot preview a machine that has no Homebrew yet.
+// Under `plan` the installer above reaches Planner.Run, which records it and
+// executes nothing, so this probe finds nothing and the phase stops with the
+// error below. That is not an oversight and must not be "fixed" by falling back
+// to the bare name: this function cannot distinguish "the installer ran and
+// produced nothing" from "the installer was recorded, not run", and the only
+// general way to tell them apart is a per-operation "was this performed" signal
+// on Machine -- a mode flag every phase could then branch on, which is the
+// erosion the dry-run invariant exists to prevent. Known, loud and documented
+// beats silently planning against a brew that is not there.
+// TestPackagesRefusesUnderPlanOnAMachineWithNoHomebrew pins it.
 func resolveBrew(c Context) (string, error) {
 	if path, err := c.Change.LookPath("brew"); err == nil {
 		c.logf("   homebrew    installed; %s", path)
@@ -158,8 +170,15 @@ func resolveBrew(c Context) (string, error) {
 	}
 	for _, candidate := range brewLocations {
 		info, err := c.Change.Lstat(candidate)
+		// Continue rather than return. An unreadable candidate is not an answer
+		// about the others, and abandoning the list on the first error means an
+		// EACCES on /opt -- which a hardened Linux box can have -- stops the walk
+		// before it ever reaches /home/linuxbrew. Only a candidate that Lstats
+		// cleanly can win; the error is reported so it is not lost.
 		if err != nil {
-			return "", err
+			c.logf("   homebrew    %s could not be read (%v); trying the next prefix",
+				candidate, err)
+			continue
 		}
 		if info.Exists {
 			c.logf("   homebrew    installed; %s (not yet on PATH -- Homebrew's "+

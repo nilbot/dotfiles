@@ -210,13 +210,24 @@ type fakeChange struct {
 	links       map[string]string
 	files       map[string][]byte
 	lookPathErr map[string]bool
-	failOn      string // when a mutation's target contains this, return a Refusal
-	Ops         []string
+	// lstatErr makes a path UNREADABLE rather than absent, which is a different
+	// answer and one a real filesystem gives often enough to matter: an EACCES on
+	// a directory component yields an error, not FileInfo{}. Code that treats the
+	// two the same -- or that abandons a search on the first error -- can only be
+	// caught by a fake that can tell them apart.
+	lstatErr map[string]bool
+	failOn   string // when a mutation's target contains this, return a Refusal
+	Ops      []string
 }
 
-func (f *fakeChange) Lstat(p string) (change.FileInfo, error) { return f.info[p], nil }
-func (f *fakeChange) Readlink(p string) (string, error)       { return f.links[p], nil }
-func (f *fakeChange) ReadFile(p string) ([]byte, error)       { return f.files[p], nil }
+func (f *fakeChange) Lstat(p string) (change.FileInfo, error) {
+	if f.lstatErr[p] {
+		return change.FileInfo{}, errPermission
+	}
+	return f.info[p], nil
+}
+func (f *fakeChange) Readlink(p string) (string, error) { return f.links[p], nil }
+func (f *fakeChange) ReadFile(p string) ([]byte, error) { return f.files[p], nil }
 func (f *fakeChange) LookPath(n string) (string, error) {
 	if f.lookPathErr[n] {
 		return "", errNotFound
@@ -287,4 +298,10 @@ func (f *fakeChange) WriteFile(p string, data []byte) error {
 	return nil
 }
 
-var errNotFound = errors.New("not found")
+var (
+	errNotFound = errors.New("not found")
+	// errPermission is what an unreadable path answers -- an EACCES on a
+	// directory component, which is a refusal to answer rather than an answer of
+	// "absent".
+	errPermission = errors.New("permission denied")
+)
