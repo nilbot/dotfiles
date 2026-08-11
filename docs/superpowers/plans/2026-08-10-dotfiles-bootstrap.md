@@ -2958,7 +2958,121 @@ already tested in the module that owns it."
 
 ---
 
-### Tasks 12 through 16
+### Task 12: The packages phase and the Brewfile
+
+**Files:**
+- Modify: `bootstrap.d/internal/phase/packages.go` (replaces the Task 3 stub)
+- Create: `bootstrap.d/Brewfile`
+- Delete: `super-install-dep.sh`, `user-install-dep.sh`, `brew/`
+- Test: `bootstrap.d/internal/phase/packages_test.go`
+
+**Interfaces:** `phase.Packages(Context) error`. No new types.
+
+**Stage zero installs only what Homebrew itself needs; one Brewfile covers
+everything above it on both platforms.** Per-distro native lists — what
+`super-install-dep.sh` does today — mean two or three manifests kept in sync
+across distros whose package names disagree (`fd` vs `fd-find`, `bat` vs
+`batcat`).
+
+Order:
+
+1. **Linux only** — `Sudo("apt-get", "update")` then
+   `Sudo("apt-get", "install", "-y", "build-essential", "curl", "file", "git")`,
+   or `Sudo("pacman", "-S", "--needed", "--noconfirm", "base-devel", "curl", "file", "git")`.
+   Choose by `LookPath`. Refuse, naming both, if neither is present.
+   **On darwin this step does not run at all.**
+2. **Homebrew** — if `LookPath("brew")` succeeds, log and skip. Otherwise run
+   its official installer. This is the **only** place this design executes
+   remote code; it runs solely when `brew` is absent, and it is skipped entirely
+   in plan mode because `Planner.Run` records rather than executes.
+3. **`Run("brew", "bundle", "--file", <root>/bootstrap.d/Brewfile)`.**
+
+**The Brewfile is an audit, not a translation** of `brew/brew-*.list`:
+
+- **`micromamba` goes** — superseded by `uv`, and Task 10 reclaims its install.
+- **`youtube-dl` goes** — unmaintained since 2021; `yt-dlp` is the live fork.
+- **`gitleaks` is added** — spec 1's `agents guard --staged` shells out to it and
+  blocks the commit without it, and nothing ever declared it.
+- **`uv` is added** — the devtools phase requires it.
+- **Casks are guarded by `OS.mac?`.** An unguarded `cask` line aborts the whole
+  bundle on Linux.
+- `font-symbols-only-nerd-font` replaces the vendored `install-font-linux.sh`
+  that Task 14 removes.
+
+```ruby
+brew "bazelisk"
+brew "boost"
+brew "fish"
+brew "go"
+brew "node"
+brew "rustup-init"
+brew "tmux"
+brew "yarn"
+
+brew "bat"
+brew "bingrep"
+brew "btop"
+brew "diff-so-fancy"
+brew "dua-cli"
+brew "fd"
+brew "fzf"
+brew "git-delta"
+brew "git-interactive-rebase-tool"
+brew "gitleaks"
+brew "jql"
+brew "jump"
+brew "lsd"
+brew "procs"
+brew "re2"
+brew "ripgrep"
+brew "starship"
+brew "tokei"
+brew "uv"
+brew "yt-dlp"
+brew "zstd"
+
+if OS.mac?
+  cask "macfuse"
+  cask "mactex"
+  cask "font-symbols-only-nerd-font"
+end
+```
+
+**Tests drive the fake `Machine` only.** Assert: darwin skips stage zero
+entirely; linux with `apt-get` produces the apt ops and not pacman, and vice
+versa; neither present refuses naming both; `brew` present skips the installer;
+`brew bundle` is always last and names the Brewfile by absolute path. Also
+assert the Brewfile parses as the audit describes — `gitleaks` and `uv` present,
+`micromamba` and `youtube-dl` absent, every `cask` inside the `OS.mac?` guard.
+
+**Then delete `super-install-dep.sh`, `user-install-dep.sh` and `brew/`** in the
+same commit. Their content is now here. For the record, all three were broken:
+`user-install-dep.sh` read `brew/brew-cask.list` while the file was
+`brew-casks.list`, called the long-removed `brew cask install`, and installed
+Homebrew from the retired ruby `master`-branch URL.
+
+```bash
+git add bootstrap.d/internal/phase bootstrap.d/Brewfile
+git rm super-install-dep.sh user-install-dep.sh
+git rm -r brew/
+git commit -m "feat(bootstrap): unify packages on Homebrew for both platforms
+
+The native package manager now installs only Homebrew's own
+prerequisites; one Brewfile covers everything above that on macOS and
+Linux alike.
+
+Replaces super-install-dep.sh and user-install-dep.sh, which were broken
+three ways: user-install-dep.sh read brew/brew-cask.list while the file
+was brew-casks.list, called the long-removed 'brew cask install', and
+installed Homebrew from the retired ruby master-branch URL.
+
+Audit: micromamba and youtube-dl removed; gitleaks and uv added, both
+required by tooling that had never declared them."
+```
+
+---
+
+### Tasks 13 through 16
 
 The remaining tasks are unchanged in *intent* from the shell plan; only their
 implementation language differs. Each follows the same shape: write the failing
@@ -2995,7 +3109,7 @@ from an experimental tree is not a supported workflow; the failure is visible
 rather than silent, which is the standard this design holds itself to.
 | 9 | `migrate`: reconciling | `internal/migrate/`, `main.go`, `preflight.go` | `fish` and `gitconfig` migrations. Fish **copies before removing** so an interrupt leaves the old state intact. Preflight refuses when one is pending and names `bootstrap migrate` |
 | 10 | `migrate`: reclaiming | `internal/migrate/` | `mambaforge`. Never runs from a bare `migrate`; bare `migrate` **lists** it with the exact command. Refuses if `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip` resolves inside it |
-| 11 | Devtools phase | `internal/phase/devtools.go` | `uv`; build `agents`; **delegate** git hooks to `git/install-hooks.sh` with `install <root> <home> <root>/../bin/agents`. Test asserts the invocation, not hook installation |
+| 11 | Devtools phase | `internal/phase/devtools.go` | `uv`; build `agents`; **delegate** git hooks to `git/install-hooks.sh` with `<root> <home> <home>/bin/agents` — the binary is `<home>/bin/agents`, NOT `<root>/../bin/agents`, which are only the same path when the checkout is at `~/dotfiles`. Test asserts the invocation, not hook installation |
 | 12 | Packages phase + Brewfile | `internal/phase/packages.go`, `Brewfile` | Native stage zero (`build-essential`/`base-devel`) then Homebrew then `brew bundle`. Audit: drop `micromamba` and `youtube-dl`; **add `gitleaks` and `uv`**, both required by tooling that never declared them. Casks guarded by `OS.mac?`. Removes `super-install-dep.sh`, `user-install-dep.sh`, `brew/` |
 | 13 | Fish phase | `internal/phase/fish.go` | `/etc/shells` via `tee -a`; `chsh` only when the login shell is not already fish; explicit fisher install. Refuses if fish is absent, naming the packages phase |
 | 14 | Removal campaign | many | One commit per group, each naming what was removed and the `git show <sha>:<path>` recovery. Groups: zsh, tools, conda/mamba, stale scripts, softlinks+fonts, bin, spacemacs/gnupg/iterm2, go.pre-commit |
