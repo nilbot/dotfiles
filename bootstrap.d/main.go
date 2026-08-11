@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 	"github.com/nilbot/dotfiles/bootstrap/internal/check"
@@ -112,6 +114,94 @@ func currentUser() string {
 	return os.Getenv("USER")
 }
 
+// commandOutput runs a command and returns what it wrote to standard output.
+// loginShell takes one of these rather than calling exec itself so its parsing
+// and its fallbacks can be exercised without running dscl or getent against the
+// accounts of whatever machine the suite is on.
+type commandOutput func(name string, args ...string) ([]byte, error)
+
+// runCommand is the real commandOutput. Standard error is discarded rather
+// than combined: a run that falls back to the hint cleanly must not also spray
+// a tool's diagnostic through the middle of a plan, and nothing written there
+// is part of the answer.
+func runCommand(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).Output()
+}
+
+// loginShell reports the shell this account logs in with, which is a property
+// of the passwd database and not of this process.
+//
+// hint is $SHELL, and it is ONLY a hint: it is inherited from whatever process
+// started this one, so a bootstrap run launched from a zsh terminal reports
+// /bin/zsh on a machine whose passwd entry has said /opt/homebrew/bin/fish for
+// months. That is what happened -- `check` reported a false login-shell failure
+// ("the login shell is /bin/zsh, not fish; run './bootstrap apply workstation'")
+// on a machine already provisioned exactly as this repository intends, purely
+// because of which shell the run was started from. $SHELL describes the
+// session; the passwd database describes the account, and the account is what
+// the login-shell check and the fish phase are both about.
+//
+// Go's os/user deliberately exposes no shell field, so the database is read
+// through the platform's own tool. Every way that can fail -- the tool absent,
+// a non-zero exit, output that does not parse, an empty shell field -- falls
+// back to the hint, which is a worse answer than the database and a far better
+// one than none: check reads an empty shell as "the login shell cannot be
+// determined at all".
+func loginShell(read commandOutput, plat, name, hint string) string {
+	var argv []string
+	switch {
+	// No name, no record: `dscl . -read /Users/ UserShell` and `getent passwd ""`
+	// ask about an account that does not exist, and running a command to be told
+	// so is still running a command during a plan.
+	case name == "":
+		return hint
+	case plat == "darwin":
+		argv = []string{"dscl", ".", "-read", "/Users/" + name, "UserShell"}
+	case plat == "linux":
+		argv = []string{"getent", "passwd", name}
+	default:
+		return hint
+	}
+	out, err := read(argv[0], argv[1:]...)
+	if err != nil {
+		return hint
+	}
+	if shell := parseLoginShell(plat, string(out)); shell != "" {
+		return shell
+	}
+	return hint
+}
+
+// parseLoginShell reads the shell out of one tool's output, answering "" for
+// anything it does not recognise -- which the caller reads as "use the hint".
+//
+// Neither format is matched loosely. dscl can print its DS Error for a record
+// it cannot find on standard output, and a passwd line can arrive truncated; a
+// parser that returned whatever it found would hand the login-shell check a
+// path that is not a shell, and the check would then fail while naming it.
+func parseLoginShell(plat, out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		switch plat {
+		case "darwin":
+			// `UserShell: /opt/homebrew/bin/fish`. dscl prints the key alone with
+			// the value indented beneath it when the value contains a space; no
+			// shell path here does, and answering "" sends such a machine to the
+			// hint rather than to a wrong path.
+			if rest, found := strings.CutPrefix(line, "UserShell:"); found {
+				return strings.TrimSpace(rest)
+			}
+		case "linux":
+			// name:x:uid:gid:gecos:home:shell -- seven fields, the shell last. A
+			// line with fewer is truncated rather than short, and reaching for its
+			// final field would return the home directory.
+			if fields := strings.Split(line, ":"); len(fields) == 7 {
+				return strings.TrimSpace(fields[6])
+			}
+		}
+	}
+	return ""
+}
+
 func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 	phases, err := phase.For(profile)
 	if err != nil {
@@ -135,10 +225,12 @@ func runProfile(verb, profile string, stdout, stderr io.Writer) int {
 		machine = change.NewPlanner(applier, stdout, repoRoot)
 	}
 
+	name := currentUser()
 	ctx := phase.Context{
 		Change: machine, Root: repoRoot, Home: os.Getenv("HOME"),
-		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"),
-		User: currentUser(), Out: stdout,
+		Platform: plat, Profile: profile,
+		Shell: loginShell(runCommand, plat, name, os.Getenv("SHELL")),
+		User:  name, Out: stdout,
 	}
 	for _, p := range phases {
 		if err := p.Run(ctx); err != nil {
@@ -201,7 +293,8 @@ func runCheck(profile string, stdout, stderr io.Writer) int {
 	// internal/check's package comment.
 	results, err := check.All(check.Context{
 		Change: change.NewApplier(stdout, repoRoot), Root: repoRoot, Home: home,
-		Platform: plat, Profile: profile, Shell: os.Getenv("SHELL"),
+		Platform: plat, Profile: profile,
+		Shell: loginShell(runCommand, plat, currentUser(), os.Getenv("SHELL")),
 	})
 	fmt.Fprintln(stdout, "== check")
 	check.Write(stdout, results)

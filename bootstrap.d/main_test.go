@@ -81,9 +81,25 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...
 	return stdout.String(), stderr.String(), code
 }
 
-// stubToolDir holds the two commands a shim case must never reach on the
-// developer's own machine -- `brew` and `fish` -- prepended to PATH by
-// runShimIn.
+// stubLoginShell is what the stub user-database tools report, and it is
+// deliberately not fish: the cases that plan a chsh need a machine whose login
+// shell is something else, and pinning it here is what makes them say the same
+// thing on every machine.
+const stubLoginShell = "/bin/bash"
+
+// stubToolDir holds the commands a shim case must never reach on the
+// developer's own machine -- `brew`, `fish`, and the two user-database tools --
+// prepended to PATH by runShimIn.
+//
+// dscl and getent are EXECUTED, by every verb: main reads the account's login
+// shell from the passwd database, because $SHELL is inherited and describes the
+// session rather than the account. Without these stubs each case would report
+// whatever the developer's own passwd entry says -- fish on the machine this
+// repository provisions, something else in CI, nothing at all in a container
+// with no entry for the running uid -- and the cases below that turn on the
+// login shell would pass or fail accordingly. They answer stubLoginShell in the
+// shape the real tools use: `UserShell: <path>` for dscl, a seven-field passwd
+// line for getent.
 //
 // brew is EXECUTED. It only ever answers `brew bundle check`, which reads and
 // reports. Exit 0 -- "every Brewfile entry is installed" -- is the choice that
@@ -110,6 +126,8 @@ func stubToolDir(t *testing.T) string {
 		"brew": "#!/bin/sh\nexit 0\n",
 		"fish": "#!/bin/sh\n" +
 			"echo \"stub fish executed with: $*\" >&2\nexit 127\n",
+		"dscl":   "#!/bin/sh\nprintf 'UserShell: %s\\n' " + stubLoginShell + "\n",
+		"getent": "#!/bin/sh\nprintf 'stub:x:1000:1000::/home/stub:%s\\n' " + stubLoginShell + "\n",
 	} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -268,19 +286,24 @@ func TestDotfilesProfileSkipsPrivilegedPhases(t *testing.T) {
 // else covers the wiring from main to phase.Context, because every phase test
 // supplies User itself.
 //
-// Both variables are overridden for the fixture to discriminate at all. SHELL,
-// because the phase plans a chsh only when the login shell is not already fish,
-// which on the machine this repository provisions it is. USER, because it is
-// inherited and can name someone else entirely -- after `sudo -E`, or a
-// container started with `docker exec -u` -- while the shell being changed
-// belongs to the account this process actually runs as.
+// USER is overridden for the fixture to discriminate at all: it is inherited
+// and can name someone else entirely -- after `sudo -E`, or a container started
+// with `docker exec -u` -- while the shell being changed belongs to the account
+// this process actually runs as.
+//
+// SHELL is overridden to fish, which is the WRONG answer here: the stub user
+// database says stubLoginShell, so a chsh is due, and main reading $SHELL
+// instead would report the login shell as already fish and plan nothing at all.
+// That is the second half of this case -- the login shell reaching the phase
+// from the passwd database and not from the environment -- and it is why the
+// chsh lines being absent is a failure rather than a skip.
 func TestPlanNamesTheCurrentUserWhenItChangesTheLoginShell(t *testing.T) {
 	me, err := user.Current()
 	if err != nil {
 		t.Skipf("no passwd entry for this process: %v", err)
 	}
 	stdout, stderr, code := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"),
-		tempHome(t), []string{"SHELL=/bin/bash", "USER=somebodyelse"},
+		tempHome(t), []string{"SHELL=/opt/homebrew/bin/fish", "USER=somebodyelse"},
 		"plan", "workstation")
 	if code != 0 {
 		t.Fatalf("exit %d:\n%s%s", code, stdout, stderr)
@@ -292,13 +315,47 @@ func TestPlanNamesTheCurrentUserWhenItChangesTheLoginShell(t *testing.T) {
 		}
 	}
 	if len(lines) == 0 {
-		t.Fatalf("a login shell that is not fish must plan a chsh:\n%s", stdout)
+		t.Fatalf("the passwd database says the login shell is %s, so a chsh must be "+
+			"planned; $SHELL says fish and is inherited from whoever started the "+
+			"run:\n%s", stubLoginShell, stdout)
 	}
 	for _, line := range lines {
 		if !strings.HasSuffix(strings.TrimSpace(line), " "+me.Username) {
 			t.Errorf("chsh must end in this account's login name (%s), not $USER "+
 				"and not nothing at all: %s", me.Username, line)
 		}
+	}
+}
+
+// The other context main builds, and the defect this all came from: `check`
+// read $SHELL, which is inherited from whatever started the run, and so
+// reported a login-shell failure naming the terminal's shell on a machine whose
+// account had been fish for months.
+//
+// SHELL is set to fish and the stub user database says stubLoginShell, so the
+// two answers cannot be confused: the row must name the database's. A `check`
+// still reading the environment would report the shell it was handed -- fish --
+// and this case would see the wrong path in the detail.
+//
+// The detail is read rather than the status. Both answers here happen to be a
+// failing row, for opposite reasons, so a status alone would not tell them
+// apart.
+func TestCheckReadsTheLoginShellFromThePasswdDatabase(t *testing.T) {
+	stdout, stderr, _ := runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"),
+		tempHome(t), []string{"SHELL=/opt/homebrew/bin/fish"}, "check", "workstation")
+
+	var row string
+	for _, line := range strings.Split(stdout, "\n") {
+		if fields := strings.Fields(line); len(fields) > 1 && fields[1] == "login-shell" {
+			row = line
+		}
+	}
+	if row == "" {
+		t.Fatalf("no login-shell row:\n%s%s", stdout, stderr)
+	}
+	if !strings.Contains(row, stubLoginShell) {
+		t.Errorf("login-shell reports %q; it must name the login shell the passwd "+
+			"database gives (%s), not the inherited $SHELL", row, stubLoginShell)
 	}
 }
 
