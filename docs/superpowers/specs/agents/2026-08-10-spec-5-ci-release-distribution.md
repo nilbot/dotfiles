@@ -90,9 +90,15 @@ exists because an unkeyed cache let a clone and a worktree share one binary and 
 old code against a new tree, silently (spec 2, shim defect 2). Under a release, the
 same property has to be carried by a checksum plus a version the binary reports back.
 
-This spec must therefore decide what it publishes: `agents`, `bootstrap`, or both.
-They are separate modules and separate binaries, and only `bootstrap` is on the
-stage-zero path.
+**Decided 2026-08-11 (human): this spec publishes both binaries, and any later one
+on the same terms.** They are separate modules producing separate binaries, and only
+`bootstrap` is on the stage-zero path — but publishing one and not the other would
+leave half the repository's executables installed by a mechanism the other does not
+use, which is the two-entry-points problem spec 2 removed from provisioning.
+
+Verification, versioning, checksums and the upgrade path are therefore per-binary
+concerns to be solved once and applied to each, not a pipeline built around
+`agents` with `bootstrap` bolted on. A third binary should need no new decisions.
 
 ### The Go gate that no longer exists anywhere
 
@@ -317,8 +323,10 @@ a checkout the runner placed.
   weakening its current exact-identity checks?
 - Should Doctor report only version mismatch, or also offer a non-mutating command
   that explains the reviewed upgrade path?
-- Is `bootstrap` published at all, or does spec 2's build-from-checkout floor remain
-  the only way to run it?
+- ~~Is `bootstrap` published at all?~~ **Answered 2026-08-11: both binaries are
+  published, on the same terms, and so is any later one.** What remains open is
+  whether spec 2's build-from-checkout path stays as a documented fallback once a
+  release exists, or becomes development-only.
 - Which Linux distributions does a CI runner actually verify? Spec 2 targets
   Debian/Ubuntu and Arch/Manjaro on paper and leaves the question open; a runner
   image answers it in practice, which makes this spec's choice the de facto one.
