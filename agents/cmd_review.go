@@ -1,0 +1,317 @@
+package main
+
+import (
+	"bytes"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/handoff"
+	"github.com/nilbot/dotfiles/agents/internal/memory"
+	"github.com/nilbot/dotfiles/agents/internal/queue"
+	"github.com/nilbot/dotfiles/agents/internal/repo"
+)
+
+// runReview is where an unreviewed draft becomes tracked knowledge, or stops
+// existing.
+//
+// There is deliberately no --keep --all. Pending drafts are surfaced to agents,
+// and an agent able to promote in bulk closes the review loop with no human in
+// it, which is the whole thing this design is for. Requiring one id per
+// promotion leaves an agent exactly one move -- show the drafts and ask -- so
+// the selecting happens in conversation, where the context is, while the queue
+// is what lets that conversation survive being interrupted for three days.
+func runReview(args []string, stdout io.Writer) int {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	fs.SetOutput(stdout)
+	laneFlag := fs.String("lane", "", "only this lane")
+	show := fs.String("show", "", "print one draft")
+	keep := fs.String("keep", "", "promote one draft: write, reindex, and commit it")
+	bin := fs.String("bin", "", "delete one draft")
+	edit := fs.String("edit", "", "open one draft in $EDITOR")
+	if err := fs.Parse(args); err != nil {
+		return exitcode.Malformed
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stdout, "usage: agents review [--lane <l>] [--show|--keep|--bin|--edit <id>]")
+		return exitcode.Malformed
+	}
+	chosen := 0
+	for _, f := range []string{*show, *keep, *bin, *edit} {
+		if f != "" {
+			chosen++
+		}
+	}
+	if chosen > 1 {
+		fmt.Fprintln(stdout, "agents review: --show, --keep, --bin and --edit are one at a time")
+		return exitcode.Malformed
+	}
+
+	rc, agentsDir, store, code := storeHere(stdout)
+	if code != exitcode.OK {
+		return code
+	}
+
+	switch {
+	case *show != "":
+		return reviewShow(store, *show, stdout)
+	case *bin != "":
+		return reviewBin(store, *bin, stdout)
+	case *edit != "":
+		return reviewEdit(store, *edit, stdout)
+	case *keep != "":
+		return reviewKeep(rc, agentsDir, store, *keep, stdout)
+	default:
+		return reviewList(store, *laneFlag, stdout)
+	}
+}
+
+func reviewList(store, lane string, stdout io.Writer) int {
+	drafts, err := queue.List(store)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	shown := 0
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "ID\tKIND\tWHEN\tSUBJECT")
+	for _, d := range drafts {
+		if lane != "" && d.Lane != lane {
+			continue
+		}
+		shown++
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n",
+			tableCell(d.ID), tableCell(d.Kind),
+			d.When.UTC().Format("2006-01-02 15:04"), tableCell(d.Subject))
+	}
+	_ = tw.Flush()
+	if shown == 0 {
+		fmt.Fprintln(stdout, "no drafts pending review")
+		return exitcode.OK
+	}
+	// Advisory, not OK: there is something here to decide about, and a script
+	// has to be able to tell "nothing pending" from "several waiting".
+	fmt.Fprintf(stdout, "%d draft(s) pending; `agents review --show <id>` to read one\n", shown)
+	return exitcode.Advisory
+}
+
+func reviewShow(store, id string, stdout io.Writer) int {
+	d, err := queue.Get(store, id)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	fmt.Fprintf(stdout, "id:      %s\nkind:    %s\nlane:    %s\nsession: %s\nwhen:    %s\n",
+		tableCell(d.ID), tableCell(d.Kind), tableCell(d.Lane), tableCell(d.Session),
+		d.When.UTC().Format(time.RFC3339))
+	if d.Subject != "" {
+		fmt.Fprintf(stdout, "subject: %s\n", tableCell(d.Subject))
+	}
+	if d.Kind == queue.KindMemory {
+		fmt.Fprintf(stdout, "name:    %s\ntype:    %s\ndesc:    %s\n",
+			tableCell(d.Name), tableCell(d.Type), tableCell(d.Description))
+	}
+	fmt.Fprintf(stdout, "\n%s\n", d.Body)
+	return exitcode.OK
+}
+
+func reviewBin(store, id string, stdout io.Writer) int {
+	if _, err := queue.Get(store, id); err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if err := queue.Remove(store, id); err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// Nothing tracked records the rejection. A draft nobody wanted is not a
+	// decision the repository needs to carry.
+	fmt.Fprintf(stdout, "binned %s\n", tableCell(id))
+	return exitcode.OK
+}
+
+func reviewEdit(store, id string, stdout io.Writer) int {
+	path, err := queue.Path(store, id)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if _, err := queue.Get(store, id); err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		fmt.Fprintf(stdout, "agents review: $EDITOR is unset; the draft is at %s\n", tableCell(path))
+		return exitcode.Malformed
+	}
+	cmd := exec.Command(editor, path)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	// Re-read so a mangled edit is reported now rather than at promotion.
+	d, err := queue.Get(store, id)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: the edited draft no longer parses: %v\n", err)
+		return exitcode.Malformed
+	}
+	if err := queue.Validate(d); err != nil {
+		fmt.Fprintf(stdout, "agents review: the edited draft is incomplete: %v\n", err)
+		return exitcode.Malformed
+	}
+	fmt.Fprintf(stdout, "edited %s; `agents review --keep %s` to promote it\n", tableCell(id), tableCell(id))
+	return exitcode.OK
+}
+
+// reviewKeep promotes one draft in a single act.
+//
+// The order is chosen so that nothing reaches the tracked tree before it has
+// been validated, and nothing leaves the queue before it is committed. A
+// failure at any step leaves the draft recoverable, which is the property that
+// makes "promotion is one act" true rather than merely convenient.
+func reviewKeep(rc *repo.Context, agentsDir, store, id string, stdout io.Writer) int {
+	d, err := queue.Get(store, id)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if err := queue.Validate(d); err != nil {
+		// Malformed, and the queue is untouched. Synthesising the missing
+		// fields here would put a guessed slug and description into the tracked
+		// tree at the one moment nobody is reading carefully.
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.Malformed
+	}
+
+	op, err := repo.InProgress(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if op != "" {
+		fmt.Fprintf(stdout, "agents review: a `git %s` is in progress, and a commit scoped to .agents/ is not safe during one. %s, then promote again.\n", op, inProgressRemedy(op))
+		return exitcode.NoRecord
+	}
+
+	if d.Kind == queue.KindMemory {
+		if warn := offDefaultBranchWarning(rc); warn != "" {
+			// Warn and proceed. Refusing would block the case where the
+			// knowledge came FROM this branch's work and belongs in its merge;
+			// silently retargeting the default branch would commit to a branch
+			// the user is not on.
+			fmt.Fprintln(stdout, warn)
+		}
+	}
+
+	path, err := promote(agentsDir, d)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	subject := d.Subject
+	if subject == "" {
+		subject = fmt.Sprintf("%s: promote a reviewed draft from %s", d.Kind, d.Lane)
+	}
+	if out, err := repo.Git(rc.Root, "add", "--", ".agents"); err != nil {
+		fmt.Fprintf(stdout, "agents review: git add: %v\n%s", err, out)
+		return exitcode.NoRecord
+	}
+	out, err := repo.Git(rc.Root, "commit", "-m", subject, "--", ".agents")
+	fmt.Fprint(stdout, out)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: the draft is at %s and still queued; nothing was lost\n", tableCell(path))
+		return exitcode.NoRecord
+	}
+
+	// Only now. Everything above can fail without costing the draft.
+	if err := queue.Remove(store, id); err != nil {
+		fmt.Fprintf(stdout, "agents review: promoted, but the queued copy could not be removed: %v\n", err)
+		return exitcode.Advisory
+	}
+	fmt.Fprintf(stdout, "promoted %s -> %s\n", tableCell(id), tableCell(path))
+	return exitcode.OK
+}
+
+// promote writes the draft into the tracked tree and regenerates the index it
+// belongs to, in one operation, so the normal path never leaves a stale index
+// for the pre-commit guard to block on.
+func promote(agentsDir string, d queue.Draft) (string, error) {
+	switch d.Kind {
+	case queue.KindHandoff:
+		// StatusReviewed, because a human selected it. The generated index
+		// tells its reader that `draft` means nobody has checked it, and a
+		// promoted note has been checked -- that is what promotion is.
+		path, err := handoff.Write(agentsDir, d.Lane, d.Session, handoff.StatusReviewed, d.Body, d.When)
+		var stale *handoff.IndexError
+		if errors.As(err, &stale) {
+			return path, fmt.Errorf("%w; fix that file and run `agents index`", err)
+		}
+		return path, err
+	case queue.KindMemory:
+		dir := filepath.Join(agentsDir, "memory")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+		fm := memory.Frontmatter{Name: d.Name, Description: d.Description}
+		fm.Metadata.Type = d.Type
+		head, err := yaml.Marshal(fm)
+		if err != nil {
+			return "", err
+		}
+		var b bytes.Buffer
+		b.WriteString("---\n")
+		b.Write(head)
+		b.WriteString("---\n\n")
+		b.WriteString(strings.TrimRight(d.Body, "\n"))
+		b.WriteString("\n")
+		path := filepath.Join(dir, d.Name+".md")
+		if _, err := os.Lstat(path); err == nil {
+			return "", fmt.Errorf("a memory entry named %q already exists; edit it or rename the draft rather than overwriting curated knowledge", d.Name)
+		}
+		if err := os.WriteFile(path, b.Bytes(), 0o644); err != nil {
+			return "", err
+		}
+		if err := memory.WriteIndex(dir); err != nil {
+			return path, err
+		}
+		return path, nil
+	default:
+		return "", fmt.Errorf("draft kind %q cannot be promoted", d.Kind)
+	}
+}
+
+// offDefaultBranchWarning names the branch a repo-wide memory entry is about to
+// land on, when that is not where the rest of the repository can see it.
+func offDefaultBranchWarning(rc *repo.Context) string {
+	head, err := repo.Git(rc.Root, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return ""
+	}
+	branch := strings.TrimSpace(head)
+	if branch == "" || branch == "HEAD" {
+		return ""
+	}
+	def, err := repo.Git(rc.Root, "config", "--get", "init.defaultBranch")
+	fallback := strings.TrimSpace(def)
+	if err != nil || fallback == "" {
+		fallback = "main"
+	}
+	if branch == fallback || branch == "main" || branch == "master" {
+		return ""
+	}
+	return fmt.Sprintf("agents review: a memory entry is repo-wide knowledge and this promotion lands it on %q;"+
+		" it stays invisible to every other lane until that branch merges, and is lost if the branch is abandoned", tableCell(branch))
+}

@@ -26,6 +26,21 @@ var ErrLocalInLinkedWorktree = errors.New("--local is not supported inside a lin
 // rewrites an existing CLAUDE.md, so restoring this marker is not a migration.
 const DoctorInstruction = "Run `agents doctor` early and report any warnings before relying on this context."
 
+// CaptureInstruction is the capture mechanism.
+//
+// The sentence it replaces -- "Write handoffs with `agents handoff write`, not
+// by hand" -- instructs HOW and never WHETHER or WHEN. An agent following it
+// perfectly writes zero handoffs, which is exactly what twenty sessions of this
+// repository produced. That is not a failed instruction; it is an instruction
+// that was never given.
+//
+// Three properties do the work here, and the sentence it replaces has none of
+// them. It names the moment rather than the tool. It bounds the output, because
+// an unbounded ask reads as expensive and gets deferred. And it says the cost
+// is nothing, which is true only because the queue is untracked -- if that ever
+// stops being true, this sentence becomes a lie and the mechanism goes with it.
+const CaptureInstruction = "When a stretch of work concludes — a bug understood, a decision made, an approach abandoned — record it before moving on: at most three bullets, covering what a future agent could not get from the code or the git log. Write it with `agents handoff draft --lane <lane> --session <id>`. Drafts are untracked until you review them, so drafting costs nothing and commits you to nothing."
+
 // ClaudeMD is the trigger, not the payload.
 //
 // It is the only file every harness loads automatically, so it costs context in
@@ -46,8 +61,10 @@ say -- report it rather than working around it.
 
 ` + DoctorInstruction + `
 
-Write handoffs with ` + "`agents handoff write`" + `, not by hand. Commit ` + "`.agents/`" + `
-changes with ` + "`agents save`" + ` so they do not ride along with code changes.
+` + CaptureInstruction + `
+
+Review what has been drafted with ` + "`agents review`" + `; promoting one writes it
+into ` + "`.agents/`" + ` and commits it in the same act.
 `
 
 // gitattributesLines are tracked on purpose: they are a statement about how this

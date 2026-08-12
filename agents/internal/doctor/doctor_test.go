@@ -1,8 +1,11 @@
 package doctor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/nilbot/dotfiles/agents/internal/queue"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"os"
 	"path/filepath"
 	"strings"
@@ -714,12 +717,19 @@ func TestPointerClassesAndMissingMachineIdentity(t *testing.T) {
 	}
 	checks := checkPointers(recs, "m1", t.TempDir())
 	if !strings.Contains(checkByName(t, checks, "pointers:unverified").Detail, "2") ||
-		!strings.Contains(checkByName(t, checks, "pointers:local-unreachable").Detail, "1") ||
 		!strings.Contains(checkByName(t, checks, "pointers:remote").Detail, "m2=2") {
 		t.Fatalf("pointer classes = %+v", checks)
 	}
+	// Locally unreachable pointers are deliberately not a class any more: the
+	// remedy was to win an unwinnable race, and it warned on every healthy
+	// machine every day.
+	for _, c := range checks {
+		if c.Name == "pointers:local-unreachable" {
+			t.Errorf("the unreachable-pointer warning came back: %+v", c)
+		}
+	}
 	withoutID := checkPointers(recs, "", t.TempDir())
-	for _, name := range []string{"pointers:local-unreachable", "pointers:remote"} {
+	for _, name := range []string{"pointers:remote"} {
 		for _, check := range withoutID {
 			if check.Name == name {
 				t.Fatalf("missing machine id misclassified ownership: %+v", withoutID)
@@ -973,11 +983,7 @@ func TestPointersCountACachedTranscriptAsSavedRatherThanUnreachable(t *testing.T
 		lost,
 	}, "m1", cacheRoot)
 
-	unreachable := checkByName(t, checks, "pointers:local-unreachable")
-	if !strings.Contains(unreachable.Detail, "1") {
-		t.Errorf("local-unreachable = %q, want only the one transcript that is "+
-			"genuinely gone; a cached copy is not lost", unreachable.Detail)
-	}
+	_ = lost // reported by no check: unreachable is a normal state now.
 	saved := checkByName(t, checks, "pointers:cached")
 	if saved.Status != OK {
 		t.Errorf("pointers:cached = %+v, want OK: caching worked, and a warning "+
@@ -999,7 +1005,75 @@ func TestPointersReportNoCachedRowWhenNothingWasSaved(t *testing.T) {
 			t.Errorf("pointers:cached appeared with nothing cached: %+v", c)
 		}
 	}
-	if !strings.Contains(checkByName(t, checks, "pointers:local-unreachable").Detail, "1") {
-		t.Errorf("the genuinely lost transcript must still be reported: %+v", checks)
+	for _, c := range checks {
+		if c.Name == "pointers:local-unreachable" {
+			t.Errorf("the unreachable-pointer warning came back: %+v", c)
+		}
+	}
+}
+
+func TestCaptureInstructionCheckReportsItsAbsence(t *testing.T) {
+	root := t.TempDir()
+	// Present.
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(scaffold.ClaudeMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkScaffoldCaptureInstruction(root); got.Status != OK {
+		t.Errorf("with the instruction present: %+v", got)
+	}
+	// Absent. Under the shipped phases this paragraph is the whole capture
+	// mechanism, so its silent absence is the feature silently absent.
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("# nothing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := checkScaffoldCaptureInstruction(root)
+	if got.Status != Warn {
+		t.Errorf("with the instruction missing: %+v, want warn", got)
+	}
+	if got.Remedy == "" {
+		t.Error("the check names no remedy")
+	}
+}
+
+func TestQueueCheckWarnsOnlyPastTheThreshold(t *testing.T) {
+	store := t.TempDir()
+	if got := checkQueue(store, 3); got.Status != OK || !strings.Contains(got.Detail, "no drafts") {
+		t.Errorf("empty queue = %+v", got)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := queue.Write(store, queue.Draft{
+			Kind: queue.KindHandoff, Lane: "master", Session: "s1",
+			When: time.Now().UTC(), Body: "- x\n",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Below the threshold a backlog is news, not a defect.
+	if got := checkQueue(store, 3); got.Status != OK || !strings.Contains(got.Detail, "2") {
+		t.Errorf("two pending under a threshold of three = %+v", got)
+	}
+	if got := checkQueue(store, 2); got.Status != Warn {
+		t.Errorf("at the threshold = %+v, want warn", got)
+	}
+}
+
+func TestStoreSizeCheckWarnsOverTheCap(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "trace-cache", "claude-code")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "a.jsonl"), bytes.Repeat([]byte("x"), 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cache)
+	if got := checkStoreSize(root, 1<<30); got.Status != OK {
+		t.Errorf("under the cap = %+v", got)
+	}
+	got := checkStoreSize(root, 1024)
+	if got.Status != Warn {
+		t.Errorf("over the cap = %+v, want warn", got)
+	}
+	if !strings.Contains(got.Remedy, "--retention") {
+		t.Errorf("the remedy does not name the command that fixes it: %q", got.Remedy)
 	}
 }

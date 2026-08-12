@@ -74,6 +74,8 @@ func run(args []string) int {
 		return runTrace(args[1:], os.Stdout)
 	case "handoff":
 		return runHandoff(args[1:], os.Stdin, os.Stdout)
+	case "review":
+		return runReview(args[1:], os.Stdout)
 	case "index":
 		return runIndex(args[1:], os.Stdout)
 	case "save":
@@ -100,10 +102,13 @@ func usage() {
   wire                        regenerate harness configs (merges, never overwrites)
   doctor                      report wiring, trust evidence, reachability, and lane health
   index                       regenerate memory and handoff indexes
-  save [-m msg]               commit .agents/ paths and nothing else
-  handoff write|prune         lane-scoped handoff management
+  save [-m msg]               commit .agents/ paths and nothing else (escape hatch)
+  handoff write|draft|prune   write a reviewed note, queue an unreviewed one, prune
+  review [--keep|--bin <id>]  read pending drafts; promote one, or bin it
   trace ls|show|cache         query records; read one back; copy reachable ones
   trace cache prune --lane    remove one lane's cached copies (never the records)
+  trace cache prune --retention  evict by age and size
+  trace migrate [--yes]       move a tracked index into the machine-local store
   ls [--prune]                list the fleet on this machine
   update --all [--apply]      rewire every registered repo (dry run by default)
   guard --staged              pre-commit checks (the only command that blocks)

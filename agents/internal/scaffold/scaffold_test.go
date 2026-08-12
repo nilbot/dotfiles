@@ -385,3 +385,26 @@ func TestCreateNoLongerScaffoldsATrackedTraceDirectory(t *testing.T) {
 		t.Error("Create dropped the linguist-generated attribute along with merge=union")
 	}
 }
+
+func TestClaudeMDCarriesTheCaptureInstruction(t *testing.T) {
+	if !strings.Contains(ClaudeMD, CaptureInstruction) {
+		t.Fatal("the scaffolded CLAUDE.md does not carry the capture instruction")
+	}
+	// The three properties the replaced sentence lacked. An instruction that
+	// names the tool and not the moment is what produced zero handoffs in
+	// twenty sessions, so each is asserted rather than assumed.
+	for _, want := range []struct{ property, needle string }{
+		{"names the moment", "concludes"},
+		{"bounds the output", "three bullets"},
+		{"names the command", "agents handoff draft"},
+		{"removes the perceived stake", "untracked"},
+	} {
+		if !strings.Contains(CaptureInstruction, want.needle) {
+			t.Errorf("the capture instruction never %s (no %q)", want.property, want.needle)
+		}
+	}
+	// The old sentence must be gone: it told an agent how and never whether.
+	if strings.Contains(ClaudeMD, "Write handoffs with `agents handoff write`, not by hand") {
+		t.Error("the instruction that produced zero handoffs is still in the scaffold")
+	}
+}
