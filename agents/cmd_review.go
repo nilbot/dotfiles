@@ -66,7 +66,7 @@ func runReview(args []string, stdout io.Writer) int {
 	}
 
 	if *stats {
-		return reviewStats(rc, store, *since, stdout)
+		return reviewStats(rc, store, *laneFlag, *since, stdout)
 	}
 	switch {
 	case *show != "":
@@ -121,7 +121,7 @@ func reviewList(store, lane string, stdout io.Writer) int {
 // available evidence that a turn completed, chosen because anything stronger
 // (files changed, commits made) excludes the read-only debugging session that
 // is exactly where the valuable conclusions come from.
-func reviewStats(rc *repo.Context, store, since string, stdout io.Writer) int {
+func reviewStats(rc *repo.Context, store, lane, since string, stdout io.Writer) int {
 	var window time.Duration
 	if since != "" {
 		d, err := trace.ParseSince(since)
@@ -137,7 +137,10 @@ func reviewStats(rc *repo.Context, store, since string, stdout io.Writer) int {
 		cutoff = now.Add(-window)
 	}
 
-	res, err := trace.Query(store, trace.Filter{Event: "stop", Since: window}, now)
+	// --lane slices per scenario when the experiment runs one branch per
+	// scenario, which is what makes expected-versus-actual mechanical instead
+	// of inferred from subject lines.
+	res, err := trace.Query(store, trace.Filter{Event: "stop", Lane: lane, Since: window}, now)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents review: %v\n", err)
 		return exitcode.NoRecord
@@ -147,7 +150,7 @@ func reviewStats(rc *repo.Context, store, since string, stdout io.Writer) int {
 		sessions = append(sessions, r.SessionID)
 	}
 
-	st, err := queue.Summarize(store, sessions, cutoff)
+	st, err := queue.SummarizeLane(store, sessions, lane, cutoff)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents review: %v\n", err)
 		return exitcode.NoRecord
@@ -156,6 +159,9 @@ func reviewStats(rc *repo.Context, store, since string, stdout io.Writer) int {
 	scope := "all recorded history"
 	if window > 0 {
 		scope = "the last " + since
+	}
+	if lane != "" {
+		scope += ", lane " + tableCell(lane)
 	}
 	fmt.Fprintf(stdout, "capture instruction, over %s\n\n", scope)
 	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)

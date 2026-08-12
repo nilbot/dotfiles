@@ -161,3 +161,32 @@ func TestUnreadableEventLineIsLoudRatherThanSkipped(t *testing.T) {
 		t.Error("an unreadable event line was skipped silently")
 	}
 }
+
+func TestSummarizeLaneSlicesPerScenario(t *testing.T) {
+	store := t.TempDir()
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	for _, e := range []Event{
+		{When: now, Event: EventDrafted, Session: "s-cache", Lane: "s3-cache"},
+		{When: now, Event: EventDrafted, Session: "s-auth", Lane: "s4-auth"},
+	} {
+		if err := AppendEvent(store, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Per-scenario slicing is what makes expected-versus-actual mechanical
+	// instead of inferred from subject lines.
+	st, err := SummarizeLane(store, []string{"s-cache", "s-auth"}, "s3-cache", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Drafted != 1 || st.SessionsDrafted != 1 {
+		t.Fatalf("lane slice = %+v, want only the s3-cache draft", st)
+	}
+	all, err := Summarize(store, []string{"s-cache", "s-auth"}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Drafted != 2 {
+		t.Errorf("unsliced = %+v, want both", all)
+	}
+}

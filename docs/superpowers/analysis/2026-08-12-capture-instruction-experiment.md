@@ -1,118 +1,219 @@
 # Measuring the capture instruction
 
-**Date:** 2026-08-12
-**Status:** run once, 2026-08-12 — see [Results](#results-2026-08-12)
+**Date:** 2026-08-12, redesigned 2026-08-13 after the first run
+**Status:** v2, not yet run. [v1 results](#v1-results-2026-08-12) below.
 **Measures:** [spec 7](../specs/agents/2026-08-12-spec-7-capture-and-review.md) §3a
 **Harness:** [`agents/experiment/capture-setup.sh`](../../../agents/experiment/capture-setup.sh)
-**Reported by:** `agents review --stats`
+**Reported by:** `agents review --stats [--lane <scenario>]`
 
 The question: **does an agent record a durable conclusion when it is asked
 properly?** The baseline is zero — twenty sessions under the previous
 instruction produced no handoffs.
 
-This takes an afternoon, not a week. It replaces the "run it for a working week
-and see" measurement, which was paced by the calendar rather than by work — the
-same defect the trace store had.
+---
+
+## What the instruction actually asks
+
+Everything below is designed against this one sentence from `CLAUDE.md`, because
+v1 was designed against my intuition instead and got a scenario wrong:
+
+> …what a future agent could not get from the code or the git log.
+
+That is a conjunction of two independent facts, and a note is warranted only in
+one of the four cells:
+
+| | a conclusion exists | the code or diff already carries it | note warranted |
+|---|---|---|---|
+| **A** | yes | no | **yes** |
+| **B** | yes | yes | no |
+| **C** | no | — | no |
+
+**B is the case that tests discrimination**, and v1 had exactly one of them —
+misclassified as an A. v2 has three A's and two B's, because a scenario set made
+of easy negatives measures politeness rather than judgement.
 
 ## Setup
-
-Two arms, because a draft rate on its own proves nothing: an agent might record
-conclusions with no instruction at all, and then the paragraph is decoration.
 
 ```bash
 agents/experiment/capture-setup.sh /tmp/cap-treatment
 agents/experiment/capture-setup.sh /tmp/cap-control --no-instruction
 ```
 
-Run these from the dotfiles checkout root. Each takes a second and needs
-`agents` on `PATH`.
+Run from the dotfiles checkout root; each takes a second and needs `agents` on
+`PATH`. The two repositories are identical except for the paragraph under test.
 
-Both repositories are identical except for the paragraph under test. Each has
-`agents init` run and the hooks wired, so `stop` records accumulate and the
-denominator is real.
+Every scenario touches **its own file** so changes never commingle, and runs on
+**its own branch** so the lane names the scenario and the result slices
+mechanically.
 
 ## Running
 
-Start a **fresh Claude Code session per scenario**, `cd` into the arm's
-directory first, and paste the prompt verbatim. Fresh sessions matter: the
-instruction is read at session start, and reusing one session measures its
-memory rather than the instruction.
+For each scenario: a **fresh Claude Code session**, `cd` into the arm's
+directory, create the branch, paste the prompt verbatim.
 
-**Commit after each scenario that changes code.** The instruction's criterion is
-"what a future agent could not get from the code *or the git log*", so leaving
-everything uncommitted removes half of what the agent is asked to weigh against
-— and commingles one scenario's changes with the next. The first run missed
-this: `git log` held only `initial import` throughout.
+Fresh sessions matter — the instruction is read at session start, so reusing a
+session measures its memory instead. Do not tell the agent what is being
+measured.
 
-Run every scenario in both arms. Do not tell the agent what is being measured.
+**Commit after any scenario that changed code, before starting the next.** The
+criterion includes "or the git log", so leaving work uncommitted deletes half of
+what the agent is asked to weigh against. v1 missed this and ran with a git log
+containing only `initial import`.
 
-### Scenario 1 — a fix whose reasoning the diff does carry
+Run **all seven** in the treatment arm. In the control arm run **only the three
+A scenarios** — the risk a control guards against is "the model drafts anyway",
+which is only visible where drafting is warranted.
 
-> `src/retry.py` retries but the backoff never actually delays between
-> attempts. Find out why and fix it.
+---
 
-The `time.sleep` is outside the loop. **Expect no draft**, and read a draft here
-as a false positive.
+### s1-retry — B: the fix explains itself
 
-This expectation was inverted after the first run. It originally read "the fix
-is one line, so the reasoning is invisible in the diff — expect a draft." That
-was wrong: a `sleep` moving inside a loop *is* the explanation, legible to
-anyone reading the diff. The instruction's criterion is "what a future agent
-could not get from the code or the git log", and this fails it.
+```bash
+git checkout -b s1-retry
+```
 
-### Scenario 2 — a unit mismatch found by reading
+> `src/retry.py` retries but the backoff never actually delays between attempts.
+> Find out why and fix it.
 
-> Something is wrong with how timeouts are configured in `src/config.py`.
-> Work out what and explain it. Do not change any code.
+The `time.sleep` sits outside the loop. Moving it in *is* the explanation, fully
+legible in the diff. **Expect no draft.** A draft here is a false positive.
 
-Read-only, no diff at all, and a real conclusion: `REQUEST_TIMEOUT_MS` is in
-milliseconds while its neighbours are seconds. This is the session type the
-whole design is for — valuable, and invisible to git.
+### s2-config — A: read-only, no diff to carry it
+
+```bash
+git checkout -b s2-config
+```
+
+> Something is wrong with how timeouts are configured in `src/config.py`. Work
+> out what and explain it. Do not change any code.
+
+`REQUEST_TIMEOUT_MS` holds a seconds value, and nothing in the repo consumes it,
+so no test can reach it. Zero diff, so the conclusion has no other carrier.
 **Expect a draft.**
 
-### Scenario 3 — nothing worth recording
+### s3-cache — A: the conclusion is an interaction, not a line
 
-> Add a docstring to `fetch_with_retry` describing its parameters.
+```bash
+git checkout -b s3-cache
+```
 
-Mechanical, fully described by the diff, no conclusion.
-**Expect no draft.** A draft here is a false positive and means the instruction
-fires indiscriminately, which is a wording problem.
+> `src/cache.py` is supposed to bound memory two ways: a TTL and a maximum entry
+> count. Under steady traffic it still grows. Explain why. Do not change any
+> code.
 
-### Scenario 4 — a question, not a task
+`get()` refreshes the timestamp on read, so a frequently-read key never expires
+and the LRU-ish eviction never reaches it. The finding spans two methods and
+survives no single line. **Expect a draft.**
 
-> What does `src/config.py` do?
+### s4-auth — A: the reason lives in another file
 
-No work, no conclusion.
+```bash
+git checkout -b s4-auth
+```
+
+> `src/auth.py` refreshes the token when a call fails, but in production the
+> refresh never happens. Work out why. Do not change any code.
+
+`docs/vendor.md` records that this vendor returns **403** for expired
+credentials, not 401, so the `== 401` branch can never fire. The conclusion is a
+cross-file fact about an external system. **Expect a draft.**
+
+### s5-pool — B: an off-by-one whose fix explains itself
+
+```bash
+git checkout -b s5-pool
+```
+
+> `src/pool.py` is configured with `max_size=10` but callers report exhaustion
+> at nine connections. Fix it.
+
+`< self._max_size - 1`. The corrected comparison carries the whole story.
 **Expect no draft.**
+
+### s6-parser — C: mechanical, no conclusion
+
+```bash
+git checkout -b s6-parser
+```
+
+> Add type hints to the functions in `src/parser.py`.
+
+**Expect no draft.**
+
+### s7-question — C: no work at all
+
+```bash
+git checkout -b s7-question
+```
+
+> What does `src/parser.py` do?
+
+**Expect no draft.**
+
+---
 
 ## Reading the result
 
 ```bash
 cd /tmp/cap-treatment && agents review --stats
 cd /tmp/cap-control   && agents review --stats
+
+# per scenario
+agents review --stats --lane s3-cache
 ```
 
-Then review what was drafted, which is the part no number can answer:
+Score it as a confusion matrix over the seven treatment scenarios:
 
-```bash
-agents review              # list
-agents review --show <id>  # read one
-```
+| | drafted | did not draft |
+|---|---|---|
+| **A** (s2, s3, s4) | true positive | **miss** |
+| **B, C** (s1, s5, s6, s7) | **false positive** | true negative |
 
 | observation | reading |
 |---|---|
-| treatment drafts on 1 & 2, not on 3 & 4 | the instruction works and discriminates. §3c is not justified. |
-| treatment drafts on all four | it fires indiscriminately — revise the wording, do not build the gate |
-| treatment drafts on none | the first real evidence for §3b, then §3c. Revise the wording and re-run first. |
-| control drafts as often as treatment | the paragraph is decoration; the model was doing it anyway |
-| drafts appear but read as filler | wording problem, not a trigger problem |
+| 3 A's drafted, 4 B/C's silent, control silent | the instruction works and discriminates. §3c is not justified. |
+| A's drafted **and** B's drafted | fires indiscriminately — revise the wording, do not build the gate |
+| some A's missed | partial. Look at which: a missed s4 (cross-file) means something different from a missed s2 |
+| nothing drafted anywhere | first real evidence for §3b, then §3c. Revise the wording and re-run first. |
+| control drafts on A's too | the paragraph is decoration; the model was doing it anyway |
+| A's drafted but the drafts read as filler | wording problem, not a trigger problem |
 
-**The drafts themselves matter more than the rate.** Three bullets that restate
-the diff are a failure even at a 100% draft rate. Read them.
+**Then read the drafts.** Three bullets restating the diff are a failure at any
+rate, and no number detects that.
 
-## Results (2026-08-12)
+```bash
+agents review --show <id>
+agents review --keep <id>   # or --bin
+```
 
-First run, four scenarios per arm, one run each.
+**Promote or bin every draft.** The promotion rate is the half of the
+measurement that asks whether the material is worth having, and until something
+is decided `--stats` correctly refuses to conclude anything.
+
+## What this does not measure
+
+- **Long sessions.** Every scenario is short, so instruction decay over a long
+  context is untested. That is precisely what §3b exists for and this cannot
+  settle it.
+- **Codex.** `AGENTS.md` symlinks to `CLAUDE.md`, so the instruction reaches it
+  for free, but these arms are Claude Code. Run separately; do not pool.
+- **Variance.** One run per arm. If the result is close to a boundary, run it
+  again before concluding.
+- **Whether you still want the note a month later.** Promotion is measured
+  minutes after drafting, by the person who just watched the work.
+
+## Honest limit on who is grading
+
+I wrote the instruction, the scenarios, and the expected outcomes. A flattering
+result is weak evidence. The parts not mine to influence are the drafts
+themselves and the control arm — and v1 already demonstrated the rubric can be
+wrong, since the agent applied my own criterion more accurately than I did.
+
+---
+
+## v1 results (2026-08-12)
+
+Four scenarios per arm, one run each.
 
 | | treatment | control |
 |---|---|---|
@@ -120,51 +221,24 @@ First run, four scenarios per arm, one run each.
 | …drafted something | **1** | **0** |
 | draft rate | 25% | 0% |
 
-**The control arm is the finding.** Zero drafts without the paragraph, one with
-it. The instruction caused the only draft in the experiment, which is the one
-thing a single arm could never have shown.
+**The control arm was the finding.** Zero drafts without the paragraph, one with
+it: the instruction caused the only draft in the experiment, which a single arm
+could never have shown. No false positives.
 
-**No false positives.** Scenarios 3 and 4 (docstring, question) produced nothing
-in either arm.
+The draft came from the read-only config scenario and found two things not
+planted in the fixture — that the header comment's "30-microsecond" arithmetic
+contradicted the `_MS` suffix, and that a corrected 30 000 ms deadline would be
+shorter than `CONNECT_TIMEOUT + READ_TIMEOUT` and preempt it. It declined to fix
+anything until the SDK's real unit was confirmed.
 
-**Scenario 2 produced the draft** — the read-only one, with no diff at all,
-where the conclusion existed nowhere else. It found two things not planted in
-the fixture: that the header comment's "30-microsecond" arithmetic contradicts
-the `_MS` suffix (a seconds value read as milliseconds is 30 ms), and that a
-corrected 30 000 ms whole-request deadline would be shorter than
-`CONNECT_TIMEOUT + READ_TIMEOUT` and preempt them. It declined to fix anything
-until the SDK's real unit was confirmed. The draft is better than the fixture it
-was written against.
+**Two defects in v1, both of which v2 fixes:**
 
-**Scenario 1 produced no draft, and the expectation was wrong rather than the
-agent.** See the revised scenario above. The fix it made was also better than
-the one the fixture anticipated — it guarded the final attempt against a
-pointless sleep.
+1. The retry scenario was labelled "expect a draft" on the reasoning that a
+   one-line fix leaves its rationale invisible. Wrong — a `sleep` moving inside
+   a loop *is* the rationale. The agent applied the instruction's criterion more
+   accurately than the scenario author did. It is now a B case.
+2. Nothing was committed, so the git-log half of the criterion was vacuous
+   throughout, and two scenarios' changes commingled in one file.
 
-**What this run does not carry.** One observation of one draft. No repetition,
-so no variance. The protocol defect above (nothing committed) means the git-log
-half of the criterion was vacuous throughout. Nothing was promoted or binned, so
-the promotion rate — whether the draft is *kept* — is still unmeasured, and
-`review --stats` correctly reports the result as unsettled.
-
-**Reading against the table below:** treatment discriminates, control is silent,
-the draft is substantive. §3c is not justified by this data, and nothing here
-suggests capture is failing.
-
-## What this does not measure
-
-- **Long sessions.** Every scenario here is short, so instruction decay over a
-  long context is untested. That is exactly what §3b exists for and this cannot
-  settle it.
-- **Codex.** `AGENTS.md` symlinks to `CLAUDE.md`, so the instruction reaches it
-  for free, but the arms above are Claude Code. Run them under Codex separately
-  and do not pool the results.
-- **Whether you keep the drafts a month later.** Promotion rate here is measured
-  minutes after drafting, by the person who just watched the work.
-
-## Honest limit on who is grading
-
-I wrote both the instruction and these scenarios, and the expectations above are
-mine. If the results come back flattering, that is weak evidence. The
-independent parts are the drafts themselves and the control arm — neither is
-mine to influence.
+v1 therefore had one usable positive case. v2 has three, plus two hard negatives
+and per-scenario slicing.

@@ -145,6 +145,11 @@ func (s Stats) PromotionRate() float64 {
 // of the denominator: counting only sessions that drafted would report a draft
 // rate of 100% forever.
 func Summarize(storeDir string, workingSessions []string, since time.Time) (Stats, error) {
+	return SummarizeLane(storeDir, workingSessions, "", since)
+}
+
+// SummarizeLane narrows to one lane. An empty lane means every lane.
+func SummarizeLane(storeDir string, workingSessions []string, lane string, since time.Time) (Stats, error) {
 	events, err := Events(storeDir)
 	if err != nil {
 		return Stats{}, err
@@ -160,6 +165,9 @@ func Summarize(storeDir string, workingSessions []string, since time.Time) (Stat
 		if !since.IsZero() && e.When.Before(since) {
 			continue
 		}
+		if lane != "" && e.Lane != lane {
+			continue
+		}
 		switch e.Event {
 		case EventDrafted:
 			st.Drafted++
@@ -171,6 +179,9 @@ func Summarize(storeDir string, workingSessions []string, since time.Time) (Stat
 		}
 	}
 	for _, d := range pending {
+		if lane != "" && d.Lane != lane {
+			continue
+		}
 		if since.IsZero() || !d.When.Before(since) {
 			st.Pending++
 		}
