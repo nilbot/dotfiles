@@ -50,12 +50,18 @@ func InfoExcludePath(dir string) (string, error) {
 	return filepath.Join(common, "info", "exclude"), nil
 }
 
-// TraceCacheDir resolves where copied transcripts live for a repo.
+// StoreDir resolves the machine-local store for a repository.
 //
-// The common directory, for two reasons that both come from what the cache
+// One store rather than two halves under different rationales. It holds the
+// trace index, the transcript cache, and the untracked draft queue -- which is
+// to say everything upstream of a conclusion. The tracked tier holds
+// conclusions and nothing else.
+//
+// The common directory, for two reasons that both come from what the store
 // holds. Once a harness deletes a transcript the cached copy is the only one
-// that will ever exist, so it must not be filed anywhere a worktree takes with
-// it: <root>/.agents/.trace-cache gave every linked worktree its own, and
+// that will ever exist, and a queued draft exists nowhere else at all, so
+// neither must be filed anywhere a worktree takes with it:
+// <root>/.agents/.trace-cache gave every linked worktree its own, and
 // `git worktree remove` then deleted the only surviving copies. And transcript
 // content must never be committed by the tool whose premise is that it records
 // where transcripts are, never what they say -- inside the common directory git
@@ -63,14 +69,31 @@ func InfoExcludePath(dir string) (string, error) {
 // write an ignore file next to it.
 //
 // Not $XDG_CACHE_HOME, whose contract is non-essential data that can be
-// regenerated: cleaners act on that, and this cannot be regenerated. The cache
-// is also per-repository, which the common directory gives for free.
-func TraceCacheDir(dir string) (string, error) {
+// regenerated: cleaners act on that, and this cannot be regenerated. Not XDG
+// state either, which would need a stable repository identity -- paths and
+// remotes both move, so the key would have to be the root-commit hash -- and
+// would strand orphaned stores for repositories deleted months ago, needing a
+// GC command. The common directory gives per-repository scoping and lifecycle
+// for free.
+//
+// The cost, unmitigated: delete-and-re-clone loses the store, and any
+// unpromoted draft with it.
+func StoreDir(dir string) (string, error) {
 	common, err := gitPath(dir, "--git-common-dir")
 	if err != nil {
 		return "", ErrNotARepo
 	}
-	return filepath.Join(common, "agents", "trace-cache"), nil
+	return filepath.Join(common, "agents"), nil
+}
+
+// TraceCacheDir resolves where copied transcripts live for a repo. See StoreDir
+// for why this location, and for what it costs.
+func TraceCacheDir(dir string) (string, error) {
+	store, err := StoreDir(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(store, "trace-cache"), nil
 }
 
 // LegacyHooksPath resolves the repository-owned hooks directory that a global

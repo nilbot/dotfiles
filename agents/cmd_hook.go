@@ -103,7 +103,11 @@ func recordHook(args []string, stdin io.Reader) error {
 		Transcript:      tr.Transcript,
 		PointerVerified: tr.PointerVerified,
 	}
-	if err := record.NewWriter(agentsDir).Append(rec); err != nil {
+	store, err := repo.StoreDir(rc.Root)
+	if err != nil {
+		return err
+	}
+	if err := record.NewWriter(store).Append(rec); err != nil {
 		return err
 	}
 	return cacheSubagentTranscript(rc.Root, mid, event, rec)

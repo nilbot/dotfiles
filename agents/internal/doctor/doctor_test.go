@@ -847,7 +847,12 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(agentsDir, "memory"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "reports", "traces", "2026-08-20.jsonl"), []byte("not-json\n"), 0o644); err != nil {
+	// The unreadable line goes in the store, which is the index now.
+	storeTraces := filepath.Join(repoRoot, ".git", "agents", "traces")
+	if err := os.MkdirAll(storeTraces, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storeTraces, "2026-08-20.jsonl"), []byte("not-json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("Run `agents doctor` early and report any warnings before relying on this context.\n"), 0o644); err != nil {
@@ -873,7 +878,7 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 		}
 	}
 
-	checks, err := RunWithDeps(repoRoot, agentsDir, "", binary, DefaultThresholds(), time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC), deps)
+	checks, err := RunWithDeps(repoRoot, agentsDir, filepath.Join(repoRoot, ".git", "agents"), "", binary, DefaultThresholds(), time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -896,10 +901,16 @@ func TestRunReturnsContentSafeErrorForUnreadableTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	private := "private-trace-name"
-	if err := os.Symlink(filepath.Join(t.TempDir(), private), filepath.Join(traceDir, "2026-08-20.jsonl")); err != nil {
+	// Under the store, which is where the index lives and where RunWithDeps
+	// is told to read.
+	storeTraces := filepath.Join(repoRoot, ".git", "agents", "traces")
+	if err := os.MkdirAll(storeTraces, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := RunWithDeps(repoRoot, agentsDir, "", filepath.Join(t.TempDir(), "agents"), DefaultThresholds(), time.Now(), Dependencies{})
+	if err := os.Symlink(filepath.Join(t.TempDir(), private), filepath.Join(storeTraces, "2026-08-20.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RunWithDeps(repoRoot, agentsDir, filepath.Join(repoRoot, ".git", "agents"), "", filepath.Join(t.TempDir(), "agents"), DefaultThresholds(), time.Now(), Dependencies{})
 	if err == nil || strings.Contains(err.Error(), private) {
 		t.Fatalf("trace error = %v, want content-safe failure", err)
 	}
@@ -911,7 +922,7 @@ func TestRunWithIncompleteDependenciesReturnsDiagnosticsInsteadOfPanicking(t *te
 	if err := os.MkdirAll(filepath.Join(agentsDir, "reports", "traces"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	checks, err := RunWithDeps(repoRoot, agentsDir, "", filepath.Join(repoRoot, "missing-agents"), DefaultThresholds(), time.Now(), Dependencies{})
+	checks, err := RunWithDeps(repoRoot, agentsDir, filepath.Join(repoRoot, ".git", "agents"), "", filepath.Join(repoRoot, "missing-agents"), DefaultThresholds(), time.Now(), Dependencies{})
 	if err != nil {
 		t.Fatal(err)
 	}

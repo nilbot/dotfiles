@@ -1,4 +1,4 @@
-// Package trace queries the tracked pointer index.
+// Package trace queries the machine-local pointer index.
 //
 // The daily JSONL files are storage; this package is the index. A generated
 // index file would drift out of sync with what is on disk the moment anything
@@ -87,21 +87,19 @@ func scaleWindow(s string, n int, unit time.Duration) (time.Duration, error) {
 	return time.Duration(n) * unit, nil
 }
 
-func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
-	agentsRoot, err := os.OpenRoot(agentsDir)
-	if err != nil {
-		return Result{}, err
-	}
-	defer agentsRoot.Close()
-	reportsRoot, err := safeio.OpenDirAt(agentsRoot, "reports")
+// Query reads the index out of the machine-local store, resolved by
+// repo.StoreDir. An absent store is an empty history, not an error: a
+// repository that has never recorded anything is a normal state.
+func Query(storeDir string, f Filter, now time.Time) (Result, error) {
+	storeRoot, err := os.OpenRoot(storeDir)
 	if os.IsNotExist(err) {
 		return Result{}, nil
 	}
 	if err != nil {
 		return Result{}, err
 	}
-	defer reportsRoot.Close()
-	tracesRoot, err := safeio.OpenDirAt(reportsRoot, "traces")
+	defer storeRoot.Close()
+	tracesRoot, err := safeio.OpenDirAt(storeRoot, "traces")
 	if os.IsNotExist(err) {
 		return Result{}, nil
 	}
@@ -125,7 +123,7 @@ func Query(agentsDir string, f Filter, now time.Time) (Result, error) {
 		if !strings.HasSuffix(name, ".jsonl") {
 			continue
 		}
-		p := filepath.Join(agentsDir, "reports", "traces", name)
+		p := filepath.Join(storeDir, "traces", name)
 		file, _, err := safeio.OpenRegularAt(tracesRoot, name)
 		if err != nil {
 			// Loud, never skipped. A daily file we cannot open is history we

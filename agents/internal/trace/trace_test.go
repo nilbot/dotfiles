@@ -53,7 +53,7 @@ func seedRecords(t *testing.T, recs ...record.Record) string {
 // can only append well-formed lines, and damage is the point of some fixtures.
 func writeTraceFile(t *testing.T, dir, day, body string) string {
 	t.Helper()
-	tdir := filepath.Join(dir, "reports", "traces")
+	tdir := filepath.Join(dir, "traces")
 	if err := os.MkdirAll(tdir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestQueryModuleStopsAtThePathBoundary(t *testing.T) {
 func TestQueryDoesNotCountBlankLines(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	dir := seedRecords(t, record.Record{When: now, AgentID: "a1"})
-	path := filepath.Join(dir, "reports", "traces", "2026-08-10.jsonl")
+	path := filepath.Join(dir, "traces", "2026-08-10.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestQueryGrepSpansAgentTypeAndIgnoresCase(t *testing.T) {
 // Dropping them silently is how a reader lies about coverage; count them.
 func TestQueryCountsUnreadableLines(t *testing.T) {
 	dir, now := seed(t)
-	path := filepath.Join(dir, "reports", "traces", "2026-08-10.jsonl")
+	path := filepath.Join(dir, "traces", "2026-08-10.jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -338,7 +338,7 @@ func TestQueryFailsLoudlyOnAnUnopenableFile(t *testing.T) {
 func TestQueryRejectsAnExistingTraceSymlinkWithoutConsumingItsTarget(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	dir := t.TempDir()
-	traceDir := filepath.Join(dir, "reports", "traces")
+	traceDir := filepath.Join(dir, "traces")
 	if err := os.MkdirAll(traceDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -360,42 +360,26 @@ func TestQueryRejectsAnExistingTraceSymlinkWithoutConsumingItsTarget(t *testing.
 	}
 }
 
-func TestQueryRejectsRedirectedTraceDirectoriesWithoutConsumingExternalRecords(t *testing.T) {
+func TestQueryRejectsARedirectedTraceDirectoryWithoutConsumingExternalRecords(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	for _, redirected := range []string{"reports", "traces"} {
-		t.Run(redirected, func(t *testing.T) {
-			agentsDir := t.TempDir()
-			external := t.TempDir()
-			externalTraces := filepath.Join(external, "traces")
-			if redirected == "reports" {
-				if err := os.MkdirAll(externalTraces, 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(external, filepath.Join(agentsDir, "reports")); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				if err := os.MkdirAll(filepath.Join(agentsDir, "reports"), 0o755); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(external, filepath.Join(agentsDir, "reports", "traces")); err != nil {
-					t.Fatal(err)
-				}
-				externalTraces = external
-			}
-			private := "PRIVATE-redirected-trace-directory"
-			if err := os.WriteFile(filepath.Join(externalTraces, "2026-08-10.jsonl"), []byte(jsonLine(t, record.Record{When: now, AgentID: private})), 0o600); err != nil {
-				t.Fatal(err)
-			}
+	storeDir := t.TempDir()
+	external := t.TempDir()
+	// One hop, not two: the index moved to <store>/traces, so "reports" is no
+	// longer a directory Query walks through and cannot be redirected.
+	if err := os.Symlink(external, filepath.Join(storeDir, "traces")); err != nil {
+		t.Fatal(err)
+	}
+	private := "PRIVATE-redirected-trace-directory"
+	if err := os.WriteFile(filepath.Join(external, "2026-08-10.jsonl"), []byte(jsonLine(t, record.Record{When: now, AgentID: private})), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-			res, err := Query(agentsDir, Filter{}, now)
-			if err == nil || len(res.Records) != 0 {
-				t.Fatalf("Query followed redirected %s directory: records=%+v err=%v", redirected, res.Records, err)
-			}
-			if strings.Contains(err.Error(), private) {
-				t.Fatalf("redirected directory failure exposed record content: %v", err)
-			}
-		})
+	res, err := Query(storeDir, Filter{}, now)
+	if err == nil || len(res.Records) != 0 {
+		t.Fatalf("Query followed a redirected traces directory: records=%+v err=%v", res.Records, err)
+	}
+	if strings.Contains(err.Error(), private) {
+		t.Fatalf("redirected directory failure exposed record content: %v", err)
 	}
 }
 
@@ -404,7 +388,7 @@ func TestQueryRejectsRedirectedTraceDirectoriesWithoutConsumingExternalRecords(t
 // required implementation returns before the release point with an error.
 func TestQueryRejectsATraceFIFOPromptly(t *testing.T) {
 	dir := t.TempDir()
-	traceDir := filepath.Join(dir, "reports", "traces")
+	traceDir := filepath.Join(dir, "traces")
 	if err := os.MkdirAll(traceDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

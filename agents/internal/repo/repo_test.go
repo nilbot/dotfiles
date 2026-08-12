@@ -429,3 +429,56 @@ func TestTraceCacheDirRefusesOutsideARepository(t *testing.T) {
 		t.Fatalf("TraceCacheDir outside a repo: err = %v, want ErrNotARepo", err)
 	}
 }
+
+func TestStoreDirIsTheCommonDirectoryAndHoldsTheCache(t *testing.T) {
+	dir := initRepo(t)
+	got, err := StoreDir(dir)
+	if err != nil {
+		t.Fatalf("StoreDir: %v", err)
+	}
+	// git reports the resolved path, and on macOS the temp root reaches it
+	// through /var -> /private/var. Resolve the expectation the same way, or
+	// the test fails on the symlink rather than on the behaviour.
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(resolved, ".git", "agents")
+	if got != want {
+		t.Errorf("StoreDir = %q, want %q", got, want)
+	}
+	// One store, not two halves under different rationales: the cache has to
+	// sit inside it or the layout does not make the claim the design does.
+	cache, err := TraceCacheDir(dir)
+	if err != nil {
+		t.Fatalf("TraceCacheDir: %v", err)
+	}
+	if cache != filepath.Join(want, "trace-cache") {
+		t.Errorf("TraceCacheDir = %q, want it under the store %q", cache, want)
+	}
+}
+
+func TestStoreDirIsSharedByLinkedWorktrees(t *testing.T) {
+	dir := initRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "add", "f.txt")
+	git(t, dir, "commit", "-m", "seed")
+	wt := filepath.Join(t.TempDir(), "linked")
+	git(t, dir, "worktree", "add", "-b", "side", wt)
+
+	main, err := StoreDir(dir)
+	if err != nil {
+		t.Fatalf("StoreDir(main): %v", err)
+	}
+	linked, err := StoreDir(wt)
+	if err != nil {
+		t.Fatalf("StoreDir(linked): %v", err)
+	}
+	// The queue holds drafts that exist nowhere else. A per-worktree store
+	// would lose them to `git worktree remove`.
+	if main != linked {
+		t.Errorf("linked worktree got its own store: %q vs %q", linked, main)
+	}
+}

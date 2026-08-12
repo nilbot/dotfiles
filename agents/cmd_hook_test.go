@@ -63,7 +63,7 @@ func TestNewRepoKeepsRepositoryHooksLocal(t *testing.T) {
 
 func readOnlyRecord(t *testing.T, root string) map[string]any {
 	t.Helper()
-	matches, _ := filepath.Glob(filepath.Join(root, ".agents", "reports", "traces", "*.jsonl"))
+	matches, _ := filepath.Glob(filepath.Join(mustStoreDir(t, root), "traces", "*.jsonl"))
 	if len(matches) != 1 {
 		t.Fatalf("want exactly one trace file, got %v", matches)
 	}

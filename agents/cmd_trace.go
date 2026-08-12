@@ -75,6 +75,26 @@ func repoHere(stdout io.Writer) (*repo.Context, string, int) {
 	return rc, dir, exitcode.OK
 }
 
+// storeHere resolves the machine-local store beside the .agents/ directory.
+//
+// Spec 7 moved the trace index out of the tracked tree, so a reader of the
+// index needs the store while a writer into .agents/ still needs the tracked
+// directory. Both come from one answer to "where am I?", for the reason
+// repoHere already gives: deriving one from the other at a call site is a
+// second answer waiting to disagree with the first.
+func storeHere(stdout io.Writer) (*repo.Context, string, string, int) {
+	rc, dir, code := repoHere(stdout)
+	if code != exitcode.OK {
+		return nil, "", "", code
+	}
+	store, err := repo.StoreDir(rc.Root)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents: %v\n", err)
+		return nil, "", "", exitcode.Malformed
+	}
+	return rc, dir, store, exitcode.OK
+}
+
 func runTraceLS(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("trace ls", flag.ContinueOnError)
 	fs.SetOutput(stdout)
@@ -106,12 +126,12 @@ func runTraceLS(args []string, stdout io.Writer) int {
 	// the matcher compares paths, it does not guess at spellings.
 	f.Module = strings.TrimRight(f.Module, "/")
 
-	dir, code := agentsDirHere(stdout)
+	_, _, store, code := storeHere(stdout)
 	if code != exitcode.OK {
 		return code
 	}
 
-	res, err := trace.Query(dir, f, time.Now().UTC())
+	res, err := trace.Query(store, f, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace ls: %v\n", err)
 		return exitcode.NoRecord
@@ -175,7 +195,7 @@ func runTraceShow(args []string, stdout io.Writer) int {
 	}
 	want := fs.Arg(0)
 
-	rc, dir, code := repoHere(stdout)
+	rc, _, store, code := storeHere(stdout)
 	if code != exitcode.OK {
 		return code
 	}
@@ -186,7 +206,7 @@ func runTraceShow(args []string, stdout io.Writer) int {
 	}
 	// No window: a transcript worth reading back is usually an old one, and a
 	// default --since would silently answer "not found" for it.
-	res, err := trace.Query(dir, trace.Filter{}, time.Now().UTC())
+	res, err := trace.Query(store, trace.Filter{}, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace show: %v\n", err)
 		return exitcode.NoRecord
@@ -287,7 +307,7 @@ func runTraceCachePrune(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 
-	rc, dir, code := repoHere(stdout)
+	rc, _, store, code := storeHere(stdout)
 	if code != exitcode.OK {
 		return code
 	}
@@ -297,7 +317,7 @@ func runTraceCachePrune(args []string, stdout io.Writer) int {
 		return exitcode.NoRecord
 	}
 	// Every record, not a window: a lane worth pruning is usually an old one.
-	res, err := trace.Query(dir, trace.Filter{}, time.Now().UTC())
+	res, err := trace.Query(store, trace.Filter{}, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
 		return exitcode.NoRecord
@@ -348,7 +368,7 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 
-	rc, dir, code := repoHere(stdout)
+	rc, dir, store, code := storeHere(stdout)
 	if code != exitcode.OK {
 		return code
 	}
@@ -381,7 +401,7 @@ func runTraceCache(args []string, stdout io.Writer) int {
 		}
 	}
 
-	res, err := trace.Query(dir, trace.Filter{Lane: *lane, Since: d}, time.Now().UTC())
+	res, err := trace.Query(store, trace.Filter{Lane: *lane, Since: d}, time.Now().UTC())
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache: %v\n", err)
 		return exitcode.NoRecord

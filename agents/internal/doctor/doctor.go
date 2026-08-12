@@ -130,8 +130,16 @@ func sanitizedGitEnvironment(environment []string) []string {
 	return append(out, "GIT_TERMINAL_PROMPT=0")
 }
 
-func RunWithDeps(repoRoot, agentsDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {
-	traceResult, err := trace.Query(agentsDir, trace.Filter{}, now)
+// RunWithDeps takes storeDir as a parameter rather than resolving it through
+// Dependencies.
+//
+// A faked-out store that silently resolves to nothing reports "all trace index
+// lines are readable" and "this harness has never recorded here" -- a clean
+// bill of health for a diagnostic that never found the index. That is the
+// undiscriminating double this repository already has a memory entry about.
+// An explicit parameter has no nil case to be wrong about.
+func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {
+	traceResult, err := trace.Query(storeDir, trace.Filter{}, now)
 	if err != nil {
 		return nil, errors.New("trace index could not be read")
 	}
