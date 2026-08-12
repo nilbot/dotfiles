@@ -16,7 +16,7 @@ number may be implemented before an earlier one without renumbering either.
 | 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | candidate, gated on triggers | spec 1 (adapters) |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | designed | spec 1 (exit codes, security boundaries) |
 | 6 | [releases and binary distribution](2026-08-11-spec-6-releases-and-distribution.md) | scope only | spec 1, spec 5 |
-| 7 | [capture at the boundary, review before tracking](2026-08-12-spec-7-capture-and-review.md) | designed | spec 1 (tiers, record schema, adapters, exit codes) |
+| 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | phases A and B′ implemented; §3c deliberately not built | spec 1 (tiers, record schema, adapters, exit codes) |
 
 **Spec 1 is the implemented foundation.** It defines the terminology, placement
 rule, pointer format, Go module, and installation boundaries that the remaining
@@ -38,16 +38,24 @@ for five days and finding that the tracked trace index is a reference to
 machine-bound material filed in the tracked tier: 48% of its records were
 unreachable on the machine that wrote them, while the curated store it was meant
 to feed held zero handoffs. Spec 7 untracks the trace store, adds an untracked
-draft queue filled by a blocking `Stop` gate, and makes promotion into `.agents/`
-a single reviewed act.
+draft queue, and makes promotion into `.agents/` a single reviewed act.
+
+**Its capture triggers are ordered cheapest-first, and that ordering is the
+point.** §3a is an instruction in `CLAUDE.md`; §3b a non-blocking nudge; §3c a
+blocking `Stop` gate. Each is built only if the previous one measurably fails. The
+spec's own first draft went straight to the gate, justified by a spec 1
+measurement about subagents — which do not read `CLAUDE.md` at all — while the
+repository's actual instruction told agents *how* to write a handoff and never
+*whether* to. §3a and the review path are implemented; **§3c is specified in full
+and deliberately not built.**
 
 Read spec 7 before designing spec 3 — `agents distill` is demoted from the primary
 path to the fallback, and designing against spec 3's current text would build the
-wrong thing. Spec 7 also resolves one contradiction in spec 1 §6 (the `Stop` gate
-is a second deliberate exception to fail-open recording, and it blocks on success
-rather than failure), adds a capability requirement to spec 4, and adds store
-migration to spec 6's scope. Its one collision with spec 5 is the command
-registry: `agents review` and `agents handoff draft` land in it.
+wrong thing. Spec 7 adds store migration to spec 6's scope and a *contingent*
+capability requirement to spec 4 that arrives only if §3c is ever built; spec 1
+§6's exit-code rule is likewise untouched until then. Its one collision with
+spec 5 is the command registry: `agents review` and `agents handoff draft` land
+in it.
 
 Spec 2 is independent of the `agents` tool and shares no code with it; it lives
 here because its numbering and its one ordering constraint (spec 1 §8) belong to
@@ -61,6 +69,7 @@ this catalog.
 | 1, 2 | [checkout path and field defects](../../plans/2026-08-11-checkout-path-and-field-defects.md) | executed |
 | 1 | [trace cache preservation](../../plans/2026-08-11-trace-cache-preservation.md) | executed |
 | 2 | [dotfiles bootstrap](../../plans/2026-08-10-dotfiles-bootstrap.md) | executed |
+| 7 | [capture and review, phases A and B′](../../plans/2026-08-12-spec-7-capture-and-review.md) | executed |
 
 Spec 1's plan is phased: the record loop on Claude Code (Phase 1), Codex
 (Phase 2), retrieval (Phase 3), memory and handoffs (Phase 4), guards and the
