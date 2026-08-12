@@ -17,12 +17,16 @@
 > `agents review` and `agents handoff draft`; demotes `agents save` to an escape
 > hatch).
 >
-> **§6's exit-code rule is directly contradicted and the contradiction is
-> deliberate.** "`agents guard` is the sole deliberate exception" to fail-open
-> recording is no longer true: spec 7's `Stop` gate is a second exception, and a
-> semantically different one — guard blocks on *failure*, the gate blocks on
-> *success*, having decided to ask for a draft. The recording path itself still
-> fails open: a failed trace write exits 0.
+> **§2's scaffolded `CLAUDE.md` gains a capture paragraph**, which under spec 7's
+> shipped phases *is* the capture mechanism — `doctor` checks for it the way it
+> already checks for the doctor instruction.
+>
+> **§6's exit-code rule stands for now.** Spec 7 considered a blocking `Stop` gate
+> that would have been a second deliberate exception alongside `agents guard`
+> (guard blocks on *failure*; the gate would block on *success*). That gate was
+> demoted to a contingency (spec 7 §3c) and is **not built**, so "`agents guard`
+> is the sole deliberate exception" remains true. If §3c is ever built, this rule
+> is what it amends.
 
 ---
 

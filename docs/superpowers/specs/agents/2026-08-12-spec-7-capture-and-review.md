@@ -1,11 +1,13 @@
-# Spec 7 — capture at the boundary, review before tracking
+# Spec 7 — capture cheaply, review before tracking
 
 **Date:** 2026-08-12
-**Status:** designed — not implemented
+**Status:** designed. Phases A and B′ implemented; §3c not built and deliberately
+so.
 **Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the tiers,
 the record schema, the hook adapters, and the exit-code contract.
-**Amends:** spec 1 §1, §3.6, §3.7, §4, §6. See
-[Cross-spec impact](#cross-spec-impact).
+**Amends:** spec 1 §1, §2, §3.6, §3.7, §4. See
+[Cross-spec impact](#cross-spec-impact). §6's exit-code rule is amended only if
+§3c is built.
 **Changes the premise of:** [spec 3](2026-08-07-spec-3-agents-distill.md), which
 is scope-only and must not be designed against its current primary path.
 
@@ -19,6 +21,16 @@ design, and the experience is weird.*
 
 The complaint is correct, and the defect is one tier assignment made in spec 1 §1.
 Everything below follows from repairing it.
+
+**This document was restructured on 2026-08-12 after its own review.** The first
+draft made capture a blocking `Stop` gate and justified it with a spec 1
+measurement about *subagents* — a population that does not read `CLAUDE.md` at
+all. The repository's own evidence is narrower and more interesting: the existing
+instruction tells an agent *how* to write a handoff and never *that* it should, so
+a properly worded instruction has never been tested here. Capture is now ordered
+cheapest-first (§3), and the gate survives in full as the contingency §3c. The
+history is kept because the error — assuming a measurement instead of taking it —
+is the same one that produced the tracked trace store.
 
 ---
 
@@ -157,24 +169,50 @@ prose and pipe it to stdin.* Five-day score: zero.
 
 **The queue was never the problem. Nothing filled it.**
 
-### The constraint that shapes the repair
+### The instruction that was never actually given
+
+It is tempting to read the zero as proof that instructing a model to record
+knowledge does not work. The repository's own `CLAUDE.md` says:
+
+> Write handoffs with `agents handoff write`, not by hand.
+
+That sentence instructs **how** to write a handoff. It never says *that* one
+should, or *when*. An agent following it perfectly writes zero handoffs, which is
+exactly the observed outcome. This is not a failed instruction; it is an
+instruction that was never given.
+
+**A properly worded instruction has not been tested in this repository.** Any
+design that skips past it to heavier machinery is assuming a measurement nobody
+took.
+
+### The constraint that shapes the repair, and its limits
 
 Spec 1's Claude Code measurements record: *"Subagents inherit `CLAUDE.md` but do
 not act on it — 0 of 31 observed subagents followed an inherited bootstrap
 directive. This is why recording must be a hook and never an instruction."*
 
-That rule is true for pointers and **false by necessity for meaning**. A hook is
-a subprocess; it cannot write prose. Only a model can, and directing a model is
-instruction. The split:
+**That figure is about subagents, and it does not generalize to main sessions.**
+The same measurement says subagents inherit `CLAUDE.md` without acting on it; main
+sessions read and act on it, which is the mechanism this whole repository runs on
+— including the `agents doctor` line in the same file, which is followed. Citing
+0-of-31 as evidence that a main-session instruction will fail is evidence about
+the wrong population.
+
+What the measurement does establish is narrower and still important:
 
 | | mechanism | reliability | value of output |
 |---|---|---|---|
 | pointers | hook | mechanical | ~nothing |
-| meaning | instruction | unreliable | the entire point |
+| meaning | instruction | **unmeasured at the main-session tier** | the entire point |
 
-Mechanical semantic capture is not available. What is available is the strongest
-form of instruction: a blocking hook whose reason the model must satisfy before
-the turn ends, rather than an ambient directive that measured 0 of 31.
+A hook is a subprocess; it cannot write prose. Only a model can, and directing a
+model is instruction — so mechanical semantic capture is not available at any
+price. What remains open is *how strong an instruction is needed*: an ambient line
+in `CLAUDE.md`, a re-salienced nudge late in a session, or a blocking gate the
+model must satisfy before the turn ends. Those differ by orders of magnitude in
+cost, and the cheapest has never been tried.
+
+That question is settled by measurement in §3, not by argument here.
 
 ---
 
@@ -196,7 +234,7 @@ Spec 1 §1's operations table gains two entries and loses portability in two:
 
 | Operation | Command | Behaviour |
 |---|---|---|
-| Check | `agents doctor` | local reachability, queue depth, store size, gate liveness |
+| Check | `agents doctor` | local reachability, queue depth, store size, and that the capture instruction is present in `CLAUDE.md` |
 | Materialize | `subagent-stop` hook, `agents trace cache` | unchanged, now bounded by retention |
 | Read | `agents trace show <id>` | unchanged, local only |
 | **Draft** | the `Stop` gate (§3) | model writes a candidate into the untracked queue |
@@ -255,7 +293,71 @@ count is what §3's budget arithmetic counts against. Its job changes from
 portable provenance — which it could not do — to local forensics and the gate's
 own bookkeeping, which it can.
 
-### 3. Capture: the `Stop` gate
+### 3. Capture: the instruction first, the gate only if it fails
+
+Capture has three possible triggers, differing by orders of magnitude in cost.
+**They are tried in ascending order, and each one has to fail before the next is
+built.**
+
+| | trigger | cost to build | cost per session |
+|---|---|---|---|
+| **3a** | an instruction in `CLAUDE.md` | one sentence | none |
+| **3b** | a non-blocking nudge re-salienced late in a session | a hook that injects context | negligible |
+| **3c** | a blocking `Stop` gate | budget, watermarks, ceilings, a positive control | latency and context on every fire |
+
+This ordering is the correction of an error in this spec's own first draft, which
+went straight to 3c on the strength of a measurement about subagents. See
+[the constraint and its limits](#the-constraint-that-shapes-the-repair-and-its-limits).
+
+#### 3a. The instruction
+
+`CLAUDE.md` gains one paragraph. It is a trigger, which is what §2 of spec 1 says
+that file is for:
+
+> When a stretch of work concludes — a bug understood, a decision made, an
+> approach abandoned — record it before moving on: at most three bullets, covering
+> what a future agent could not get from the code or the git log. Write it with
+> `agents handoff draft --lane <lane> --session <id>`. Drafts are untracked until
+> you review them, so drafting costs nothing and commits you to nothing.
+
+Three properties are doing the work, and the existing sentence has none of them:
+
+- **It names the moment.** "When a stretch of work concludes," not "when writing a
+  handoff."
+- **It bounds the output.** Three bullets. An unbounded ask reads as expensive and
+  gets deferred.
+- **It removes the perceived stake.** Untracked, reviewable, revocable. Nothing is
+  being committed to the repository by drafting.
+
+Everything downstream — the queue, `agents review`, promotion-commits — is
+identical under all three triggers. Only the trigger changes.
+
+#### 3b. The nudge, if 3a under-fires
+
+An instruction read at session start competes with everything since. The longest
+sessions have the most to record and the weakest instruction. A `Stop` hook that
+*adds context without blocking* re-saliences the instruction late in a session at
+no latency cost and with no decline gradient, because nothing is being demanded.
+
+**Whether Claude Code or Codex can add context from `Stop` without blocking is
+unmeasured.** It goes in the same probe as the blocking question below.
+
+#### 3c. The gate, if 3a and 3b both fail
+
+Everything from here to the end of §3 describes the blocking gate. **It is a
+contingency, not the plan.** It is specified in full because a contingency nobody
+designed is a contingency nobody can cost — but nothing in it is built until the
+measurement below says the cheaper triggers were not enough.
+
+**What decides.** Run 3a for a working week and count: sessions, drafts created,
+drafts promoted. The comparison is not against perfection but against the current
+baseline of zero. A week that produces a handful of drafts you actually keep means
+3c is over-engineering and should not be built. A week that produces nothing
+promotes 3b, and then 3c.
+
+This measurement is the compliance question the first draft of this spec deferred
+until after the gate was built. Asked this way it costs a sentence, and it answers
+the same thing: *does a model record knowledge when it is asked properly?*
 
 **Order of operations on every `Stop`:**
 
@@ -372,6 +474,13 @@ rather than a summing-up. Mitigations: drafts are revisable, the budget renews s
 a long lane is asked again, and a mid-lane note is a truthful record of what was
 learned by then. This is a cost of the approach.
 
+**Note that 3a does not have this weakness**, which is a substantive argument for
+trying it first rather than merely a cheaper one. An instruction fires when the
+*model* judges that work concluded — the moment the gate structurally cannot
+reach. The gate buys reliability and pays for it in timing; the instruction buys
+timing and pays for it in reliability. Only measurement says which trade is worth
+more here.
+
 **The second cost is context, not latency.** A blocking `Stop` puts the
 instruction *and the resulting draft* into the session's own transcript. At K = 3
 that is three retrospectives injected into the working context of a session that
@@ -379,28 +488,21 @@ did not ask for them, priming subsequent turns. The draft belongs in the queue,
 not in the conversation, and there is no mechanism that puts it in one without the
 other. Keeping K small is the only lever.
 
-**Two things must be measured before this is built, and they are different
-things.**
+**The harness probe, if the gate is ever reached.** Claude Code's `Stop` payload
+carries `stop_hook_active`, and Codex's does too — a field that exists only to
+bound a blocking stop hook. That is strong circumstantial evidence that both
+harnesses honour a blocking `Stop`, and it is **not a measurement of the blocking
+behaviour**. This repository's standard is positive controls (§"Measured facts").
+Probe both, together with 3b's question of whether `Stop` can add context without
+blocking — one probe answers both, and 3b needs the answer first. A harness that
+cannot block gets an advisory gate that prints, and its queue stays empty rather
+than pretending.
 
-1. **Plumbing.** Claude Code's `Stop` payload carries `stop_hook_active`, and
-   Codex's does too — a field that exists only to bound a blocking stop hook.
-   That is strong circumstantial evidence that both harnesses honour a blocking
-   `Stop`, and it is **not a measurement of the blocking behaviour**. This
-   repository's standard is positive controls (§"Measured facts"). Probe both. A
-   harness that cannot block gets an advisory gate that prints, and its queue
-   stays empty rather than pretending.
-2. **Compliance.** A block landing says nothing about whether the model writes a
-   useful draft or games the gate to end the turn. This is the assumption that can
-   invalidate the whole approach: if models reliably decline to avoid work, the
-   queue stays empty and this design has rebuilt handoffs with more machinery.
-   **Phase B is not planned until compliance is measured** over a real week — ask
-   count, `keep` rate, the stored `redundant` summaries read against the sessions
-   that produced them, and whether the kept drafts are any good.
-
-Plumbing is a precondition for building. Compliance is a precondition for
-*committing to the approach*, and it can only be measured by running the gate.
-The order is: probe plumbing, ship the gate behind a flag, read a week of stored
-outcomes, then decide whether Phase C is worth building.
+**Compliance is measured at 3a, not here.** The first draft of this spec deferred
+"does the model write a useful draft, or game the gate to end the turn" until
+after the gate was built — which put the expensive machinery upstream of the
+question that decides whether the machinery is needed. Running 3a for a week
+answers it for a sentence.
 
 **Draft location:** `<store>/queue/<lane>/<session>-<n>.md`, untracked.
 
@@ -511,9 +613,11 @@ normal path.
 could not win, about data that no longer needs to survive. It is one of the two
 warnings making `doctor` exit 1 on a healthy machine today.
 
-**New checks:** queue depth per lane, store size against the caps, and gate
-liveness — has the gate fired recently, and does this harness honour a blocking
-`Stop` at all.
+**New checks:** queue depth per lane, store size against the caps, and **that
+`CLAUDE.md` carries §3a's capture paragraph** — checked exactly like the existing
+`scaffold:doctor-instruction`. Under B′ that paragraph *is* the capture mechanism,
+so its silent absence would be the whole feature silently absent. If §3c is ever
+built, gate liveness joins them.
 
 ### 6. Migration
 
@@ -543,24 +647,28 @@ stays empty, a gate with no review command fills a queue nobody drains — but i
 not one landing. The plan is expected to split at the seam where new behaviour
 begins:
 
-| Phase | Contents | Ends somewhere working |
-|---|---|---|
-| A | One store, retention, migration, untracking, doctor changes | The tracked tree is clean and the store is bounded. No new behaviour. Valuable alone. |
-| B | The `Stop` gate, the queue, `agents handoff draft` | Drafts accumulate. Reviewable by hand before the command exists. |
-| C | `agents review`, boundary notifications, `agents save` demotion | The loop closes. |
+| Phase | Contents | Ends somewhere working | Gate to the next phase |
+|---|---|---|---|
+| A | One store, retention, migration, untracking, doctor changes | Tracked tree clean, store bounded. No new behaviour. | — |
+| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review` | **The whole loop, closed, with a one-sentence trigger.** | A working week of measurement: sessions, drafts, promotions |
+| B″ | §3b's non-blocking nudge | Same loop, re-salienced late in long sessions | Another week, if B′ under-fires |
+| C | §3c's `Stop` gate: budget, watermarks, ceilings, the harness probe | Same loop, with capture forced | built only if B′ and B″ both fail |
 
-Phase A is worth landing on its own even if B and C are delayed: it removes the
-churn, the 51 MB, and the false `doctor` warning without waiting on the positive
-control that B depends on.
+**B′ closes the loop on its own.** That is the substantive change from this spec's
+first draft, which put the gate in B and the review command in C — so nothing was
+usable until both landed, and the expensive half came first. The queue, the draft
+verb, and `agents review` are shared by all three triggers; only the trigger
+differs. Ordering them cheapest-first costs one sentence to test and could retire
+C entirely.
 
-**The phasing is asymmetric in a way worth stating plainly: Phase A is a net
-deletion, and it is the easy one.** It removes machinery and produces no
-conclusions. Phase B is where anything is captured, and it is gated on the
-compliance measurement in §3 — the one assumption that could invalidate the
-approach. If B stalls, spec 7 leaves this repository with *less* machinery and the
-same zero conclusions it has today, which is tidier but not better. Landing A
-without a scheduled attempt at B is the failure mode to watch for, not a safe
-resting point.
+**Phase A is a net deletion, and it is the easy one.** It removes machinery and
+produces no conclusions. If nothing after it lands, spec 7 leaves this repository
+with *less* machinery and the same zero conclusions it has today — tidier, not
+better. A is not a resting point, and B′ is cheap enough that there is no excuse
+for stopping there.
+
+**A and B′ should be planned together.** They are, jointly, smaller than the first
+draft's Phase B alone.
 
 ---
 
@@ -574,24 +682,27 @@ amendment note pointing here, as spec 5 received on 2026-08-11.
 §1 gains the conclusions-versus-upstream rule and the Draft and Promote
 operations; Materialize and Read become local-only. §3.6 and §3.7 lose
 portability and `merge=union`. §4 gains an `agents handoff draft` verb targeting
-the queue, retires `handoff write --draft`, and finally has the auto-draft caller
-it specified. §6 gains `agents review` and `agents handoff draft`; `agents save`
-is demoted.
+the queue and retires `handoff write --draft`; the auto-draft caller it specified
+arrives as §3a's instruction rather than as the `Stop` hook §4 imagined. §6 gains
+`agents review` and `agents handoff draft`; `agents save` is demoted. §2's
+scaffolded `CLAUDE.md` gains the capture paragraph.
 
-**One direct contradiction, resolved explicitly rather than silently.** §6 states:
-*"Recording hooks exit 0 on every path: a failed record must never disrupt a
-dispatch. `agents guard` is the sole deliberate exception."*
+**One direct contradiction, contingent on §3c and therefore not yet live.** §6
+states: *"Recording hooks exit 0 on every path: a failed record must never disrupt
+a dispatch. `agents guard` is the sole deliberate exception."*
 
-The `Stop` gate is a second exception and a semantically different one:
+Under §3a and §3b that sentence stays true — nothing new blocks. Under §3c the
+gate would be a second exception, and a semantically different one:
 
 | | blocks on | meaning |
 |---|---|---|
 | `agents guard` | failure | something is wrong; stop |
 | the `Stop` gate | success | everything worked; a question is being asked |
 
-Both halves must be stated in the amendment: the recording path still fails open
-— a failed trace write exits 0 — and only the gate blocks, only after spending
-its budget.
+If §3c is ever built, both halves must be stated: the recording path still fails
+open — a failed trace write exits 0 — and only the gate blocks, only after
+spending its budget. Until then spec 1 §6 needs no change on this point, which is
+one more reason to try the cheap trigger first: it amends less.
 
 ### Spec 3 — premise inverts; do not design against the current text
 
@@ -608,10 +719,16 @@ its budget.
 Spec 3 gets smaller and easier. Whoever picks it up must read this first or they
 will design the wrong primary path.
 
-### Spec 4 — a new capability to express
+### Spec 4 — a capability requirement, contingent
 
-The wiring DSL must express "this hook may block," not only "run this." A
-capability flag, not a command string.
+**Only if §3c is ever built.** The wiring DSL would then have to express "this
+hook may block," and "this hook adds context without blocking" for §3b — a
+per-hook capability, not just a command string, with degradation on a harness that
+fails the positive control.
+
+Under §3a, wiring is unchanged: the instruction lives in `CLAUDE.md`, which is
+scaffold, not wiring. Spec 4 should treat this as a requirement that may never
+arrive rather than one to design around now.
 
 ### Spec 5 — unaffected in its claims, one sequencing collision
 
@@ -637,6 +754,30 @@ across versions. That is not currently in spec 6's scope.
 Following §11's standards: golden files from real payloads, structural assertions
 over string searches.
 
+**Phases A and B′ — everything that gets built now:**
+
+- **The queue is unreachable from git** — structural, not an ignore-rule check.
+- **Promotion is atomic** — writes, reindexes, and commits with guard running; a
+  failure at any step leaves the queue item intact.
+- **Promotion refuses an invalid draft** — a `kind: memory` draft missing `name`,
+  `description`, or `metadata.type` is rejected at promotion, and nothing reaches
+  the tracked tree for the generated-index guard to block on later.
+- **Promoting a memory entry off the default branch warns and proceeds** — it
+  neither refuses nor retargets.
+- **Promotion requires an explicit id.** The absence of bulk promotion is a design
+  constraint, so it gets a test.
+- **Retention** — age and size eviction; migration preserves content before
+  untracking.
+- **Recording still fails open** — a trace-write failure exits 0.
+- **Redaction stays structural** — unchanged from §11, and now additionally
+  relevant because drafts are model output.
+- **The scaffolded `CLAUDE.md` carries §3a's paragraph** — `agents init` writes it
+  and `doctor` reports its absence, the same way it already checks for the doctor
+  instruction. An instruction that is the entire capture mechanism must not be
+  silently droppable.
+
+**Phase C only — not built until B′ and B″ have failed:**
+
 - **Gate arithmetic** — budget spend-before-block, N-turns-since-watermark, the
   K-per-day ceiling, the `stop_hook_active` loop guard, the floor.
 - **Concurrent sessions on one lane** — two sessions each get their own ask and
@@ -646,25 +787,9 @@ over string searches.
 - **A `redundant` label without a summary is rejected** — the gate's whole defence
   against a reflexive decline is that the summary is required, so the requirement
   is enforced rather than requested, and `--audit` surfaces what was stored.
-- **Promotion refuses an invalid draft** — a `kind: memory` draft missing `name`,
-  `description`, or `metadata.type` is rejected at promotion, and nothing reaches
-  the tracked tree for the generated-index guard to block on later.
-- **Promoting a memory entry off the default branch warns and proceeds** — it
-  neither refuses nor retargets.
-- **Positive control per harness** that a blocking `Stop` is honoured. This is the
-  one assumption in §3 that is inferred rather than measured. A harness failing it
-  degrades to an advisory gate, and a test pins that degradation.
-- **Fail-open is preserved** — a trace-write failure exits 0 even where the gate
-  would otherwise have fired.
-- **The queue is unreachable from git** — structural, not an ignore-rule check.
-- **Promotion is atomic** — writes, reindexes, and commits with guard running; a
-  failure at any step leaves the queue item intact.
-- **Promotion requires an explicit id.** The absence of bulk promotion is a design
-  constraint, so it gets a test.
-- **Retention** — age and size eviction; migration preserves content before
-  untracking.
-- **Redaction stays structural** — unchanged from §11, and now additionally
-  relevant because drafts are model output.
+- **Positive control per harness** that a blocking `Stop` is honoured, and whether
+  `Stop` can add context without blocking (which 3b needs). A harness failing the
+  first degrades to an advisory gate, and a test pins that degradation.
 
 ---
 
@@ -693,6 +818,12 @@ the right moment. No model remains to write anything.
 cache; wrong once drafting moved to the moment context is live, because the
 orphan-GC chore then outweighs a durability requirement that no longer exists.
 
+**Building the `Stop` gate first.** This spec's own first draft. Rejected on
+review: it justified skipping the cheap trigger with a measurement about
+subagents, and it put the machinery upstream of the question that decides whether
+the machinery is needed. The gate survives in full as §3c, as the contingency it
+should always have been.
+
 **Capturing mechanically at `Stop` and summarizing later at review time.** Removes
 the incentive problem outright — no model judgment at capture, so nothing can be
 dodged. Rejected because the reviewing agent then lacks the producing session's
@@ -712,12 +843,13 @@ the mechanism.
 
 | Risk | Mitigation |
 |---|---|
-| A harness does not honour a blocking `Stop` | Positive control before build; degrade to advisory and report it in `doctor` |
-| **Models decline reflexively to end the turn, and the queue stays empty** — the risk that invalidates the approach | The gate asks for an unconditional summary and a label, not a yes/no, so declining costs the same thinking as drafting; drafts are bounded so drafting is cheap too; `--audit` makes lazy `redundant` labels findable; §3's compliance measurement gates Phase C on a real week of data. Narrowed, not closed. |
-| The model drafts rather than declining | `redundant` is a first-class label; drafted-but-never-promoted rate is measured |
-| Mid-work timing produces premature drafts | Drafts revisable; budget renews; promoted-rate is measured and can force a rethink |
-| Blocking injects drafts into the session's own context, priming later turns | Small K is the only lever; no mechanism separates the two. Not eliminated. |
-| **Phase A lands, Phase B stalls** — the repo ends with less machinery and the same zero conclusions | §7 names it; A is not a resting point, and B is scheduled with A rather than after it |
+| **§3a's instruction is ignored and the queue stays empty** — the risk that decides everything downstream | This is measured, not mitigated. A week of B′ counts sessions, drafts and promotions against a baseline of zero. Failure promotes 3b, then 3c — which is why 3c is specified in full rather than hand-waved. |
+| Building the gate first and discovering the instruction would have sufficed | The ordering in §7 exists for this. The first draft of this spec made exactly this error. |
+| **Phase A lands, nothing after it does** — the repo ends with less machinery and the same zero conclusions | §7 names it; A is not a resting point, and B′ is one sentence plus the review path, so there is no cost excuse |
+| An instruction decays in salience over a long session | §3b exists for this, and is cheaper than the gate. Unmeasured until B′ reports. |
+| A session ends abruptly and the instruction never fires | Accepted under B′. It is one of the three things only the gate fixes, and it is what a failed B′ week would demonstrate. |
+| A memory entry promoted on a feature branch is lost if the branch dies | Promotion warns and names the branch; it does not refuse or silently retarget |
+| A `kind: memory` draft lacks the frontmatter a memory entry needs | Promotion validates and refuses rather than synthesizing a slug nobody reviewed |
 | A memory entry promoted on a feature branch is lost if the branch dies | Promotion warns and names the branch; it does not refuse or silently retarget |
 | A `kind: memory` draft lacks the frontmatter a memory entry needs | Promotion validates and refuses rather than synthesizing a slug nobody reviewed |
 | Losing the bare signal that work happened on another machine | Accepted, and named as a loss in the diagnosis. If it matters on its own, it needs a purpose-built tracked artifact, not a pointer index |
@@ -725,22 +857,39 @@ the mechanism.
 | Delete-and-re-clone loses unpromoted drafts | Queue is short-lived by design; depth surfaced at boundaries. Not eliminated. |
 | An agent bulk-promotes its own drafts | No `--keep --all`; explicit id per draft; a test pins the constraint |
 | Store grows unbounded, as the cache did | Age and size caps, pruned at `post-merge`; `doctor` reports size |
+
+**Phase C only, and therefore currently hypothetical:**
+
+| Risk | Mitigation |
+|---|---|
+| A harness does not honour a blocking `Stop` | Positive control before build; degrade to advisory and report it in `doctor` |
+| Models decline reflexively to end the turn | The gate asks for an unconditional summary and a label, not a yes/no, so declining costs the same thinking as drafting; drafts are bounded so drafting is cheap too; `--audit` makes lazy labels findable. Narrowed, not closed. |
+| The model drafts rather than declining | `redundant` is a first-class label; drafted-but-never-promoted rate is measured |
+| Mid-work timing produces premature drafts | Drafts revisable; budget renews. §3a does not have this weakness at all. |
+| Blocking injects drafts into the session's own context, priming later turns | Small K is the only lever; no mechanism separates the two. Not eliminated. |
 | N and K are wrong | They are labelled guesses; the gate records outcomes so they are tuned from data rather than argued |
 
 ---
 
 ## Open questions
 
-- **The floor's exact definition (§3 step 4).** Turn count and dispatched-subagent
-  are both defensible; neither has data. Low stakes — the budget bounds
-  over-firing regardless — so decide during implementation and record what was
-  chosen.
+- **The wording of §3a's instruction.** The draft in §3a names the moment, bounds
+  the output, and removes the perceived stake, which is three more properties than
+  the sentence it replaces has. Whether it is *good enough* is the B′ measurement
+  and nothing else. It is a parameter: revise and re-measure before escalating to
+  3b or 3c, because a cheap trigger revised twice still costs less than the gate.
+- **Whether a `Stop` hook can add context without blocking**, under either
+  harness. 3b depends on it entirely and it is unmeasured. Probe it with the
+  blocking question rather than separately.
 - **Draft `kind` inference.** The model proposes `memory` or `handoff` in
   frontmatter. Whether that is reliable enough to skip a confirmation at promotion
   is unknown until there are drafts to look at.
-- **Codex `Stop` gate.** Contingent on the positive control. If Codex cannot
-  block, whether an advisory print is worth shipping for that harness at all, or
-  whether Codex sessions simply produce no drafts, is undecided.
+- **The floor's exact definition (§3c).** Contingent on the gate being built at
+  all. Turn count and dispatched-subagent are both defensible; neither has data.
+- **Codex, under any trigger.** §3a reaches Codex through `AGENTS.md`, which is a
+  symlink to `CLAUDE.md`, so the instruction is free there. Whether Codex sessions
+  act on it at the same rate as Claude Code sessions is a separate reading of the
+  same week, and the two should not be pooled.
 - **Whether `session-start` records still earn their place** once the index is
   local and the budget counts `stop` records only. Cheap to keep; keeping them is
   not the same as needing them.

@@ -3,13 +3,17 @@
 **Status:** deferred, not rejected. Gated on trigger conditions below.
 **Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §5 (harness adapters).
 
-> **New requirement 2026-08-12 from
-> [spec 7](2026-08-12-spec-7-capture-and-review.md).** Wiring is no longer purely
-> "run this command at this lifecycle moment." Spec 7's `Stop` gate *blocks* —
-> it exits non-zero to ask the model for a draft — and not every harness is known
-> to honour that. The DSL must therefore express a per-hook capability ("this hook
-> may block"), not just a command string, and must be able to degrade a blocking
-> hook to advisory on a harness that fails the positive control.
+> **Contingent requirement 2026-08-12 from
+> [spec 7](2026-08-12-spec-7-capture-and-review.md).** *Only if spec 7 §3c is ever
+> built.* That section's `Stop` gate blocks — it exits non-zero to ask the model
+> for a draft — and a sibling option adds context without blocking; neither
+> behaviour is known to be supported by every harness. The DSL would then need a
+> per-hook capability ("this hook may block"), not just a command string, plus
+> degradation on a harness that fails the positive control.
+>
+> Spec 7 ships its capture instruction in `CLAUDE.md` instead, which is scaffold
+> rather than wiring, so **nothing in the wiring surface changes today.** Treat
+> this as a requirement that may never arrive.
 
 ## What it is
 
