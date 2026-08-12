@@ -296,8 +296,9 @@ own bookkeeping, which it can.
 ### 3. Capture: the instruction first, the gate only if it fails
 
 Capture has three possible triggers, differing by orders of magnitude in cost.
-**They are tried in ascending order, and each one has to fail before the next is
-built.**
+**They are tried in ascending order: each is put into real use, and only an
+observed failure justifies building the next.** "Tried" is literal — the cheapest
+is in use now and has produced no data yet.
 
 | | trigger | cost to build | cost per session |
 |---|---|---|---|
@@ -305,9 +306,25 @@ built.**
 | **3b** | a non-blocking nudge re-salienced late in a session | a hook that injects context | negligible |
 | **3c** | a blocking `Stop` gate | budget, watermarks, ceilings, a positive control | latency and context on every fire |
 
-This ordering is the correction of an error in this spec's own first draft, which
-went straight to 3c on the strength of a measurement about subagents. See
-[the constraint and its limits](#the-constraint-that-shapes-the-repair-and-its-limits).
+**None of the three has been measured, and 3a ships unmeasured.** The ordering is
+not the result of a comparison and 3a is not the winner of one; it is a live
+experiment. Two things put it first, and they are different claims:
+
+1. **The case for 3c was never valid.** This spec's first draft went straight to
+   the gate on the strength of a measurement about *subagents*, which do not act
+   on `CLAUDE.md` at all — see
+   [the constraint and its limits](#the-constraint-that-shapes-the-repair-and-its-limits).
+   Withdrawing a bad argument for the gate does not establish that the gate is
+   unnecessary. It leaves the question open, which is where it stands.
+2. **Only the cheap trigger can be measured cheaply, and that is what makes the
+   order non-arbitrary.** Shipping 3a *is* the experiment: a sentence costs
+   nothing to try and produces the compliance data by existing. 3c cannot be
+   tested that way, because building the budget, watermarks, ceilings and
+   labelling *is* the expense that would need justifying. Constructing the
+   subsystem to discover whether the subsystem was needed is circular.
+
+The table above is a design-time **cost estimate**, not a measurement of
+anything.
 
 #### 3a. The instruction
 
@@ -349,11 +366,15 @@ contingency, not the plan.** It is specified in full because a contingency nobod
 designed is a contingency nobody can cost — but nothing in it is built until the
 measurement below says the cheaper triggers were not enough.
 
-**What decides.** Run 3a for a working week and count: sessions, drafts created,
-drafts promoted. The comparison is not against perfection but against the current
-baseline of zero. A week that produces a handful of drafts you actually keep means
-3c is over-engineering and should not be built. A week that produces nothing
-promotes 3b, and then 3c.
+**What decides, and it has not happened yet.** Run 3a for a working week and
+count: sessions, drafts created, drafts promoted. The comparison is not against
+perfection but against the current baseline of zero. A week that produces a
+handful of drafts you actually keep means 3c is over-engineering and should not
+be built. A week that produces nothing promotes 3b, and then 3c.
+
+Until that week has run, **nothing here is evidence about 3c either way.** The
+gate is unbuilt because its justification was withdrawn, not because it was
+tried and beaten.
 
 This measurement is the compliance question the first draft of this spec deferred
 until after the gate was built. Asked this way it costs a sentence, and it answers

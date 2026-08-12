@@ -42,12 +42,17 @@ draft queue, and makes promotion into `.agents/` a single reviewed act.
 
 **Its capture triggers are ordered cheapest-first, and that ordering is the
 point.** §3a is an instruction in `CLAUDE.md`; §3b a non-blocking nudge; §3c a
-blocking `Stop` gate. Each is built only if the previous one measurably fails. The
-spec's own first draft went straight to the gate, justified by a spec 1
-measurement about subagents — which do not read `CLAUDE.md` at all — while the
-repository's actual instruction told agents *how* to write a handoff and never
-*whether* to. §3a and the review path are implemented; **§3c is specified in full
-and deliberately not built.**
+blocking `Stop` gate. §3a and the review path are implemented; **§3c is specified
+in full and deliberately not built.**
+
+**None of the three has been measured — §3a shipped unmeasured, as a live
+experiment rather than the winner of a comparison.** The spec's own first draft
+went straight to the gate, justified by a spec 1 measurement about subagents,
+which do not read `CLAUDE.md` at all; withdrawing that leaves the question open
+rather than settled. What puts the instruction first is that only the cheap
+trigger can be measured cheaply — shipping a sentence *is* the experiment,
+whereas building the gate to find out whether the gate was needed is circular. A
+week of real use decides whether §3b or §3c is ever justified.
 
 Read spec 7 before designing spec 3 — `agents distill` is demoted from the primary
 path to the fallback, and designing against spec 3's current text would build the

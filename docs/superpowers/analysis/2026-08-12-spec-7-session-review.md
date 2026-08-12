@@ -59,10 +59,32 @@ Two things changed direction mid-session, both because you pushed:
 watermarks, per-lane ceilings, the `redundant`/`keep` labelling, `review
 --audit`. All specified in full, none implemented.
 
-The spec orders capture cheapest-first: §3a an instruction, §3b a non-blocking
-nudge, §3c the gate — each built only if the previous measurably fails. Building
-3c now would repeat the exact error the session found: assuming a measurement
-instead of taking one.
+**No measurement has happened.** Not of §3a, not of §3b, not of §3c. §3a shipped
+*unmeasured*, and it is a live experiment rather than the winner of a comparison.
+Nothing was weighed against anything.
+
+Two separate things decided this, and they are worth keeping apart:
+
+1. **The case for building §3c was never valid.** The first draft argued a gate
+   was necessary because instructions do not work, citing spec 1's "0 of 31
+   followed an inherited directive" — a measurement about *subagents*, which do
+   not act on `CLAUDE.md` at all. It says nothing about main sessions. Removing a
+   bad argument for the gate does not establish that the gate is unnecessary; it
+   leaves the question open, which is the state we are actually in.
+2. **Under that uncertainty, cost decides the order — because only the cheap
+   option can be measured cheaply.** Shipping §3a *is* the experiment: a sentence
+   in `CLAUDE.md` costs nothing to try and produces the compliance data by
+   existing. §3c cannot be tested that way. Building the budget arithmetic,
+   watermarks, ceilings and labelling *is* the expense that would need
+   justifying, so constructing it to discover whether it was needed is circular.
+
+What has not started is the week of real use — sessions, drafts and promotions
+counted against a baseline of zero. If that comes back empty it is the first
+genuine evidence anyone has that a stronger trigger is required, and §3c is
+specified in full so it can then be built without being redesigned.
+
+The only comparison that did happen was a design-time **cost estimate** (§3's
+table: a sentence, a hook, a subsystem). That is an estimate, not a measurement.
 
 **§3b, the non-blocking nudge.** Depends on whether a `Stop` hook can add
 context without blocking, which is unmeasured under both harnesses.
