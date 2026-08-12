@@ -306,8 +306,9 @@ made — exclude exactly the sessions worth capturing.
 **Starting constants, labelled as guesses: N = 10 `stop` records, K = 3 per lane
 per day.** §4.1's lane-health thresholds have sat unimplemented at "tuned once
 there is real data" because nothing collects the data. This gate collects its
-own. Every ask records its outcome in the store — drafted, declined **with its
-stated reason**, and later promoted or binned.
+own. Every ask records its outcome in the store — **the summary and its label**,
+`keep` or `redundant`, and for kept drafts whether they were later promoted or
+binned.
 
 **Decline rate on its own is not a usable signal, and recording the reason is what
 makes it one.** A high decline rate is equally consistent with three different
@@ -315,30 +316,53 @@ causes that call for opposite fixes:
 
 | observation | could mean | so |
 |---|---|---|
-| high decline rate | asking too often | raise N |
-| high decline rate | the wording invites laziness | rewrite the reason text |
-| high decline rate | **the gate is working correctly** | change nothing |
+| high `redundant` rate | asking too often | raise N |
+| high `redundant` rate | the model is dodging the work | the summaries say so on inspection; see below |
+| high `redundant` rate | **the gate is working correctly** | change nothing |
 | drafts written, rarely promoted | asking at the wrong moments | raise the floor; reconsider mid-work timing |
 | lanes going a week with an empty queue | asking too rarely | lower N |
 
-Stored decline reasons are what separate the first three: they are spot-checkable
-against the session that produced them. A decline with no reason recorded is
-indistinguishable from a decline to end the turn faster.
+Stored summaries are what separate the first three: they are spot-checkable
+against the session that produced them. A `redundant` label with no summary
+recorded is indistinguishable from a dodge to end the turn faster, which is why
+the summary is required rather than requested.
 
-**The reason text has to walk a line, and both edges are real.** Letting the model
-judge relevance risks an agreeable model drafting something rather than saying
-"nothing here." But declining is also the cheap answer — it ends the turn, while
-drafting is work — so wording that leans too hard the other way invites reflexive
-declines and an empty queue. This draft leans toward permitting declines and is
-therefore the more likely to under-fire:
+**The gate must not ask a yes/no question, because the two answers do not cost the
+same.** Declining is one line and the turn ends; drafting is work. That is an
+incentive gradient, and no wording sits on top of it — a request-with-opt-out
+invites the cheap answer however it is phrased. Both edges are real (an agreeable
+model over-drafting is the opposite failure) but only one of them is subsidised by
+the mechanism.
 
-> Lane `feat-x` has no note from this session today. If it produced something a
-> future agent would want and cannot get from the code or git history, draft it
-> now with `agents handoff draft --lane feat-x --session <id>`. If it did not, say
-> so in one line, with the reason, and finish. Declining is a normal answer.
+So the summary is unconditional and the only judgment is a label:
 
-The wording is a parameter, not a decision. It is tuned from stored decline
-reasons like N and K.
+> Before finishing: in at most three bullets, state what this session established
+> that a future agent could not get from the code or the git log. Then label it —
+> `keep` if it is worth carrying forward, `redundant` if the code and history
+> already carry it. If `keep`, write it with
+> `agents handoff draft --lane feat-x --session <id>`. The summary and label are
+> recorded either way.
+
+Declining now requires the same retrospective *thinking* as drafting: the session
+must be summarized in order to argue that nothing came of it. Only the
+writing-down differs, and §4 bounds that too — **the draft is those same three
+bullets plus frontmatter, not an essay.** Attacking the gradient from both ends is
+what closes it; expansion happens at review, where a human is present and the
+material is already in front of them.
+
+This also gives the compliance measurement something to read. A stored `redundant`
+label now arrives with a summary attached, so a week of declines is falsifiable
+evidence rather than a rate meaning three contradictory things.
+
+`redundant` summaries are recorded in the store and **do not enter the queue** —
+auditable without cluttering review. `agents review --audit` lists recent declines
+with their summaries; where one looks wrong, the cached transcript is still there.
+That is the first job in this design where the cache is load-bearing rather than
+forensic insurance.
+
+**This narrows the gradient; it does not remove it.** A model can still write
+three lazy bullets and label them `redundant`. The difference is that it now has
+to write something falsifiable in order to do so.
 
 **Timing weakness, stated rather than engineered away.** The right moment to ask
 is when work *ends*. `Stop` fires at the end of every turn and cannot know which
@@ -370,7 +394,8 @@ things.**
    invalidate the whole approach: if models reliably decline to avoid work, the
    queue stays empty and this design has rebuilt handoffs with more machinery.
    **Phase B is not planned until compliance is measured** over a real week — ask
-   count, draft rate, decline reasons, and whether the drafts are any good.
+   count, `keep` rate, the stored `redundant` summaries read against the sessions
+   that produced them, and whether the kept drafts are any good.
 
 Plumbing is a precondition for building. Compliance is a precondition for
 *committing to the approach*, and it can only be measured by running the gate.
@@ -403,7 +428,14 @@ agents review --show <id>     print one
 agents review --keep <id>     promote: write + reindex + scoped commit
 agents review --bin <id>      delete from the queue
 agents review --edit <id>     $EDITOR, then keep
+agents review --audit         recent `redundant` declines with their summaries
 ```
+
+**Drafts are bounded.** A draft is the three bullets the gate asked for plus its
+frontmatter — not an essay. This is half of what keeps declining from being the
+cheap answer (§3); the other half is requiring the summary either way. A draft
+that wants to be longer grows at review, where a human is present and the material
+is in front of them.
 
 **Promotion is one act.** `--keep` writes to `.agents/memory/<name>.md` or
 `.agents/reports/handoff/<lane>/<date>-<session>.md` per the draft's `kind`,
@@ -611,6 +643,9 @@ over string searches.
   their own watermark; neither consumes the other's; the lane ceiling still caps
   the pair. This is the defect a lane-keyed budget would have, so it gets a test
   rather than a comment.
+- **A `redundant` label without a summary is rejected** — the gate's whole defence
+  against a reflexive decline is that the summary is required, so the requirement
+  is enforced rather than requested, and `--audit` surfaces what was stored.
 - **Promotion refuses an invalid draft** — a `kind: memory` draft missing `name`,
   `description`, or `metadata.type` is rejected at promotion, and nothing reaches
   the tracked tree for the generated-index guard to block on later.
@@ -658,6 +693,17 @@ the right moment. No model remains to write anything.
 cache; wrong once drafting moved to the moment context is live, because the
 orphan-GC chore then outweighs a durability requirement that no longer exists.
 
+**Capturing mechanically at `Stop` and summarizing later at review time.** Removes
+the incentive problem outright — no model judgment at capture, so nothing can be
+dodged. Rejected because the reviewing agent then lacks the producing session's
+context and has to reconstruct it from a transcript, which is the expensive, lossy
+path that draft-at-Stop exists to avoid. It survives as `agents distill`
+(spec 3), which is the right shape for material the gate never saw.
+
+**A yes/no gate with carefully chosen wording.** Rejected in §3: the two answers
+do not cost the same, and wording cannot flatten an incentive gradient built into
+the mechanism.
+
 **Rewriting git history to remove pushed trace records.** See §6.
 
 ---
@@ -667,8 +713,8 @@ orphan-GC chore then outweighs a durability requirement that no longer exists.
 | Risk | Mitigation |
 |---|---|
 | A harness does not honour a blocking `Stop` | Positive control before build; degrade to advisory and report it in `doctor` |
-| **Models decline reflexively to end the turn, and the queue stays empty** — the risk that invalidates the approach | Stored decline reasons make lazy and honest declines distinguishable; §3's compliance measurement gates Phase B on a real week of data before Phase C is built |
-| The model drafts rather than declining | Reason text permits declining; drafted-but-never-promoted rate is measured |
+| **Models decline reflexively to end the turn, and the queue stays empty** — the risk that invalidates the approach | The gate asks for an unconditional summary and a label, not a yes/no, so declining costs the same thinking as drafting; drafts are bounded so drafting is cheap too; `--audit` makes lazy `redundant` labels findable; §3's compliance measurement gates Phase C on a real week of data. Narrowed, not closed. |
+| The model drafts rather than declining | `redundant` is a first-class label; drafted-but-never-promoted rate is measured |
 | Mid-work timing produces premature drafts | Drafts revisable; budget renews; promoted-rate is measured and can force a rethink |
 | Blocking injects drafts into the session's own context, priming later turns | Small K is the only lever; no mechanism separates the two. Not eliminated. |
 | **Phase A lands, Phase B stalls** — the repo ends with less machinery and the same zero conclusions | §7 names it; A is not a resting point, and B is scheduled with A rather than after it |
