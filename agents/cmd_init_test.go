@@ -199,3 +199,15 @@ func TestInitRegistersAfterScaffoldEvenWhenWiringFails(t *testing.T) {
 		t.Fatalf("scaffolded repo was not registered before wiring failed: %+v", r.Repos)
 	}
 }
+
+// A message naming a path the tool no longer writes sends its reader to an
+// empty directory to conclude that recording is broken.
+func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
+	for _, f := range []func() string{
+		func() string { var b bytes.Buffer; runInit(nil, &b); return b.String() },
+	} {
+		if strings.Contains(f(), "reports/traces") {
+			t.Error("init still points at .agents/reports/traces/, which nothing writes any more")
+		}
+	}
+}

@@ -25,7 +25,8 @@ var ForbiddenFields = []string{
 	"tool_response",
 }
 
-// Record is one line of .agents/reports/traces/YYYY-MM-DD.jsonl.
+// Record is one line of <store>/traces/YYYY-MM-DD.jsonl, where <store> is
+// repo.StoreDir. Machine-local: see Writer for why it is not tracked.
 //
 // Adding a field here is a decision about what this repository publishes.
 // Before adding one, check it against ForbiddenFields and against spec 3.2.

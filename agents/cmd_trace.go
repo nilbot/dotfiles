@@ -159,7 +159,7 @@ func runTraceLS(args []string, stdout io.Writer) int {
 	if res.Skipped > 0 {
 		// Advisory rather than silent: unreadable lines mean the history is
 		// smaller than it looks.
-		fmt.Fprintf(stdout, "\n%d unreadable line(s) skipped — check for merge conflict markers in .agents/reports/traces/\n", res.Skipped)
+		fmt.Fprintf(stdout, "\n%d unreadable line(s) skipped — inspect the trace index in the machine-local store\n", res.Skipped)
 		return exitcode.Advisory
 	}
 	return exitcode.OK

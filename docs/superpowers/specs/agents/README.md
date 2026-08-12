@@ -52,7 +52,8 @@ which do not read `CLAUDE.md` at all; withdrawing that leaves the question open
 rather than settled. What puts the instruction first is that only the cheap
 trigger can be measured cheaply — shipping a sentence *is* the experiment,
 whereas building the gate to find out whether the gate was needed is circular. A
-week of real use decides whether §3b or §3c is ever justified.
+two-arm scenario run in `agents/testdata/capture-experiment/` decides whether
+§3b or §3c is ever justified — scripted, an afternoon, with a control arm.
 
 Read spec 7 before designing spec 3 — `agents distill` is demoted from the primary
 path to the fallback, and designing against spec 3's current text would build the

@@ -84,6 +84,13 @@ func runHandoffDraft(args []string, stdin io.Reader, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 
+	// Best-effort, and deliberately after the draft is on disk. A failure to
+	// measure must never cost the thing being measured.
+	_ = queue.AppendEvent(store, queue.Event{
+		When: d.When, Event: queue.EventDrafted, Session: d.Session,
+		Lane: d.Lane, Kind: d.Kind, DraftID: d.ID,
+	})
+
 	// The id first and alone on the line, so a caller can name this draft back
 	// at review time without parsing prose.
 	fmt.Fprintln(stdout, d.ID)

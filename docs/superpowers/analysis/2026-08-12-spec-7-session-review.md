@@ -78,10 +78,18 @@ Two separate things decided this, and they are worth keeping apart:
    watermarks, ceilings and labelling *is* the expense that would need
    justifying, so constructing it to discover whether it was needed is circular.
 
-What has not started is the week of real use — sessions, drafts and promotions
-counted against a baseline of zero. If that comes back empty it is the first
+What has not run is the measurement itself: the two-arm scenario set in
+`agents/testdata/capture-experiment/`. If it comes back empty that is the first
 genuine evidence anyone has that a stronger trigger is required, and §3c is
 specified in full so it can then be built without being redesigned.
+
+**An earlier version of this document proposed running §3a ambiently for a
+working week. That was wrong twice over and you called both.** It paced the
+measurement by the calendar while the thing being measured is produced by work
+— the same category error this whole spec diagnoses — and it would have produced
+an uninterpretable number, because §3a has no decline path: an agent that reads
+the instruction and correctly records nothing leaves exactly the same trace as
+one that ignored it. Both are now fixed; see below.
 
 The only comparison that did happen was a design-time **cost estimate** (§3's
 table: a sentence, a hook, a subsystem). That is an estimate, not a measurement.
@@ -169,14 +177,58 @@ readable file at the far end of the traversal; it now catches the mutant.
    ignoring it would write a tracked note claiming nobody checked it.
 4. **The instruction's wording is a parameter, not a decision.** It names the
    moment, bounds the output to three bullets, and says drafting costs nothing.
-   Whether that is *good enough* is the B′ measurement — a week of real use,
-   counting sessions, drafts, and promotions against a baseline of zero. Revise
-   and re-measure before escalating to §3b or §3c; a cheap trigger revised twice
-   still costs less than the gate.
+   Whether that is *good enough* is decided by running
+   `agents/testdata/capture-experiment/` — two arms, four scenarios, an
+   afternoon. Revise and re-measure before escalating to §3b or §3c; a cheap
+   trigger revised twice still costs less than the gate.
 5. **Git history keeps the old trace records**, per your decision. They contain
    hostname, `$HOME` paths, session UUIDs, and lane names on a public remote.
    Low-sensitivity here; the note in the spec says a work repository with ticket
    ids as lane names should decide that on its own facts.
+
+## The measurement, and the instrumentation it needed
+
+**Added after review, because the first version of this document had neither.**
+
+`internal/queue/events.go` appends a durable line at draft, promote and bin, in
+`<store>/events.jsonl`. It exists because the draft files are *deleted* at
+promotion and at binning: counting the queue answers "what is pending" and never
+"what happened". Without it the only observable is an empty queue, which is
+equally consistent with the instruction working, the instruction being ignored,
+and nothing having been worth recording — three causes and one observation. The
+event type carries no body, subject or description; it is a measurement
+artifact, not a copy of the note.
+
+`agents review --stats` joins that log against the trace index:
+
+```
+sessions that did work        2      <- denominator, from `stop` records
+…of those, drafted something  1
+draft rate                    50%
+drafts written                1
+…promoted / binned / pending  0 / 0 / 1
+```
+
+The denominator is sessions that **did work**, not sessions that drafted.
+Counting only the latter reports 100% forever and measures nothing; a mutation
+test pins it.
+
+`agents/testdata/capture-experiment/` is the harness: `setup.sh` builds a
+throwaway repo with a real bug in it and runs `agents init`, with
+`--no-instruction` producing the control arm. `SCENARIOS.md` has four scripted
+tasks — two with a conclusion the diff cannot carry, two with none — and a table
+mapping each outcome to a reading. Both arms were smoke-tested; they differ in
+exactly the paragraph under test and nothing else.
+
+Two honesty constraints are built into the readout. It refuses to conclude
+anything from zero sessions, and it refuses to call drafting a success before
+anything has been reviewed — an unreviewed draft is not evidence the instruction
+produces material worth having, and a readout that says otherwise is marking its
+own homework. Both are pinned by tests.
+
+**I wrote the instruction, the scenarios and the expected outcomes**, so a
+flattering result is weak evidence. The parts not mine to influence are the
+drafts themselves and the control arm.
 
 ## Known limits, stated rather than buried
 

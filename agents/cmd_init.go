@@ -57,7 +57,7 @@ func runInit(args []string, stdout io.Writer) int {
 			fmt.Fprintf(stdout, "  - %s\n", s)
 		}
 	}
-	fmt.Fprintln(stdout, "\nTo confirm the setup is recording, check Codex `/hooks` for Active hooks, or look for traces in `.agents/reports/traces/`.")
+	fmt.Fprintln(stdout, "\nTo confirm the setup is recording, check Codex `/hooks` for Active hooks, or run `agents trace ls`.")
 	return exitcode.Advisory
 }
 

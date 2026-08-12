@@ -366,11 +366,26 @@ contingency, not the plan.** It is specified in full because a contingency nobod
 designed is a contingency nobody can cost — but nothing in it is built until the
 measurement below says the cheaper triggers were not enough.
 
-**What decides, and it has not happened yet.** Run 3a for a working week and
-count: sessions, drafts created, drafts promoted. The comparison is not against
-perfection but against the current baseline of zero. A week that produces a
-handful of drafts you actually keep means 3c is over-engineering and should not
-be built. A week that produces nothing promotes 3b, and then 3c.
+**What decides, and it has not happened yet.** Two arms of scripted scenarios in
+a throwaway repository — `agents/testdata/capture-experiment/`. One arm carries
+the instruction, one has it stripped, and the scenarios are chosen so that two
+have a real conclusion the diff cannot carry and two have none. `agents review
+--stats` reports the draft rate over sessions that *did work*, taken from the
+trace index, plus what was promoted and what was binned.
+
+This replaces an earlier proposal to run 3a ambiently for a working week. That
+measurement was paced by the calendar while the thing being measured is produced
+by work — the same category error as recording per `session-start`, one document
+later. Scripted scenarios answer in an afternoon and vary one thing at a time.
+
+The comparison is not against perfection but against the baseline of zero.
+Drafting on the two scenarios that have a conclusion and not on the two that do
+not means 3c is over-engineering. Drafting on all four is a wording problem.
+Drafting on none is the first real evidence for 3b, then 3c. A control arm that
+drafts as often as the treatment arm means the paragraph is decoration.
+
+**The drafts themselves outrank the rate.** Three bullets restating the diff are
+a failure at any draft rate, and no number detects that.
 
 Until that week has run, **nothing here is evidence about 3c either way.** The
 gate is unbuilt because its justification was withdrawn, not because it was
@@ -671,7 +686,7 @@ begins:
 | Phase | Contents | Ends somewhere working | Gate to the next phase |
 |---|---|---|---|
 | A | One store, retention, migration, untracking, doctor changes | Tracked tree clean, store bounded. No new behaviour. | — |
-| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review` | **The whole loop, closed, with a one-sentence trigger.** | A working week of measurement: sessions, drafts, promotions |
+| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review`, the event log and `review --stats` | **The whole loop, closed, with a one-sentence trigger.** | The two-arm scenario run in `testdata/capture-experiment/` |
 | B″ | §3b's non-blocking nudge | Same loop, re-salienced late in long sessions | Another week, if B′ under-fires |
 | C | §3c's `Stop` gate: budget, watermarks, ceilings, the harness probe | Same loop, with capture forced | built only if B′ and B″ both fail |
 

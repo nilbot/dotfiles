@@ -10,6 +10,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/queue"
+	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
@@ -316,5 +317,156 @@ func TestReviewRefusesTwoActionsAtOnce(t *testing.T) {
 	store, _ := repo.StoreDir(root)
 	if _, err := queue.Get(store, d.ID); err != nil {
 		t.Error("an ambiguous invocation consumed the draft")
+	}
+}
+
+// The experiment's denominator is sessions that did work, not sessions that
+// drafted. Getting that wrong reports 100% forever and measures nothing.
+func TestStatsCountsSessionsThatDraftedNothing(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	now := time.Now().UTC()
+	w := record.NewWriter(store)
+	for _, id := range []string{"worked-and-drafted", "worked-silently"} {
+		if err := w.Append(record.Record{
+			When: now, Harness: "claude-code", Machine: "m1", Event: "stop",
+			Lane: "master", SessionID: id,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := queue.AppendEvent(store, queue.Event{
+		When: now, Event: queue.EventDrafted, Session: "worked-and-drafted",
+		Lane: "master", Kind: queue.KindHandoff, DraftID: "master/a.md",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := runReviewIn(t, root, []string{"--stats"})
+	if !strings.Contains(out, "sessions that did work") {
+		t.Fatalf("no stats printed:\n%s", out)
+	}
+	if !strings.Contains(out, "50%") {
+		t.Errorf("draft rate is not 1 of 2; the silent session was dropped from the denominator:\n%s", out)
+	}
+	if code != exitcode.OK && code != exitcode.Advisory {
+		t.Errorf("exit = %d", code)
+	}
+}
+
+func TestStatsReportsNothingDraftedAsTheResultThatJustifiesEscalation(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	if err := record.NewWriter(store).Append(record.Record{
+		When: time.Now().UTC(), Harness: "claude-code", Machine: "m1",
+		Event: "stop", Lane: "master", SessionID: "silent",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out := runReviewIn(t, root, []string{"--stats"})
+	if code != exitcode.Advisory {
+		t.Errorf("exit = %d, want Advisory", code)
+	}
+	if !strings.Contains(out, "nothing drafted") {
+		t.Errorf("the empty result was not named:\n%s", out)
+	}
+	// It must point at revising the wording before escalating, or the first
+	// bad week buys a subsystem.
+	if !strings.Contains(out, "revise") {
+		t.Errorf("stats did not say to revise the wording before escalating:\n%s", out)
+	}
+}
+
+func TestStatsSeparatesDiscardedFromKept(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	now := time.Now().UTC()
+	if err := record.NewWriter(store).Append(record.Record{
+		When: now, Harness: "claude-code", Machine: "m1", Event: "stop",
+		Lane: "master", SessionID: "s1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range []queue.Event{
+		{When: now, Event: queue.EventDrafted, Session: "s1"},
+		{When: now, Event: queue.EventDrafted, Session: "s1"},
+		{When: now, Event: queue.EventDrafted, Session: "s1"},
+		{When: now, Event: queue.EventBinned, Session: "s1"},
+		{When: now, Event: queue.EventBinned, Session: "s1"},
+		{When: now, Event: queue.EventBinned, Session: "s1"},
+	} {
+		if err := queue.AppendEvent(store, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, out := runReviewIn(t, root, []string{"--stats"})
+	if !strings.Contains(out, "wording problem") {
+		t.Errorf("drafting-but-discarding was not distinguished from not drafting:\n%s", out)
+	}
+}
+
+func TestDraftAndReviewRecordTheirEvents(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runHandoffDraft([]string{"--session", "s1", "--lane", "master", "--subject", "x"},
+		strings.NewReader("- a conclusion\n"), &out); code != exitcode.OK {
+		t.Fatalf("draft exit = %d: %s", code, out.String())
+	}
+	id := strings.TrimSpace(strings.SplitN(out.String(), "\n", 2)[0])
+
+	if code, o := runReviewIn(t, root, []string{"--keep", id}); code != exitcode.OK {
+		t.Fatalf("keep exit = %d: %s", code, o)
+	}
+
+	events, err := queue.Events(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kinds []string
+	for _, e := range events {
+		kinds = append(kinds, e.Event)
+	}
+	// Both halves, or the measurement cannot tell a draft that was kept from
+	// one that was never written.
+	if len(events) != 2 || kinds[0] != queue.EventDrafted || kinds[1] != queue.EventPromoted {
+		t.Fatalf("events = %v, want drafted then promoted", kinds)
+	}
+	if events[0].Session != "s1" {
+		t.Errorf("event lost the session: %+v", events[0])
+	}
+}
+
+// An unreviewed draft is not evidence the instruction produces anything worth
+// having. A readout that treats drafting as the result is marking its own
+// homework.
+func TestStatsDoesNotClaimSuccessBeforeAnythingIsReviewed(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	now := time.Now().UTC()
+	if err := record.NewWriter(store).Append(record.Record{
+		When: now, Harness: "claude-code", Machine: "m1", Event: "stop",
+		Lane: "master", SessionID: "s1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.AppendEvent(store, queue.Event{
+		When: now, Event: queue.EventDrafted, Session: "s1",
+		Lane: "master", Kind: queue.KindHandoff, DraftID: "master/a.md",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out := runReviewIn(t, root, []string{"--stats"})
+	if strings.Contains(out, "not justified") {
+		t.Errorf("stats declared success with nothing reviewed:\n%s", out)
+	}
+	if !strings.Contains(out, "nothing is settled") {
+		t.Errorf("stats did not say the result is undecided:\n%s", out)
+	}
+	if code != exitcode.Advisory {
+		t.Errorf("exit = %d, want Advisory while undecided", code)
 	}
 }

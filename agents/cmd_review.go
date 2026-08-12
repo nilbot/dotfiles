@@ -20,6 +20,7 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/memory"
 	"github.com/nilbot/dotfiles/agents/internal/queue"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
+	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
 // runReview is where an unreviewed draft becomes tracked knowledge, or stops
@@ -39,6 +40,8 @@ func runReview(args []string, stdout io.Writer) int {
 	keep := fs.String("keep", "", "promote one draft: write, reindex, and commit it")
 	bin := fs.String("bin", "", "delete one draft")
 	edit := fs.String("edit", "", "open one draft in $EDITOR")
+	stats := fs.Bool("stats", false, "report whether the capture instruction is working")
+	since := fs.String("since", "", "with --stats: window, e.g. 7d")
 	if err := fs.Parse(args); err != nil {
 		return exitcode.Malformed
 	}
@@ -62,6 +65,9 @@ func runReview(args []string, stdout io.Writer) int {
 		return code
 	}
 
+	if *stats {
+		return reviewStats(rc, store, *since, stdout)
+	}
 	switch {
 	case *show != "":
 		return reviewShow(store, *show, stdout)
@@ -105,6 +111,97 @@ func reviewList(store, lane string, stdout io.Writer) int {
 	return exitcode.Advisory
 }
 
+// reviewStats answers the question §3a exists to have answered: does an agent
+// record anything when it is asked properly?
+//
+// The denominator is sessions that DID WORK, taken from the trace index, not
+// sessions that drafted. Counting only the ones that drafted would report a
+// draft rate of 100% forever and measure nothing. A session is counted as
+// having worked when it produced at least one `stop` record -- the weakest
+// available evidence that a turn completed, chosen because anything stronger
+// (files changed, commits made) excludes the read-only debugging session that
+// is exactly where the valuable conclusions come from.
+func reviewStats(rc *repo.Context, store, since string, stdout io.Writer) int {
+	var window time.Duration
+	if since != "" {
+		d, err := trace.ParseSince(since)
+		if err != nil {
+			fmt.Fprintf(stdout, "agents review: --since %q: %v\n", since, err)
+			return exitcode.Malformed
+		}
+		window = d
+	}
+	now := time.Now().UTC()
+	var cutoff time.Time
+	if window > 0 {
+		cutoff = now.Add(-window)
+	}
+
+	res, err := trace.Query(store, trace.Filter{Event: "stop", Since: window}, now)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+	sessions := make([]string, 0, len(res.Records))
+	for _, r := range res.Records {
+		sessions = append(sessions, r.SessionID)
+	}
+
+	st, err := queue.Summarize(store, sessions, cutoff)
+	if err != nil {
+		fmt.Fprintf(stdout, "agents review: %v\n", err)
+		return exitcode.NoRecord
+	}
+
+	scope := "all recorded history"
+	if window > 0 {
+		scope = "the last " + since
+	}
+	fmt.Fprintf(stdout, "capture instruction, over %s\n\n", scope)
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "sessions that did work\t%d\n", st.Sessions)
+	fmt.Fprintf(tw, "…of those, drafted something\t%d\n", st.SessionsDrafted)
+	fmt.Fprintf(tw, "draft rate\t%.0f%%\n", 100*st.DraftRate())
+	fmt.Fprintf(tw, "drafts written\t%d\n", st.Drafted)
+	fmt.Fprintf(tw, "…promoted\t%d\n", st.Promoted)
+	fmt.Fprintf(tw, "…binned\t%d\n", st.Binned)
+	fmt.Fprintf(tw, "…still pending\t%d\n", st.Pending)
+	if st.Promoted+st.Binned > 0 {
+		fmt.Fprintf(tw, "promotion rate\t%.0f%%\n", 100*st.PromotionRate())
+	}
+	_ = tw.Flush()
+
+	// The reading, spelled out, because a bare rate invites the wrong
+	// conclusion. The baseline is zero: twenty sessions under the previous
+	// instruction produced no handoffs at all.
+	fmt.Fprintln(stdout)
+	switch {
+	case st.Sessions == 0:
+		fmt.Fprintln(stdout, "no sessions recorded in this window; nothing can be concluded")
+		return exitcode.Advisory
+	case st.SessionsDrafted == 0:
+		fmt.Fprintln(stdout, "nothing drafted. This is the result that would justify §3b, then §3c —")
+		fmt.Fprintln(stdout, "but revise the instruction's wording and re-measure first: a cheap trigger")
+		fmt.Fprintln(stdout, "revised twice still costs less than the gate.")
+		return exitcode.Advisory
+	case st.Promoted+st.Binned == 0:
+		// Drafting is not the result. A draft nobody has judged is not
+		// evidence the instruction produces anything worth having, and saying
+		// otherwise here would be the readout marking its own homework.
+		fmt.Fprintf(stdout, "%d draft(s) written and none reviewed yet, so nothing is settled.\n", st.Drafted)
+		fmt.Fprintln(stdout, "Read them with `agents review --show <id>`: three bullets restating the diff")
+		fmt.Fprintln(stdout, "are a failure even at a 100% draft rate.")
+		return exitcode.Advisory
+	case st.PromotionRate() < 0.34:
+		fmt.Fprintln(stdout, "the instruction fires but produces material you mostly discard.")
+		fmt.Fprintln(stdout, "That is a wording problem, not an argument for a stronger trigger.")
+		return exitcode.Advisory
+	default:
+		fmt.Fprintln(stdout, "the instruction is producing material you keep; §3c is not justified.")
+		return exitcode.OK
+	}
+}
+
 func reviewShow(store, id string, stdout io.Writer) int {
 	d, err := queue.Get(store, id)
 	if err != nil {
@@ -126,7 +223,8 @@ func reviewShow(store, id string, stdout io.Writer) int {
 }
 
 func reviewBin(store, id string, stdout io.Writer) int {
-	if _, err := queue.Get(store, id); err != nil {
+	d, err := queue.Get(store, id)
+	if err != nil {
 		fmt.Fprintf(stdout, "agents review: %v\n", err)
 		return exitcode.NoRecord
 	}
@@ -134,8 +232,15 @@ func reviewBin(store, id string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "agents review: %v\n", err)
 		return exitcode.NoRecord
 	}
-	// Nothing tracked records the rejection. A draft nobody wanted is not a
-	// decision the repository needs to carry.
+	// Nothing TRACKED records the rejection -- a draft nobody wanted is not a
+	// decision the repository needs to carry. The machine-local event log does
+	// record it, because "drafted then binned" and "never drafted" are
+	// different answers to whether the instruction works, and an empty queue
+	// cannot tell them apart.
+	_ = queue.AppendEvent(store, queue.Event{
+		Event: queue.EventBinned, Session: d.Session,
+		Lane: d.Lane, Kind: d.Kind, DraftID: id,
+	})
 	fmt.Fprintf(stdout, "binned %s\n", tableCell(id))
 	return exitcode.OK
 }
@@ -241,6 +346,10 @@ func reviewKeep(rc *repo.Context, agentsDir, store, id string, stdout io.Writer)
 		fmt.Fprintf(stdout, "agents review: promoted, but the queued copy could not be removed: %v\n", err)
 		return exitcode.Advisory
 	}
+	_ = queue.AppendEvent(store, queue.Event{
+		Event: queue.EventPromoted, Session: d.Session,
+		Lane: d.Lane, Kind: d.Kind, DraftID: id,
+	})
 	fmt.Fprintf(stdout, "promoted %s -> %s\n", tableCell(id), tableCell(path))
 	return exitcode.OK
 }
