@@ -52,7 +52,7 @@ which do not read `CLAUDE.md` at all; withdrawing that leaves the question open
 rather than settled. What puts the instruction first is that only the cheap
 trigger can be measured cheaply — shipping a sentence *is* the experiment,
 whereas building the gate to find out whether the gate was needed is circular. A
-two-arm scenario run in `agents/testdata/capture-experiment/` decides whether
+two-arm scenario run in [the capture experiment](../analysis/2026-08-12-capture-instruction-experiment.md) decides whether
 §3b or §3c is ever justified — scripted, an afternoon, with a control arm.
 
 Read spec 7 before designing spec 3 — `agents distill` is demoted from the primary
@@ -106,3 +106,7 @@ that it was write-only: nothing could read a cached transcript back, so a
 
 - [`fixtures/`](fixtures/) — real hook payloads captured from live agent runs,
   used as test fixtures by spec 1. Sanitized; see the fixtures README.
+- [the capture experiment](../../analysis/2026-08-12-capture-instruction-experiment.md)
+  — the two-arm protocol that decides spec 7 §3a, with
+  [`agents/experiment/capture-setup.sh`](../../../../agents/experiment/capture-setup.sh)
+  as its harness. Not yet run.

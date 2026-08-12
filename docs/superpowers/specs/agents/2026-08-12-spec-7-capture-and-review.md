@@ -367,7 +367,7 @@ designed is a contingency nobody can cost — but nothing in it is built until t
 measurement below says the cheaper triggers were not enough.
 
 **What decides, and it has not happened yet.** Two arms of scripted scenarios in
-a throwaway repository — `agents/testdata/capture-experiment/`. One arm carries
+a throwaway repository — [the capture experiment](../analysis/2026-08-12-capture-instruction-experiment.md). One arm carries
 the instruction, one has it stripped, and the scenarios are chosen so that two
 have a real conclusion the diff cannot carry and two have none. `agents review
 --stats` reports the draft rate over sessions that *did work*, taken from the
@@ -686,7 +686,7 @@ begins:
 | Phase | Contents | Ends somewhere working | Gate to the next phase |
 |---|---|---|---|
 | A | One store, retention, migration, untracking, doctor changes | Tracked tree clean, store bounded. No new behaviour. | — |
-| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review`, the event log and `review --stats` | **The whole loop, closed, with a one-sentence trigger.** | The two-arm scenario run in `testdata/capture-experiment/` |
+| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review`, the event log and `review --stats` | **The whole loop, closed, with a one-sentence trigger.** | The two-arm scenario run in the capture experiment |
 | B″ | §3b's non-blocking nudge | Same loop, re-salienced late in long sessions | Another week, if B′ under-fires |
 | C | §3c's `Stop` gate: budget, watermarks, ceilings, the harness probe | Same loop, with capture forced | built only if B′ and B″ both fail |
 

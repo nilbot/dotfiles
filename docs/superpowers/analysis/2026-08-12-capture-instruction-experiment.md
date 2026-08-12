@@ -1,5 +1,11 @@
 # Measuring the capture instruction
 
+**Date:** 2026-08-12
+**Status:** not yet run
+**Measures:** [spec 7](../specs/agents/2026-08-12-spec-7-capture-and-review.md) §3a
+**Harness:** [`agents/experiment/capture-setup.sh`](../../../agents/experiment/capture-setup.sh)
+**Reported by:** `agents review --stats`
+
 The question: **does an agent record a durable conclusion when it is asked
 properly?** The baseline is zero — twenty sessions under the previous
 instruction produced no handoffs.
@@ -14,10 +20,12 @@ Two arms, because a draft rate on its own proves nothing: an agent might record
 conclusions with no instruction at all, and then the paragraph is decoration.
 
 ```bash
-cd agents/testdata/capture-experiment
-./setup.sh /tmp/cap-treatment
-./setup.sh /tmp/cap-control --no-instruction
+agents/experiment/capture-setup.sh /tmp/cap-treatment
+agents/experiment/capture-setup.sh /tmp/cap-control --no-instruction
 ```
+
+Run these from the dotfiles checkout root. Each takes a second and needs
+`agents` on `PATH`.
 
 Both repositories are identical except for the paragraph under test. Each has
 `agents init` run and the hooks wired, so `stop` records accumulate and the

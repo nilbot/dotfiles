@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Build a throwaway repository for measuring the capture instruction.
 #
+# The protocol this serves lives in
+# docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md.
+#
 # The repository is deliberately small and deliberately has a real bug in it:
 # the scenarios below have to be tasks where a genuine conclusion exists to be
 # recorded, or the experiment measures nothing but the model's manners.
 #
-# Usage:  ./setup.sh <dir> [--no-instruction]
+# Usage:  agents/experiment/capture-setup.sh <dir> [--no-instruction]
 #
 # --no-instruction scaffolds the same repo with the capture paragraph stripped
 # from CLAUDE.md. That is the control arm: without it, a draft rate means
@@ -14,11 +17,11 @@
 
 set -euo pipefail
 
-target="${1:?usage: setup.sh <dir> [--no-instruction]}"
+target="${1:?usage: capture-setup.sh <dir> [--no-instruction]}"
 arm="${2:-}"
 
 if [ -e "$target" ]; then
-  echo "setup.sh: $target already exists; pick a fresh path" >&2
+  echo "capture-setup.sh: $target already exists; pick a fresh path" >&2
   exit 1
 fi
 
@@ -105,5 +108,6 @@ git commit -q -m "agents init" 2>/dev/null || true
 
 echo "ready: $(pwd)"
 echo
-echo "Run the scenarios in SCENARIOS.md from inside this directory, then:"
+echo "Run the scenarios from docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md"
+echo "in a fresh Claude Code session per scenario, from inside this directory. Then:"
 echo "  agents review --stats"
