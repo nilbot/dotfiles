@@ -81,7 +81,6 @@ func TestCreateBuildsLayout(t *testing.T) {
 		".agents/reports/specs",
 		".agents/reports/plans",
 		".agents/reports/analysis",
-		".agents/reports/traces",
 		".agents/skills",
 	} {
 		if fi, err := os.Stat(filepath.Join(root, rel)); err != nil || !fi.IsDir() {
@@ -107,19 +106,18 @@ func TestCreateBuildsLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf(".gitattributes: %v", err)
 	}
-	if !strings.Contains(string(attrs), "merge=union") {
-		t.Error("traces need merge=union or a concurrent append produces invalid JSON")
+	if strings.Contains(string(attrs), "merge=union") {
+		t.Error("merge=union outlived the tracked index it protected")
 	}
 	if !strings.Contains(string(attrs), "linguist-generated=true") {
 		t.Error(".agents/** should collapse in diffs")
 	}
 	// The attribute tokens above say nothing about WHICH paths carry them, and a
 	// pathspec matching nothing is indistinguishable from a missing line: two
-	// branches appending traces on the same day then produce conflict markers
-	// that are not valid JSON, which a line-oriented reader silently drops.
-	// Both lines are verbatim plan constraints, so assert them whole.
+	// merge=union is gone with the tracked index it protected; see
+	// gitattributesLines. The rendering rule is a verbatim constraint and is
+	// asserted whole.
 	for _, want := range []string{
-		".agents/reports/traces/*.jsonl merge=union",
 		".agents/** linguist-generated=true",
 	} {
 		if !hasLine(string(attrs), want) {
@@ -292,7 +290,7 @@ func TestCreatePreservesExistingFiles(t *testing.T) {
 	if !strings.Contains(string(attrs), "*.png binary") {
 		t.Error("existing gitattributes lines must survive")
 	}
-	if !strings.Contains(string(attrs), "merge=union") {
+	if !strings.Contains(string(attrs), "linguist-generated=true") {
 		t.Error("our lines must still be appended")
 	}
 
@@ -301,7 +299,7 @@ func TestCreatePreservesExistingFiles(t *testing.T) {
 		t.Fatalf("second Create: %v", err)
 	}
 	attrs2, _ := os.ReadFile(filepath.Join(root, ".gitattributes"))
-	if strings.Count(string(attrs2), "merge=union") != 1 {
+	if strings.Count(string(attrs2), "linguist-generated=true") != 1 {
 		t.Errorf("gitattributes duplicated on re-run:\n%s", attrs2)
 	}
 }
@@ -364,5 +362,26 @@ func TestCreateAlwaysExcludesGeneratedHarnessConfigs(t *testing.T) {
 			t.Errorf("exclude missing %q:\n%s", want, exclude)
 		}
 		assertIgnored(t, root, strings.TrimPrefix(want, "/"))
+	}
+}
+
+func TestCreateNoLongerScaffoldsATrackedTraceDirectory(t *testing.T) {
+	root := newRepo(t)
+	if err := Create(root, false); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".agents", "reports", "traces")); !os.IsNotExist(err) {
+		t.Error("scaffold still creates .agents/reports/traces; the index is machine-local now")
+	}
+	b, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "merge=union") {
+		t.Error("merge=union survives, but nothing tracked appends concurrently now")
+	}
+	// The rendering rule is unrelated to traces and must stay.
+	if !strings.Contains(string(b), "linguist-generated=true") {
+		t.Error("Create dropped the linguist-generated attribute along with merge=union")
 	}
 }

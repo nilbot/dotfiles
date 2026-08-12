@@ -31,6 +31,8 @@ func runTrace(args []string, stdout io.Writer) int {
 		return runTraceShow(args[1:], stdout)
 	case "cache":
 		return runTraceCache(args[1:], stdout)
+	case "migrate":
+		return runTraceMigrate(args[1:], stdout)
 	default:
 		fmt.Fprintf(stdout, "agents trace: unknown subcommand %q\n", args[0])
 		return exitcode.Malformed
@@ -294,16 +296,39 @@ func runTraceShow(args []string, stdout io.Writer) int {
 // gone" does not mean "the content is irrelevant": a deleted branch is usually
 // a merged one, and a throwaway worktree is often exactly where the interesting
 // investigation happened.
+// Cache retention defaults, sized against each other.
+//
+// At the 51 MB/day this repository measured, 14 days is roughly 714 MB. A
+// 500 MB cap would evict at ten days and the age cap could never bind, leaving
+// one of the two as decoration. 1 GB keeps age as the policy in an active
+// repository and size as the backstop for a busier one.
+const (
+	DefaultCacheMaxAge         = 14 * 24 * time.Hour
+	DefaultCacheMaxBytes int64 = 1 << 30
+)
+
 func runTraceCachePrune(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("trace cache prune", flag.ContinueOnError)
 	fs.SetOutput(stdout)
-	lane := fs.String("lane", "", "the lane whose cached copies to remove (required)")
+	lane := fs.String("lane", "", "the lane whose cached copies to remove")
+	retention := fs.Bool("retention", false, "instead prune by age and size, the same caps the hook enforces")
+	age := fs.Duration("age", DefaultCacheMaxAge, "with --retention: evict copies older than this")
+	size := fs.Int64("size", DefaultCacheMaxBytes, "with --retention: total byte cap, oldest evicted first")
 	apply := fs.Bool("yes", false, "actually remove them; without this it only reports")
 	if err := fs.Parse(args); err != nil {
 		return exitcode.Malformed
 	}
-	if *lane == "" {
-		fmt.Fprintln(stdout, "usage: agents trace cache prune --lane <name> [--yes]")
+	if *lane == "" && !*retention {
+		fmt.Fprintln(stdout, "usage: agents trace cache prune --lane <name> [--yes]\n"+
+			"       agents trace cache prune --retention [--age <d>] [--size <bytes>] [--yes]")
+		return exitcode.Malformed
+	}
+	if *lane != "" && *retention {
+		// Two different questions. --lane asks which material is irrelevant and
+		// is answered by a human; --retention asks what no longer fits and is
+		// answered by arithmetic. Running both from one invocation would report
+		// one number for two decisions.
+		fmt.Fprintln(stdout, "agents trace cache prune: --lane and --retention are separate operations; run them separately")
 		return exitcode.Malformed
 	}
 
@@ -323,21 +348,35 @@ func runTraceCachePrune(args []string, stdout io.Writer) int {
 		return exitcode.NoRecord
 	}
 
-	rep, err := trace.PruneLane(cacheRoot, res.Records, *lane, *apply)
+	var rep trace.PruneReport
+	if *retention {
+		rep, err = trace.PruneRetention(cacheRoot, *age, *size, time.Now(), *apply)
+	} else {
+		rep, err = trace.PruneLane(cacheRoot, res.Records, *lane, *apply)
+	}
 	if err != nil {
 		fmt.Fprintf(stdout, "agents trace cache prune: %v\n", err)
 		return exitcode.Malformed
 	}
 	if rep.Removed == 0 {
-		fmt.Fprintf(stdout, "no cached transcripts for lane %q\n", *lane)
+		if *retention {
+			fmt.Fprintln(stdout, "the cache is within both caps")
+		} else {
+			fmt.Fprintf(stdout, "no cached transcripts for lane %q\n", *lane)
+		}
 		return exitcode.OK
 	}
 	verb := "would remove"
 	if *apply {
 		verb = "removed"
 	}
-	fmt.Fprintf(stdout, "%s %d cached transcript(s), %.1f MB, for lane %q\n",
-		verb, rep.Removed, float64(rep.Bytes)/(1024*1024), *lane)
+	if *retention {
+		fmt.Fprintf(stdout, "%s %d cached transcript(s), %.1f MB, over the retention caps\n",
+			verb, rep.Removed, float64(rep.Bytes)/(1024*1024))
+	} else {
+		fmt.Fprintf(stdout, "%s %d cached transcript(s), %.1f MB, for lane %q\n",
+			verb, rep.Removed, float64(rep.Bytes)/(1024*1024), *lane)
+	}
 	for _, d := range rep.Details {
 		fmt.Fprintln(stdout, "  "+tableCell(d))
 	}

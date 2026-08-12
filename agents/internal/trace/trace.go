@@ -204,3 +204,77 @@ func matches(r record.Record, f Filter, cutoff time.Time) bool {
 	}
 	return true
 }
+
+// MigrateTrackedIndex copies the previously tracked daily files into the store.
+//
+// Line-wise and set-based rather than a file copy, because both sides can be
+// non-empty at once: a migrated binary may already have written today's records
+// into the store while the tracked file still holds this morning's, and a merge
+// can bring tracked records in after the first migration ran. Appending only
+// the lines the store does not already have makes a second run a no-op, which
+// is what lets this be re-run rather than being a one-shot nobody dares repeat.
+//
+// It copies and never deletes. Removing the tracked files is a git operation
+// with a commit attached, and it belongs to whoever is deciding what else is in
+// flight -- not to the function that made the content safe to remove.
+func MigrateTrackedIndex(agentsDir, storeDir string) (int, error) {
+	src := filepath.Join(agentsDir, "reports", "traces")
+	entries, err := os.ReadDir(src)
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	dst := filepath.Join(storeDir, "traces")
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return 0, err
+	}
+
+	moved := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		in, err := os.ReadFile(filepath.Join(src, e.Name()))
+		if err != nil {
+			return moved, err
+		}
+		target := filepath.Join(dst, e.Name())
+		have := map[string]bool{}
+		existing, err := os.ReadFile(target)
+		if err != nil && !os.IsNotExist(err) {
+			return moved, err
+		}
+		for _, l := range strings.Split(string(existing), "\n") {
+			if l != "" {
+				have[l] = true
+			}
+		}
+		var add []string
+		for _, l := range strings.Split(string(in), "\n") {
+			if l == "" || have[l] {
+				continue
+			}
+			have[l] = true
+			add = append(add, l)
+		}
+		if len(add) == 0 {
+			continue
+		}
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return moved, err
+		}
+		_, werr := f.WriteString(strings.Join(add, "\n") + "\n")
+		cerr := f.Close()
+		if werr != nil {
+			return moved, werr
+		}
+		if cerr != nil {
+			return moved, cerr
+		}
+		moved++
+	}
+	return moved, nil
+}

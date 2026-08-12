@@ -676,15 +676,15 @@ func TestAttributeDiagnosticsRejectWrongConfigTargetAndSource(t *testing.T) {
 				t.Fatal(err)
 			}
 			other := filepath.Join(t.TempDir(), "attrs")
-			if err := os.WriteFile(other, []byte(globalTraceAttribute+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(other, []byte("*.txt text\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(other, deps.AttributesLink); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"source line", func(t *testing.T, deps *Dependencies) {
-			if err := os.WriteFile(deps.AttributesSource, []byte("*.txt text\n"), 0o644); err != nil {
+		{"unreadable source", func(t *testing.T, deps *Dependencies) {
+			if err := os.Remove(deps.AttributesSource); err != nil {
 				t.Fatal(err)
 			}
 		}},

@@ -1151,7 +1151,11 @@ func TestTask18HookDirectoryIgnoresMachineLinksButTracksItsIgnoreFile(t *testing
 	}
 }
 
-func TestTask18TrackedAttributesContainOnlyTheGlobalTraceRule(t *testing.T) {
+// The global attributes file carries no rules since the trace merge=union
+// attribute retired with the tracked index. It still has to exist and still has
+// to be free of private paths: core.attributesFile points at it, and it is
+// tracked in a public repository.
+func TestTask18TrackedAttributesCarryNoRulesAndNoPrivatePaths(t *testing.T) {
 	root := task18RepoRoot(t)
 	contents, err := os.ReadFile(filepath.Join(root, "git", "gitattributes"))
 	if err != nil {
@@ -1164,8 +1168,8 @@ func TestTask18TrackedAttributesContainOnlyTheGlobalTraceRule(t *testing.T) {
 			rules = append(rules, line)
 		}
 	}
-	if len(rules) != 1 || rules[0] != ".agents/reports/traces/*.jsonl merge=union" {
-		t.Fatalf("global attributes rules = %q", rules)
+	if len(rules) != 0 {
+		t.Fatalf("global attributes rules = %q, want none", rules)
 	}
 	if strings.Contains(string(contents), "/Users/") || strings.Contains(string(contents), task18RepoRoot(t)) {
 		t.Fatal("tracked global attributes contain a private absolute path")

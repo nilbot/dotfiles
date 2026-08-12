@@ -53,11 +53,12 @@ changes with ` + "`agents save`" + ` so they do not ride along with code changes
 // gitattributesLines are tracked on purpose: they are a statement about how this
 // repository merges and renders, which belongs to the repository.
 //
-// merge=union is load-bearing, not cosmetic. Two branches appending traces on
-// the same day otherwise produce conflict markers that are not valid JSON, and a
-// line-oriented reader silently drops those lines.
+// merge=union used to be here and is gone with the thing it protected. It
+// existed because two branches appending to the same tracked daily trace file
+// produced conflict markers that are not valid JSON, which a line-oriented
+// reader silently drops. The index is machine-local now, so nothing tracked
+// appends concurrently and the attribute has nothing to defend.
 var gitattributesLines = []string{
-	".agents/reports/traces/*.jsonl merge=union",
 	".agents/** linguist-generated=true",
 }
 
@@ -79,7 +80,6 @@ var dirs = []string{
 	"reports/specs",
 	"reports/plans",
 	"reports/analysis",
-	"reports/traces",
 	"skills",
 }
 

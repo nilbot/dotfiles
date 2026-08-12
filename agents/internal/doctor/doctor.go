@@ -498,11 +498,8 @@ func checkLegacyHooks(repoRoot string, deps Dependencies) Check {
 }
 
 var repoAttributeLines = []string{
-	".agents/reports/traces/*.jsonl merge=union",
 	".agents/** linguist-generated=true",
 }
-
-const globalTraceAttribute = ".agents/reports/traces/*.jsonl merge=union"
 
 func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	if deps.Git == nil {
@@ -525,9 +522,13 @@ func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	if err != nil || !sourceInfo.Mode().IsRegular() || !os.SameFile(linkTarget, sourceInfo) {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link does not resolve to the tracked source", Remedy: "run the reviewed global hook installer"}
 	}
-	source, err := safeio.ReadRegular(deps.AttributesSource)
-	if err != nil || !hasExactLine(source, globalTraceAttribute) {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes source lacks the exact trace merge rule", Remedy: "restore the tracked attributes source"}
+	// The source has to be readable and has to be the tracked file, checked
+	// above. Its contents are no longer asserted: the one rule that lived here
+	// was the trace merge=union attribute, which retired with the tracked
+	// index. Asserting a specific line again would mean this check fails the
+	// moment the file legitimately holds nothing.
+	if _, err := safeio.ReadRegular(deps.AttributesSource); err != nil {
+		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes source is unreadable", Remedy: "restore the tracked attributes source"}
 	}
 	repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
 	if err != nil {

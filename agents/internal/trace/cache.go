@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/record"
 )
@@ -484,4 +486,102 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.Rename(tmp, dst)
+}
+
+// PruneRetention bounds the cache by age and by total size.
+//
+// The cache grew 51 MB in one day on the repository this was written for, with
+// no policy anywhere. Capture is only possible at the instant the hook fires
+// and never afterwards, so caching stays; what has to change is that it stops
+// growing forever.
+//
+// Both caps or neither is a false choice -- they have to be sized against each
+// other or one of them is decoration. At 51 MB/day a 500 MB cap evicts at ten
+// days, so a 14-day age cap could never bind. The defaults in cmd_trace.go are
+// 14 days and 1 GB for that reason.
+//
+// Age first, then size over whatever survived, oldest evicted first.
+// Modification time orders it rather than the record timestamp: a cached copy
+// is a file, and the file is what has to fit. A zero cap disables that
+// dimension.
+//
+// Nothing here reads a record. This bounds copies; the index it copies from is
+// never touched, because losing an index entry loses the knowledge that there
+// was ever anything to look for.
+func PruneRetention(root string, maxAge time.Duration, maxBytes int64, now time.Time, apply bool) (PruneReport, error) {
+	type cached struct {
+		path string
+		size int64
+		mod  time.Time
+	}
+	var rep PruneReport
+	var kept []cached
+
+	drop := func(c cached) error {
+		rep.Removed++
+		rep.Bytes += c.size
+		rep.Details = append(rep.Details, c.path)
+		if !apply {
+			return nil
+		}
+		return os.Remove(c.path)
+	}
+
+	harnesses, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		// A repository that has never cached anything is a normal state, not a
+		// failure to prune.
+		return rep, nil
+	}
+	if err != nil {
+		return rep, err
+	}
+	for _, h := range harnesses {
+		if !h.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, h.Name()))
+		if err != nil {
+			return rep, err
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				continue
+			}
+			info, err := f.Info()
+			if err != nil {
+				return rep, err
+			}
+			c := cached{path: filepath.Join(root, h.Name(), f.Name()), size: info.Size(), mod: info.ModTime()}
+			if maxAge > 0 && now.Sub(c.mod) > maxAge {
+				if err := drop(c); err != nil {
+					return rep, err
+				}
+				continue
+			}
+			kept = append(kept, c)
+		}
+	}
+
+	if maxBytes <= 0 {
+		return rep, nil
+	}
+	var total int64
+	for _, c := range kept {
+		total += c.size
+	}
+	if total <= maxBytes {
+		return rep, nil
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].mod.Before(kept[j].mod) })
+	for _, c := range kept {
+		if total <= maxBytes {
+			break
+		}
+		if err := drop(c); err != nil {
+			return rep, err
+		}
+		total -= c.size
+	}
+	return rep, nil
 }

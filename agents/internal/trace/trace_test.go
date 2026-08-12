@@ -471,3 +471,75 @@ func TestParseSinceRejectsWindowsThatWouldSilentlyMeanNoWindow(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateTrackedIndexIsIdempotentAndLossless(t *testing.T) {
+	agentsDir, store := t.TempDir(), t.TempDir()
+	src := filepath.Join(agentsDir, "reports", "traces")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	lines := `{"when":"2026-08-10T00:00:00Z","event":"stop"}` + "\n"
+	if err := os.WriteFile(filepath.Join(src, "2026-08-10.jsonl"), []byte(lines), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := MigrateTrackedIndex(agentsDir, store); err != nil {
+			t.Fatalf("MigrateTrackedIndex run %d: %v", i, err)
+		}
+	}
+	got, err := os.ReadFile(filepath.Join(store, "traces", "2026-08-10.jsonl"))
+	if err != nil {
+		t.Fatalf("migrated file missing: %v", err)
+	}
+	// Running twice must not double the history. A migration that can only be
+	// run once is one nobody can re-run after a merge brings more records in.
+	if string(got) != lines {
+		t.Errorf("content = %q, want %q", got, lines)
+	}
+}
+
+func TestMigrateTrackedIndexMergesWithRecordsTheStoreAlreadyHas(t *testing.T) {
+	agentsDir, store := t.TempDir(), t.TempDir()
+	src := filepath.Join(agentsDir, "reports", "traces")
+	dst := filepath.Join(store, "traces")
+	for _, d := range []string{src, dst} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shared := `{"when":"2026-08-10T00:00:00Z","event":"stop"}`
+	trackedOnly := `{"when":"2026-08-10T01:00:00Z","event":"session-start"}`
+	storeOnly := `{"when":"2026-08-10T02:00:00Z","event":"subagent-stop"}`
+	if err := os.WriteFile(filepath.Join(src, "2026-08-10.jsonl"), []byte(shared+"\n"+trackedOnly+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dst, "2026-08-10.jsonl"), []byte(shared+"\n"+storeOnly+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateTrackedIndex(agentsDir, store); err != nil {
+		t.Fatalf("MigrateTrackedIndex: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dst, "2026-08-10.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(b)
+	for _, want := range []string{shared, trackedOnly, storeOnly} {
+		if !strings.Contains(body, want) {
+			t.Errorf("migration lost a record: %s", want)
+		}
+	}
+	if strings.Count(body, shared) != 1 {
+		t.Errorf("the shared record was duplicated:\n%s", body)
+	}
+}
+
+func TestMigrateTrackedIndexOnAnAbsentSourceIsNotAnError(t *testing.T) {
+	n, err := MigrateTrackedIndex(t.TempDir(), t.TempDir())
+	if err != nil {
+		t.Fatalf("MigrateTrackedIndex: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("moved = %d, want 0", n)
+	}
+}

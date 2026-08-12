@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -434,5 +435,38 @@ func TestHookAutoCacheCanBeTurnedOff(t *testing.T) {
 	// The pointer is not the expensive part and is not what was opted out of.
 	if rec := readOnlyRecord(t, root); rec["agent_id"] != "a9f3" {
 		t.Errorf("opting out of caching must not stop recording: got %v", rec)
+	}
+}
+
+func TestSubagentStopPrunesTheCacheItJustWroteInto(t *testing.T) {
+	root := newRepo(t)
+	cacheRoot := filepath.Join(mustStoreDir(t, root), "trace-cache")
+	stale := filepath.Join(cacheRoot, "claude-code", "stale.jsonl")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Older than the age cap by a wide margin.
+	long := time.Now().Add(-90 * 24 * time.Hour)
+	if err := os.Chtimes(stale, long, long); err != nil {
+		t.Fatal(err)
+	}
+
+	transcript := filepath.Join(t.TempDir(), "agent-a1.jsonl")
+	if err := os.WriteFile(transcript, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload := `{"hook_event_name":"SubagentStop","session_id":"s1","agent_id":"a1","cwd":"` +
+		root + `","transcript_path":"` + transcript + `","agent_transcript_path":"` + transcript + `"}`
+	t.Chdir(root)
+	if code := runHook([]string{"subagent-stop", "--harness", "claude-code"},
+		strings.NewReader(payload), io.Discard); code != 0 {
+		t.Fatalf("hook exited %d; recording must never fail the dispatch", code)
+	}
+
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("the aged-out copy survived a cache write; retention is not enforced where the cache grows")
 	}
 }

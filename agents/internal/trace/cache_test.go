@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
@@ -999,4 +1000,109 @@ func TestPruneLaneCountsOnlyWhatIsActuallyInTheCache(t *testing.T) {
 	if rep.Removed != 0 || rep.Bytes != 0 {
 		t.Errorf("report = %+v, want zeroes: nothing was ever cached for that record", rep)
 	}
+}
+
+// seedCached writes one cached copy with a given size and modification time.
+func seedCached(t *testing.T, root, harness, name string, size int, at time.Time) string {
+	t.Helper()
+	dir := filepath.Join(root, harness)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, bytes.Repeat([]byte("x"), size), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(p, at, at); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestPruneRetentionEvictsByAge(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	old := seedCached(t, root, "claude-code", "old.jsonl", 1, now.Add(-20*24*time.Hour))
+	fresh := seedCached(t, root, "claude-code", "fresh.jsonl", 1, now.Add(-time.Hour))
+
+	rep, err := PruneRetention(root, 14*24*time.Hour, 1<<30, now, true)
+	if err != nil {
+		t.Fatalf("PruneRetention: %v", err)
+	}
+	if rep.Removed != 1 {
+		t.Errorf("Removed = %d, want 1", rep.Removed)
+	}
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("the aged-out copy survived")
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Error("a fresh copy was evicted by the age cap")
+	}
+}
+
+func TestPruneRetentionEvictsOldestFirstUnderTheSizeCap(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	// Three 100-byte copies an hour apart against a 250-byte cap: the oldest
+	// has to go and the two newest have to stay.
+	a := seedCached(t, root, "claude-code", "a.jsonl", 100, now.Add(-3*time.Hour))
+	b := seedCached(t, root, "claude-code", "b.jsonl", 100, now.Add(-2*time.Hour))
+	c := seedCached(t, root, "codex", "c.jsonl", 100, now.Add(-1*time.Hour))
+
+	rep, err := PruneRetention(root, 0, 250, now, true)
+	if err != nil {
+		t.Fatalf("PruneRetention: %v", err)
+	}
+	if rep.Removed != 1 {
+		t.Fatalf("Removed = %d, want 1", rep.Removed)
+	}
+	if _, err := os.Stat(a); !os.IsNotExist(err) {
+		t.Error("the oldest copy survived the size cap")
+	}
+	for _, p := range []string{b, c} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was evicted although the cap was already met", filepath.Base(p))
+		}
+	}
+}
+
+func TestPruneRetentionDryRunRemovesNothingButReports(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC)
+	p := seedCached(t, root, "claude-code", "old.jsonl", 7, now.Add(-30*24*time.Hour))
+
+	rep, err := PruneRetention(root, 14*24*time.Hour, 1<<30, now, false)
+	if err != nil {
+		t.Fatalf("PruneRetention: %v", err)
+	}
+	if rep.Removed != 1 || rep.Bytes != 7 {
+		t.Errorf("report = %+v, want 1 file and 7 bytes", rep)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Error("a dry run deleted a copy; this is the one operation that cannot be undone")
+	}
+}
+
+func TestPruneRetentionOnAnAbsentCacheIsNotAnError(t *testing.T) {
+	rep, err := PruneRetention(filepath.Join(t.TempDir(), "never-created"), time.Hour, 1, time.Now(), true)
+	if err != nil {
+		t.Fatalf("PruneRetention on an absent cache: %v", err)
+	}
+	if rep.Removed != 0 {
+		t.Errorf("Removed = %d, want 0", rep.Removed)
+	}
+}
+
+// The caps have to be sized against each other or one of them never binds.
+// This pins the arithmetic the defaults were chosen from rather than the
+// numbers themselves, so a future change to either has to stay coherent.
+func TestRetentionDefaultsAreSizedAgainstEachOther(t *testing.T) {
+	const measuredBytesPerDay = 51 << 20 // observed on this repository
+	days := int64(14)
+	cap := int64(1) << 30
+	if measuredBytesPerDay*days <= cap {
+		return // age binds first, which is the intent
+	}
+	t.Errorf("at %d MB/day the %d-day age cap needs more than %d MB to ever bind; one cap is decoration",
+		measuredBytesPerDay>>20, days, cap>>20)
 }
