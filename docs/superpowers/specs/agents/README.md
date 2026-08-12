@@ -16,6 +16,7 @@ number may be implemented before an earlier one without renumbering either.
 | 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | candidate, gated on triggers | spec 1 (adapters) |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | designed | spec 1 (exit codes, security boundaries) |
 | 6 | [releases and binary distribution](2026-08-11-spec-6-releases-and-distribution.md) | scope only | spec 1, spec 5 |
+| 7 | [capture at the boundary, review before tracking](2026-08-12-spec-7-capture-and-review.md) | designed | spec 1 (tiers, record schema, adapters, exit codes) |
 
 **Spec 1 is the implemented foundation.** It defines the terminology, placement
 rule, pointer format, Go module, and installation boundaries that the remaining
@@ -31,6 +32,22 @@ needed no open decisions, and no single plan could be written against the union.
 Spec 5 kept verification and was designed; everything else moved to spec 6
 intact. Spec 6 depends on spec 5 rather than the reverse: releases built on a
 repository with no automated gate publish unverified binaries on a schedule.
+
+**Spec 7 amends spec 1 and changes spec 3's premise.** It came out of using spec 1
+for five days and finding that the tracked trace index is a reference to
+machine-bound material filed in the tracked tier: 48% of its records were
+unreachable on the machine that wrote them, while the curated store it was meant
+to feed held zero handoffs. Spec 7 untracks the trace store, adds an untracked
+draft queue filled by a blocking `Stop` gate, and makes promotion into `.agents/`
+a single reviewed act.
+
+Read spec 7 before designing spec 3 — `agents distill` is demoted from the primary
+path to the fallback, and designing against spec 3's current text would build the
+wrong thing. Spec 7 also resolves one contradiction in spec 1 §6 (the `Stop` gate
+is a second deliberate exception to fail-open recording, and it blocks on success
+rather than failure), adds a capability requirement to spec 4, and adds store
+migration to spec 6's scope. Its one collision with spec 5 is the command
+registry: `agents review` and `agents handoff draft` land in it.
 
 Spec 2 is independent of the `agents` tool and shares no code with it; it lives
 here because its numbering and its one ordering constraint (spec 1 §8) belong to

@@ -1,0 +1,588 @@
+# Spec 7 — capture at the boundary, review before tracking
+
+**Date:** 2026-08-12
+**Status:** designed — not implemented
+**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the tiers,
+the record schema, the hook adapters, and the exit-code contract.
+**Amends:** spec 1 §1, §3.6, §3.7, §4, §6. See
+[Cross-spec impact](#cross-spec-impact).
+**Changes the premise of:** [spec 3](2026-08-07-spec-3-agents-distill.md), which
+is scope-only and must not be designed against its current primary path.
+
+---
+
+## Origin
+
+Spec 1 shipped and was used for five days. This spec is the review of what that
+produced, from the observation that started it: *tracking traces in git is a weird
+design, and the experience is weird.*
+
+The complaint is correct, and the defect is one tier assignment made in spec 1 §1.
+Everything below follows from repairing it.
+
+---
+
+## Measured baseline (2026-08-12T17:15Z)
+
+On this machine, this repository, five days after `agents init`.
+
+**The tracked trace store**
+
+- 63 records across 3 daily files, 24,409 bytes tracked.
+- By event: 21 `session-start`, 26 `stop`, 16 `subagent-stop`.
+- **30 of 63 records (48%) point at transcripts that no longer exist** — on the
+  machine that wrote them. All 16 `subagent-stop` pointers are unreachable;
+  13 of 21 `session-start`; 1 of 26 `stop`.
+- 20 distinct sessions.
+
+**Growth is decoupled from value.** Earlier the same day the store held 43
+records from the same 20 sessions. The 20 records added between the two
+measurements were produced by a single design conversation that wrote no code.
+
+**The cache**
+
+- `<git-common-dir>/agents/trace-cache`: 66 files, 51 MB, accumulated in
+  roughly one day. No retention policy exists in any spec.
+
+**What the tracked half has produced**
+
+- 3 commits have ever touched `.agents/reports/traces/`.
+- The working tree has been dirty with trace churn essentially continuously;
+  it was dirty at the start of this design session and dirty at the end.
+- 4 commits have ever touched `.agents/` at all. Three of them were traces.
+
+**What the curated half has produced**
+
+- 2 memory entries.
+- **0 handoffs.** `reports/handoff/INDEX.md` is empty after 20 sessions and
+  26 `stop` events.
+
+**Health**
+
+- `agents doctor` exits 1 on this healthy machine. One of its two warnings is
+  `pointers:local-unreachable — 30 verified local pointer(s) are unreachable and
+  uncached`, remediation *"run `agents trace cache` sooner; subagent transcripts
+  are deleted mid-session."* That is advice to win a race that
+  [`harness-transcript-retention`](../../../../.agents/memory/harness-transcript-retention.md)
+  records as unwinnable.
+
+**Exposure**
+
+- `origin` is `github.com:nilbot/dotfiles`, which spec 1 §10 states is public,
+  and the trace files are pushed. Each record publishes hostname, an absolute
+  `$HOME` path, a session UUID, `cwd`, and `lane` — where `lane` is the branch
+  name.
+
+---
+
+## Diagnosis
+
+### The tier error
+
+Spec 1 §1's three tiers are sound. The error is that **a reference to tier 3 was
+filed in tier 2**.
+
+Test a trace record against tier 2's own definition — holds "what this codebase
+is," travels with the repo. The record travels. What it names cannot, ever, by
+construction. On arrival it is a name for a file nobody can open.
+
+§3.3 anticipated the objection and answered that provenance makes the pointer
+meaningful elsewhere. That is true in a narrow sense — `machine` tells you whose
+disk held it — and it is not the sense that matters. Knowing which machine holds
+an unreadable file is a receipt, not a record.
+
+### Why cross-machine recall was never an intermediate state
+
+The stated goal is durable repo knowledge future agents can use. Cross-machine
+recall was adopted as a step toward it. It is not a step; it is a fork with two
+ends, and neither is an intermediate state:
+
+- **Pointer travels, content does not** — the receiving agent learns a session
+  existed and cannot read it. This is the measured condition of 48% of records
+  on the *originating* machine.
+- **Content travels** — it travels because it has been distilled into prose,
+  which is the goal itself. The intermediate has collapsed into the destination.
+
+Distillation can only run where the material is. Its *output* travels; its
+*input* never needs to. Git is not involved at any point in that path.
+
+### Three inversions
+
+1. **The pointer is tracked; the payload is deferred.** What is worth committing
+   is a conclusion. Conclusions are spec 3, unbuilt. The system commits the
+   worthless half and defers the valuable one.
+2. **Durability is assigned backwards.** The design assumed transcripts persist
+   well enough for a pointer, making content capture optional and manual.
+   The reverse is true: transcripts are ephemeral, the copy is durable. So the
+   ephemeral reference is tracked and the irreplaceable content is machine-local
+   with no retention policy.
+3. **Cost accrues per session; value accrues per insight.** Every
+   `session-start` writes a line whether or not the session did anything.
+
+### The tell
+
+Three mechanisms exist only to contain the damage of tracking a
+machine-generated append-only log in the working tree: `merge=union` in
+`.gitattributes`, guard's mixed-commit warning, and `agents save` as a scoped
+commit command. Spec 1 §1 states the test they fail — *"anything that does not
+clearly fit one tier is a design smell."*
+
+### Why handoffs are empty, which is the more important failure
+
+The trace store is noisy. The curated store is *empty*, and that is the failure
+that matters, because the curated store is the entire point.
+
+§4 named two ways a handoff comes into being: written deliberately via a skill,
+or auto-drafted at `Stop`/`SessionEnd` and marked `draft`. **Neither was built.**
+Nothing in `cmd_hook.go` or any harness adapter mentions handoff. Twenty-six
+`Stop` events produced twenty-six trace lines and zero drafts.
+
+Both surviving paths reduce to *a human or agent remembers, unprompted, to author
+prose and pipe it to stdin.* Five-day score: zero.
+
+**The queue was never the problem. Nothing filled it.**
+
+### The constraint that shapes the repair
+
+Spec 1's Claude Code measurements record: *"Subagents inherit `CLAUDE.md` but do
+not act on it — 0 of 31 observed subagents followed an inherited bootstrap
+directive. This is why recording must be a hook and never an instruction."*
+
+That rule is true for pointers and **false by necessity for meaning**. A hook is
+a subprocess; it cannot write prose. Only a model can, and directing a model is
+instruction. The split:
+
+| | mechanism | reliability | value of output |
+|---|---|---|---|
+| pointers | hook | mechanical | ~nothing |
+| meaning | instruction | unreliable | the entire point |
+
+Mechanical semantic capture is not available. What is available is the strongest
+form of instruction: a blocking hook whose reason the model must satisfy before
+the turn ends, rather than an ambient directive that measured 0 of 31.
+
+---
+
+## Design
+
+### 1. The corrected rule
+
+> **The tracked tier holds conclusions. Everything upstream of a conclusion is
+> machine-local.**
+
+| | before | after |
+|---|---|---|
+| trace index | tracked | machine-local store |
+| cached transcripts | `.git/agents/trace-cache` | same store |
+| drafts | did not exist | store, untracked queue |
+| memory entries, handoffs | tracked | **unchanged** |
+
+Spec 1 §1's operations table gains two entries and loses portability in two:
+
+| Operation | Command | Behaviour |
+|---|---|---|
+| Check | `agents doctor` | local reachability, queue depth, store size, gate liveness |
+| Materialize | `subagent-stop` hook, `agents trace cache` | unchanged, now bounded by retention |
+| Read | `agents trace show <id>` | unchanged, local only |
+| **Draft** | the `Stop` gate (§3) | model writes a candidate into the untracked queue |
+| **Promote** | `agents review --keep <id>` (§4) | human selects; writes, reindexes, commits |
+| Distil | `agents distill` (spec 3) | **demoted to fallback** — see cross-spec impact |
+
+This puts the design in agreement with spec 3 rather than in conflict with it.
+Spec 3 already requires that drafting "never writes unreviewed model output
+straight into the tracked tree." Spec 3 assumed a queue and never said where it
+lived. This supplies it.
+
+### 2. One store
+
+Index, cache, and queue become one machine-local store rather than two halves
+under different rationales.
+
+**Location: `<git-common-dir>/agents/`** — where the cache already is.
+
+The competing option is XDG state under `machine.StateDir()`, keyed by a stable
+repo identity, matching the fleet registry (§10). It was rejected here, and the
+reasoning turns on a decision made in §3 of this spec rather than on §10's:
+
+- **For `<git-common-dir>`:** lifecycle is free. Delete the repo, the store goes
+  with it. XDG-keyed storage needs a stable repo identity — paths and remotes
+  both move, so the key would have to be the root-commit hash — and strands
+  orphaned directories of hundreds of megabytes for repos deleted months ago,
+  requiring a GC command. That is one more chore, and chores are what this spec
+  exists to remove.
+- **Against, and unmitigated:** delete-and-re-clone loses the store. If
+  unpromoted drafts are in the queue at that moment, that work is gone. The
+  queue is short-lived by design and its depth is surfaced at boundaries and by
+  `doctor`, which reduces the window without closing it.
+
+The durability bar dropped because §3 moves drafting to the moment context is
+live. The cache stops being upstream of anything and becomes forensic
+convenience. Had drafting stayed downstream of the cache, XDG would be correct.
+
+**Retention — new, and currently absent from every spec.** 51 MB/day unbounded
+is the live defect. Capture is only possible at the instant the hook fires and
+never afterwards, so caching stays; it must be bounded:
+
+- age cap, default **14 days**
+- size cap, default **500 MB**, evicting oldest first
+- pruned automatically at `post-merge`, when a lane has landed and its material
+  is least likely to be wanted
+- `agents trace cache prune --lane <n>` stays as the manual override
+
+**The index keeps recording everything it records today, including
+`session-start`.** Untracked it costs ~400 bytes a day, and the per-lane `stop`
+count is what §3's budget arithmetic counts against. Its job changes from
+portable provenance — which it could not do — to local forensics and the gate's
+own bookkeeping, which it can.
+
+### 3. Capture: the `Stop` gate
+
+**Order of operations on every `Stop`:**
+
+1. Record the trace line. Always, silently, fail-open.
+2. Budget spent on this lane today? → **exit 0.** The common path, free.
+3. `stop_hook_active` set? → **exit 0.** No loops.
+4. Floor not met? → **exit 0.**
+5. Otherwise **spend the budget — write the watermark before blocking** — and
+   exit non-zero with a reason.
+
+Spending before the outcome is deliberate. A decline must cost the same as a
+draft, or the gate re-asks on the next turn and rebuilds the annoyance it exists
+to avoid.
+
+**The budget is elastic, indexed to work, not to the clock.**
+
+A flat daily cap rations interruptions on a calendar while the thing being
+rationed is produced by work. A 40-turn day and a 3-turn day would get the same
+allowance — the same category error as recording per `session-start`.
+
+- **Ask #1:** floor met, no ask spent on this lane today.
+- **Ask #n+1:** the lane has moved — **N `stop` records on this lane since the
+  last ask watermark**.
+- **Ceiling K per lane per day**, so a pathological day cannot spiral.
+
+Turns are the right unit. Commit counts over-trigger in a repository where the
+agent commits several times an hour, and under-trigger for read-only work — and
+read-only work is where the valuable sessions are: the two-hour debugging session
+that touches nothing and concludes *why*. The count is free: the index already
+records every `stop`, so turns-since-last-ask is a count over the store.
+
+**The floor (step 4) stays deliberately low.** Its only job is to avoid asking on
+a session that just started; the budget already bounds over-firing. Turn count or
+a dispatched subagent is enough. The tempting proxies — files changed, commits
+made — exclude exactly the sessions worth capturing.
+
+**Starting constants, labelled as guesses: N = 10 `stop` records, K = 3 per lane
+per day.** §4.1's lane-health thresholds have sat unimplemented at "tuned once
+there is real data" because nothing collects the data. This gate collects its
+own. Every ask records its outcome in the store — drafted, declined, and later
+promoted or binned — giving three signals with unambiguous readings:
+
+| signal | means | fix |
+|---|---|---|
+| high decline rate | asking too often | raise N |
+| drafts written, rarely promoted | asking at the wrong moments | raise the floor; reconsider mid-work timing |
+| lanes going a week with an empty queue | asking too rarely | lower N |
+
+**The reason text must make declining first-class**, or the known failure mode of
+letting the model judge relevance — an agreeable model drafting something rather
+than saying "nothing here" — becomes the default:
+
+> Lane `feat-x` has no note from today. If this session produced something a
+> future agent would want and cannot get from the code or git history, draft it
+> now with `agents handoff draft --lane feat-x --session <id>`. If it did not,
+> say so in one line and finish. Declining is the expected answer most days.
+
+**Timing weakness, stated rather than engineered away.** The right moment to ask
+is when work *ends*. `Stop` fires at the end of every turn and cannot know which
+is last. `SessionEnd` fires once at the true end, with no model left to write
+anything. So the gate necessarily asks mid-work and the draft is a snapshot
+rather than a summing-up. Mitigations: drafts are revisable, the budget renews so
+a long lane is asked again, and a mid-lane note is a truthful record of what was
+learned by then. This is a cost of the approach.
+
+**One thing must be measured before this is built.** Claude Code's `Stop` payload
+carries `stop_hook_active`, and Codex's does too — a field that exists only to
+bound a blocking stop hook. That is strong circumstantial evidence that both
+harnesses honour a blocking `Stop`, and it is **not a measurement of the blocking
+behaviour**. This repository's standard is positive controls (§"Measured facts").
+Probe both. A harness that cannot block gets an advisory gate that prints, and
+its queue stays empty rather than pretending.
+
+**Draft location:** `<store>/queue/<lane>/<session>-<n>.md`, untracked,
+frontmatter carrying `kind: memory|handoff`, `lane`, `session`, `when`, and a
+suggested subject.
+
+**Secrets.** The draft is unreviewed model output, which is precisely why it must
+not land in the tracked tree — and does not. Because promotion is a commit,
+`agents guard --staged` and gitleaks remain exactly the boundary they are today.
+Nothing bypasses the existing gate.
+
+### 4. Review: the queue is storage, the conversation is the interface
+
+```
+agents review [--lane x]      list pending drafts
+agents review --show <id>     print one
+agents review --keep <id>     promote: write + reindex + scoped commit
+agents review --bin <id>      delete from the queue
+agents review --edit <id>     $EDITOR, then keep
+```
+
+**Promotion is one act.** `--keep` writes to `.agents/memory/<name>.md` or
+`.agents/reports/handoff/<lane>/<date>-<session>.md` per the draft's `kind`,
+regenerates the affected `INDEX.md`, and makes the `.agents/`-scoped commit —
+inheriting the parts of `agents save` that are not merely `git commit`:
+reindex-before-guard, path scoping, refusal mid-merge. There is no
+"promoted but uncommitted" state in which work can be lost or swept into a code
+commit.
+
+**There is no `--keep --all`, and the omission is load-bearing.** Pending drafts
+are surfaced to agents at boundaries and at `SessionStart`. An agent able to bulk
+promote closes the review loop with no human in it, which defeats the design.
+Requiring an explicit id per draft leaves the agent one move — show the drafts and
+ask — so selection happens in conversation, where the context is, while the queue
+is what lets that conversation survive a three-day interruption.
+
+**Notification, never blocking.** `post-checkout` and `post-merge` are already
+installed, already firing, and today carry no built-in stage. They gain one: print
+the lane's pending-draft count. Hook stdout reaches a human terminal and an
+agent's tool result identically, with no interactivity, which is why the
+notification lives here and the *selection* does not.
+
+| hook | what happened | what it prints |
+|---|---|---|
+| `post-checkout` | left a lane, work unfinished | pending drafts for the lane being left |
+| `post-merge` | a lane landed | pending drafts for the merged lane; prunes the cache |
+
+**`agents handoff write` is unchanged** — same primitive, body on stdin,
+`--session` required. It gains **`agents handoff draft`** as a sibling verb: same
+stdin contract, writing to the queue instead of the tracked tree. That verb is
+what the `Stop` gate invokes, and it is the caller §4 specified and never built.
+
+**`handoff write --draft` retires with its meaning.** The flag currently writes
+into the *tracked* tree with `status: draft`, which is the thing that must not
+happen — unreviewed model output inside `.agents/`. Unreviewed now means
+*unpromoted*, and unpromoted means *not in the tree*. The `status` frontmatter
+field stays, because a promoted draft is still worth distinguishing from one
+written deliberately by hand.
+
+This is what makes model-authored content acceptable at all. Spec 1 rejected
+redirecting harness auto-memory into `.agents/memory/` because it aimed
+unreviewed model output at a tracked directory and made the secret guard
+load-bearing rather than defence-in-depth. An untracked queue with explicit
+promotion is that idea done safely: the tracked tree only ever receives what was
+chosen.
+
+**`agents save` retires to a documented escape hatch** — a hand-edited memory
+entry, or batching several promotions into one commit. Not a reflex, not in the
+normal path.
+
+### 5. What retires
+
+| | why |
+|---|---|
+| `.agents/reports/traces/` from tracking | §1 |
+| `merge=union` on traces in `.gitattributes` | nothing tracked appends concurrently |
+| doctor's `pointers:local-unreachable` | unreachable pointers are now normal, not a finding |
+| `agents save` from the normal path | promotion commits |
+| guard's mixed-commit warning as a daily event | stays; becomes rare again |
+
+`pointers:local-unreachable` is deleted, not fixed. It reported a race the design
+could not win, about data that no longer needs to survive. It is one of the two
+warnings making `doctor` exit 1 on a healthy machine today.
+
+**New checks:** queue depth per lane, store size against the caps, and gate
+liveness — has the gate fired recently, and does this harness honour a blocking
+`Stop` at all.
+
+### 6. Migration
+
+1. Copy tracked trace content into the local store. Nothing is lost locally.
+2. `git rm -r --cached .agents/reports/traces`, drop the `merge=union` line,
+   remove the directory from the scaffold.
+3. Prune the cache to the new caps on first run.
+4. **Git history is left alone.** Decided 2026-08-12. Three commits contain
+   records. Rewriting a public repository's history breaks every clone, and what
+   is exposed here is low-sensitivity: lanes are `master` and
+   `agents-design-spec`, and the GitHub handle already discloses the username.
+
+**The exposure generalizes even though this instance is mild, and that is the
+reason it is recorded.** `agents init` installs this behaviour in every
+repository. In a work repository, `lane` is a ticket id and `cwd` names modules
+and clients, published to whatever remote that repository has. Spec 1 §10 reasoned
+about exactly this hazard — "a registry enumerating every repo path would publish
+project names, client or employer names, and directory structure" — and reached
+the opposite conclusion for a store carrying the same class of data. A repository
+migrating with sensitive lane names should decide history rewriting on its own
+facts.
+
+### 7. Expected phasing
+
+This is one spec because the pieces are interdependent — a queue with no gate
+stays empty, a gate with no review command fills a queue nobody drains — but it is
+not one landing. The plan is expected to split at the seam where new behaviour
+begins:
+
+| Phase | Contents | Ends somewhere working |
+|---|---|---|
+| A | One store, retention, migration, untracking, doctor changes | The tracked tree is clean and the store is bounded. No new behaviour. Valuable alone. |
+| B | The `Stop` gate, the queue, `agents handoff draft` | Drafts accumulate. Reviewable by hand before the command exists. |
+| C | `agents review`, boundary notifications, `agents save` demotion | The loop closes. |
+
+Phase A is worth landing on its own even if B and C are delayed: it removes the
+churn, the 51 MB, and the false `doctor` warning without waiting on the positive
+control that B depends on.
+
+---
+
+## Cross-spec impact
+
+Recorded so parallel work streams are not surprised. Each spec below gets an
+amendment note pointing here, as spec 5 received on 2026-08-11.
+
+### Spec 1 — amended, not rewritten
+
+§1 gains the conclusions-versus-upstream rule and the Draft and Promote
+operations; Materialize and Read become local-only. §3.6 and §3.7 lose
+portability and `merge=union`. §4 gains an `agents handoff draft` verb targeting
+the queue, retires `handoff write --draft`, and finally has the auto-draft caller
+it specified. §6 gains `agents review` and `agents handoff draft`; `agents save`
+is demoted.
+
+**One direct contradiction, resolved explicitly rather than silently.** §6 states:
+*"Recording hooks exit 0 on every path: a failed record must never disrupt a
+dispatch. `agents guard` is the sole deliberate exception."*
+
+The `Stop` gate is a second exception and a semantically different one:
+
+| | blocks on | meaning |
+|---|---|---|
+| `agents guard` | failure | something is wrong; stop |
+| the `Stop` gate | success | everything worked; a question is being asked |
+
+Both halves must be stated in the amendment: the recording path still fails open
+— a failed trace write exits 0 — and only the gate blocks, only after spending
+its budget.
+
+### Spec 3 — premise inverts; do not design against the current text
+
+`agents distill` was the path from raw material to knowledge. It becomes the
+**fallback** for lanes never drafted, mining cached transcripts after the fact.
+
+- Its open question 3 — *"is there a useful `--since <last-distill>` watermark,
+  and where is it stored?"* — is answered: the store holds per-lane ask
+  watermarks.
+- Its constraint that drafting must draft for review and never write unreviewed
+  output into the tracked tree is now *implemented* by the untracked queue rather
+  than left to the implementer.
+
+Spec 3 gets smaller and easier. Whoever picks it up must read this first or they
+will design the wrong primary path.
+
+### Spec 4 — a new capability to express
+
+The wiring DSL must express "this hook may block," not only "run this." A
+capability flag, not a command string.
+
+### Spec 5 — unaffected in its claims, one sequencing collision
+
+Both organizing claims still hold and get easier: with traces untracked, CI never
+sees machine-local paths in the tracked tree.
+
+The collision is §6's command registry and the help text derived from it.
+`agents review` and `agents handoff draft` land in that registry. Either spec 5's
+registry ships first, or these commands arrive without help text and spec 5
+inherits them. This is a scheduling decision, not a conflict.
+
+### Spec 6 — one addition to scope
+
+The store now has a schema, machine-local, that a released binary must migrate
+across versions. That is not currently in spec 6's scope.
+
+### Spec 2 — unaffected
+
+---
+
+## Testing
+
+Following §11's standards: golden files from real payloads, structural assertions
+over string searches.
+
+- **Gate arithmetic** — budget spend-before-block, N-turns-since-watermark, the
+  K-per-day ceiling, the `stop_hook_active` loop guard, the floor.
+- **Positive control per harness** that a blocking `Stop` is honoured. This is the
+  one assumption in §3 that is inferred rather than measured. A harness failing it
+  degrades to an advisory gate, and a test pins that degradation.
+- **Fail-open is preserved** — a trace-write failure exits 0 even where the gate
+  would otherwise have fired.
+- **The queue is unreachable from git** — structural, not an ignore-rule check.
+- **Promotion is atomic** — writes, reindexes, and commits with guard running; a
+  failure at any step leaves the queue item intact.
+- **Promotion requires an explicit id.** The absence of bulk promotion is a design
+  constraint, so it gets a test.
+- **Retention** — age and size eviction; migration preserves content before
+  untracking.
+- **Redaction stays structural** — unchanged from §11, and now additionally
+  relevant because drafts are model output.
+
+---
+
+## Rejected alternatives
+
+**Keeping traces tracked and fixing the cache.** The measured failure is not that
+the cache misses transcripts; it is that a tracked pointer to a machine-local file
+has no reader anywhere. A perfect cache would leave 48% of records resolving to a
+file only one machine can open, and would not write a single conclusion.
+
+**A work-order queue instead of a draft queue.** Items would be "lane x landed, 4
+sessions, material cached here" — mechanical, cheap, and no model output until you
+engage. Rejected because reviewing then means *doing the work*: a later agent must
+re-read cached transcripts and reconstruct what mattered. That is a todo list, and
+the handoff directory is already a todo list with zero items.
+
+**An interactive picker in the hook.** The literal reading of a selection UI. At a
+work boundary the actor is usually an agent running `git merge`; a TTY prompt
+either hangs it or is auto-dismissed, and when it does reach a human it interrupts
+mid-git-operation — the worst moment to ask what is worth remembering.
+
+**`SessionEnd` instead of `Stop`.** Fires once, at the true end of work, which is
+the right moment. No model remains to write anything.
+
+**XDG state for the store.** See §2. Correct had drafting stayed downstream of the
+cache; wrong once drafting moved to the moment context is live, because the
+orphan-GC chore then outweighs a durability requirement that no longer exists.
+
+**Rewriting git history to remove pushed trace records.** See §6.
+
+---
+
+## Risks
+
+| Risk | Mitigation |
+|---|---|
+| A harness does not honour a blocking `Stop` | Positive control before build; degrade to advisory and report it in `doctor` |
+| The model drafts rather than declining | Reason text makes declining first-class; decline rate is measured and tunes N |
+| Mid-work timing produces premature drafts | Drafts revisable; budget renews; promoted-rate is measured and can force a rethink |
+| Queue becomes an inbox nobody empties — handoff's failure, repeated | Boundary hooks and `doctor` surface depth; items are pre-written, so review is seconds not work |
+| Delete-and-re-clone loses unpromoted drafts | Queue is short-lived by design; depth surfaced at boundaries. Not eliminated. |
+| An agent bulk-promotes its own drafts | No `--keep --all`; explicit id per draft; a test pins the constraint |
+| Store grows unbounded, as the cache did | Age and size caps, pruned at `post-merge`; `doctor` reports size |
+| N and K are wrong | They are labelled guesses; the gate records outcomes so they are tuned from data rather than argued |
+
+---
+
+## Open questions
+
+- **The floor's exact definition (§3 step 4).** Turn count and dispatched-subagent
+  are both defensible; neither has data. Low stakes — the budget bounds
+  over-firing regardless — so decide during implementation and record what was
+  chosen.
+- **Draft `kind` inference.** The model proposes `memory` or `handoff` in
+  frontmatter. Whether that is reliable enough to skip a confirmation at promotion
+  is unknown until there are drafts to look at.
+- **Codex `Stop` gate.** Contingent on the positive control. If Codex cannot
+  block, whether an advisory print is worth shipping for that harness at all, or
+  whether Codex sessions simply produce no drafts, is undecided.
+- **Whether `session-start` records still earn their place** once the index is
+  local and the budget counts `stop` records only. Cheap to keep; keeping them is
+  not the same as needing them.
