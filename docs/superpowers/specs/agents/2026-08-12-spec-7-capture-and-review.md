@@ -103,6 +103,21 @@ ends, and neither is an intermediate state:
 - **Content travels** — it travels because it has been distilled into prose,
   which is the goal itself. The intermediate has collapsed into the destination.
 
+**What is genuinely lost, stated as a loss rather than argued away.** A tracked
+index does carry one thing a machine-local store does not: the bare knowledge that
+*work happened elsewhere*. Under this spec, if a lane is worked for two days on
+machine A and nothing is promoted, machine B cannot learn that anything occurred
+at all. Today it would at least see records.
+
+That is a real reduction for a multi-machine user and it is accepted, not denied.
+The trade is: a signal that something exists, against 48% of records resolving to
+files nobody can open, a permanently dirty working tree, and a curated store that
+stayed empty for five days. The signal was never read, and the price of keeping it
+was the thing that made the tool unpleasant to use. If cross-machine awareness
+turns out to matter on its own, the honest way to provide it is a tracked artifact
+built for that purpose — a promoted note saying work is in flight elsewhere — not
+a byproduct of a pointer index.
+
 Distillation can only run where the material is. Its *output* travels; its
 *input* never needs to. Git is not involved at any point in that path.
 
@@ -224,7 +239,12 @@ is the live defect. Capture is only possible at the instant the hook fires and
 never afterwards, so caching stays; it must be bounded:
 
 - age cap, default **14 days**
-- size cap, default **500 MB**, evicting oldest first
+- size cap, default **1 GB**, evicting oldest first
+
+  The two caps must be sized against each other or one is decoration. At the
+  measured 51 MB/day, 14 days is ~714 MB; a 500 MB size cap would evict at ~10
+  days and the age cap could never bind. 1 GB leaves age as the policy in an
+  active repository and size as the backstop for one busier than this.
 - pruned automatically at `post-merge`, when a lane has landed and its material
   is least likely to be wanted
 - `agents trace cache prune --lane <n>` stays as the manual override
@@ -240,7 +260,8 @@ own bookkeeping, which it can.
 **Order of operations on every `Stop`:**
 
 1. Record the trace line. Always, silently, fail-open.
-2. Budget spent on this lane today? → **exit 0.** The common path, free.
+2. Budget spent by this session today, or the lane's ceiling reached? →
+   **exit 0.** The common path, free.
 3. `stop_hook_active` set? → **exit 0.** No loops.
 4. Floor not met? → **exit 0.**
 5. Otherwise **spend the budget — write the watermark before blocking** — and
@@ -256,10 +277,20 @@ A flat daily cap rations interruptions on a calendar while the thing being
 rationed is produced by work. A 40-turn day and a 3-turn day would get the same
 allowance — the same category error as recording per `session-start`.
 
-- **Ask #1:** floor met, no ask spent on this lane today.
-- **Ask #n+1:** the lane has moved — **N `stop` records on this lane since the
-  last ask watermark**.
-- **Ceiling K per lane per day**, so a pathological day cannot spiral.
+**The budget is keyed on `(lane, session)`, with the ceiling on the lane.**
+
+- **Ask #1:** floor met, no ask spent by **this session** today.
+- **Ask #n+1:** **N `stop` records in this session since its last ask watermark**.
+- **Ceiling K per lane per day**, across all sessions on it, so a pathological day
+  cannot spiral no matter how many agents are running.
+
+The key must not be the lane alone. Spec 1 §4 designs for concurrent agents on one
+branch — that is why handoffs are keyed `(lane, session)` and why `--session` is
+mandatory. A lane-keyed budget breaks the same case: agent A spends the lane's
+allowance on its own work, agent B is never asked about entirely different work on
+the same branch, and B's turns accelerate A's next ask. Watermarks are per session
+for the same reason. The lane-level ceiling stays because the thing worth capping
+globally is total interruptions, and that is a property of the lane.
 
 Turns are the right unit. Commit counts over-trigger in a repository where the
 agent commits several times an hour, and under-trigger for read-only work — and
@@ -275,23 +306,39 @@ made — exclude exactly the sessions worth capturing.
 **Starting constants, labelled as guesses: N = 10 `stop` records, K = 3 per lane
 per day.** §4.1's lane-health thresholds have sat unimplemented at "tuned once
 there is real data" because nothing collects the data. This gate collects its
-own. Every ask records its outcome in the store — drafted, declined, and later
-promoted or binned — giving three signals with unambiguous readings:
+own. Every ask records its outcome in the store — drafted, declined **with its
+stated reason**, and later promoted or binned.
 
-| signal | means | fix |
+**Decline rate on its own is not a usable signal, and recording the reason is what
+makes it one.** A high decline rate is equally consistent with three different
+causes that call for opposite fixes:
+
+| observation | could mean | so |
 |---|---|---|
 | high decline rate | asking too often | raise N |
+| high decline rate | the wording invites laziness | rewrite the reason text |
+| high decline rate | **the gate is working correctly** | change nothing |
 | drafts written, rarely promoted | asking at the wrong moments | raise the floor; reconsider mid-work timing |
 | lanes going a week with an empty queue | asking too rarely | lower N |
 
-**The reason text must make declining first-class**, or the known failure mode of
-letting the model judge relevance — an agreeable model drafting something rather
-than saying "nothing here" — becomes the default:
+Stored decline reasons are what separate the first three: they are spot-checkable
+against the session that produced them. A decline with no reason recorded is
+indistinguishable from a decline to end the turn faster.
 
-> Lane `feat-x` has no note from today. If this session produced something a
+**The reason text has to walk a line, and both edges are real.** Letting the model
+judge relevance risks an agreeable model drafting something rather than saying
+"nothing here." But declining is also the cheap answer — it ends the turn, while
+drafting is work — so wording that leans too hard the other way invites reflexive
+declines and an empty queue. This draft leans toward permitting declines and is
+therefore the more likely to under-fire:
+
+> Lane `feat-x` has no note from this session today. If it produced something a
 > future agent would want and cannot get from the code or git history, draft it
-> now with `agents handoff draft --lane feat-x --session <id>`. If it did not,
-> say so in one line and finish. Declining is the expected answer most days.
+> now with `agents handoff draft --lane feat-x --session <id>`. If it did not, say
+> so in one line, with the reason, and finish. Declining is a normal answer.
+
+The wording is a parameter, not a decision. It is tuned from stored decline
+reasons like N and K.
 
 **Timing weakness, stated rather than engineered away.** The right moment to ask
 is when work *ends*. `Stop` fires at the end of every turn and cannot know which
@@ -301,17 +348,47 @@ rather than a summing-up. Mitigations: drafts are revisable, the budget renews s
 a long lane is asked again, and a mid-lane note is a truthful record of what was
 learned by then. This is a cost of the approach.
 
-**One thing must be measured before this is built.** Claude Code's `Stop` payload
-carries `stop_hook_active`, and Codex's does too — a field that exists only to
-bound a blocking stop hook. That is strong circumstantial evidence that both
-harnesses honour a blocking `Stop`, and it is **not a measurement of the blocking
-behaviour**. This repository's standard is positive controls (§"Measured facts").
-Probe both. A harness that cannot block gets an advisory gate that prints, and
-its queue stays empty rather than pretending.
+**The second cost is context, not latency.** A blocking `Stop` puts the
+instruction *and the resulting draft* into the session's own transcript. At K = 3
+that is three retrospectives injected into the working context of a session that
+did not ask for them, priming subsequent turns. The draft belongs in the queue,
+not in the conversation, and there is no mechanism that puts it in one without the
+other. Keeping K small is the only lever.
 
-**Draft location:** `<store>/queue/<lane>/<session>-<n>.md`, untracked,
-frontmatter carrying `kind: memory|handoff`, `lane`, `session`, `when`, and a
-suggested subject.
+**Two things must be measured before this is built, and they are different
+things.**
+
+1. **Plumbing.** Claude Code's `Stop` payload carries `stop_hook_active`, and
+   Codex's does too — a field that exists only to bound a blocking stop hook.
+   That is strong circumstantial evidence that both harnesses honour a blocking
+   `Stop`, and it is **not a measurement of the blocking behaviour**. This
+   repository's standard is positive controls (§"Measured facts"). Probe both. A
+   harness that cannot block gets an advisory gate that prints, and its queue
+   stays empty rather than pretending.
+2. **Compliance.** A block landing says nothing about whether the model writes a
+   useful draft or games the gate to end the turn. This is the assumption that can
+   invalidate the whole approach: if models reliably decline to avoid work, the
+   queue stays empty and this design has rebuilt handoffs with more machinery.
+   **Phase B is not planned until compliance is measured** over a real week — ask
+   count, draft rate, decline reasons, and whether the drafts are any good.
+
+Plumbing is a precondition for building. Compliance is a precondition for
+*committing to the approach*, and it can only be measured by running the gate.
+The order is: probe plumbing, ship the gate behind a flag, read a week of stored
+outcomes, then decide whether Phase C is worth building.
+
+**Draft location:** `<store>/queue/<lane>/<session>-<n>.md`, untracked.
+
+**Draft frontmatter is the promotion contract, not a suggestion.** A `kind:
+handoff` draft carries `lane`, `session`, `when`. A `kind: memory` draft must
+additionally carry everything a memory entry requires — `name` (the slug),
+`description`, `metadata.type`, and any `sources:` — because `INDEX.md` is
+generated from exactly those fields and `agents guard --staged` regenerates and
+compares byte-for-byte. **Promotion validates and refuses an invalid draft; it
+never synthesizes the missing fields.** Synthesis at promotion time would put a
+guessed slug and description into the tracked tree at the one moment nobody is
+reading carefully, and a malformed entry would surface as a blocked commit far
+from its cause.
 
 **Secrets.** The draft is unreviewed model output, which is precisely why it must
 not land in the tracked tree — and does not. Because promotion is a commit,
@@ -335,6 +412,17 @@ inheriting the parts of `agents save` that are not merely `git commit`:
 reindex-before-guard, path scoping, refusal mid-merge. There is no
 "promoted but uncommitted" state in which work can be lost or swept into a code
 commit.
+
+**A promoted memory entry lands on whatever branch you are standing on, and that
+is a problem the two kinds do not share.** A handoff is lane-scoped, so committing
+it to the lane's own branch is exactly right. A memory entry is repo-wide
+knowledge: promoted from a feature branch it is invisible to every other lane
+until merge, and lost outright if the branch is abandoned. Promotion of a
+`kind: memory` draft outside the default branch therefore **warns and proceeds** —
+naming the branch and that the entry travels only if it merges. It does not
+refuse: refusing would block the case where the knowledge came *from* that
+branch's work and belongs in its merge. It does not silently retarget the default
+branch either, which would commit to a branch the user is not on.
 
 **There is no `--keep --all`, and the omission is load-bearing.** Pending drafts
 are surfaced to agents at boundaries and at `SessionStart`. An agent able to bulk
@@ -433,6 +521,15 @@ Phase A is worth landing on its own even if B and C are delayed: it removes the
 churn, the 51 MB, and the false `doctor` warning without waiting on the positive
 control that B depends on.
 
+**The phasing is asymmetric in a way worth stating plainly: Phase A is a net
+deletion, and it is the easy one.** It removes machinery and produces no
+conclusions. Phase B is where anything is captured, and it is gated on the
+compliance measurement in §3 — the one assumption that could invalidate the
+approach. If B stalls, spec 7 leaves this repository with *less* machinery and the
+same zero conclusions it has today, which is tidier but not better. Landing A
+without a scheduled attempt at B is the failure mode to watch for, not a safe
+resting point.
+
 ---
 
 ## Cross-spec impact
@@ -470,8 +567,8 @@ its budget.
 **fallback** for lanes never drafted, mining cached transcripts after the fact.
 
 - Its open question 3 — *"is there a useful `--since <last-distill>` watermark,
-  and where is it stored?"* — is answered: the store holds per-lane ask
-  watermarks.
+  and where is it stored?"* — is answered: the store holds ask watermarks per
+  `(lane, session)`.
 - Its constraint that drafting must draft for review and never write unreviewed
   output into the tracked tree is now *implemented* by the untracked queue rather
   than left to the implementer.
@@ -510,6 +607,15 @@ over string searches.
 
 - **Gate arithmetic** — budget spend-before-block, N-turns-since-watermark, the
   K-per-day ceiling, the `stop_hook_active` loop guard, the floor.
+- **Concurrent sessions on one lane** — two sessions each get their own ask and
+  their own watermark; neither consumes the other's; the lane ceiling still caps
+  the pair. This is the defect a lane-keyed budget would have, so it gets a test
+  rather than a comment.
+- **Promotion refuses an invalid draft** — a `kind: memory` draft missing `name`,
+  `description`, or `metadata.type` is rejected at promotion, and nothing reaches
+  the tracked tree for the generated-index guard to block on later.
+- **Promoting a memory entry off the default branch warns and proceeds** — it
+  neither refuses nor retargets.
 - **Positive control per harness** that a blocking `Stop` is honoured. This is the
   one assumption in §3 that is inferred rather than measured. A harness failing it
   degrades to an advisory gate, and a test pins that degradation.
@@ -561,8 +667,14 @@ orphan-GC chore then outweighs a durability requirement that no longer exists.
 | Risk | Mitigation |
 |---|---|
 | A harness does not honour a blocking `Stop` | Positive control before build; degrade to advisory and report it in `doctor` |
-| The model drafts rather than declining | Reason text makes declining first-class; decline rate is measured and tunes N |
+| **Models decline reflexively to end the turn, and the queue stays empty** — the risk that invalidates the approach | Stored decline reasons make lazy and honest declines distinguishable; §3's compliance measurement gates Phase B on a real week of data before Phase C is built |
+| The model drafts rather than declining | Reason text permits declining; drafted-but-never-promoted rate is measured |
 | Mid-work timing produces premature drafts | Drafts revisable; budget renews; promoted-rate is measured and can force a rethink |
+| Blocking injects drafts into the session's own context, priming later turns | Small K is the only lever; no mechanism separates the two. Not eliminated. |
+| **Phase A lands, Phase B stalls** — the repo ends with less machinery and the same zero conclusions | §7 names it; A is not a resting point, and B is scheduled with A rather than after it |
+| A memory entry promoted on a feature branch is lost if the branch dies | Promotion warns and names the branch; it does not refuse or silently retarget |
+| A `kind: memory` draft lacks the frontmatter a memory entry needs | Promotion validates and refuses rather than synthesizing a slug nobody reviewed |
+| Losing the bare signal that work happened on another machine | Accepted, and named as a loss in the diagnosis. If it matters on its own, it needs a purpose-built tracked artifact, not a pointer index |
 | Queue becomes an inbox nobody empties — handoff's failure, repeated | Boundary hooks and `doctor` surface depth; items are pre-written, so review is seconds not work |
 | Delete-and-re-clone loses unpromoted drafts | Queue is short-lived by design; depth surfaced at boundaries. Not eliminated. |
 | An agent bulk-promotes its own drafts | No `--keep --all`; explicit id per draft; a test pins the constraint |
