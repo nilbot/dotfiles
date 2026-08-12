@@ -109,4 +109,5 @@ that it was write-only: nothing could read a cached transcript back, so a
 - [the capture experiment](../../analysis/2026-08-12-capture-instruction-experiment.md)
   — the two-arm protocol that decides spec 7 §3a, with
   [`agents/experiment/capture-setup.sh`](../../../../agents/experiment/capture-setup.sh)
-  as its harness. Not yet run.
+  as its harness. Run once on 2026-08-12: treatment 1 draft of 4 sessions,
+  control 0 of 4.

@@ -366,7 +366,14 @@ contingency, not the plan.** It is specified in full because a contingency nobod
 designed is a contingency nobody can cost — but nothing in it is built until the
 measurement below says the cheaper triggers were not enough.
 
-**What decides, and it has not happened yet.** Two arms of scripted scenarios in
+**What decides. Run once on 2026-08-12; see
+[the results](../../analysis/2026-08-12-capture-instruction-experiment.md#results-2026-08-12).
+Treatment drafted on 1 of 4 sessions, control on 0 of 4 — so the instruction
+caused the only draft, produced no false positives, and the one draft it
+produced was substantive. §3c is not justified by that. It is one observation,
+and the promotion rate is still unmeasured.**
+
+The protocol: Two arms of scripted scenarios in
 a throwaway repository — [the capture experiment](../analysis/2026-08-12-capture-instruction-experiment.md). One arm carries
 the instruction, one has it stripped, and the scenarios are chosen so that two
 have a real conclusion the diff cannot carry and two have none. `agents review
