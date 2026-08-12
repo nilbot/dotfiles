@@ -81,6 +81,14 @@ phases, then the removals, and the Makefile reduced to the `agents` target last.
 Bootstrap landed before anything was removed, so provisioning never broke
 mid-plan.
 
+Spec 7's plan is six tasks across two phases. Phase A moved the trace index
+into `<git-common-dir>/agents/`, bounded the transcript cache, and untracked
+the index from this repository; Phase B′ added the capture instruction, the
+untracked draft queue, `agents handoff draft`, and `agents review`. §3c's
+blocking `Stop` gate is specified in the spec and deliberately not built --
+the plan's first Global Constraint says so, because the cheap trigger has to
+be measured before the expensive one is justified.
+
 The two 2026-08-11 plans are corrective rather than new surface, and both came
 out of running the thing on a real machine. The first stopped `agents` assuming
 its checkout is `~/dotfiles` and fixed two defects a first provisioning run
