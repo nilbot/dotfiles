@@ -910,7 +910,7 @@ the mechanism.
 | A memory entry promoted on a feature branch is lost if the branch dies | Promotion warns and names the branch; it does not refuse or silently retarget |
 | A `kind: memory` draft lacks the frontmatter a memory entry needs | Promotion validates and refuses rather than synthesizing a slug nobody reviewed |
 | Losing the bare signal that work happened on another machine | Accepted, and named as a loss in the diagnosis. If it matters on its own, it needs a purpose-built tracked artifact, not a pointer index |
-| Queue becomes an inbox nobody empties — handoff's failure, repeated | Boundary hooks and `doctor` surface depth; items are pre-written, so review is seconds not work |
+| **Queue becomes an inbox nobody empties — handoff's failure, repeated** | `doctor`'s `queue:pending` surfaces depth, and items are pre-written so review is seconds not work. **Weaker than it reads:** `doctor` is pull-based, so review depends on the same muscle memory `agents save` depended on, and forgetting is worse here — the material was written and then lost with the queue. No boundary hook surfaces depth today. Not repaired, because nothing has yet been observed to rot; see [open questions](#open-questions). |
 | Delete-and-re-clone loses unpromoted drafts | Queue is short-lived by design; depth surfaced at boundaries. Not eliminated. |
 | An agent bulk-promotes its own drafts | No `--keep --all`; explicit id per draft; a test pins the constraint |
 | Store grows unbounded, as the cache did | Age and size caps, pruned at `post-merge`; `doctor` reports size |
@@ -930,11 +930,33 @@ the mechanism.
 
 ## Open questions
 
+- **Whether *review* needs a trigger, now that capture has one.** This spec gave
+  capture a trigger that measurably works and left review on the same pull-based
+  footing `agents save` had — and forgetting review is the worse failure, because
+  the material was written and then lost with an untracked queue rather than
+  never written at all.
+
+  The candidate, if one is ever built, is **the commit boundary, lane-scoped**:
+  promotion *is* a commit, the guard hook already runs on every one, and firing
+  only for drafts on the current lane keeps it silent almost always — which a
+  session-start banner could not do without becoming wallpaper. That is §3a's own
+  logic (name the moment, bound the ask, remove the stake) applied to the other
+  half of the loop.
+
+  **Not built, on this spec's own rule: only an observed failure justifies the
+  next thing, and nothing has yet been left to rot** — the first cohort was 5
+  drafts, 5 promoted. What is missing is not the nudge but the ability to *see*
+  the failure if it starts: the event log already stamps `drafted`, `promoted`
+  and `binned`, so time-from-draft-to-decision is derivable and `--stats` simply
+  does not report it. Reporting the age of the oldest pending draft is the
+  leading indicator, costs a few lines, and turns this risk from an assertion
+  into a measurement. Do that before designing the trigger.
 - **The wording of §3a's instruction.** The draft in §3a names the moment, bounds
   the output, and removes the perceived stake, which is three more properties than
-  the sentence it replaces has. Whether it is *good enough* is the B′ measurement
-  and nothing else. It is a parameter: revise and re-measure before escalating to
-  3b or 3c, because a cheap trigger revised twice still costs less than the gate.
+  the sentence it replaces has. The B′ measurement says it is good enough to beat
+  a zero control decisively; it does not say it is optimal. It remains a
+  parameter: revise and re-measure before escalating to 3b or 3c, because a cheap
+  trigger revised twice still costs less than the gate.
 - **Whether a `Stop` hook can add context without blocking**, under either
   harness. 3b depends on it entirely and it is unmeasured. Probe it with the
   blocking question rather than separately.
@@ -945,8 +967,9 @@ the mechanism.
   all. Turn count and dispatched-subagent are both defensible; neither has data.
 - **Codex, under any trigger.** §3a reaches Codex through `AGENTS.md`, which is a
   symlink to `CLAUDE.md`, so the instruction is free there. Whether Codex sessions
-  act on it at the same rate as Claude Code sessions is a separate reading of the
-  same week, and the two should not be pooled.
+  act on it at the same rate as Claude Code sessions is a separate run of the same
+  experiment, and the two must not be pooled. Both arms measured so far are Claude
+  Code.
 - **Whether `session-start` records still earn their place** once the index is
   local and the budget counts `stop` records only. Cheap to keep; keeping them is
   not the same as needing them.
