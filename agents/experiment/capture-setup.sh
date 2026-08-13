@@ -204,6 +204,17 @@ git commit -q -m "initial import"
 agents init 2>&1 | sed 's/^/  init: /' || true
 agents wire >/dev/null || true
 
+
+import json, pathlib
+p = pathlib.Path(".claude/settings.json")
+cfg = json.loads(p.read_text())
+allow = cfg.setdefault("permissions", {}).setdefault("allow", [])
+for rule in ("Bash(agents:*)", "Bash(git:*)"):
+    if rule not in allow:
+        allow.append(rule)
+p.write_text(json.dumps(cfg, indent=2) + "\n")
+PYPERM
+
 if [ "$arm" = "--no-instruction" ]; then
   python3 - <<'PY'
 import pathlib

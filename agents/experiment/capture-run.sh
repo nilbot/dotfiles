@@ -54,12 +54,24 @@ run_arm() {
     git checkout -q -b "$branch" 2>/dev/null || git checkout -q "$branch"
     printf '  %-12s (expect %-8s) ' "$branch" "$expect"
 
-    # --permission-mode acceptEdits so a scenario that must edit code can,
+    # Two flags, for two different reasons.
+    #
+    # --permission-mode acceptEdits lets a scenario that must change code do so
     # without a prompt nobody is there to answer.
+    #
+    # --allowedTools "Bash(agents:*)" is what makes the measurement possible at
+    # all. A headless session does not grant arbitrary Bash, so without it
+    # `agents handoff draft` is refused and the arm reads zero however well the
+    # instruction works -- an experiment guaranteed to find nothing. It cannot
+    # go in .claude/settings.json: an untrusted workspace ignores
+    # permissions.allow outright, which a run confirmed. An interactive user
+    # approves `agents` once and never meets this, so granting exactly that one
+    # command restores parity rather than tilting the result.
     # </dev/null is load-bearing: without it `claude` inherits this loop's
     # stdin and consumes the remaining scenario lines, so only the first
     # scenario ever runs and every other one silently reports "no draft".
-    if claude -p "$prompt" --permission-mode acceptEdits </dev/null >/dev/null 2>&1; then
+    if claude -p "$prompt" --permission-mode acceptEdits \
+         --allowedTools "Bash(agents:*)" </dev/null >/dev/null 2>&1; then
       printf 'ran'
     else
       printf 'ran (non-zero)'

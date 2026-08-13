@@ -190,6 +190,33 @@ agents review --keep <id>   # or --bin
 measurement that asks whether the material is worth having, and until something
 is decided `--stats` correctly refuses to conclude anything.
 
+## Confounds that produced false zeros
+
+Recorded because each one produced a clean, plausible **0% draft rate** that
+looked exactly like the instruction failing. A measurement that cannot fail
+loudly will report the null result it was broken into.
+
+1. **`agents init` left the arm uncommittable.** It scaffolded `.agents/`
+   without the generated `INDEX.md` files, so the pre-commit guard blocked the
+   first commit and every commit after it. Fixed in `init`; setup now refuses to
+   finish with a dirty tree instead of swallowing the failure.
+2. **The runner ran one scenario of seven.** `claude -p` inherits the
+   `while read` loop's stdin and consumed the remaining scenario lines. The six
+   that never ran each scored "no draft". `</dev/null` fixes it.
+3. **`agents` was blocked in every headless session.** `--permission-mode
+   acceptEdits` grants file edits, not arbitrary Bash, so `agents handoff draft`
+   was refused every time — the agent could not have recorded anything however
+   well the instruction worked. `--allowedTools "Bash(agents:*)"` on the CLI
+   grants it; **`.claude/settings.json` cannot**, because an untrusted workspace
+   ignores `permissions.allow` outright. Hooks fire in an untrusted workspace;
+   permissions do not. Those are different claims and conflating them cost a
+   whole run.
+
+The general lesson, which is the same one this spec keeps relearning: an
+observation of nothing is consistent with the mechanism working, the mechanism
+failing, and the measurement being broken. Rule out the third before reporting
+either of the first two.
+
 ## What this does not measure
 
 - **Long sessions.** Every scenario is short, so instruction decay over a long
