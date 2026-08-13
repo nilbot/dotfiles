@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -209,5 +210,34 @@ func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
 		if strings.Contains(f(), "reports/traces") {
 			t.Error("init still points at .agents/reports/traces/, which nothing writes any more")
 		}
+	}
+}
+
+// A freshly initialized repository must be committable. Without the generated
+// indexes the pre-commit guard regenerates them, finds them unstaged, and
+// blocks -- so `agents init` would produce a tree whose first commit fails.
+func TestInitLeavesARepositoryThatCanCommit(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	var out bytes.Buffer
+	runInit(nil, &out)
+
+	for _, rel := range []string{
+		filepath.Join(".agents", "memory", "INDEX.md"),
+		filepath.Join(".agents", "reports", "handoff", "INDEX.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("init did not write %s: %v", rel, err)
+		}
+	}
+
+	git(t, root, "add", "-A")
+	cmd := exec.Command("git", "commit", "-m", "agents init")
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the first commit after `agents init` was blocked:\n%s", b)
+	}
+	if s := git(t, root, "status", "--porcelain"); strings.TrimSpace(s) != "" {
+		t.Errorf("init left uncommittable residue:\n%s", s)
 	}
 }

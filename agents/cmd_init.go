@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/handoff"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/memory"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
@@ -36,7 +39,21 @@ func runInit(args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "agents init: %v\n", err)
 		return exitcode.NoRecord
 	}
-	fmt.Fprintf(stdout, "initialized %s\n", repo.AgentsDir(rc.Root))
+	// The generated indexes are part of the scaffolded tree, not an optional
+	// extra. Without them the pre-commit guard regenerates, finds them missing
+	// from the index, and blocks -- so a freshly initialized repository could
+	// not make its first commit without someone knowing to run `agents index`
+	// first. `init` owns the tree it creates, including the derived files in it.
+	agentsDir := repo.AgentsDir(rc.Root)
+	if err := memory.WriteIndex(filepath.Join(agentsDir, "memory")); err != nil {
+		fmt.Fprintf(stdout, "agents init: %v\n", err)
+		return exitcode.NoRecord
+	}
+	if err := handoff.WriteIndex(agentsDir); err != nil {
+		fmt.Fprintf(stdout, "agents init: %v\n", err)
+		return exitcode.NoRecord
+	}
+	fmt.Fprintf(stdout, "initialized %s\n", agentsDir)
 	if _, err := registry.Register(rc.Root, *local); err != nil {
 		// The repository has already been initialized. The registry is a
 		// disposable fleet cache, so its failure is a warning, never a rollback

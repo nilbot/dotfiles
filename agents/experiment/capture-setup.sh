@@ -197,9 +197,11 @@ git add -A
 git commit -q -m "initial import"
 
 # `agents init` exits 1 (advisory) to report the trust steps a hook cannot take
-# for itself. That is success here, so the exit code is tolerated deliberately
-# rather than by dropping `set -e`.
-agents init >/dev/null || true
+# for itself, so its exit code is tolerated deliberately. Its OUTPUT is not
+# discarded: an earlier version sent both to /dev/null and hid a real defect --
+# init was not writing the generated indexes, so the guard blocked the very
+# first commit and the repository shipped with staged, uncommittable changes.
+agents init 2>&1 | sed 's/^/  init: /' || true
 agents wire >/dev/null || true
 
 if [ "$arm" = "--no-instruction" ]; then
@@ -217,7 +219,20 @@ PY
 fi
 
 git add -A
-git commit -q -m "agents init" 2>/dev/null || true
+# Loud. A silent failure here leaves staged .agents/ changes that block every
+# commit the experiment tries to make afterwards, which is exactly how the
+# first run was spoiled.
+if ! git commit -q -m "agents init"; then
+  echo "capture-setup.sh: the post-init commit was refused; the tree is not clean" >&2
+  git status --short >&2
+  exit 1
+fi
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo "capture-setup.sh: working tree is not clean after setup" >&2
+  git status --short >&2
+  exit 1
+fi
 
 if [ "$arm" = "--no-instruction" ]; then
   echo "control arm (no capture instruction): $(pwd)"
