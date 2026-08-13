@@ -354,6 +354,61 @@ func TestStatsCountsSessionsThatDraftedNothing(t *testing.T) {
 	}
 }
 
+// Capture was given a trigger that measurably works; review was not, so it
+// still runs on the muscle memory `agents save` died of. This number is the
+// leading indicator of that failure, and it has to arrive with the advice
+// attached -- a bare age reads as trivia.
+func TestStatsWarnsWhenTheQueueHasBeenSittingUnreviewed(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	now := time.Now().UTC()
+	if err := record.NewWriter(store).Append(record.Record{
+		When: now, Harness: "claude-code", Machine: "m1", Event: "stop",
+		Lane: "master", SessionID: "s1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	d := queue.Draft{
+		Kind: queue.KindHandoff, Lane: "master", Session: "s1",
+		When: now.Add(-20 * 24 * time.Hour), Subject: "old", Body: "- stale\n",
+	}
+	queueDraft(t, root, d)
+
+	_, out := runReviewIn(t, root, []string{"--stats"})
+	if !strings.Contains(out, "20 days") {
+		t.Errorf("the age of the oldest pending draft is not reported:\n%s", out)
+	}
+	if !strings.Contains(out, "re-clone") {
+		t.Errorf("the age is reported without saying why it matters:\n%s", out)
+	}
+}
+
+// The counterweight: a draft written minutes ago is not a backlog. Reporting
+// "0 hours" every run is how a reader learns to skip the line that matters.
+func TestStatsSaysNothingAboutTheAgeOfAFreshQueue(t *testing.T) {
+	root := reviewRepo(t)
+	store, _ := repo.StoreDir(root)
+	now := time.Now().UTC()
+	if err := record.NewWriter(store).Append(record.Record{
+		When: now, Harness: "claude-code", Machine: "m1", Event: "stop",
+		Lane: "master", SessionID: "s1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	queueDraft(t, root, queue.Draft{
+		Kind: queue.KindHandoff, Lane: "master", Session: "s1",
+		When: now, Subject: "fresh", Body: "- fresh\n",
+	})
+
+	_, out := runReviewIn(t, root, []string{"--stats"})
+	if strings.Contains(out, "oldest pending") {
+		t.Errorf("a queue drafted seconds ago was reported as a backlog:\n%s", out)
+	}
+	if strings.Contains(out, "re-clone") {
+		t.Errorf("the stale-queue advice fired on a fresh queue:\n%s", out)
+	}
+}
+
 func TestStatsReportsNothingDraftedAsTheResultThatJustifiesEscalation(t *testing.T) {
 	root := reviewRepo(t)
 	store, _ := repo.StoreDir(root)

@@ -172,7 +172,7 @@ func reviewStats(rc *repo.Context, store, lane, since string, stdout io.Writer) 
 	fmt.Fprintf(tw, "…promoted\t%d\n", st.Promoted)
 	fmt.Fprintf(tw, "…binned\t%d\n", st.Binned)
 	fmt.Fprintf(tw, "…still pending\t%d\n", st.Pending)
-	if age := st.PendingAge(time.Now()); age > 0 {
+	if age := st.PendingAge(time.Now()); age >= reportablePendingAge {
 		fmt.Fprintf(tw, "oldest pending\t%s\n", humanAge(age))
 	}
 	if st.Promoted+st.Binned > 0 {
@@ -233,17 +233,18 @@ func reviewStats(rc *repo.Context, store, lane, since string, stdout io.Writer) 
 // promoted, the number is wrong rather than the queue.
 const staleQueueAge = 7 * 24 * time.Hour
 
-// humanAge renders a duration the way someone reading a backlog thinks about
-// it. Anything under a day is not interesting here, so hours are the floor.
+// reportablePendingAge is the floor for saying anything about the queue's age.
+// A draft written minutes ago is not a backlog, and "oldest pending 0 hours" is
+// noise that trains the reader to skip the line that matters at 0 days.
+const reportablePendingAge = 24 * time.Hour
+
+// humanAge renders a backlog age in days, which is the only unit this number is
+// read in. Callers gate on reportablePendingAge, so it never sees under a day.
 func humanAge(d time.Duration) string {
-	switch days := int(d.Hours() / 24); {
-	case days >= 2:
+	if days := int(d.Hours() / 24); days >= 2 {
 		return fmt.Sprintf("%d days", days)
-	case days == 1:
-		return "1 day"
-	default:
-		return fmt.Sprintf("%d hours", int(d.Hours()))
 	}
+	return "1 day"
 }
 
 func reviewShow(store, id string, stdout io.Writer) int {
