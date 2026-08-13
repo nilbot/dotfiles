@@ -45,9 +45,15 @@ func newHookInstallFixture(t *testing.T) hookInstallFixture {
 	return fixture
 }
 
+// task18RepoRoot locates the checkout these tests read tracked fixtures from.
+// It resolves against packageDir rather than the working directory: TestMain
+// moves every test out of the checkout, so `..` would name a temp directory.
 func task18RepoRoot(t *testing.T) string {
 	t.Helper()
-	root, err := filepath.Abs("..")
+	if packageDir == "" {
+		t.Fatal("packageDir is unset; TestMain did not run")
+	}
+	root, err := filepath.Abs(filepath.Join(packageDir, ".."))
 	if err != nil {
 		t.Fatal(err)
 	}

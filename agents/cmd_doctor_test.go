@@ -310,7 +310,9 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 		}
 	}
 	build := exec.Command("go", "build", "-o", binary, ".")
-	build.Dir = "."
+	// TestMain moves the working directory out of the checkout, so the module
+	// this package belongs to has to be named explicitly.
+	build.Dir = packageDir
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build temp agents: %v\n%s", err, out)
 	}

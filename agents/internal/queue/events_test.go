@@ -190,3 +190,79 @@ func TestSummarizeLaneSlicesPerScenario(t *testing.T) {
 		t.Errorf("unsliced = %+v, want both", all)
 	}
 }
+
+func TestSummarizeReportsTheOldestPendingDraftNotTheNewest(t *testing.T) {
+	store := t.TempDir()
+	old := handoffDraft()
+	old.Lane = "old-lane"
+	old.When = time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	if _, err := Write(store, old); err != nil {
+		t.Fatal(err)
+	}
+	recent := handoffDraft()
+	recent.Lane = "recent-lane"
+	recent.When = time.Date(2026, 8, 13, 9, 0, 0, 0, time.UTC)
+	if _, err := Write(store, recent); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Summarize(store, nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Pending != 2 {
+		t.Fatalf("Pending = %d, want 2", st.Pending)
+	}
+	// The newest is the wrong end. A queue whose oldest item is a fortnight
+	// stale reads as fresh if the age tracks whatever arrived last, which is
+	// precisely the failure this number exists to catch.
+	if !st.OldestPending.Equal(old.When) {
+		t.Errorf("OldestPending = %v, want the older draft at %v", st.OldestPending, old.When)
+	}
+	now := time.Date(2026, 8, 15, 9, 0, 0, 0, time.UTC)
+	if got, want := st.PendingAge(now), 14*24*time.Hour; got != want {
+		t.Errorf("PendingAge = %v, want %v", got, want)
+	}
+}
+
+func TestPendingAgeIsZeroWhenNothingIsPending(t *testing.T) {
+	st, err := Summarize(t.TempDir(), nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An empty queue and a queue nobody has touched in a fortnight must not
+	// render the same; zero here is what lets the caller tell them apart.
+	if got := st.PendingAge(time.Date(2026, 8, 15, 0, 0, 0, 0, time.UTC)); got != 0 {
+		t.Errorf("PendingAge on an empty queue = %v, want 0", got)
+	}
+}
+
+func TestPromotingTheOldestDraftAdvancesTheAge(t *testing.T) {
+	store := t.TempDir()
+	old := handoffDraft()
+	old.Lane = "old-lane"
+	old.When = time.Date(2026, 8, 1, 9, 0, 0, 0, time.UTC)
+	written, err := Write(store, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recent := handoffDraft()
+	recent.Lane = "recent-lane"
+	recent.When = time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC)
+	if _, err := Write(store, recent); err != nil {
+		t.Fatal(err)
+	}
+	if err := Remove(store, written.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := Summarize(store, nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Draining the backlog has to be visible, or the number reports a problem
+	// that has been fixed and stops meaning anything.
+	if !st.OldestPending.Equal(recent.When) {
+		t.Errorf("OldestPending = %v, want %v after the oldest was decided", st.OldestPending, recent.When)
+	}
+}

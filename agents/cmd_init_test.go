@@ -204,12 +204,18 @@ func TestInitRegistersAfterScaffoldEvenWhenWiringFails(t *testing.T) {
 // A message naming a path the tool no longer writes sends its reader to an
 // empty directory to conclude that recording is broken.
 func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
-	for _, f := range []func() string{
-		func() string { var b bytes.Buffer; runInit(nil, &b); return b.String() },
-	} {
-		if strings.Contains(f(), "reports/traces") {
-			t.Error("init still points at .agents/reports/traces/, which nothing writes any more")
-		}
+	// t.Chdir is not decoration. runInit discovers its repository from the
+	// working directory, so without this the test wired THIS repository with
+	// the ephemeral test binary's path -- once per `go test` run, accumulating,
+	// because stripOurs will not delete a command whose basename is
+	// `agents.test`. Seven runs left 28 dead hooks erroring at every session
+	// start. See TestMain, which now makes forgetting this harmless.
+	t.Chdir(newRepo(t))
+
+	var b bytes.Buffer
+	runInit(nil, &b)
+	if strings.Contains(b.String(), "reports/traces") {
+		t.Error("init still points at .agents/reports/traces/, which nothing writes any more")
 	}
 }
 

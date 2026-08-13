@@ -114,6 +114,31 @@ type Stats struct {
 	Promoted        int
 	Binned          int
 	Pending         int
+
+	// OldestPending is when the longest-waiting undecided draft was written,
+	// zero if nothing is pending.
+	//
+	// This is the leading indicator for the one failure this design has no
+	// trigger against: capture got an instruction that measurably works, review
+	// did not, so review still runs on the muscle memory that `agents save`
+	// died of. Forgetting is worse here than it was there -- the material was
+	// written and then lost with an untracked queue, rather than never written.
+	// A rising age is that failure starting, and it is visible before the queue
+	// is large enough to notice.
+	OldestPending time.Time
+}
+
+// PendingAge is how long the oldest undecided draft has waited. Zero when the
+// queue is empty, which is the state this number exists to distinguish from
+// "nobody has looked in a fortnight".
+func (s Stats) PendingAge(now time.Time) time.Duration {
+	if s.OldestPending.IsZero() {
+		return 0
+	}
+	if d := now.Sub(s.OldestPending); d > 0 {
+		return d
+	}
+	return 0
 }
 
 // DraftRate is the fraction of working sessions that recorded something. It is
@@ -184,6 +209,9 @@ func SummarizeLane(storeDir string, workingSessions []string, lane string, since
 		}
 		if since.IsZero() || !d.When.Before(since) {
 			st.Pending++
+			if st.OldestPending.IsZero() || d.When.Before(st.OldestPending) {
+				st.OldestPending = d.When
+			}
 		}
 	}
 	seen := map[string]bool{}

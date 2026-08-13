@@ -294,7 +294,43 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 	if generatedCount != len(a.Events()) {
 		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("hook config contains %d generated commands; want %d exact required hooks", generatedCount, len(a.Events())), Remedy: "run `agents wire`"}, info.ModTime(), nil
 	}
+	// Everything above counts hooks we own. An entry shaped like ours but run
+	// from some other binary is owned by nobody: `agents wire` will not replace
+	// it, because replacing it would mean deleting a command we cannot prove is
+	// ours, and the harness runs it anyway -- so it fails at every session
+	// start while this check says the wiring is exact. Report it; never delete.
+	if stale := resemblingButUnowned(hooks); len(stale) > 0 {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary, e.g. %s", len(stale), stale[0]),
+			Remedy: "these are not `agents wire`'s to remove; delete them from " + path + " by hand",
+		}, info.ModTime(), keys
+	}
 	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+}
+
+// resemblingButUnowned returns the hook commands that have our shape but that
+// ParseHookCommand refuses, newest-looking first is not meaningful here so the
+// order is whatever the config gives.
+func resemblingButUnowned(hooks map[string]any) []string {
+	var found []string
+	for _, rawGroups := range hooks {
+		groups, _ := rawGroups.([]any)
+		for _, rawGroup := range groups {
+			group, _ := rawGroup.(map[string]any)
+			inner, _ := group["hooks"].([]any)
+			for _, rawHook := range inner {
+				hook, _ := rawHook.(map[string]any)
+				command, _ := hook["command"].(string)
+				if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
+					found = append(found, command)
+				}
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
 }
 
 func snakeEvent(s string) string {

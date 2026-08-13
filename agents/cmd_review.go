@@ -172,10 +172,27 @@ func reviewStats(rc *repo.Context, store, lane, since string, stdout io.Writer) 
 	fmt.Fprintf(tw, "…promoted\t%d\n", st.Promoted)
 	fmt.Fprintf(tw, "…binned\t%d\n", st.Binned)
 	fmt.Fprintf(tw, "…still pending\t%d\n", st.Pending)
+	if age := st.PendingAge(time.Now()); age > 0 {
+		fmt.Fprintf(tw, "oldest pending\t%s\n", humanAge(age))
+	}
 	if st.Promoted+st.Binned > 0 {
 		fmt.Fprintf(tw, "promotion rate\t%.0f%%\n", 100*st.PromotionRate())
 	}
 	_ = tw.Flush()
+
+	// Said before the verdict below, and independently of it, because it is a
+	// different question. Everything else here grades capture; this grades
+	// review, which has no trigger at all -- capture was given an instruction
+	// that measurably works and review was left on the same muscle memory
+	// `agents save` died of. A queue nobody drains is that failure, and it is
+	// worse than forgetting to capture: the material was written and is now one
+	// re-clone from gone, since the queue is untracked and machine-local.
+	if age := st.PendingAge(time.Now()); age >= staleQueueAge {
+		fmt.Fprintln(stdout)
+		fmt.Fprintf(stdout, "the oldest pending draft has waited %s. Review is not happening on its\n", humanAge(age))
+		fmt.Fprintln(stdout, "own, and the queue is untracked -- a re-clone takes it. Drain it with")
+		fmt.Fprintln(stdout, "`agents review --keep <id>` or `--bin <id>`.")
+	}
 
 	// The reading, spelled out, because a bare rate invites the wrong
 	// conclusion. The baseline is zero: twenty sessions under the previous
@@ -205,6 +222,27 @@ func reviewStats(rc *repo.Context, store, lane, since string, stdout io.Writer) 
 	default:
 		fmt.Fprintln(stdout, "the instruction is producing material you keep; §3c is not justified.")
 		return exitcode.OK
+	}
+}
+
+// staleQueueAge is when a pending draft stops being "not got to yet" and starts
+// being evidence that review does not happen without being asked. Seven days is
+// a guess, and deliberately a loose one: it is the threshold for *reporting* a
+// suspicion, nothing acts on it, and the cost of being wrong is one paragraph.
+// If real use shows drafts routinely sitting a fortnight and then still being
+// promoted, the number is wrong rather than the queue.
+const staleQueueAge = 7 * 24 * time.Hour
+
+// humanAge renders a duration the way someone reading a backlog thinks about
+// it. Anything under a day is not interesting here, so hours are the floor.
+func humanAge(d time.Duration) string {
+	switch days := int(d.Hours() / 24); {
+	case days >= 2:
+		return fmt.Sprintf("%d days", days)
+	case days == 1:
+		return "1 day"
+	default:
+		return fmt.Sprintf("%d hours", int(d.Hours()))
 	}
 }
 

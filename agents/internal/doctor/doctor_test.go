@@ -179,6 +179,73 @@ func TestCheckWiringAllowsForeignHooks(t *testing.T) {
 	}
 }
 
+// The failure this reproduces: a test wired this repository with the ephemeral
+// `agents.test` binary, and because stripOurs refuses to delete a command whose
+// basename is not `agents`, the entries survived every subsequent `agents
+// wire`. Four accumulated per run, all of them erroring at session start, while
+// doctor reported the wiring exact -- it counted only hooks it owned.
+func TestCheckWiringReportsHookCommandsThatLookOursButRunAnotherBinary(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "claude-code")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	stale := "/tmp/go-build123/b001/agents.test hook stop --harness claude-code"
+	groups := cfg["hooks"].(map[string]any)["Stop"].([]any)
+	cfg["hooks"].(map[string]any)["Stop"] = append(groups, map[string]any{
+		"hooks": []any{map[string]any{"type": "command", "command": stale}},
+	})
+	writeJSONMap(t, path, cfg)
+
+	got, _, _ := checkWiring(a, root, binary)
+	if got.Status != Warn {
+		t.Fatalf("status = %v, want Warn; a hook that fails at every session start must not read as exact wiring: %+v", got.Status, got)
+	}
+	if !strings.Contains(got.Detail, "agents.test") {
+		t.Errorf("detail does not name the offending command: %q", got.Detail)
+	}
+	// It is not wire's to remove -- deleting a command we cannot prove is ours
+	// is the worse failure -- so the remedy must not prescribe re-wiring, which
+	// is the one thing that provably does not fix this.
+	if strings.Contains(got.Remedy, "run `agents wire`") {
+		t.Errorf("remedy sends the user to a command that cannot fix this: %q", got.Remedy)
+	}
+	if !strings.Contains(got.Remedy, "by hand") {
+		t.Errorf("remedy does not say what to actually do: %q", got.Remedy)
+	}
+}
+
+// The counterweight to the test above: widening what we *report* must not
+// widen what we delete, and a genuine third-party hook must survive both.
+func TestWireLeavesAResemblingForeignHookAlone(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "claude-code")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	foreign := "/opt/vendor/auditor hook stop --harness claude-code"
+	groups := cfg["hooks"].(map[string]any)["Stop"].([]any)
+	cfg["hooks"].(map[string]any)["Stop"] = append(groups, map[string]any{
+		"hooks": []any{map[string]any{"type": "command", "command": foreign}},
+	})
+	writeJSONMap(t, path, cfg)
+
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(b), foreign) {
+		t.Error("wire deleted a hook it could not prove was ours; reporting is allowed, deleting is not")
+	}
+}
+
 func TestDoctorReadsGeneratedWiringAsVerifiedRegularLeaf(t *testing.T) {
 	binary := executableFile(t, t.TempDir(), "agents")
 	a := adapterNamed(t, "codex")
