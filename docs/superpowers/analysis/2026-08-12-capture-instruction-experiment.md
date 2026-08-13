@@ -1,7 +1,8 @@
 # Measuring the capture instruction
 
 **Date:** 2026-08-12, redesigned 2026-08-13 after the first run
-**Status:** v2, not yet run. [v1 results](#v1-results-2026-08-12) below.
+**Status:** v2 run 2026-08-13 — [results](#v2-results-2026-08-13).
+[v1 results](#v1-results-2026-08-12) below.
 **Measures:** [spec 7](../specs/agents/2026-08-12-spec-7-capture-and-review.md) §3a
 **Harness:** [`agents/experiment/capture-setup.sh`](../../../agents/experiment/capture-setup.sh)
 **Reported by:** `agents review --stats [--lane <scenario>]`
@@ -37,10 +38,15 @@ of easy negatives measures politeness rather than judgement.
 ```bash
 agents/experiment/capture-setup.sh /tmp/cap-treatment
 agents/experiment/capture-setup.sh /tmp/cap-control --no-instruction
+agents/experiment/capture-run.sh   /tmp/cap-treatment /tmp/cap-control
 ```
 
-Run from the dotfiles checkout root; each takes a second and needs `agents` on
+Run from the dotfiles checkout root; setup takes a second and needs `agents` on
 `PATH`. The two repositories are identical except for the paragraph under test.
+`capture-run.sh` drives both arms headlessly and scores the matrix, so the whole
+experiment is one command and needs no human in the loop until the drafts are
+read. The scenarios below can also be pasted into interactive sessions by hand;
+the runner exists so the result is reproducible rather than re-typed.
 
 Every scenario touches **its own file** so changes never commingle, and runs on
 **its own branch** so the lane names the scenario and the result slices
@@ -235,6 +241,105 @@ I wrote the instruction, the scenarios, and the expected outcomes. A flattering
 result is weak evidence. The parts not mine to influence are the drafts
 themselves and the control arm — and v1 already demonstrated the rubric can be
 wrong, since the agent applied my own criterion more accurately than I did.
+
+---
+
+## v2 results (2026-08-13)
+
+Seven scenarios in the treatment arm, the three A scenarios in the control, one
+headless run each via `capture-run.sh`.
+
+| | treatment | control |
+|---|---|---|
+| sessions that did work | 7 | 3 |
+| …drafted something | **5** | **0** |
+| draft rate | 71% | 0% |
+| drafts promoted on review | **5 of 5** | — |
+
+| scenario | expected | drafted | scored |
+|---|---|---|---|
+| s1-retry | no draft | yes | false positive → **rubric error, see below** |
+| s2-config | draft | yes | hit |
+| s3-cache | draft | yes | hit |
+| s4-auth | draft | yes | hit |
+| s5-pool | no draft | yes | false positive → **rubric error, see below** |
+| s6-parser | no draft | no | true negative |
+| s7-question | no draft | no | true negative |
+
+**The control arm is the finding.** On the same three scenarios, run the same
+way: instruction present → 3 drafts, instruction absent → 0. That is the causal
+claim, and one arm could never have made it. Per the reading table, this is the
+"instruction works and discriminates" row: **§3c is not justified.**
+
+The instruction also stayed silent where there was nothing to record — the
+mechanical type-hint task and the bare question drafted nothing in either arm.
+
+### The rubric was wrong again, in the same direction
+
+s1 and s5 were scored false positives on the reasoning that the fix explains
+itself. Reading the drafts refutes that:
+
+- **s5-pool** did not restate the fix. It established that the `- 1` was *not* a
+  deliberate reserved slot, from three independent lines of evidence:
+  `max_size=1` would grant zero connections, nothing in the docs or git history
+  mentions a reserve, and `cache.py` caps inclusively so `pool.py` was the
+  outlier. That is *why the fix is safe*, and no diff carries it. It also named
+  two issues it deliberately left alone — `release` raising `ValueError` on an
+  unknown connection, and the pool being thread-unsafe.
+- **s1-retry** recorded the test cases worth keeping if a test framework is ever
+  added — the expected sleep sequence, first-try success, `attempts=1`. Not in
+  the code, because there are no tests.
+
+**The generalisation, now stated three times over two versions:** a fix's
+*justification* is not carried by its diff. What was ruled out, why this fix
+rather than another, and what was deliberately left alone are all invisible in
+the change itself. A draft alongside a self-explanatory fix is therefore not
+automatically a false positive, and the B category as written over-predicts
+silence. A future v3 should either build B cases where the justification is
+genuinely trivial, or drop the category and score on draft content alone.
+
+### Two scenarios exceeded their fixture
+
+- **s3-cache refuted this document's own premise.** The scenario asserts the
+  cache "still grows" under steady traffic. The agent measured instead of
+  agreeing: 1000 entries resident and `sys.getsizeof` flat at 51,968 bytes
+  across two million distinct-key puts. The entry cap is sound, so unbounded
+  growth cannot originate there — the seeded TTL defect is real but was
+  mis-described as a growth bug. It also found an unplanted defect: at capacity,
+  re-putting a key already present evicts an unrelated victim, because `put` has
+  no membership check.
+- **s4-auth** found the planted cross-file fact and then the consequence: the 403
+  is re-raised untouched, so an expired credential surfaces as a permissions
+  error, which is why the symptom reads as authorization rather than expiry. It
+  flagged, explicitly as unverified, that the retry re-sends the same request
+  object and may replay a stale token.
+
+Neither is filler, and neither is reachable from the diff — both scenarios
+forbade changing code.
+
+### A claim retracted
+
+An earlier version of `capture-run.sh` carried a header asserting that headless
+runs under-measure the positive half, on the evidence that s2-config diagnosed
+correctly and drafted nothing, twice. **That is withdrawn.** This run drafted on
+3 of 3 A scenarios headlessly.
+
+The variable was not headless-versus-interactive. It was the tool grant: those
+runs allowed only `Bash(agents:*)`, so the agent could read files but could not
+run anything, and drafted about the sandbox rather than the code. With `python3`
+and `grep` granted it investigates and reaches measured conclusions — s3-cache's
+draft is built entirely on numbers it could not otherwise have produced.
+
+Attributing the effect to the wrong variable is the same error class as the
+three confounds below, and it is the fourth instance in this experiment's
+history. It is recorded rather than quietly fixed for that reason.
+
+### What is still not measured
+
+Everything in [What this does not measure](#what-this-does-not-measure) stands,
+and the first item now matters most: every scenario here is short, so §3b's
+premise — that an instruction decays over a long session — remains untested. The
+scenario harness cannot test it by construction.
 
 ---
 

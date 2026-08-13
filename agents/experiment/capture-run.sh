@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-# Run the capture experiment headlessly.
+# Run the capture experiment headlessly, both arms, and score the matrix.
 #
-# READ THIS BEFORE TRUSTING A RESULT FROM IT.
+# An earlier version of this header claimed headless runs under-measure the
+# positive half, because in a one-shot run the agent's answer IS the deliverable
+# so there is no "before moving on" left to record. RETRACTED: on 2026-08-13 this
+# runner drafted on 3 of 3 A scenarios headlessly.
 #
-# `claude -p` is a different population from an interactive session, and the
-# difference bites exactly where this experiment looks. In a one-shot headless
-# run the agent's answer IS the deliverable, returned to whoever invoked it, so
-# for a read-only "explain X" scenario there is no "before moving on" to record
-# before -- the knowledge has just been handed over. Measured: the s2-config
-# scenario produced a complete, correct diagnosis and drafted nothing, twice,
-# while the same scenario run interactively drafted.
+# The variable was the tool grant, not the harness. Those earlier runs allowed
+# only `Bash(agents:*)`, so the agent could read files and nothing else; it
+# drafted about the sandbox rather than the code. Granting python3 and grep lets
+# it investigate and reach a measured conclusion, and then it drafts. Keep that
+# in mind before blaming a population difference for a zero.
 #
-# So this runner is sound for the NEGATIVE half of the matrix -- does the
-# instruction fire when it should not -- and under-measures the positive half.
-# Run the A scenarios interactively; the protocol is in
-# docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md.
+# Protocol and results:
+# docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md
 #
 # Usage:  agents/experiment/capture-run.sh <treatment-dir> [control-dir]
 
@@ -137,9 +136,11 @@ done
 
 cat <<'NOTE'
 
-Before reading anything into the positive half: headless sessions under-measure
-it, because the agent's answer is already the deliverable. The negative half --
-false positives on s1, s5, s6, s7 -- is what this run measures soundly.
+A "false positive" here is a scored verdict against a rubric that has been wrong
+before. On 2026-08-13 both scored false positives turned out to be sound drafts:
+a fix's justification -- what was ruled out, what was left alone -- is not
+carried by its diff, so drafting alongside a self-explanatory fix is not by
+itself a failure. Do not report the matrix without reading what it scored.
 
 Read the drafts; the rate does not say whether they are any good:
   agents review --show <id>

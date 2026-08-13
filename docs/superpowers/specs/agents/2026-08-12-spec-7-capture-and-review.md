@@ -1,8 +1,8 @@
 # Spec 7 — capture cheaply, review before tracking
 
 **Date:** 2026-08-12
-**Status:** designed. Phases A and B′ implemented; §3c not built and deliberately
-so.
+**Status:** phases A and B′ implemented. §3a measured 2026-08-13 and it works
+(71% draft rate against a 0% control); §3c not built, now on evidence.
 **Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the tiers,
 the record schema, the hook adapters, and the exit-code contract.
 **Amends:** spec 1 §1, §2, §3.6, §3.7, §4. See
@@ -298,7 +298,7 @@ own bookkeeping, which it can.
 Capture has three possible triggers, differing by orders of magnitude in cost.
 **They are tried in ascending order: each is put into real use, and only an
 observed failure justifies building the next.** "Tried" is literal — the cheapest
-is in use now and has produced no data yet.
+is in use now, and it is the only one that has been measured.
 
 | | trigger | cost to build | cost per session |
 |---|---|---|---|
@@ -306,9 +306,10 @@ is in use now and has produced no data yet.
 | **3b** | a non-blocking nudge re-salienced late in a session | a hook that injects context | negligible |
 | **3c** | a blocking `Stop` gate | budget, watermarks, ceilings, a positive control | latency and context on every fire |
 
-**None of the three has been measured, and 3a ships unmeasured.** The ordering is
-not the result of a comparison and 3a is not the winner of one; it is a live
-experiment. Two things put it first, and they are different claims:
+**3a shipped unmeasured and has since been measured; 3b and 3c have not.** The
+ordering was not the result of a comparison and 3a was not the winner of one; it
+was a live experiment, since run. Two things put it first, and they are different
+claims:
 
 1. **The case for 3c was never valid.** This spec's first draft went straight to
    the gate on the strength of a measurement about *subagents*, which do not act
@@ -366,37 +367,52 @@ contingency, not the plan.** It is specified in full because a contingency nobod
 designed is a contingency nobody can cost — but nothing in it is built until the
 measurement below says the cheaper triggers were not enough.
 
-**What decides. Run once on 2026-08-12; see
-[the results](../../analysis/2026-08-12-capture-instruction-experiment.md#results-2026-08-12).
-Treatment drafted on 1 of 4 sessions, control on 0 of 4 — so the instruction
-caused the only draft, produced no false positives, and the one draft it
-produced was substantive. §3c is not justified by that. It is one observation,
-and the promotion rate is still unmeasured.**
+**What decided it. Measured 2026-08-13, seven scenarios per arm — see
+[the results](../../analysis/2026-08-12-capture-instruction-experiment.md#v2-results-2026-08-13).**
 
-The protocol: Two arms of scripted scenarios in
-a throwaway repository — [the capture experiment](../analysis/2026-08-12-capture-instruction-experiment.md). One arm carries
-the instruction, one has it stripped, and the scenarios are chosen so that two
-have a real conclusion the diff cannot carry and two have none. `agents review
---stats` reports the draft rate over sessions that *did work*, taken from the
-trace index, plus what was promoted and what was binned.
+| | treatment | control |
+|---|---|---|
+| sessions that did work | 7 | 3 |
+| …drafted something | **5** (71%) | **0** (0%) |
+| of the three scenarios run in both arms | **3 of 3** | **0 of 3** |
+| drafts promoted on review | **5 of 5** | — |
 
-This replaces an earlier proposal to run 3a ambiently for a working week. That
+**§3c is not justified.** The control arm is the finding: on the same three
+scenarios, the instruction present produced three drafts and the instruction
+absent produced none. The paragraph is not decoration, and capture is not
+failing in a way a gate would repair.
+
+It also discriminated where it should. The two scenarios with no conclusion to
+record — mechanical type hints, and a question — drafted nothing in either arm.
+
+The protocol: two arms of scripted scenarios in a throwaway repository —
+[the capture experiment](../../analysis/2026-08-12-capture-instruction-experiment.md).
+One arm carries the instruction, one has it stripped. `agents review --stats`
+reports the draft rate over sessions that *did work*, taken from the trace
+index, plus what was promoted and what was binned.
+
+This replaced an earlier proposal to run 3a ambiently for a working week. That
 measurement was paced by the calendar while the thing being measured is produced
 by work — the same category error as recording per `session-start`, one document
-later. Scripted scenarios answer in an afternoon and vary one thing at a time.
+later. Scripted scenarios answered it in an afternoon and varied one thing at a
+time.
 
-The comparison is not against perfection but against the baseline of zero.
-Drafting on the two scenarios that have a conclusion and not on the two that do
-not means 3c is over-engineering. Drafting on all four is a wording problem.
-Drafting on none is the first real evidence for 3b, then 3c. A control arm that
-drafts as often as the treatment arm means the paragraph is decoration.
+**The drafts themselves outrank the rate**, and reading them changed the score.
+Two scenarios were scored false positives against a rubric that expected no
+draft "because the fix explains itself." The drafts did not restate the fix:
+one established from three independent lines of evidence that a `- 1` was not a
+deliberate reserved slot — which is *why the fix is safe*, and is in no diff —
+and the other recorded the test cases worth keeping if tests are ever added. A
+third refuted this spec's own seeded premise with measurements. **All five were
+promoted; none was filler.**
 
-**The drafts themselves outrank the rate.** Three bullets restating the diff are
-a failure at any draft rate, and no number detects that.
+The rubric has now been wrong in the same direction three times. The standing
+correction: a fix's *justification* — what was ruled out, why this fix and not
+another, what was deliberately left alone — is not carried by the diff, so a
+draft alongside a self-explanatory fix is not automatically a false positive.
 
-Until that week has run, **nothing here is evidence about 3c either way.** The
-gate is unbuilt because its justification was withdrawn, not because it was
-tried and beaten.
+The gate stays unbuilt, now on evidence rather than only on the withdrawal of
+its original argument.
 
 This measurement is the compliance question the first draft of this spec deferred
 until after the gate was built. Asked this way it costs a sentence, and it answers
@@ -544,8 +560,8 @@ than pretending.
 **Compliance is measured at 3a, not here.** The first draft of this spec deferred
 "does the model write a useful draft, or game the gate to end the turn" until
 after the gate was built — which put the expensive machinery upstream of the
-question that decides whether the machinery is needed. Running 3a for a week
-answers it for a sentence.
+question that decides whether the machinery is needed. Measuring 3a answered it
+for a sentence: the drafts were substantive and all five were promoted.
 
 **Draft location:** `<store>/queue/<lane>/<session>-<n>.md`, untracked.
 
@@ -693,9 +709,9 @@ begins:
 | Phase | Contents | Ends somewhere working | Gate to the next phase |
 |---|---|---|---|
 | A | One store, retention, migration, untracking, doctor changes | Tracked tree clean, store bounded. No new behaviour. | — |
-| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review`, the event log and `review --stats` | **The whole loop, closed, with a one-sentence trigger.** | The two-arm scenario run in the capture experiment |
-| B″ | §3b's non-blocking nudge | Same loop, re-salienced late in long sessions | Another week, if B′ under-fires |
-| C | §3c's `Stop` gate: budget, watermarks, ceilings, the harness probe | Same loop, with capture forced | built only if B′ and B″ both fail |
+| B′ | §3a's instruction, the queue, `agents handoff draft`, `agents review`, the event log and `review --stats` | **The whole loop, closed, with a one-sentence trigger.** | **Passed** — the two-arm scenario run, 2026-08-13 |
+| B″ | §3b's non-blocking nudge | Same loop, re-salienced late in long sessions | Not triggered. Needs evidence of decay in a long session, which the scenario run could not produce. |
+| C | §3c's `Stop` gate: budget, watermarks, ceilings, the harness probe | Same loop, with capture forced | Not triggered, and B′ passing makes it unlikely |
 
 **B′ closes the loop on its own.** That is the substantive change from this spec's
 first draft, which put the gate in B and the review command in C — so nothing was
@@ -886,13 +902,11 @@ the mechanism.
 
 | Risk | Mitigation |
 |---|---|
-| **§3a's instruction is ignored and the queue stays empty** — the risk that decides everything downstream | This is measured, not mitigated. A week of B′ counts sessions, drafts and promotions against a baseline of zero. Failure promotes 3b, then 3c — which is why 3c is specified in full rather than hand-waved. |
+| **§3a's instruction is ignored and the queue stays empty** — the risk that decides everything downstream | **Measured and did not materialize.** Seven scenarios, 5 drafted, all 5 promoted; the control arm drafted 0 of 3 on the same scenarios. Retained as a risk because scripted scenarios are short and say nothing about long sessions. |
 | Building the gate first and discovering the instruction would have sufficed | The ordering in §7 exists for this. The first draft of this spec made exactly this error. |
 | **Phase A lands, nothing after it does** — the repo ends with less machinery and the same zero conclusions | §7 names it; A is not a resting point, and B′ is one sentence plus the review path, so there is no cost excuse |
-| An instruction decays in salience over a long session | §3b exists for this, and is cheaper than the gate. Unmeasured until B′ reports. |
-| A session ends abruptly and the instruction never fires | Accepted under B′. It is one of the three things only the gate fixes, and it is what a failed B′ week would demonstrate. |
-| A memory entry promoted on a feature branch is lost if the branch dies | Promotion warns and names the branch; it does not refuse or silently retarget |
-| A `kind: memory` draft lacks the frontmatter a memory entry needs | Promotion validates and refuses rather than synthesizing a slug nobody reviewed |
+| An instruction decays in salience over a long session | §3b exists for this, and is cheaper than the gate. **Still unmeasured** — every scenario in the experiment was short, which is the one thing it could not test. |
+| A session ends abruptly and the instruction never fires | Accepted under B′. It is one of the three things only the gate fixes. |
 | A memory entry promoted on a feature branch is lost if the branch dies | Promotion warns and names the branch; it does not refuse or silently retarget |
 | A `kind: memory` draft lacks the frontmatter a memory entry needs | Promotion validates and refuses rather than synthesizing a slug nobody reviewed |
 | Losing the bare signal that work happened on another machine | Accepted, and named as a loss in the diagnosis. If it matters on its own, it needs a purpose-built tracked artifact, not a pointer index |

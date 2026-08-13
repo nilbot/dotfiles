@@ -16,7 +16,7 @@ number may be implemented before an earlier one without renumbering either.
 | 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | candidate, gated on triggers | spec 1 (adapters) |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | designed | spec 1 (exit codes, security boundaries) |
 | 6 | [releases and binary distribution](2026-08-11-spec-6-releases-and-distribution.md) | scope only | spec 1, spec 5 |
-| 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | phases A and B′ implemented; §3c deliberately not built | spec 1 (tiers, record schema, adapters, exit codes) |
+| 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | phases A and B′ implemented; §3a measured and it works, so §3c stays unbuilt | spec 1 (tiers, record schema, adapters, exit codes) |
 
 **Spec 1 is the implemented foundation.** It defines the terminology, placement
 rule, pointer format, Go module, and installation boundaries that the remaining
@@ -107,7 +107,10 @@ that it was write-only: nothing could read a cached transcript back, so a
 - [`fixtures/`](fixtures/) — real hook payloads captured from live agent runs,
   used as test fixtures by spec 1. Sanitized; see the fixtures README.
 - [the capture experiment](../../analysis/2026-08-12-capture-instruction-experiment.md)
-  — the two-arm protocol that decides spec 7 §3a, with
-  [`agents/experiment/capture-setup.sh`](../../../../agents/experiment/capture-setup.sh)
-  as its harness. Run once on 2026-08-12: treatment 1 draft of 4 sessions,
-  control 0 of 4.
+  — the two-arm protocol that decided spec 7 §3a, with
+  [`capture-setup.sh`](../../../../agents/experiment/capture-setup.sh) and
+  [`capture-run.sh`](../../../../agents/experiment/capture-run.sh) as its
+  harness. **v2, 2026-08-13: treatment drafted on 5 of 7 sessions and all 5 were
+  promoted; the control drafted 0 of 3 on the same scenarios.** The instruction
+  causes the drafting, so §3c is not justified. Read the v2 section before
+  reusing the rubric — it over-predicts silence, twice now.
