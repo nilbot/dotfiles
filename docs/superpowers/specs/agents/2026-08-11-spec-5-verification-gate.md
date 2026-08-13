@@ -77,28 +77,33 @@ repository has ever actually run.
 
 ## Current baseline
 
-Measured on 2026-08-11, on this machine.
+Re-measured on 2026-08-13, on this machine, after spec 7's phases A and B′
+landed. Figures from the 2026-08-11 draft that moved are marked.
 
 - No `.github/` directory. No workflows, no PR checks, no releases.
 - Two Go modules — `agents/` and `bootstrap.d/` — and deliberately **no
   `go.work`** (spec 2 §11). Two independent build graphs.
-- 98 Go files, 50 of them containing tests. The suites are fast.
+- 107 Go files, 54 of them containing tests *(was 98 and 50 on 08-11; spec 7 is
+  still adding)*. The suites are fast.
 - Go 1.26.5 `darwin/arm64`; `go.mod` says `go 1.26`, which floats.
 - gitleaks 8.30.1 on `PATH`, run by hand.
-- `agents/internal/exitcode/exitcode.go` defines **six** codes; the fifth,
-  `NoRecord = 5`, has been there since the module's first commit `038eb8f`.
-  `bootstrap.d/main.go:28` defines **five**. The two help texts disagree
-  accordingly (`agents/main.go:113` prints six, `bootstrap.d/main.go:50` five).
-- `agents/main.go:60` dispatches through a `switch`; `agents/main.go:94` is a
-  hand-maintained `usage()` literal. Nothing connects them. There is no `help`
-  command and no `--help` at any depth; `agents --help` reports
-  `unknown command` and exits `3`.
+- **Spec 1 §6 defines six shared exit codes** and calls them "identical across
+  every subcommand." `agents/internal/exitcode/exitcode.go` implements all six.
+  `bootstrap.d/main.go:28` implements five — it has no `5`. See
+  [§4](#4-exit-codes-are-a-per-invocation-contract) for the three-way wording
+  drift on top of that.
+- `agents/main.go:61` dispatches through a `switch`; `agents/main.go:98` is a
+  hand-maintained `usage()` literal *(lines moved from 60 and 94)*. Nothing
+  connects them. There is no `help` command and no `--help` at any depth;
+  `agents --help` reports `unknown command` and exits `3`.
 - Four files read the real `$HOME`: `agents/root.go`,
   `agents/internal/doctor/doctor.go`, `agents/internal/machine/machine.go`,
-  `bootstrap.d/main.go`.
+  `bootstrap.d/main.go`. Unchanged since 08-11.
 - `agents ls` reports a fleet of one.
 - `agents doctor` on this healthy machine exits advisory, over
-  `recording:codex` and `pointers:local-unreachable`. Both are machine-local.
+  `recording:codex` and `pointers:unverified` — both machine-local. *(The
+  08-11 draft cited `pointers:local-unreachable`, which spec 7 removed. The
+  citation changed; the argument it supports did not, which is the point.)*
 
 ## The organizing claim
 
@@ -216,10 +221,18 @@ there is a git checkout and a `.agents/` directory, so a `4` from
 reported as a pass.
 
 `agents doctor` makes the failure of a global table concrete. It exits advisory
-on this healthy machine over `recording:codex` and `pointers:local-unreachable`,
-both machine-local and both meaningless on a runner. "Advisory fails" makes the
-gate permanently red for reasons no pull request can fix; "advisory passes" means
+on this healthy machine over `recording:codex` and `pointers:unverified`, both
+machine-local and both meaningless on a runner. "Advisory fails" makes the gate
+permanently red for reasons no pull request can fix; "advisory passes" means
 doctor can never fail CI for anything.
+
+Spec 7 then produced the case that settles it. **`agents review --stats` returns
+`1` for several readings that are entirely successful** — there, `1` means
+"measured, and the reading is not a clean pass", which is not an error at all.
+One binary now uses code `1` for *a finding about the repository*, *a warning
+about this machine*, and *a successful measurement whose value is low*. No global
+verdict can be correct for all three, and no amount of care in choosing one will
+make it correct later.
 
 **So every CI call site declares the exit code it expects, and the workflow
 asserts equality.**
@@ -243,15 +256,37 @@ contract.
 on a runner, and `doctor_test.go` already covers its logic. Gating on it would
 mean choosing between a red gate and a toothless one.
 
-**The reconciliation.** `agents` has six codes and `bootstrap` five. This spec
-audits `bootstrap` for paths that return `2` (refused) where they mean `5` (could
-not complete) — a refusal asserts *this machine is in a state I will not write
-over*, which is a different claim from *I tried and could not*. If real cases
-exist, `bootstrap` gains the sixth code for a reason. If none do, the asymmetry
-is documented as truth in both help texts — `0`–`4` universal, `5` `agents`-only
-— and pinned by a test that reads both. No constant is added for symmetry alone.
+**The reconciliation, against spec 1 — not against either binary.** The
+08-11 draft of this spec proposed documenting the divergence as a legitimate
+asymmetry: `0`–`4` universal, `5` `agents`-only. **That was wrong.** Spec 1 §6
+defines all six codes and calls them "identical across every subcommand." `5` is
+not an `agents` extension; `bootstrap` is missing a code the foundation defines.
+Writing the asymmetry down as truth would have canonised a drift as a decision —
+the exact failure this spec exists to prevent, committed by the spec itself.
 
-That pinning test reads a tracked file from outside its own module, which
+Because the divergence is wider than two help texts. One table is described in
+**three** places, and all three differ:
+
+| Source | code 4 | code 5 |
+|---|---|---|
+| Spec 1 §6 (canonical) | not applicable / skip | could not record |
+| `exitcode.go` constant comments | not applicable here | could not complete the requested operation |
+| `agents` help text | skip | could not complete the operation |
+| `bootstrap` help text | not applicable | *absent* |
+
+So the work is: **help text renders from the constants** rather than restating
+them — which is [§6](#6-the-command-registry-and-the-documentation-derived-from-it)'s
+registry doing its job, not a separate mechanism — and a test pins the constants
+against spec 1's table. Prose in a spec cannot be generated from code, so that
+test is the only thing that can hold the two together.
+
+`bootstrap` is then audited for paths returning `2` (refused) that mean `5` — a
+refusal asserts *this machine is in a state I will not write over*, which is a
+different claim from *I tried and could not*. Unlike the 08-11 draft, the audit
+no longer decides **whether** `bootstrap` gets the code; spec 1 already did. It
+decides which existing paths were mislabelled on the way.
+
+The pinning test reads tracked files from outside its own module, which
 `bootstrap.d/makefile_test.go` already establishes as this repository's pattern,
 and which is one more reason the gate runs `-count=1`.
 
@@ -259,12 +294,40 @@ and which is one more reason the gate runs `-count=1`.
 
 Two checks that belong together because they assert the same property.
 
+#### The incident that arrived after this section was written
+
+On 2026-08-13, `a26eaa9` fixed exactly the failure this job exists to catch, and
+it is recorded here because a hypothetical became a measurement.
+
+`TestInitDoesNotPointAtTheRetiredTrackedTracePath` called `runInit` with no
+`t.Chdir`, so **it wired this repository with the ephemeral `agents.test`
+binary path** — four times per `go test` run, erroring at session start. The
+damage compounded: `stripOurs` only deleted commands whose basename was exactly
+`agents`, so the real hook was stripped, the test one added, and nothing could
+ever remove it.
+
+**And `agents doctor` reported the wiring exact throughout.** A test escaped
+into the machine, corrupted the machine's configuration, and the diagnostic
+designed to notice said everything was fine.
+
+`TestMain` now chdirs out of the checkout before any test runs, which closes the
+**cwd** escape route. That is a real fix and this spec does not duplicate it.
+**It leaves the sibling route open:** a test that reads `$HOME` rather than the
+working directory reaches the machine exactly as before, and four files still
+read the real `$HOME`. The hygiene job is what closes that one.
+
+One constraint the fix introduced, which matters to anyone writing the tests
+this spec asks for: three call sites resolving repository paths from cwd —
+`task18RepoRoot` and two `go build` invocations — now use `packageDir` captured
+before the chdir. A new test that reads a tracked fixture must do the same.
+
+#### The checks
+
 **The suites under a synthetic environment.** Both modules run with `HOME` and
 `XDG_CACHE_HOME` pointed at temporary directories, and `bootstrap.d`
 additionally under `umask 077` — the conditions PR #16 verified by hand and
-which nothing currently keeps verified. Four files read the real `$HOME` today;
-the phase measures what breaks before deciding what to fix, and this spec does
-not guess the number.
+which nothing currently keeps verified. The phase measures what breaks before
+deciding what to fix, and this spec does not guess the number.
 
 **`agents index` followed by `git diff --exit-code`.** The `generated-file`
 guard rule already blocks a commit that leaves an index stale, but it is enforced
@@ -278,10 +341,23 @@ the check that says so.
 
 ### 6. The command registry, and the documentation derived from it
 
+**This section owns the `cli-help-unification` lane**, whose pending draft
+handoff was written on 2026-08-13 for whoever picked this up.
+
 `agents/main.go` dispatches through a `switch` and describes itself through a
 separate string literal. Nothing connects them, so adding a command and
 forgetting to document it is a silent, ordinary mistake. There is no `help`
 command, and `trace cache prune` — a destructive verb — has no help at all.
+
+Spec 7 demonstrated the cost while this spec sat unimplemented. Four usage lines
+changed in one workstream — `handoff write|draft|prune` gained a verb, and
+`review [--keep|--bin <id>]`, `trace cache prune --retention` and
+`trace migrate [--yes]` are new — each one a hand-edit to a literal that
+happened to be remembered. Doctor's check set changed in the same period without
+any usage line to update, and `wiring:*` gained a `Warn` result it never had.
+**The registry is worth landing early for this reason: it is the mechanism that
+makes the next workstream's commands document themselves, and there is a next
+workstream.**
 
 **A declared command tree replaces both.** Each node carries name, one-line
 summary, usage, detail, flags, handler, and subcommands. Dispatch and help walk
@@ -307,23 +383,38 @@ does not define. The check scans inline code spans and fenced blocks for
 the direction that actually hurts: a document confidently naming a command that
 no longer exists.
 
-**The backward check covers `README.md`, `CLAUDE.md`, and everything under
-`.agents/skills/`, and deliberately excludes `docs/superpowers/plans/` and
-`docs/superpowers/specs/`.**
+**The backward check covers `README.md`, both `CLAUDE.md` files — the project
+one and the tracked global `claude/CLAUDE.md` — and everything under
+`claude/skills/` and `.agents/skills/`. It deliberately excludes
+`docs/superpowers/plans/` and `docs/superpowers/specs/`.**
 Plans and specs are dated records of what was true when they were written; the
 executed bootstrap plan legitimately names `make githooks`, which no longer
 exists. Forcing those to match today's command set would destroy the record, and
 a record that is silently rewritten to stay true is not a record.
 
-**Harness guidance lives in `.agents/skills/`, not in `CLAUDE.md`.** The
-repository's `CLAUDE.md` declares itself "only the pointer" to `.agents/`, and
-`.agents/skills/` is already defined as "procedures specific to this repo." A
-harness needs to know not just what the commands are but when to reach for them —
-when a finding is worth `agents handoff write` rather than a comment, when
-`agents trace show` answers a question that grep cannot, why `agents save` exists
-separately from `git commit`. That is a skill document. Growing `CLAUDE.md` into
-a manual would contradict the structure it exists to establish. The backward
-check covers both files regardless of which holds what.
+**Harness guidance lives in `claude/skills/`, not in either `CLAUDE.md` and not
+in `.agents/skills/`.** The 08-11 draft said `.agents/skills/`; PR #19 shows
+that was the wrong shelf.
+
+`bootstrap.d/links.manifest:20-21` symlinks `claude/skills` → `~/.claude/skills`
+and `claude/CLAUDE.md` → `~/.claude/CLAUDE.md` on every provisioned machine. So
+`claude/skills/` is **fleet-wide**: tracked in this repository, installed
+everywhere, loaded in every session in every repository. `.agents/skills/` is
+per-repository procedure.
+
+`agents` is a fleet-wide tool — `agents ls` lists registered repositories and
+`agents update --all` rewires every one of them. Guidance on when to reach for
+it is therefore not specific to this checkout, and putting it in `.agents/skills/`
+would mean the one repository that needs it least is the only one that has it.
+
+What that guidance has to carry is judgment rather than syntax: when a finding is
+worth `agents handoff draft` rather than a comment, why `agents review` stands
+between a draft and the tracked record, when `agents trace show` answers a
+question grep cannot, why `agents save` exists separately from `git commit`. The
+generated block in §6 gives a harness the command list; this gives it the reason
+to use one. Neither `CLAUDE.md` grows into a manual — the project one declares
+itself "only the pointer" to `.agents/`, and the global one is kept to rules a
+session acts on.
 
 ### 7. Linux
 
@@ -414,14 +505,22 @@ contain a stretch where the work is not trustworthy.
 |---|---|---|
 | 1 | Workflow skeleton: `test` matrix, `secrets`, `gate` | The first automated Go gate this repository has run |
 | 2 | Hygiene: temp `HOME` and `XDG_CACHE_HOME`, index freshness | Both suites proven independent of the machine |
-| 3 | Exit-code audit and reconciliation | One documented vocabulary, pinned by a test |
-| 4 | Command registry, `agents help`, coverage check | Every command reachable and documented by construction |
-| 5 | Documentation: generated README block, backward name check, `.agents/skills/` harness guidance | Docs that cannot drift from the command set |
+| 3 | Command registry, `agents help`, coverage check | Every command reachable and documented by construction |
+| 4 | Exit-code audit and reconciliation against spec 1 | One vocabulary, rendered from the constants, pinned by a test |
+| 5 | Documentation: generated README block, backward name check, `claude/skills/` harness guidance | Docs that cannot drift from the command set |
 | 6 | Linux: `dotfiles` profile, then Debian, then Arch | Spec 2's largest known gap closed or precisely narrowed |
 | 7 | Doctor stamped-root check | The worktree hazard PR #16 documented is no longer silent |
 
 Phase 1 is expected green on arrival. Phases 2, 3, 4 and 6 each expect red
 first — that is the point of pairing each with its fix.
+
+**Phases 3 and 4 were swapped on 2026-08-13.** The 08-11 draft reconciled exit
+codes first. Once the help text renders from the constants rather than restating
+them ([§4](#4-exit-codes-are-a-per-invocation-contract)), that work *is* a
+registry feature and cannot precede the registry. The swap also answers the
+pressure spec 7 exposed: four usage lines changed by hand in one workstream, and
+another workstream is already open, so every phase the registry waits is more
+drift to reconcile when it lands.
 
 ## The testing rule
 
@@ -466,8 +565,9 @@ Two, both narrow, both resolved by running the thing rather than by discussion:
 
 - Does `./bootstrap plan dotfiles` exit `0` in an unprivileged container? §7
   states the answer if it does not.
-- Does the `bootstrap` audit in §4 find real code-`5` cases? If yes, `bootstrap`
-  gains a sixth code; if no, the asymmetry is documented.
+- Which existing `bootstrap` paths return `2` where they mean `5`? That
+  `bootstrap` gets the code is not open — spec 1 §6 defines it. The audit finds
+  the call sites that were mislabelled on the way.
 
 ## Rejected alternatives
 
@@ -496,10 +596,14 @@ and agent context in separate commits. Teaching `index` to write a tracked file
 outside `.agents/` would put those two mechanisms in tension for a convenience.
 The renderer emits markdown on stdout; CI is the enforcement point.
 
-**Adding `NoRecord = 5` to `bootstrap` for symmetry.** Rejected unless the audit
-in §4 finds a path that genuinely means it. An unused constant documents a
-capability the binary does not have, which is the same category of lie as a
-`usage()` string that has drifted from its dispatch.
+**~~Adding `NoRecord = 5` to `bootstrap` for symmetry.~~ Reversed 2026-08-13.**
+The 08-11 draft rejected this, reasoning that an unused constant documents a
+capability the binary does not have. The reasoning was sound and the premise was
+false: spec 1 §6 defines six codes as "identical across every subcommand," so
+this was never symmetry-for-its-own-sake — `bootstrap` is missing a code the
+foundation specifies. Recorded rather than deleted, because the mistake is
+instructive: it took the two binaries as the authority on their shared
+vocabulary, when the shared vocabulary is defined above both of them.
 
 **Suites only, no container jobs** — run `go test` on `ubuntu-latest` and call
 Linux covered. Rejected: it proves the Go code is portable and touches none of
