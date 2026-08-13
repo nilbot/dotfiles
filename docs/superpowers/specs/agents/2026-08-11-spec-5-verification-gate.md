@@ -12,6 +12,17 @@ closed here or nowhere.
 what a distributed binary stamps now lives in
 [spec 6](2026-08-11-spec-6-releases-and-distribution.md), which is scope only.
 
+> **Note added 2026-08-12 from
+> [spec 7](2026-08-12-spec-7-capture-and-review.md).** Neither organizing claim
+> changes, and both get easier: with the trace index untracked, CI never sees
+> machine-local paths in the tracked tree at all.
+>
+> One scheduling collision. Spec 7 adds `agents review` and
+> `agents handoff draft`, which land in **§6**'s command registry and its derived
+> help text. Either this spec's registry ships first and spec 7's commands are
+> born with help text, or they arrive without it and this spec inherits them.
+> A sequencing decision, not a conflict.
+
 ---
 
 ## What changed from the scope note

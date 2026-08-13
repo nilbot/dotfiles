@@ -3,7 +3,12 @@
 #
 # Per-repository .gitattributes (written by `agents init`) takes precedence
 # over anything here.
-
-# Trace indexes are append-only. Union merge keeps concurrent branch appends
-# as line-oriented JSONL instead of producing invalid conflict markers.
-.agents/reports/traces/*.jsonl merge=union
+#
+# The trace merge=union rule that used to live here retired with spec 7. It
+# existed because two branches appending to the same tracked daily trace file
+# produced conflict markers that are not valid JSON, which a line-oriented
+# reader silently drops. The index is machine-local now -- nothing tracked
+# appends concurrently -- so the rule had nothing left to defend.
+#
+# Deliberately empty of rules. The file itself stays: core.attributesFile
+# points at it, and removing it would break that link rather than this rule.

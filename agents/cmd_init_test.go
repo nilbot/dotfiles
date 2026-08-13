@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,5 +198,52 @@ func TestInitRegistersAfterScaffoldEvenWhenWiringFails(t *testing.T) {
 	}
 	if len(r.Repos) != 1 || r.Repos[0].Path != resolved {
 		t.Fatalf("scaffolded repo was not registered before wiring failed: %+v", r.Repos)
+	}
+}
+
+// A message naming a path the tool no longer writes sends its reader to an
+// empty directory to conclude that recording is broken.
+func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
+	// t.Chdir is not decoration. runInit discovers its repository from the
+	// working directory, so without this the test wired THIS repository with
+	// the ephemeral test binary's path -- once per `go test` run, accumulating,
+	// because stripOurs will not delete a command whose basename is
+	// `agents.test`. Seven runs left 28 dead hooks erroring at every session
+	// start. See TestMain, which now makes forgetting this harmless.
+	t.Chdir(newRepo(t))
+
+	var b bytes.Buffer
+	runInit(nil, &b)
+	if strings.Contains(b.String(), "reports/traces") {
+		t.Error("init still points at .agents/reports/traces/, which nothing writes any more")
+	}
+}
+
+// A freshly initialized repository must be committable. Without the generated
+// indexes the pre-commit guard regenerates them, finds them unstaged, and
+// blocks -- so `agents init` would produce a tree whose first commit fails.
+func TestInitLeavesARepositoryThatCanCommit(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	var out bytes.Buffer
+	runInit(nil, &out)
+
+	for _, rel := range []string{
+		filepath.Join(".agents", "memory", "INDEX.md"),
+		filepath.Join(".agents", "reports", "handoff", "INDEX.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+			t.Errorf("init did not write %s: %v", rel, err)
+		}
+	}
+
+	git(t, root, "add", "-A")
+	cmd := exec.Command("git", "commit", "-m", "agents init")
+	cmd.Dir = root
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("the first commit after `agents init` was blocked:\n%s", b)
+	}
+	if s := git(t, root, "status", "--porcelain"); strings.TrimSpace(s) != "" {
+		t.Errorf("init left uncommittable residue:\n%s", s)
 	}
 }

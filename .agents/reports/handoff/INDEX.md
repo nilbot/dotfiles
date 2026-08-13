@@ -5,3 +5,9 @@ regenerates this file and blocks the commit if it differs.
 
 `reviewed` was written deliberately. `draft` was written automatically at
 session end and has not been checked by anyone. Weigh them differently.
+
+## spec-7-capture-and-review
+
+| when | status | session | file |
+|---|---|---|---|
+| 2026-08-12 18:29 | reviewed | spec7-verify | [2026-08-12-spec7-verify.md](spec-7-capture-and-review/2026-08-12-spec7-verify.md) |

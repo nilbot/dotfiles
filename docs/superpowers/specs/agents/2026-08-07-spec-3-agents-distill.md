@@ -5,6 +5,25 @@
 format (§3.1) and the memory `sources:` schema (§3.4). Both were specified in spec 1
 *specifically* so this could be built later without unrepairable data loss.
 
+> **⚠ Premise changed 2026-08-12 by
+> [spec 7](2026-08-12-spec-7-capture-and-review.md). Read that first.**
+> This document describes distillation as *the* path from machine-bound material
+> to tracked knowledge. It is now the **fallback** path. Spec 7's primary path
+> drafts while the producing session's context is still live — at a blocking
+> `Stop` gate — because a session that has already ended can only be reconstructed
+> from transcripts that are 48%-deleted by the time anyone asks. `agents distill`
+> covers what the gate missed: lanes never drafted, and material worth a second
+> pass.
+>
+> Two things below are already settled by spec 7 and should not be re-opened:
+> **open question 3** (the `--since` watermark exists — the store holds per-lane
+> ask watermarks), and the constraint that drafting must never write unreviewed
+> output into the tracked tree (**implemented** by spec 7's untracked queue plus
+> `agents review`, rather than left to this spec's implementer).
+>
+> Designing against the text below without reading spec 7 will build the wrong
+> primary path.
+
 ## Why it exists
 
 Spec 1 §1 defines three tiers, and the third — machine-bound harness material — is

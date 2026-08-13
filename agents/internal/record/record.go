@@ -25,7 +25,8 @@ var ForbiddenFields = []string{
 	"tool_response",
 }
 
-// Record is one line of .agents/reports/traces/YYYY-MM-DD.jsonl.
+// Record is one line of <store>/traces/YYYY-MM-DD.jsonl, where <store> is
+// repo.StoreDir. Machine-local: see Writer for why it is not tracked.
 //
 // Adding a field here is a decision about what this repository publishes.
 // Before adding one, check it against ForbiddenFields and against spec 3.2.
@@ -71,18 +72,24 @@ func (r Record) Line() ([]byte, error) {
 	return append(b, '\n'), nil
 }
 
-// Writer appends records under an .agents directory.
-type Writer struct{ agentsDir string }
+// Writer appends records under the machine-local store, resolved by
+// repo.StoreDir.
+//
+// Not under .agents/. A record names a transcript that only one machine can
+// open, so tracking it publishes a pointer with no reader: measured on this
+// repository, 48% of tracked records were unreachable on the machine that
+// wrote them. The index stays as local forensics, which is a job it can do.
+type Writer struct{ storeDir string }
 
-func NewWriter(agentsDir string) *Writer { return &Writer{agentsDir: agentsDir} }
+func NewWriter(storeDir string) *Writer { return &Writer{storeDir: storeDir} }
 
 // Append adds one record to the UTC-dated file for its timestamp.
 //
-// Partitioning is by UTC so that records written from two timezones land in the
-// same file, which is what makes the merge=union gitattribute do the right
-// thing on a merge.
+// Partitioning is by UTC so that records written from two timezones land in
+// the same file. That mattered when the files were tracked and merged with
+// merge=union; it survives because a reader still wants one file per day.
 func (w *Writer) Append(r Record) error {
-	dir := filepath.Join(w.agentsDir, "reports", "traces")
+	dir := filepath.Join(w.storeDir, "traces")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}

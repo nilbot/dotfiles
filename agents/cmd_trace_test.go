@@ -21,6 +21,18 @@ import (
 // flag bound to the wrong Filter field cannot pass by accident. The trace
 // package's own tests exercise matching; nothing there can catch `--module`
 // wired to Filter.Machine.
+// mustStoreDir is the machine-local store for a fixture repository. The trace
+// index moved there in spec 7, so a test that seeds records has to write where
+// the writer writes rather than under .agents/.
+func mustStoreDir(t *testing.T, root string) string {
+	t.Helper()
+	store, err := repo.StoreDir(root)
+	if err != nil {
+		t.Fatalf("StoreDir(%s): %v", root, err)
+	}
+	return store
+}
+
 func seedTraces(t *testing.T, root string) {
 	t.Helper()
 	seedTracesAt(t, root, time.Now().UTC())
@@ -28,7 +40,7 @@ func seedTraces(t *testing.T, root string) {
 
 func seedTracesAt(t *testing.T, root string, now time.Time) {
 	t.Helper()
-	w := record.NewWriter(repo.AgentsDir(root))
+	w := record.NewWriter(mustStoreDir(t, root))
 	recs := []record.Record{
 		{When: now.Add(-1 * time.Hour), Harness: "codex", Machine: "m1", Event: "stop",
 			Lane: "lane-a", Cwd: "alpha/api", AgentType: "Explore",
@@ -156,7 +168,7 @@ func TestTraceLSDescriptionCannotForgeARow(t *testing.T) {
 	root := newRepo(t)
 	hostile := "real work\n2026-01-01 00:00\tcodex\tstop\tfake-lane\tfake/cwd\t-\ty\tforged\rtail"
 	flattened := "real work 2026-01-01 00:00 codex stop fake-lane fake/cwd - y forged tail"
-	w := record.NewWriter(repo.AgentsDir(root))
+	w := record.NewWriter(mustStoreDir(t, root))
 	if err := w.Append(record.Record{
 		When: time.Now().UTC().Add(-time.Hour), Harness: "codex", Machine: "m1", Event: "stop",
 		Lane: "lane-a", Cwd: "alpha/api", AgentType: "Explore",
@@ -189,7 +201,7 @@ func TestTraceLSDescriptionCannotForgeARow(t *testing.T) {
 func TestTraceLSRendersTheDerivedColumns(t *testing.T) {
 	root := newRepo(t)
 	now := time.Now().UTC()
-	w := record.NewWriter(repo.AgentsDir(root))
+	w := record.NewWriter(mustStoreDir(t, root))
 	for _, r := range []record.Record{
 		{When: now.Add(-1 * time.Hour), Harness: "codex", Machine: "m1", Event: "subagent-stop",
 			Lane: "lane-a", Cwd: "alpha/api", AgentType: "Explore",
@@ -247,7 +259,7 @@ func TestTraceLSAdvisoryOnUnreadableLines(t *testing.T) {
 	seedTracesAt(t, root, now)
 	t.Chdir(root)
 
-	path := filepath.Join(repo.AgentsDir(root), "reports", "traces",
+	path := filepath.Join(mustStoreDir(t, root), "traces",
 		now.Add(-time.Hour).Format("2006-01-02")+".jsonl")
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -273,7 +285,7 @@ func TestTraceLSAdvisoryOnUnreadableLines(t *testing.T) {
 func seedCacheRepo(t *testing.T, mid string, recs ...record.Record) string {
 	t.Helper()
 	root := newRepo(t)
-	w := record.NewWriter(repo.AgentsDir(root))
+	w := record.NewWriter(mustStoreDir(t, root))
 	for _, r := range recs {
 		if r.When.IsZero() {
 			r.When = time.Now().UTC().Add(-time.Hour)

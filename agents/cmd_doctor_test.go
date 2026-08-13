@@ -26,7 +26,7 @@ func commandDepsForDoctor(t *testing.T, checks []doctor.Check, runErr error) doc
 		BinaryPath: func() (string, error) { return filepath.Join(root, "agents"), nil },
 		Now:        func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
 		DoctorDeps: doctor.Dependencies{},
-		Run: func(string, string, string, string, doctor.Thresholds, time.Time, doctor.Dependencies) ([]doctor.Check, error) {
+		Run: func(string, string, string, string, string, doctor.Thresholds, time.Time, doctor.Dependencies) ([]doctor.Check, error) {
 			return checks, runErr
 		},
 	}
@@ -145,7 +145,11 @@ func TestDoctorMapsUnsafeTraceLeavesToContentSafeNoRecord(t *testing.T) {
 	for _, kind := range []string{"symlink", "fifo"} {
 		t.Run(kind, func(t *testing.T) {
 			root := newRepo(t)
-			traceLeaf := filepath.Join(root, ".agents", "reports", "traces", "2026-08-20.jsonl")
+			storeTraces := filepath.Join(mustStoreDir(t, root), "traces")
+			if err := os.MkdirAll(storeTraces, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			traceLeaf := filepath.Join(storeTraces, "2026-08-20.jsonl")
 			private := "PRIVATE-doctor-trace-sentinel"
 			var stop chan struct{}
 			var released <-chan struct{}
@@ -306,7 +310,9 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 		}
 	}
 	build := exec.Command("go", "build", "-o", binary, ".")
-	build.Dir = "."
+	// TestMain moves the working directory out of the checkout, so the module
+	// this package belongs to has to be named explicitly.
+	build.Dir = packageDir
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build temp agents: %v\n%s", err, out)
 	}

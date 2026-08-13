@@ -84,6 +84,9 @@ func buildTemporaryAgentsBinary(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "agents")
 	cmd := exec.Command("go", "build", "-o", path, ".")
+	// TestMain moves the working directory out of the checkout, so `.` and the
+	// module it belongs to have to be named explicitly.
+	cmd.Dir = packageDir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build temporary agents binary: %v\n%s", err, out)
 	}

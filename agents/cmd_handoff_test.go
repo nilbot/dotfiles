@@ -218,6 +218,18 @@ func TestHandoffWriteRefusesASessionThatEscapesTheHandoffTree(t *testing.T) {
 	}
 }
 
+func TestHandoffWriteRejectsTheRetiredDraftFlag(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runHandoffWrite([]string{"--session", "s1", "--draft"}, strings.NewReader("body\n"), &out); code != exitcode.Malformed {
+		t.Fatalf("exit = %d, want Malformed; a retired flag must not be silently ignored\noutput:\n%s", code, out.String())
+	}
+	if files := handoffFiles(t, root); len(files) != 0 {
+		t.Errorf("a rejected invocation still wrote %v", files)
+	}
+}
+
 // Exit 5 is "wanted to record and could not". A handoff that is on disk while
 // only the index refresh failed is not that, and the two must not share a code:
 // handoff.WriteIndex re-parses the whole tree, so one conflicted file -- a
@@ -302,14 +314,18 @@ func TestHandoffWriteRefusesInputItCannotFileOrRead(t *testing.T) {
 //
 // Kills: defaulting to draft, ignoring --draft, or writing the status through
 // as whatever the flag happened to spell.
-func TestHandoffWriteMarksProvenanceFromTheFlag(t *testing.T) {
+// `write` always records reviewed provenance now. The --draft flag retired
+// with its meaning: it wrote unreviewed model output into the TRACKED tree,
+// and unreviewed now means unpromoted, which means not in the tree at all.
+// A stale --draft in a script must fail loudly rather than silently writing a
+// tracked note that claims nobody checked it.
+func TestHandoffWriteAlwaysRecordsReviewedProvenance(t *testing.T) {
 	for _, tc := range []struct {
 		label string
 		want  string
 		args  []string
 	}{
 		{"default is reviewed", "status: reviewed", []string{"--session", "s1"}},
-		{"--draft is a draft", "status: draft", []string{"--session", "s1", "--draft"}},
 	} {
 		t.Run(tc.label, func(t *testing.T) {
 			root := newRepo(t)

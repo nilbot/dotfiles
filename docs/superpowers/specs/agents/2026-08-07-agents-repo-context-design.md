@@ -4,6 +4,30 @@
 **Status:** implemented
 **Scope:** spec 1 of 3 (see [Roadmap](#roadmap-specs-2-to-4) for what is deliberately deferred)
 
+> **Amended 2026-08-12 by [spec 7](2026-08-12-spec-7-capture-and-review.md).**
+> Five days of measured use found the tracked trace index to be a reference to
+> tier-3 material filed in tier 2: 48% of records were unreachable on the machine
+> that wrote them, and the curated store they were meant to feed held zero
+> handoffs. Spec 7 amends **§1** (the tracked tier holds conclusions; everything
+> upstream is machine-local — the trace index and cache move out of the tracked
+> tree), **§3.6** and **§3.7** (the index is machine-local; `merge=union` on
+> traces retires), **§4** (a new `agents handoff draft` verb writes to an
+> untracked queue, `handoff write --draft` retires, and the auto-draft caller §4
+> specified but never built now exists), and **§6** (adds
+> `agents review` and `agents handoff draft`; demotes `agents save` to an escape
+> hatch).
+>
+> **§2's scaffolded `CLAUDE.md` gains a capture paragraph**, which under spec 7's
+> shipped phases *is* the capture mechanism — `doctor` checks for it the way it
+> already checks for the doctor instruction.
+>
+> **§6's exit-code rule stands for now.** Spec 7 considered a blocking `Stop` gate
+> that would have been a second deliberate exception alongside `agents guard`
+> (guard blocks on *failure*; the gate would block on *success*). That gate was
+> demoted to a contingency (spec 7 §3c) and is **not built**, so "`agents guard`
+> is the sole deliberate exception" remains true. If §3c is ever built, this rule
+> is what it amends.
+
 ---
 
 ## Origin

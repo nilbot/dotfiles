@@ -14,5 +14,7 @@ say -- report it rather than working around it.
 
 Run `agents doctor` early and report any warnings before relying on this context.
 
-Write handoffs with `agents handoff write`, not by hand. Commit `.agents/`
-changes with `agents save` so they do not ride along with code changes.
+When a stretch of work concludes — a bug understood, a decision made, an approach abandoned — record it before moving on: at most three bullets, covering what a future agent could not get from the code or the git log. Write it with `agents handoff draft --lane <lane> --session <id>`. Drafts are untracked until you review them, so drafting costs nothing and commits you to nothing.
+
+Review what has been drafted with `agents review`; promoting one writes it
+into `.agents/` and commits it in the same act.

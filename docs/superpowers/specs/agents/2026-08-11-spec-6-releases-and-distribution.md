@@ -10,6 +10,14 @@ unverified binaries on a schedule.
 **Carries obligations from:** [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md),
 implemented — chiefly §2.2's seam.
 
+> **Scope addition 2026-08-12 from
+> [spec 7](2026-08-12-spec-7-capture-and-review.md).** Spec 7 gives the machine-local
+> store a schema — trace index, transcript cache, per-lane ask watermarks, and an
+> untracked draft queue holding work that exists nowhere else. A released binary
+> that changes that schema must migrate it, and an older binary must not corrupt a
+> newer store. Store migration across versions is not currently in this document's
+> scope and belongs in it.
+
 ---
 
 ## Why it was split from spec 5

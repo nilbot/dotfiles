@@ -103,7 +103,11 @@ func recordHook(args []string, stdin io.Reader) error {
 		Transcript:      tr.Transcript,
 		PointerVerified: tr.PointerVerified,
 	}
-	if err := record.NewWriter(agentsDir).Append(rec); err != nil {
+	store, err := repo.StoreDir(rc.Root)
+	if err != nil {
+		return err
+	}
+	if err := record.NewWriter(store).Append(rec); err != nil {
 		return err
 	}
 	return cacheSubagentTranscript(rc.Root, mid, event, rec)
@@ -150,6 +154,19 @@ func cacheSubagentTranscript(root, mid, event string, rec record.Record) error {
 	if err != nil {
 		return err
 	}
+	// Bound the cache where it grows, which is here.
+	//
+	// Spec 7 §2 proposed pruning at post-merge. That timing belongs to
+	// PruneLane, whose question is WHICH lane's material is least likely to be
+	// wanted; retention asks only how old and how large, so a merge is not a
+	// meaningful moment for it -- and a repository that never merges would
+	// never prune at all. A directory walk costs far less than the copy that
+	// just happened.
+	//
+	// Errors are dropped rather than returned: the copy above succeeded, and
+	// failing the record over an unsuccessful prune would trade something
+	// irreplaceable for housekeeping.
+	_, _ = trace.PruneRetention(cacheRoot, DefaultCacheMaxAge, DefaultCacheMaxBytes, time.Now(), true)
 	if rep.Copied == 0 && len(rep.Details) > 0 {
 		return errors.New(rep.Details[0])
 	}

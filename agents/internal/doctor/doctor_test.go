@@ -1,8 +1,11 @@
 package doctor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"github.com/nilbot/dotfiles/agents/internal/queue"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,6 +176,73 @@ func TestCheckWiringAllowsForeignHooks(t *testing.T) {
 	writeJSONMap(t, path, cfg)
 	if got, _, _ := checkWiring(a, root, binary); got.Status != OK {
 		t.Fatalf("foreign hook rejected: %+v", got)
+	}
+}
+
+// The failure this reproduces: a test wired this repository with the ephemeral
+// `agents.test` binary, and because stripOurs refuses to delete a command whose
+// basename is not `agents`, the entries survived every subsequent `agents
+// wire`. Four accumulated per run, all of them erroring at session start, while
+// doctor reported the wiring exact -- it counted only hooks it owned.
+func TestCheckWiringReportsHookCommandsThatLookOursButRunAnotherBinary(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "claude-code")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	stale := "/tmp/go-build123/b001/agents.test hook stop --harness claude-code"
+	groups := cfg["hooks"].(map[string]any)["Stop"].([]any)
+	cfg["hooks"].(map[string]any)["Stop"] = append(groups, map[string]any{
+		"hooks": []any{map[string]any{"type": "command", "command": stale}},
+	})
+	writeJSONMap(t, path, cfg)
+
+	got, _, _ := checkWiring(a, root, binary)
+	if got.Status != Warn {
+		t.Fatalf("status = %v, want Warn; a hook that fails at every session start must not read as exact wiring: %+v", got.Status, got)
+	}
+	if !strings.Contains(got.Detail, "agents.test") {
+		t.Errorf("detail does not name the offending command: %q", got.Detail)
+	}
+	// It is not wire's to remove -- deleting a command we cannot prove is ours
+	// is the worse failure -- so the remedy must not prescribe re-wiring, which
+	// is the one thing that provably does not fix this.
+	if strings.Contains(got.Remedy, "run `agents wire`") {
+		t.Errorf("remedy sends the user to a command that cannot fix this: %q", got.Remedy)
+	}
+	if !strings.Contains(got.Remedy, "by hand") {
+		t.Errorf("remedy does not say what to actually do: %q", got.Remedy)
+	}
+}
+
+// The counterweight to the test above: widening what we *report* must not
+// widen what we delete, and a genuine third-party hook must survive both.
+func TestWireLeavesAResemblingForeignHookAlone(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "claude-code")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	foreign := "/opt/vendor/auditor hook stop --harness claude-code"
+	groups := cfg["hooks"].(map[string]any)["Stop"].([]any)
+	cfg["hooks"].(map[string]any)["Stop"] = append(groups, map[string]any{
+		"hooks": []any{map[string]any{"type": "command", "command": foreign}},
+	})
+	writeJSONMap(t, path, cfg)
+
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(b), foreign) {
+		t.Error("wire deleted a hook it could not prove was ours; reporting is allowed, deleting is not")
 	}
 }
 
@@ -676,15 +746,15 @@ func TestAttributeDiagnosticsRejectWrongConfigTargetAndSource(t *testing.T) {
 				t.Fatal(err)
 			}
 			other := filepath.Join(t.TempDir(), "attrs")
-			if err := os.WriteFile(other, []byte(globalTraceAttribute+"\n"), 0o644); err != nil {
+			if err := os.WriteFile(other, []byte("*.txt text\n"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Symlink(other, deps.AttributesLink); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"source line", func(t *testing.T, deps *Dependencies) {
-			if err := os.WriteFile(deps.AttributesSource, []byte("*.txt text\n"), 0o644); err != nil {
+		{"unreadable source", func(t *testing.T, deps *Dependencies) {
+			if err := os.Remove(deps.AttributesSource); err != nil {
 				t.Fatal(err)
 			}
 		}},
@@ -714,12 +784,19 @@ func TestPointerClassesAndMissingMachineIdentity(t *testing.T) {
 	}
 	checks := checkPointers(recs, "m1", t.TempDir())
 	if !strings.Contains(checkByName(t, checks, "pointers:unverified").Detail, "2") ||
-		!strings.Contains(checkByName(t, checks, "pointers:local-unreachable").Detail, "1") ||
 		!strings.Contains(checkByName(t, checks, "pointers:remote").Detail, "m2=2") {
 		t.Fatalf("pointer classes = %+v", checks)
 	}
+	// Locally unreachable pointers are deliberately not a class any more: the
+	// remedy was to win an unwinnable race, and it warned on every healthy
+	// machine every day.
+	for _, c := range checks {
+		if c.Name == "pointers:local-unreachable" {
+			t.Errorf("the unreachable-pointer warning came back: %+v", c)
+		}
+	}
 	withoutID := checkPointers(recs, "", t.TempDir())
-	for _, name := range []string{"pointers:local-unreachable", "pointers:remote"} {
+	for _, name := range []string{"pointers:remote"} {
 		for _, check := range withoutID {
 			if check.Name == name {
 				t.Fatalf("missing machine id misclassified ownership: %+v", withoutID)
@@ -847,7 +924,12 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(agentsDir, "memory"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "reports", "traces", "2026-08-20.jsonl"), []byte("not-json\n"), 0o644); err != nil {
+	// The unreadable line goes in the store, which is the index now.
+	storeTraces := filepath.Join(repoRoot, ".git", "agents", "traces")
+	if err := os.MkdirAll(storeTraces, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(storeTraces, "2026-08-20.jsonl"), []byte("not-json\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(repoRoot, "CLAUDE.md"), []byte("Run `agents doctor` early and report any warnings before relying on this context.\n"), 0o644); err != nil {
@@ -873,7 +955,7 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 		}
 	}
 
-	checks, err := RunWithDeps(repoRoot, agentsDir, "", binary, DefaultThresholds(), time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC), deps)
+	checks, err := RunWithDeps(repoRoot, agentsDir, filepath.Join(repoRoot, ".git", "agents"), "", binary, DefaultThresholds(), time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC), deps)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -896,10 +978,16 @@ func TestRunReturnsContentSafeErrorForUnreadableTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	private := "private-trace-name"
-	if err := os.Symlink(filepath.Join(t.TempDir(), private), filepath.Join(traceDir, "2026-08-20.jsonl")); err != nil {
+	// Under the store, which is where the index lives and where RunWithDeps
+	// is told to read.
+	storeTraces := filepath.Join(repoRoot, ".git", "agents", "traces")
+	if err := os.MkdirAll(storeTraces, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	_, err := RunWithDeps(repoRoot, agentsDir, "", filepath.Join(t.TempDir(), "agents"), DefaultThresholds(), time.Now(), Dependencies{})
+	if err := os.Symlink(filepath.Join(t.TempDir(), private), filepath.Join(storeTraces, "2026-08-20.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := RunWithDeps(repoRoot, agentsDir, filepath.Join(repoRoot, ".git", "agents"), "", filepath.Join(t.TempDir(), "agents"), DefaultThresholds(), time.Now(), Dependencies{})
 	if err == nil || strings.Contains(err.Error(), private) {
 		t.Fatalf("trace error = %v, want content-safe failure", err)
 	}
@@ -911,7 +999,7 @@ func TestRunWithIncompleteDependenciesReturnsDiagnosticsInsteadOfPanicking(t *te
 	if err := os.MkdirAll(filepath.Join(agentsDir, "reports", "traces"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	checks, err := RunWithDeps(repoRoot, agentsDir, "", filepath.Join(repoRoot, "missing-agents"), DefaultThresholds(), time.Now(), Dependencies{})
+	checks, err := RunWithDeps(repoRoot, agentsDir, filepath.Join(repoRoot, ".git", "agents"), "", filepath.Join(repoRoot, "missing-agents"), DefaultThresholds(), time.Now(), Dependencies{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -962,11 +1050,7 @@ func TestPointersCountACachedTranscriptAsSavedRatherThanUnreachable(t *testing.T
 		lost,
 	}, "m1", cacheRoot)
 
-	unreachable := checkByName(t, checks, "pointers:local-unreachable")
-	if !strings.Contains(unreachable.Detail, "1") {
-		t.Errorf("local-unreachable = %q, want only the one transcript that is "+
-			"genuinely gone; a cached copy is not lost", unreachable.Detail)
-	}
+	_ = lost // reported by no check: unreachable is a normal state now.
 	saved := checkByName(t, checks, "pointers:cached")
 	if saved.Status != OK {
 		t.Errorf("pointers:cached = %+v, want OK: caching worked, and a warning "+
@@ -988,7 +1072,75 @@ func TestPointersReportNoCachedRowWhenNothingWasSaved(t *testing.T) {
 			t.Errorf("pointers:cached appeared with nothing cached: %+v", c)
 		}
 	}
-	if !strings.Contains(checkByName(t, checks, "pointers:local-unreachable").Detail, "1") {
-		t.Errorf("the genuinely lost transcript must still be reported: %+v", checks)
+	for _, c := range checks {
+		if c.Name == "pointers:local-unreachable" {
+			t.Errorf("the unreachable-pointer warning came back: %+v", c)
+		}
+	}
+}
+
+func TestCaptureInstructionCheckReportsItsAbsence(t *testing.T) {
+	root := t.TempDir()
+	// Present.
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(scaffold.ClaudeMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := checkScaffoldCaptureInstruction(root); got.Status != OK {
+		t.Errorf("with the instruction present: %+v", got)
+	}
+	// Absent. Under the shipped phases this paragraph is the whole capture
+	// mechanism, so its silent absence is the feature silently absent.
+	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("# nothing\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := checkScaffoldCaptureInstruction(root)
+	if got.Status != Warn {
+		t.Errorf("with the instruction missing: %+v, want warn", got)
+	}
+	if got.Remedy == "" {
+		t.Error("the check names no remedy")
+	}
+}
+
+func TestQueueCheckWarnsOnlyPastTheThreshold(t *testing.T) {
+	store := t.TempDir()
+	if got := checkQueue(store, 3); got.Status != OK || !strings.Contains(got.Detail, "no drafts") {
+		t.Errorf("empty queue = %+v", got)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := queue.Write(store, queue.Draft{
+			Kind: queue.KindHandoff, Lane: "master", Session: "s1",
+			When: time.Now().UTC(), Body: "- x\n",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Below the threshold a backlog is news, not a defect.
+	if got := checkQueue(store, 3); got.Status != OK || !strings.Contains(got.Detail, "2") {
+		t.Errorf("two pending under a threshold of three = %+v", got)
+	}
+	if got := checkQueue(store, 2); got.Status != Warn {
+		t.Errorf("at the threshold = %+v, want warn", got)
+	}
+}
+
+func TestStoreSizeCheckWarnsOverTheCap(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "trace-cache", "claude-code")
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, "a.jsonl"), bytes.Repeat([]byte("x"), 4096), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(cache)
+	if got := checkStoreSize(root, 1<<30); got.Status != OK {
+		t.Errorf("under the cap = %+v", got)
+	}
+	got := checkStoreSize(root, 1024)
+	if got.Status != Warn {
+		t.Errorf("over the cap = %+v, want warn", got)
+	}
+	if !strings.Contains(got.Remedy, "--retention") {
+		t.Errorf("the remedy does not name the command that fixes it: %q", got.Remedy)
 	}
 }

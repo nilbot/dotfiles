@@ -72,7 +72,7 @@ func TestAppendWritesDatePartitionedJSONL(t *testing.T) {
 		}
 	}
 
-	path := filepath.Join(dir, "reports", "traces", "2026-08-07.jsonl")
+	path := filepath.Join(dir, "traces", "2026-08-07.jsonl")
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("expected %s: %v", path, err)
@@ -93,7 +93,30 @@ func TestAppendPartitionsByUTC(t *testing.T) {
 	if err := w.Append(Record{When: when, Harness: "codex", Machine: "m", Event: "stop"}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "reports", "traces", "2026-08-08.jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "traces", "2026-08-08.jsonl")); err != nil {
 		t.Fatalf("expected UTC-dated file: %v", err)
+	}
+}
+
+func TestWriterAppendsUnderTheStoreNotTheTrackedTree(t *testing.T) {
+	store := t.TempDir()
+	rec := Record{
+		When:    time.Date(2026, 8, 12, 9, 0, 0, 0, time.UTC),
+		Harness: "claude-code",
+		Machine: "m",
+		Event:   "stop",
+		Lane:    "master",
+	}
+	if err := NewWriter(store).Append(rec); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store, "traces", "2026-08-12.jsonl")); err != nil {
+		t.Fatalf("record not written under the store: %v", err)
+	}
+	// The tracked layout must not be recreated by a write. A reports/ tree
+	// appearing under the store would mean the old path survived a rename
+	// rather than a relocation.
+	if _, err := os.Stat(filepath.Join(store, "reports")); !os.IsNotExist(err) {
+		t.Error("the writer recreated a reports/ tree under the store")
 	}
 }

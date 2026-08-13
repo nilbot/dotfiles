@@ -212,6 +212,26 @@ func IsOwnedHookCommand(command string) bool {
 	return ok
 }
 
+// ResemblesHookCommand recognizes the *shape* agents generates without
+// requiring the binary to be named `agents`. It is deliberately wider than
+// ParseHookCommand, and the asymmetry is the point: stripOurs deletes entries
+// from a config we do not own, so what we delete must stay narrow, while what
+// we are willing to *report* can be broad.
+//
+// The gap between the two is not hypothetical. A test that wired this
+// repository with the ephemeral `agents.test` binary left entries that
+// ParseHookCommand refused -- correctly, by its own rule -- so wire never
+// replaced them and doctor never counted them. They accumulated four per run
+// and failed loudly at every session start while doctor reported the wiring
+// exact. Nothing acts on this predicate except a diagnostic.
+func ResemblesHookCommand(command string) bool {
+	words, ok := splitShellWords(command)
+	if !ok || len(words) != 5 || words[1] != "hook" || words[3] != "--harness" {
+		return false
+	}
+	return filepath.IsAbs(words[0]) && knownSemantic(words[2]) && knownHarness(words[4])
+}
+
 func knownSemantic(semantic string) bool {
 	switch semantic {
 	case SessionStart, SubagentStart, SubagentStop, Stop:

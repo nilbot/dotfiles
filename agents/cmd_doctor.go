@@ -25,7 +25,7 @@ type doctorCommandDependencies struct {
 	BinaryPath func() (string, error)
 	Now        func() time.Time
 	DoctorDeps doctor.Dependencies
-	Run        func(string, string, string, string, doctor.Thresholds, time.Time, doctor.Dependencies) ([]doctor.Check, error)
+	Run        func(string, string, string, string, string, doctor.Thresholds, time.Time, doctor.Dependencies) ([]doctor.Check, error)
 }
 
 func defaultDoctorCommandDependencies() doctorCommandDependencies {
@@ -85,7 +85,12 @@ func runDoctorWithDependencies(args []string, stdout io.Writer, deps doctorComma
 		fmt.Fprintln(stdout, "agents doctor: could not normalize the running executable")
 		return exitcode.NoRecord
 	}
-	checks, err := deps.Run(rc.Root, repo.AgentsDir(rc.Root), machineID, binary, thresholds, deps.Now(), deps.DoctorDeps)
+	store, err := repo.StoreDir(rc.Root)
+	if err != nil {
+		fmt.Fprintln(stdout, "agents doctor: could not resolve the machine-local store")
+		return exitcode.NoRecord
+	}
+	checks, err := deps.Run(rc.Root, repo.AgentsDir(rc.Root), store, machineID, binary, thresholds, deps.Now(), deps.DoctorDeps)
 	if err != nil {
 		fmt.Fprintln(stdout, "agents doctor: could not complete the diagnostic")
 		return exitcode.NoRecord

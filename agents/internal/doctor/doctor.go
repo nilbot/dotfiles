@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/memory"
+	"github.com/nilbot/dotfiles/agents/internal/queue"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safeio"
@@ -44,6 +46,12 @@ type Thresholds struct {
 	Days               int
 	Sessions           int
 	RecordingFreshness time.Duration
+	// QueueDepth is where a backlog stops being a backlog and starts being an
+	// inbox nobody empties.
+	QueueDepth int
+	// CacheMaxBytes mirrors the cap the subagent-stop hook enforces, so doctor
+	// reports the same boundary the tool acts on rather than a second opinion.
+	CacheMaxBytes int64
 }
 
 type GitResult struct {
@@ -72,6 +80,8 @@ func DefaultThresholds() Thresholds {
 		Days:               14,
 		Sessions:           20,
 		RecordingFreshness: 7 * 24 * time.Hour,
+		QueueDepth:         10,
+		CacheMaxBytes:      1 << 30,
 	}
 }
 
@@ -130,8 +140,16 @@ func sanitizedGitEnvironment(environment []string) []string {
 	return append(out, "GIT_TERMINAL_PROMPT=0")
 }
 
-func RunWithDeps(repoRoot, agentsDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {
-	traceResult, err := trace.Query(agentsDir, trace.Filter{}, now)
+// RunWithDeps takes storeDir as a parameter rather than resolving it through
+// Dependencies.
+//
+// A faked-out store that silently resolves to nothing reports "all trace index
+// lines are readable" and "this harness has never recorded here" -- a clean
+// bill of health for a diagnostic that never found the index. That is the
+// undiscriminating double this repository already has a memory entry about.
+// An explicit parameter has no nil case to be wrong about.
+func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {
+	traceResult, err := trace.Query(storeDir, trace.Filter{}, now)
 	if err != nil {
 		return nil, errors.New("trace index could not be read")
 	}
@@ -171,6 +189,9 @@ func RunWithDeps(repoRoot, agentsDir, thisMachine, binary string, th Thresholds,
 	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
 	checks = append(checks, checkMemorySources(agentsDir, thisMachine)...)
 	checks = append(checks, checkScaffoldInstruction(repoRoot))
+	checks = append(checks, checkScaffoldCaptureInstruction(repoRoot))
+	checks = append(checks, checkQueue(storeDir, th.QueueDepth))
+	checks = append(checks, checkStoreSize(cacheRoot, th.CacheMaxBytes))
 	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
 	return checks, nil
 }
@@ -273,7 +294,43 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 	if generatedCount != len(a.Events()) {
 		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("hook config contains %d generated commands; want %d exact required hooks", generatedCount, len(a.Events())), Remedy: "run `agents wire`"}, info.ModTime(), nil
 	}
+	// Everything above counts hooks we own. An entry shaped like ours but run
+	// from some other binary is owned by nobody: `agents wire` will not replace
+	// it, because replacing it would mean deleting a command we cannot prove is
+	// ours, and the harness runs it anyway -- so it fails at every session
+	// start while this check says the wiring is exact. Report it; never delete.
+	if stale := resemblingButUnowned(hooks); len(stale) > 0 {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary, e.g. %s", len(stale), stale[0]),
+			Remedy: "these are not `agents wire`'s to remove; delete them from " + path + " by hand",
+		}, info.ModTime(), keys
+	}
 	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+}
+
+// resemblingButUnowned returns the hook commands that have our shape but that
+// ParseHookCommand refuses, newest-looking first is not meaningful here so the
+// order is whatever the config gives.
+func resemblingButUnowned(hooks map[string]any) []string {
+	var found []string
+	for _, rawGroups := range hooks {
+		groups, _ := rawGroups.([]any)
+		for _, rawGroup := range groups {
+			group, _ := rawGroup.(map[string]any)
+			inner, _ := group["hooks"].([]any)
+			for _, rawHook := range inner {
+				hook, _ := rawHook.(map[string]any)
+				command, _ := hook["command"].(string)
+				if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
+					found = append(found, command)
+				}
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
 }
 
 func snakeEvent(s string) string {
@@ -490,11 +547,8 @@ func checkLegacyHooks(repoRoot string, deps Dependencies) Check {
 }
 
 var repoAttributeLines = []string{
-	".agents/reports/traces/*.jsonl merge=union",
 	".agents/** linguist-generated=true",
 }
-
-const globalTraceAttribute = ".agents/reports/traces/*.jsonl merge=union"
 
 func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	if deps.Git == nil {
@@ -517,9 +571,13 @@ func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	if err != nil || !sourceInfo.Mode().IsRegular() || !os.SameFile(linkTarget, sourceInfo) {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link does not resolve to the tracked source", Remedy: "run the reviewed global hook installer"}
 	}
-	source, err := safeio.ReadRegular(deps.AttributesSource)
-	if err != nil || !hasExactLine(source, globalTraceAttribute) {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes source lacks the exact trace merge rule", Remedy: "restore the tracked attributes source"}
+	// The source has to be readable and has to be the tracked file, checked
+	// above. Its contents are no longer asserted: the one rule that lived here
+	// was the trace merge=union attribute, which retired with the tracked
+	// index. Asserting a specific line again would mean this check fails the
+	// moment the file legitimately holds nothing.
+	if _, err := safeio.ReadRegular(deps.AttributesSource); err != nil {
+		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes source is unreadable", Remedy: "restore the tracked attributes source"}
 	}
 	repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
 	if err != nil {
@@ -590,9 +648,15 @@ func checkPointers(recs []record.Record, thisMachine, cacheRoot string) []Check 
 		// evidence that caching is doing anything.
 		checks = append(checks, Check{Name: "pointers:cached", Status: OK, Detail: fmt.Sprintf("%d transcript(s) survive only in the local cache", cached)})
 	}
-	if localUnreachable > 0 {
-		checks = append(checks, Check{Name: "pointers:local-unreachable", Status: Warn, Detail: fmt.Sprintf("%d verified local pointer(s) are unreachable and uncached", localUnreachable), Remedy: "run `agents trace cache` sooner; subagent transcripts are deleted mid-session"})
-	}
+	// There is deliberately no check for locally unreachable pointers.
+	//
+	// It used to warn, with the remedy "run `agents trace cache` sooner". That
+	// is advice to win a race the design cannot win: subagent transcripts are
+	// deleted mid-session on a schedule nothing can anticipate, which is why
+	// the subagent-stop hook caches unconditionally. On this repository the
+	// check stood at 30 of 63 records and exited 1 on a healthy machine, every
+	// day, for a condition nobody could act on. A diagnostic that reports an
+	// unfixable normal state teaches its reader to ignore diagnostics.
 	if len(remote) > 0 {
 		machines := make([]string, 0, len(remote))
 		for machine := range remote {
@@ -656,6 +720,76 @@ func checkMachine(thisMachine string) Check {
 		return Check{Name: "machine-id", Status: Warn, Detail: "machine identity is missing or unreadable", Remedy: "restore the machine-local identity; doctor does not create it"}
 	}
 	return Check{Name: "machine-id", Status: OK, Detail: "machine identity is readable"}
+}
+
+// checkScaffoldCaptureInstruction guards the capture mechanism itself.
+//
+// Under the shipped phases the paragraph in CLAUDE.md IS the capture
+// mechanism: nothing else asks an agent to record what it learned. Its silent
+// absence would be the entire feature silently absent, which is the failure
+// mode that produced zero handoffs in twenty sessions. Warn rather than fail,
+// for the same reason the doctor-instruction check warns: Create never
+// rewrites an existing CLAUDE.md, so an older repository legitimately lacks it
+// until someone decides to add it.
+func checkScaffoldCaptureInstruction(repoRoot string) Check {
+	b, err := safeio.ReadRegular(filepath.Join(repoRoot, "CLAUDE.md"))
+	if err != nil || !strings.Contains(string(b), scaffold.CaptureInstruction) {
+		return Check{Name: "scaffold:capture-instruction", Status: Warn, Detail: "CLAUDE.md lacks the capture instruction, which is what asks an agent to record anything at all", Remedy: "add the current capture instruction manually; existing user files are never migrated"}
+	}
+	return Check{Name: "scaffold:capture-instruction", Status: OK, Detail: "CLAUDE.md carries the capture instruction"}
+}
+
+// checkQueue reports what is waiting to be reviewed.
+//
+// Depth is news, not a defect: drafts accumulating means capture is working.
+// It warns only past a threshold, where the queue has stopped being a backlog
+// and started being an inbox nobody empties -- which is precisely how the
+// handoff directory got to zero.
+func checkQueue(storeDir string, threshold int) Check {
+	drafts, err := queue.List(storeDir)
+	if err != nil {
+		return Check{Name: "queue:pending", Status: Warn, Detail: "the draft queue could not be read", Remedy: "inspect the machine-local store"}
+	}
+	if len(drafts) == 0 {
+		return Check{Name: "queue:pending", Status: OK, Detail: "no drafts pending review"}
+	}
+	if len(drafts) >= threshold {
+		return Check{Name: "queue:pending", Status: Warn, Detail: fmt.Sprintf("%d draft(s) pending review", len(drafts)), Remedy: "run `agents review`; an unreviewed queue is where handoffs went to die"}
+	}
+	return Check{Name: "queue:pending", Status: OK, Detail: fmt.Sprintf("%d draft(s) pending review", len(drafts))}
+}
+
+// checkStoreSize reports the cache against the caps the hook enforces.
+func checkStoreSize(cacheRoot string, maxBytes int64) Check {
+	if cacheRoot == "" {
+		return Check{Name: "store:size", Status: OK, Detail: "no local cache resolved"}
+	}
+	var total int64
+	err := filepath.WalkDir(cacheRoot, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		return Check{Name: "store:size", Status: Warn, Detail: "the local cache size could not be measured", Remedy: "inspect the machine-local store"}
+	}
+	mb := float64(total) / (1024 * 1024)
+	if maxBytes > 0 && total > maxBytes {
+		return Check{Name: "store:size", Status: Warn, Detail: fmt.Sprintf("the transcript cache holds %.0f MB, over the %.0f MB cap", mb, float64(maxBytes)/(1024*1024)), Remedy: "run `agents trace cache prune --retention --yes`"}
+	}
+	return Check{Name: "store:size", Status: OK, Detail: fmt.Sprintf("the transcript cache holds %.0f MB", mb)}
 }
 
 func checkScaffoldInstruction(repoRoot string) Check {

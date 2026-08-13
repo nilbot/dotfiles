@@ -16,12 +16,14 @@ import (
 
 func runHandoff(args []string, stdin io.Reader, stdout io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: agents handoff write|prune [flags]")
+		fmt.Fprintln(stdout, "usage: agents handoff write|draft|prune [flags]")
 		return exitcode.Malformed
 	}
 	switch args[0] {
 	case "write":
 		return runHandoffWrite(args[1:], stdin, stdout)
+	case "draft":
+		return runHandoffDraft(args[1:], stdin, stdout)
 	case "prune":
 		return runHandoffPrune(args[1:], stdout)
 	default:
@@ -35,7 +37,7 @@ func runHandoffWrite(args []string, stdin io.Reader, stdout io.Writer) int {
 	fs.SetOutput(stdout)
 	laneFlag := fs.String("lane", "", "override lane resolution")
 	session := fs.String("session", "", "session id (required)")
-	draft := fs.Bool("draft", false, "mark as an unreviewed auto-draft")
+
 	if err := fs.Parse(args); err != nil {
 		return exitcode.Malformed
 	}
@@ -79,12 +81,12 @@ func runHandoffWrite(args []string, stdin io.Reader, stdout io.Writer) int {
 		return exitcode.Skip
 	}
 
-	status := handoff.StatusReviewed
-	if *draft {
-		status = handoff.StatusDraft
-	}
+	// Always reviewed. `--draft` used to write into the TRACKED tree with
+	// status: draft, which is the thing that must not happen -- unreviewed
+	// model output inside .agents/. Unreviewed now means unpromoted, and
+	// unpromoted means not in the tree at all: see `agents handoff draft`.
 	path, err := handoff.Write(dir, lane.Resolve(*laneFlag, rc),
-		*session, status, string(body), time.Now().UTC())
+		*session, handoff.StatusReviewed, string(body), time.Now().UTC())
 	// "The handoff is on disk and the index is stale" is not "wanted to record
 	// and could not". WriteIndex re-parses the whole tree, so one conflicted or
 	// hand-broken handoff anywhere -- a steady state for files designed to be
