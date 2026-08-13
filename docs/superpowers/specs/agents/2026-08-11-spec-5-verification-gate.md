@@ -1,8 +1,8 @@
 # Spec 5 — the verification gate
 
 **Date:** 2026-08-10 (scope, as "CI, releases, and binary distribution") /
-2026-08-11 (design, narrowed to verification) / 2026-08-13 (reworked around
-audience and reachability; Arch stage zero measured)
+2026-08-11 (design, narrowed to verification) / 2026-08-13 (Arch stage zero
+measured; one retracted finding, recorded in place)
 **Status:** designed — not implemented
 **Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the Go
 module, the exit-code table, and the security boundaries CI must not cross.
@@ -47,20 +47,23 @@ during this design:
 - Linux verification was listed as an open choice while the same document
   recorded the two constraints that decide it. See [§7](#7-linux).
 - The exit-code table was described as a settled five-code vocabulary shared by
-  both binaries. It is not. See [§4](#4-exit-codes-audience-and-reachability).
+  both binaries. It is not. See [§4](#4-exit-codes-what-consumes-them).
 - `usage()` in `agents` is a hand-maintained string literal with no link to the
   dispatch switch beside it, and there is no `help` command at any level. See
   [§6](#6-the-command-registry-and-the-documentation-derived-from-it).
 
-**Reworked 2026-08-13, from first principles rather than from spec 1's
-authority.** Two questions were treated as separate — what the exit-code table
-should be, and whether help should be central or distributed — and both dissolved
-under measurement. Nothing branches on the specific exit-code value, while the
-*sign* is consumed everywhere; and central-vs-distributed turned out to be about
-file layout when the property that matters is derivation. What the evidence
-actually pointed at is [the organizing claim](#the-organizing-claim), which is
-neither of those and subsumes both. The 08-11 positions this replaced are kept
-under [Rejected alternatives](#rejected-alternatives) rather than deleted.
+**Reworked 2026-08-13, and one finding retracted.** Two questions were treated as
+separate — what the exit-code table should be, and whether help should be central
+or distributed. The second dissolved: central-vs-distributed is about file
+layout, when the property that matters is derivation. The first produced a false
+finding, retracted in [§4](#4-exit-codes-what-consumes-them) and in [the
+organizing claim](#the-organizing-claim), which turned on asserting that
+`agents guard --staged` was invoked by nothing. It is invoked on every
+`pre-commit`, and the code already draws the distinction the retracted section
+claimed to be introducing. **Both retractions are recorded in place rather than
+edited away**, because the method error that produced them — confirming a
+hypothesis against sources that could not refute it — is the more useful
+artifact.
 
 ## Why it exists
 
@@ -102,7 +105,7 @@ landed. Figures from the 2026-08-11 draft that moved are marked.
 - **Spec 1 §6 defines six shared exit codes** and calls them "identical across
   every subcommand." `agents/internal/exitcode/exitcode.go` implements all six.
   `bootstrap.d/main.go:28` implements five — it has no `5`. See
-  [§4](#4-exit-codes-audience-and-reachability) for the three-way wording
+  [§4](#4-exit-codes-what-consumes-them) for the three-way wording
   drift on top of that.
 - `agents/main.go:61` dispatches through a `switch`; `agents/main.go:98` is a
   hand-maintained `usage()` literal *(lines moved from 60 and 94)*. Nothing
@@ -119,38 +122,44 @@ landed. Figures from the 2026-08-11 draft that moved are marked.
 
 ## The organizing claim
 
-**Every mechanism must have a path by which its absence becomes visible.**
+**One artifact per fact; everything else computed from it.**
 
-The recurring defect in this repository is not that descriptions drift. It is
-that mechanisms become unreachable, and *unreachable is indistinguishable from
-working*. Four measured instances:
+The recurring defect here is a hand-maintained description of the code that
+nothing forces to match the code. Four instances, all verified:
 
-- **`git/hooks/go.pre-commit`** — nothing ever installed it. Inert for its entire
-  life, and deleted without anyone noticing it had never run.
-- **The wiring incident** (`a26eaa9`, 2026-08-13) — a test wired this repository
-  with the ephemeral `agents.test` path, four times per `go test` run, while
-  `agents doctor` reported the wiring exact.
-- **`agents guard --staged`** — usage calls it "the only command that blocks" and
-  spec 1 calls it the sole deliberate exception to fail-open. **Nothing invokes
-  it.** See [§4](#4-exit-codes-audience-and-reachability).
-- **`bootstrap`'s `exitAdvisory`** — declared at `main.go:29` and never returned
-  by any path. The same disease from the other end: a value with no producer,
-  where the others are mechanisms with no caller.
+- **`usage()`** (`agents/main.go:98`) is a string literal with no link to the
+  dispatch `switch` at `:61`. Spec 7 changed four of its lines by hand in one
+  workstream.
+- **The exit-code table** is described in three places that disagree — spec 1 §6,
+  the constants' own comments, and each binary's help text. See
+  [§4](#4-exit-codes-what-consumes-them).
+- **`INDEX.md`** is generated, and stale only if regeneration does not run.
+- **The README** has no command reference at all, so nothing can be stale and
+  nothing is discoverable either.
 
-Drift is a special case of this, not a separate idea. `usage()` diverging from
-the dispatch switch beside it happens because the description is *unreachable
-from the code* — nothing forces the two into contact. A stale `INDEX.md`, a
-README naming a deleted command, and two binaries describing one vocabulary
-differently are the same shape.
-
-So the checks in this spec fall into two families, and the second is the one that
-has never existed here:
-
-1. **Derivation** — one artifact per fact, everything else computed from it.
-   Help, the exit-code table, the generated indexes, the README block.
-2. **Reachability** — a declared mechanism is actually reached by the thing
-   declared to reach it. Nothing in this repository checks this today, and it is
-   the only family that would have caught all four instances above.
+> **Retracted 2026-08-13.** A draft of this section claimed a stronger and
+> different organizing principle — *every mechanism must have a path by which its
+> absence becomes visible* — resting on the finding that `agents guard --staged`
+> was invoked by nothing. **That finding was false.** `agents/main.go:51-58` runs
+> the guard on every `pre-commit` and maps `Advisory` to `OK` so a warning does
+> not abort the commit; `githook_main_test.go:192` and `:276` pin both halves.
+> `githook.builtin` returns `0` for `pre-commit` precisely because the wiring
+> lives in `main.go`, exactly as [spec 1's plan](../../plans/2026-08-07-agents-repo-context.md)
+> Task 17 said it would.
+>
+> The error was method, not luck: `main.go` was read to line 40, one line short
+> of the call, and the conclusion was then "confirmed" against the extras
+> directory, `.git/hooks`, and the harness configs — three places that could only
+> agree with it. **Searching for further absences is not verification.** The
+> disconfirming read was one function in one file.
+>
+> What survives is weaker and is kept here rather than promoted: `go.pre-commit`
+> was never installed by anything (spec 2), `bootstrap`'s `exitAdvisory`
+> (`main.go:29`) is declared and never returned, and the `a26eaa9` wiring
+> incident had `doctor` report the wiring exact while a test had corrupted it.
+> Three instances, two of them trivial. That is an observation worth carrying,
+> **not a second check family and not a CI job** — and the guard is the
+> counter-example that shows the pattern already done right.
 
 ---
 
@@ -191,7 +200,6 @@ request rather than passing it.
 | `secrets` | `ubuntu-latest` | gitleaks against the embedded configuration |
 | `hygiene` | `ubuntu-latest` | §5 — temp `HOME`, index freshness |
 | `docs` | `ubuntu-latest` | §6 — help coverage, README block, backward name check, `agent`-audience skill coverage |
-| `reachability` | `ubuntu-latest` | §6 — every declared audience actually reaches its command |
 | `linux-dotfiles` | container | §7 — the `dotfiles` profile |
 | `linux-stage-zero` (matrix) | `{debian, arch}` containers | §7 — stage zero for real |
 | `gate` | `ubuntu-latest` | `needs:` every job above; the single required check |
@@ -239,124 +247,103 @@ thing to want and is **out of scope**: it belongs in a scheduled non-required
 job, and adding one now would mean the first thing this repository learns about
 required checks is that some of them are allowed to be red.
 
-### 4. Exit codes: audience and reachability
+### 4. Exit codes: what consumes them
 
 The scope note asked CI to "decide which codes fail a job, which annotate, and
-which are skips." The question is malformed, but not for the reason the 08-11
-draft of this section gave. It is malformed because **an exit code carries two
-different things, and only one of them has a consumer that can act.**
+which are skips." Answering it needs one measurement first: **who consumes these
+codes, and what do they do with them?**
 
 #### What was measured
 
-- **Nothing branches on `1` vs `4` vs `5`.** No consumer, in either module,
-  selects behaviour on the specific value.
-- **The two paths that run automatically bypass the vocabulary entirely.**
-  `agents/internal/githook/githook.go` does not import `exitcode` and returns
-  raw `0`/`1`; `agents/cmd_hook.go:30` returns literal `0` unconditionally.
-- **The sign, however, is consumed everywhere.** Git aborts `pre-commit` and
-  `commit-msg` on non-zero and ignores the code entirely for `post-merge` and
-  `post-checkout`. CI fails a step on non-zero. A human or an agent reads output
-  that came with a non-zero exit and skims output that did not.
+- **Git is the primary automated consumer**, reached because `git/hooks.d/*` are
+  four symlinks to the binary. Its contract is binary: `pre-commit` and
+  `commit-msg` abort on any non-zero, and `post-merge` and `post-checkout` ignore
+  the code entirely.
+- **`agents/internal/githook/githook.go` returns raw `0`/`1` and does not import
+  `exitcode`** — correctly, because it is a low-level dispatcher speaking git's
+  vocabulary, not the tool's.
+- **`agents/main.go:51-58` is where the two vocabularies meet**, and it already
+  does the right thing:
 
-So the byte carries **disposition** — what an automated caller must do — and
-**attention** — what makes a reader read the text. The value distinguishes
-neither; only the sign does.
+  ```go
+  code := runGuard([]string{"--staged"}, stdout)
+  if code == exitcode.OK || code == exitcode.Advisory {
+      return exitcode.OK
+  }
+  return code
+  ```
 
-#### Audience decides which one applies
+  A warning-level finding prints and the commit proceeds; only `Block` stops it.
+  `githook_main_test.go:192` pins the mapping and `:276` pins that a hand-edited
+  `INDEX.md` is still blocked.
+- **`agents/cmd_hook.go:30` returns literal `0` on every path**, which is spec 1
+  §6's fail-open rule for recording hooks.
 
-| Class | Members | What the exit code may mean |
+#### The distinction the code already draws
+
+An exit code carries two different things:
+
+| | what it means | who can act on it |
 |---|---|---|
-| **Automated** | `git`, `harness`, `ci` | disposition only — non-zero *is* failure |
-| **Attentional** | `human`, `agent` | non-zero is the trigger that gets the text read |
+| **disposition** | proceed, stop, or you-called-me-wrong | git, CI, a harness |
+| **attention** | there is output worth reading | a human, an agent |
 
-An automated consumer cannot read prose and decide. CI in particular has no
-reader at the moment of the call: the log is consulted later, and only if
-something already failed. **There is no attention to hijack**, which puts CI in
-the same class as git rather than in a class of its own.
+An automated consumer cannot read prose and decide, so for it the code must be
+disposition. A human or agent reads the text, and non-zero is what makes them
+read it — which is why `agents init` exits `1` "so the state is visible rather
+than assumed" (spec 1 §9), and why `agents review --stats` returns `1` for
+readings that are entirely successful but not a clean pass.
 
-**The binding rule: if any automated consumer invokes a command, its exit code
-must be disposition-only.** Attentional consumers lose nothing by this — git
-prints hook output regardless of exit status, and so does a terminal, so the
-text still arrives. Where a command has no automated audience it may hijack
-freely, which is what `agents init` already does when it exits `1` "so the state
-is visible rather than assumed" (spec 1 §9).
+**`main.go:51-58` is that translation, performed once, at the boundary where an
+attentional vocabulary meets an automated consumer.** This spec does not propose
+the pattern; it names one the code already implements in the one place it
+matters. Naming it is the point — a future subcommand wired into a hook context
+has nothing today telling it that `Advisory` must be translated rather than
+propagated.
 
-This is not a new rule imposed on the code. It is the rule the code already
-follows in two of three places — `githook.go` maps to git's two-value
-disposition, `cmd_hook.go` fails open for the harness — and follows nowhere by
-declaration, so nothing stops the third place from being wrong. It is.
+> **Retracted 2026-08-13.** A draft of this section asserted that *nothing
+> branches on `1` vs `4` vs `5`* and built a rule on it. `main.go:55` branches on
+> `Advisory` specifically, and that branch is the whole mechanism by which a
+> warning does not abort a commit. The assertion was made without reading the
+> function that contains the branch.
 
-#### `guard` is the third place, and its two defects mask each other
+#### What CI does
 
-`agents/cmd_guard.go:61` returns `Advisory` when findings exist but none are
-blocking. Its audience is `git` and `ci` — both automated. Git cannot see the
-`Blocking` field the code carefully computes; it sees a non-zero and aborts.
+CI is an automated consumer with no reader at the moment of the call, so its
+default — non-zero fails the step — is the correct disposition reading, and the
+commands it invokes exit `0` nominally: `agents index`, and
+`./bootstrap plan|apply|check dotfiles`.
 
-**So wiring the guard today would abort every commit carrying a warning-level
-finding.** The distinction the command exists to draw would be erased by its own
-consumer.
+Explicit assertion is reserved for **negative paths**: `expect 2` proves a
+refusal still refuses, which "non-zero fails" cannot express and which is the
+test that would catch a guard that quietly stopped guarding.
 
-That has never fired, because **nothing invokes `agents guard --staged`.** The
-four hook symlinks route to `githook.Run`, which runs repository hooks and then
-personal extras, and finally `builtin` — which returns `0` for every name except
-`commit-msg` (`githook.go:354`). The extras directory holds `recent.post-merge`
-and one symlink to it. `.git/hooks/` holds only samples. No harness configuration
-references it. It runs when a human types it, and otherwise never.
+An earlier draft required every call site to declare its expected code. That was
+over-general, and it would have put a copy of a fact the code owns into the
+workflow file — the drift this spec exists to remove, reintroduced by the spec.
 
-The two defects hide each other, which is why **they must land in one phase.**
-Fix reachability alone and commits begin failing on warnings; fix the exit code
-alone and nothing changes, because nothing calls it.
+#### The drift that is real: one table, three descriptions
 
-It also corrects [§5](#5-the-hygiene-job--tools-as-a-function-of-the-repository):
-the `generated-file` guard rule is not "enforced only by a git hook someone has
-to have installed." It is enforced by nothing at all, which makes CI the only
-enforcement point rather than the second one.
+| Source | code 4 | code 5 |
+|---|---|---|
+| Spec 1 §6 (design intent) | not applicable / skip | could not record |
+| `exitcode.go` constant comments | not applicable here | could not complete the requested operation |
+| `agents` help text | skip | could not complete the operation |
+| `bootstrap` help text | not applicable | *absent* |
 
-#### What CI does, and what it does not
-
-Because the commands CI invokes will have disposition-only semantics, **CI's
-default "non-zero fails the step" is already correct and needs no wrapping.**
-Checked against the actual call sites: `agents index` and
-`./bootstrap plan|apply|check` all exit `0` nominally. `guard` is the only
-hijacker, and it is the one being fixed.
-
-Explicit assertion survives for one purpose: **negative paths.** `expect 2`
-proves a refusal still refuses — the test that catches a guard which quietly
-stopped guarding, and which "non-zero fails" cannot express. Those are a handful
-of steps and they are tests, not workarounds.
-
-The 08-11 draft required *every* call site to declare its expected code. That was
-over-general, and worse, it would have put a copy of a fact the code owns into
-the workflow file — the drift this spec exists to remove, reintroduced by the
-spec.
-
-#### Spec 1's table, and `bootstrap`'s dead constant
-
-Spec 1 §6 defines six codes and calls them "identical across every subcommand."
-That is design intent, and this spec treats it as such: **the code is
-authoritative and the table is checked against it**, not the reverse. A design
-document that must be edited whenever code changes is drift wearing a spec's
-clothes. When the two disagree the check surfaces it and a human decides which
+The fix is that **help renders the table from the constants rather than restating
+it** — [§6](#6-the-command-registry-and-the-documentation-derived-from-it)'s
+registry doing its job, not a separate mechanism — with a test pinning the
+constants against spec 1's table. Spec 1 is design intent; the code is the
+implementation; when they disagree the test surfaces it and a human decides which
 was wrong.
 
-The wording has already diverged three ways — spec 1 says code 4 is "not
-applicable / skip", the constant comment says "not applicable here", `agents`
-help prints "skip", `bootstrap` help prints "not applicable". The fix is that
-**help renders the table from the constants rather than restating it**, which is
-[§6](#6-the-command-registry-and-the-documentation-derived-from-it)'s registry
-doing its job rather than a separate mechanism.
-
-`bootstrap` then needs two things, and neither is the symmetry argument the 08-11
-draft made:
-
-- **Delete `exitAdvisory`** (`bootstrap.d/main.go:29`). It is declared and never
-  returned by any path — a value with no producer. Its audience includes `ci` and
-  `human`, so under the binding rule it should never hijack, and it does not. The
-  constant documents a behaviour the binary does not have.
-- **Audit `exitBlock` for paths meaning "could not complete."** A refusal asserts
-  *this machine is in a state I will not write over*, which is a different claim
-  from *I tried and could not*. Whether that warrants adding code `5` is decided
-  by whether such paths exist, not by matching `agents`.
+`bootstrap` then needs one thing, and it is small: **`exitAdvisory`
+(`bootstrap.d/main.go:29`) is declared and returned by no path.** Either a path
+means it, or the constant goes. Whether `bootstrap` also wants `5` is decided by
+whether it has a path meaning *I tried and could not*, distinct from *this
+machine is in a state I will not write over* — an audit, not an argument from
+spec 1's authority or from matching `agents`.
 
 ### 5. The hygiene job — tools as a function of the repository
 
@@ -398,16 +385,17 @@ which nothing currently keeps verified. The phase measures what breaks before
 deciding what to fix, and this spec does not guess the number.
 
 **`agents index` followed by `git diff --exit-code`.** The `generated-file`
-guard rule is written to block a commit that leaves an index stale. It has never
-blocked one: the rule lives in `agents guard --staged`, and
-[§4](#4-exit-codes-audience-and-reachability) establishes that **nothing invokes
-that command.** So this is not CI adding a second enforcement point to a hook
-someone might not have installed — as the 08-11 draft claimed. It is CI becoming
-the *first* one, and until phase 4 wires the guard, the only one.
+guard rule already blocks a commit that leaves an index stale — it runs on every
+`pre-commit` via `main.go:54`, and `githook_main_test.go:276` pins it. But it is
+reached through `core.hooksPath`, which is global machine configuration installed
+by `git/install-hooks.sh`. A contributor whose machine has not run that has no
+guard at all, and nothing tells them. CI is the enforcement that does not depend
+on the reviewer's machine being provisioned.
 
 This check earns more than freshness: it **asserts that `agents index` is a pure
 function of tracked content.** If it ever embeds anything machine-local, this is
 the check that says so.
+
 
 ### 6. The command registry, and the documentation derived from it
 
@@ -458,25 +446,30 @@ summary, usage, or detail — a belt over the structural braces, and what makes
 #### `audience` is the field that carries the rest
 
 Each node declares who invokes it: `human`, `agent`, `git`, `harness`, `ci`.
-[§4](#4-exit-codes-audience-and-reachability) groups these into automated and
-attentional classes. Four things derive from the field, and none of them is a
-rule anyone has to remember:
+[§4](#4-exit-codes-what-consumes-them) groups these into automated and
+attentional classes. Two things derive from the field:
 
-- **The exit-code regime.** Any automated audience forces disposition-only
-  semantics. This is checkable, and `guard` fails it today.
-- **Help visibility.** `hook` is invoked only by a harness, so it does not belong
-  in top-level usage; it belongs under `help --all`.
+- **Help visibility.** `hook` is invoked only by a harness and `guard` only by
+  git, so neither belongs in top-level usage aimed at a person; they belong under
+  `help --all`. Today both sit in the same flat list as `init`.
 - **Skill-doc coverage.** Every command with an `agent` audience must appear in
-  the guidance, or a harness never learns to reach for it. Without this, a new
-  command lands, gets a generated reference entry, and no agent ever uses it.
-- **Reachability.** A command declaring `audience: git` must be reachable from
-  the git hook chain; `audience: harness` must appear in generated wiring.
+  the guidance, or a harness never learns to reach for it. Without this a new
+  command lands, gets a generated reference entry, and no agent ever uses it —
+  which is the shape spec 7 measured when `CLAUDE.md` said *how* to write a
+  handoff and never *that* one should, and twenty sessions produced none.
 
-**Reachability is the family this repository has never had**, and it is the only
-one of the four that would have caught all of [the organizing
-claim](#the-organizing-claim)'s four instances. It is red today on `guard`, whose
-fix is paired with its exit-code defect in one phase because either alone makes
-things worse.
+The field also **documents** the exit-code regime — that a command with an
+automated audience must have its vocabulary translated at the boundary rather
+than propagated, as `main.go:51-58` already does for `guard`. That is a comment
+the declaration makes unnecessary, not a check.
+
+> **Retracted 2026-08-13.** A draft added a third and a fourth derivation: an
+> enforced exit-code regime, and a **reachability check** asserting that a
+> command's declared invoker really invokes it — with `guard` cited as failing
+> both. `guard` fails neither. With that instance gone the remaining evidence for
+> a reachability check is one historical hook and one dead constant, which does
+> not justify a CI job, and the check is dropped rather than kept looking for a
+> reason.
 
 #### Documentation, checked in both directions
 
@@ -648,32 +641,26 @@ contain a stretch where the work is not trustworthy.
 |---|---|---|
 | 1 | Workflow skeleton: `test` matrix, `secrets`, `gate` | The first automated Go gate this repository has run |
 | 2 | Hygiene: temp `HOME` and `XDG_CACHE_HOME`, index freshness | Both suites proven independent of the machine |
-| 3 | Command registry with `audience`: declare/assemble/render, `agents help`, coverage check, exit-code table rendered from the constants | Dispatch and description cannot diverge; one vocabulary with one author |
-| 4 | Reachability, and `guard`'s two defects **together**: the per-audience reachability check, wiring the guard, and replacing its `Advisory` return | The first reachability check this repository has had, and a guard that guards |
-| 5 | Documentation: generated README block, backward name check, `claude/skills/` guidance with `agent`-audience coverage | Docs that cannot drift from the command set |
-| 6 | Linux: `dotfiles` profile, then Debian, then Arch with the `-Syu` fix | Spec 2's largest known gap closed or precisely narrowed |
-| 7 | Doctor stamped-root check | The worktree hazard PR #16 documented is no longer silent |
+| 3 | Command registry with `audience`: declare/assemble/render, `agents help`, coverage check, exit-code table rendered from the constants, `bootstrap`'s dead `exitAdvisory` | Dispatch and description cannot diverge; one vocabulary with one author |
+| 4 | Documentation: generated README block, backward name check, `claude/skills/` guidance with `agent`-audience coverage | Docs that cannot drift from the command set |
+| 5 | Linux: `dotfiles` profile, then Debian, then Arch with the `-Syu` fix | Spec 2's largest known gap closed or precisely narrowed |
+| 6 | Doctor stamped-root check | The worktree hazard PR #16 documented is no longer silent |
 
-Phase 1 is expected green on arrival. Phases 2, 3 and 4 expect red first — that
-is the point of pairing each with its fix.
+Phase 1 is expected green on arrival. Phases 2 and 3 expect red first — that is
+the point of pairing each with its fix.
 
-**Phase 6 is no longer a discovery.** Arch stage zero is now known broken and the
+**Phase 5 is no longer a discovery.** Arch stage zero is now known broken and the
 `-Syu` repair is known to work ([§7](#7-linux)), so the phase lands the job and
 the fix together like every other. What it still discovers is whether
 `plan dotfiles` survives a bare container, and whether plain `-Syu` suffices on a
 native x86_64 runner without the emulation flag.
 
-**Phase 4 cannot be split.** Wiring the guard without fixing its `Advisory`
-return makes every warning-level finding abort a commit; fixing the return
-without wiring it changes nothing, because nothing calls it. The two defects have
-been masking each other and must stop together.
-
-**Phases 3 and 4 were reworked on 2026-08-13.** The 08-11 draft had a standalone
-"exit-code reconciliation" phase. Under the audience model there is no such
-thing: the table is one of the registry's rendered outputs (phase 3), and the
-disposition rule is enforced by the reachability work (phase 4). `bootstrap`'s
-cleanup — deleting the never-returned `exitAdvisory` and auditing `exitBlock` for
-paths meaning "could not complete" — rides in phase 4 for the same reason.
+**The 08-11 draft's standalone "exit-code reconciliation" phase is gone**, and so
+is a 08-13 draft's "reachability and `guard`" phase, which rested on a finding
+that was retracted ([§4](#4-exit-codes-what-consumes-them)). What remains of the
+exit-code work is rendering the table from the constants and deleting
+`bootstrap`'s never-returned `exitAdvisory` — both registry work, both phase 3.
+Seven phases became six by removing one that should never have existed.
 
 ## The testing rule
 
@@ -714,20 +701,19 @@ latest Go toolchain; changing what `agents doctor` checks beyond §8.
 
 ## Open questions
 
-Four, all narrow, all resolved by running the thing rather than by discussion:
+Three, all narrow, all resolved by running the thing rather than by discussion:
 
 - Does `./bootstrap plan dotfiles` exit `0` in an unprivileged container? §7
   states the answer if it does not.
 - Does plain `-Syu` suffice on a native x86_64 runner, without the
   `--disable-sandbox` the emulated verification needed? §7.
-- Which existing `bootstrap` paths return `2` where they mean `5`? An audit, not
-  an authority question — see [Rejected alternatives](#rejected-alternatives).
-- **Where does `guard` get wired?** Phase 4 has to answer this, and the options
-  are not equivalent. As a `builtin` for `pre-commit` it is installed wherever the
-  four symlinks are, which is the whole fleet, and it cannot be opted out of. As a
-  personal extras hook it is opt-in per machine and would have stayed unwired here
-  by the same accident that hid it. The first is what "the only command that
-  blocks" implies; the second is what the current architecture makes easy.
+- Which existing `bootstrap` paths return `2` where they mean `5`, and does
+  `exitAdvisory` have a path that should return it or should it be deleted? An
+  audit, not an argument from spec 1's authority or from matching `agents`.
+
+*(A fourth — "where does `guard` get wired?" — was removed on 2026-08-13. It was
+never open: `main.go:51-58` wires it on `pre-commit` and has since spec 1's
+Task 17.)*
 
 ## Rejected alternatives
 
@@ -779,9 +765,15 @@ declares `exitAdvisory` and **no path returns it.** A value with no producer,
 sitting in the file, describing a behaviour the binary does not have.
 
 So the 08-11 instinct was right and its reason was incomplete. The reason is not
-"unused constants are untidy"; it is the organizing claim — a declaration with no
-path connecting it to reality is indistinguishable from one that works, and that
-is the defect this whole spec is about. `exitAdvisory` is deleted in phase 4.
+"unused constants are untidy": a constant nobody returns describes a behaviour
+the binary does not have, and a reader has no way to tell that from one it does.
+`exitAdvisory` is resolved in phase 3 — given a path that means it, or deleted.
+
+**A fourth position, held for part of 2026-08-13 and retracted**, generalised
+this into an organizing principle about unreachable mechanisms, on the strength
+of a false finding about `guard`. It is recorded under
+[the organizing claim](#the-organizing-claim). The narrow point about a value
+with no producer survives; the generalisation does not.
 
 **Suites only, no container jobs** — run `go test` on `ubuntu-latest` and call
 Linux covered. Rejected: it proves the Go code is portable and touches none of
