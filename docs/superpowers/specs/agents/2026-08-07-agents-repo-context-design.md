@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07
 **Status:** implemented
-**Scope:** spec 1 of 3 (see [Roadmap](#roadmap-specs-2-to-4) for what is deliberately deferred)
+**Scope:** spec 1 of the catalog (see [Roadmap](#roadmap-specs-2-to-5) for what is deliberately deferred)
 
 > **Amended 2026-08-12 by [spec 7](2026-08-12-spec-7-capture-and-review.md).**
 > Five days of measured use found the tracked trace index to be a reference to
@@ -87,7 +87,7 @@ stays the single source for the machinery that produces them.
   reconstructed. Synthesising them would misrepresent coverage.
 - **Antigravity (`agy`) and Gemini CLI support.** Out of scope — `agy` 1.1.0 does
   not read workspace-local hook config (see [Measured facts](#measured-facts-2026-08-07)).
-- Everything listed under [Roadmap](#roadmap-specs-2-to-4).
+- Everything listed under [Roadmap](#roadmap-specs-2-to-5).
 
 ---
 

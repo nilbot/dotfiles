@@ -22,7 +22,7 @@ number may be implemented before an earlier one without renumbering either.
 rule, pointer format, Go module, and installation boundaries that the remaining
 specs assume. Spec 2 is implemented; its three known gaps — chief among them
 that no phase of it has ever run on Linux — are recorded in the spec itself, and
-[spec 5 §7](2026-08-11-spec-5-verification-gate.md#7-linux) is what closes that
+[spec 5 phase 5](2026-08-11-spec-5-verification-gate.md#phase-5--linux) is what closes that
 one. Specs 3, 4 and 6 are scope documents, not finished designs — each gets a
 full brainstorm → design → plan cycle when started.
 
