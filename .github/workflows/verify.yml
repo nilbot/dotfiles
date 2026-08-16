@@ -1,0 +1,91 @@
+# The verification gate. See docs/superpowers/specs/agents/2026-08-11-spec-5-verification-gate.md
+#
+# There are deliberately no `paths:` filters. bootstrap.d/makefile_test.go reads
+# the Makefile and agents/internal/doctor/doctor_test.go reads
+# git/gitconfig.shared, so a filter keyed on the module directories would skip
+# verification for exactly the edits a cached `go test` already fails to notice.
+# A required check skipped by a path filter also reports "Expected" forever and
+# blocks the PR rather than passing it.
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # A stray go.work -- a runner's or a contributor's -- must never change what
+  # CI resolves. Spec 2 §11 chose two modules with no workspace deliberately.
+  GOWORK: off
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        module: [agents, bootstrap.d]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Exact patch, never go-version-file: `go 1.26` in go.mod floats to
+          # whatever the runner happens to ship.
+          go-version: '1.26.6'
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: build
+        run: go build ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      # -count=1 is load-bearing. Several tests assert against tracked non-Go
+      # files, whose edits do not invalidate a cached pass.
+      - name: test
+        run: go test -count=1 ./...
+      - name: test -race
+        run: go test -count=1 -race ./...
+
+  secrets:
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+      GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: install gitleaks, checksum-verified
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$url" -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: scan
+        run: gitleaks git --config git/gitleaks.toml --redact --exit-code 1
+
+  # The single required check. Branch protection names this job and nothing
+  # else, so adding a job later is a workflow change rather than a
+  # repository-settings change.
+  gate:
+    if: always()
+    needs: [test, secrets]
+    runs-on: ubuntu-latest
+    steps:
+      - name: require every dependency to have succeeded
+        run: |
+          echo "test:    ${{ needs.test.result }}"
+          echo "secrets: ${{ needs.secrets.result }}"
+          [ "${{ needs.test.result }}"    = "success" ] || exit 1
+          [ "${{ needs.secrets.result }}" = "success" ] || exit 1
