@@ -225,7 +225,6 @@ func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
 // indexes the pre-commit guard regenerates them, finds them unstaged, and
 // blocks -- so `agents init` would produce a tree whose first commit fails.
 func TestInitLeavesARepositoryThatCanCommit(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := newRepo(t)
 	t.Chdir(root)
 	var out bytes.Buffer
