@@ -119,12 +119,60 @@ jobs:
       - name: scan
         run: gitleaks git --config git/gitleaks.toml --redact --exit-code 1
 
+  # Two checks, one property: the tools are a function of the repository, not of
+  # the machine. See the spec's phase 2 -- the first check asserts CONTAINMENT
+  # (the suite must not write to $HOME), not portability. The suite already
+  # passes under a synthetic HOME; that was never the question.
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: agents/go.sum
+      - name: suites must not write to $HOME
+        run: |
+          set -euo pipefail
+          # Pin Go's own caches outside the synthetic HOME, so the only writer that
+          # can dirty it is the code under test -- and $HOME can then be asserted
+          # completely empty rather than spot-checked at one known path. This
+          # includes XDG_CONFIG_HOME: `go test` itself writes toolchain telemetry
+          # (GOTELEMETRYDIR, under os.UserConfigDir()) on every invocation, so
+          # without pinning it every run would fail here regardless of the code
+          # under test.
+          GOMODCACHE_REAL=$(go env GOMODCACHE)
+          GOPATH_REAL=$(go env GOPATH)
+          H=$(mktemp -d); X=$(mktemp -d)
+          for module in agents bootstrap.d; do
+            ( cd "$module" && HOME="$H" XDG_CACHE_HOME="$X" XDG_CONFIG_HOME="$X/config" \
+                GOMODCACHE="$GOMODCACHE_REAL" GOPATH="$GOPATH_REAL" \
+                go test -count=1 ./... )
+          done
+          if [ -n "$(find "$H" -mindepth 1 -print -quit)" ]; then
+            echo "a test wrote into \$HOME:" >&2
+            find "$H" >&2
+            exit 1
+          fi
+      - name: bootstrap.d under a restrictive umask
+        run: ( umask 077 && cd bootstrap.d && go test -count=1 ./... )
+      - name: agents index is a pure function of tracked content
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          ( cd agents && go build -trimpath -ldflags "-X main.dotfilesRoot=$GITHUB_WORKSPACE" -o "$HOME/bin/agents" . )
+          "$HOME/bin/agents" index
+          # Scoped to .agents/ so the command means the same thing here as it
+          # does on a developer's dirty working tree.
+          git diff --exit-code -- .agents/
+
   # The single required check. Branch protection names this job and nothing
   # else, so adding a job later is a workflow change rather than a
   # repository-settings change.
   gate:
     if: always()
-    needs: [test, secrets]
+    needs: [test, secrets, hygiene]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -132,5 +180,7 @@ jobs:
         run: |
           echo "test:    ${{ needs.test.result }}"
           echo "secrets: ${{ needs.secrets.result }}"
+          echo "hygiene: ${{ needs.hygiene.result }}"
           [ "${{ needs.test.result }}"    = "success" ] || exit 1
           [ "${{ needs.secrets.result }}" = "success" ] || exit 1
+          [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
