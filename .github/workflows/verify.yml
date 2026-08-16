@@ -30,6 +30,7 @@ jobs:
         os: [macos-latest, ubuntu-latest]
         module: [agents, bootstrap.d]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: ${{ matrix.module }}
@@ -82,7 +83,10 @@ jobs:
           fi
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo install /tmp/gitleaks /usr/local/bin/gitleaks
-          gitleaks version
+          resolved="$(command -v gitleaks)"
+          [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
+          installed="$(gitleaks version)"
+          [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
       # -count=1 is load-bearing. Several tests assert against tracked non-Go
       # files, whose edits do not invalidate a cached pass.
       - name: test
@@ -92,6 +96,7 @@ jobs:
 
   secrets:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GITLEAKS_VERSION: '8.30.1'
       GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
@@ -107,7 +112,10 @@ jobs:
           echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo install /tmp/gitleaks /usr/local/bin/gitleaks
-          gitleaks version
+          resolved="$(command -v gitleaks)"
+          [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
+          installed="$(gitleaks version)"
+          [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
       - name: scan
         run: gitleaks git --config git/gitleaks.toml --redact --exit-code 1
 
@@ -118,6 +126,7 @@ jobs:
     if: always()
     needs: [test, secrets]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: require every dependency to have succeeded
         run: |

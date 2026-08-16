@@ -7,10 +7,16 @@ description = "Encrypted agent task blob"
 regex = '''gAAAAAB[A-Za-z0-9_-]{24,}'''
 tags = ["agent", "encrypted-task"]
 
-# Synthetic fixtures for TestSecretScanBlocks: AWS's own documented
-# AKIAIOSFODNN7EXAMPLE, a placeholder Bearer token, a placeholder GitHub PAT,
-# and a truncated PEM header -- not real credentials. Scoped to exactly this
-# one file so nothing else is allowlisted.
+# Synthetic secret fixtures live in this one plan document: it quotes the
+# fixture table of TestSecretScanBlocks. Under the default rules this path
+# yields curl-auth-header, generic-api-key, github-pat and -- note --
+# encrypted-task-blob, this repository's own rule, which this entry
+# therefore switches off HERE and nowhere else. AWS's documented
+# AKIAIOSFODNN7EXAMPLE also appears in the file but is not why this entry
+# exists: gitleaks' defaults allowlist that string globally. Verified with
+# a control run against the unallowlisted config. `guard --staged` is
+# unaffected: it scans via `gitleaks stdin`, whose findings carry an empty
+# File that this anchored path regex cannot match.
 [allowlist]
 description = "Synthetic secret fixtures in the spec 1 implementation plan"
 paths = [

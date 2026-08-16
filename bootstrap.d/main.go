@@ -160,8 +160,8 @@ func runCommandWithin(limit time.Duration, name string, args ...string) ([]byte,
 	// stdout pipe to close -- and a shell's grandchild inherits that pipe and
 	// outlives the kill, so the deadline bounded nothing. Measured on
 	// ubuntu-latest: a 50ms deadline waited the full 10s. WaitDelay bounds the
-	// post-cancel I/O wait, then closes the pipes and returns.
-	cmd.WaitDelay = 100 * time.Millisecond
+	// post-cancel I/O wait to one second, then closes the pipes and returns.
+	cmd.WaitDelay = 1 * time.Second
 	return cmd.Output()
 }
 
