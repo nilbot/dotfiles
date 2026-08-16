@@ -812,10 +812,20 @@ func assertCommitMsgFIFOReplacementDoesNotBlock(
 	select {
 	case <-ready:
 	case got := <-done:
-		if err := replacementError(); err != nil {
-			t.Fatalf("could not install FIFO replacement: %v", err)
+		// run() closes ready synchronously inside the seam, so whenever the
+		// seam ran at all, ready is closed before run() returns. Both cases
+		// are then ready at once and select picks at random -- a fast run()
+		// failed this test for no reason. Re-check ready without blocking
+		// before concluding the seam never ran.
+		select {
+		case <-ready:
+			done <- got
+		default:
+			if err := replacementError(); err != nil {
+				t.Fatalf("could not install FIFO replacement: %v", err)
+			}
+			t.Fatalf("commit-msg returned before the FIFO replacement was ready: code=%d stderr=%q", got.code, got.stderr)
 		}
-		t.Fatalf("commit-msg returned before the FIFO replacement was ready: code=%d stderr=%q", got.code, got.stderr)
 	case <-time.After(2 * time.Second):
 		t.Fatal("FIFO replacement seam did not complete")
 	}
