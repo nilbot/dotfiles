@@ -10,5 +10,3 @@ regenerates this file and blocks the commit if it differs.
 ## reference
 
 - [harness-transcript-retention](harness-transcript-retention.md) — Claude Code deletes subagent transcripts mid-session on a rule nothing can predict, so capture must be immediate and unconditional rather than scheduled _(sources: 1)_
-
-- stale entry that the generator would not produce
