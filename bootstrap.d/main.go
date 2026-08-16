@@ -155,7 +155,14 @@ func runCommand(name string, args ...string) ([]byte, error) {
 func runCommandWithin(limit time.Duration, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// The context kills the process, but Output() waits for every writer of the
+	// stdout pipe to close -- and a shell's grandchild inherits that pipe and
+	// outlives the kill, so the deadline bounded nothing. Measured on
+	// ubuntu-latest: a 50ms deadline waited the full 10s. WaitDelay bounds the
+	// post-cancel I/O wait, then closes the pipes and returns.
+	cmd.WaitDelay = 100 * time.Millisecond
+	return cmd.Output()
 }
 
 // loginShell reports the shell this account logs in with, which is a property
