@@ -32,6 +32,3 @@ func DotfilesRoot() string {
 	}
 	return filepath.Join(home, "dotfiles")
 }
-
-
-func  badlyFormatted( ) {}
