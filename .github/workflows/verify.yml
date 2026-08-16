@@ -47,6 +47,42 @@ jobs:
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - name: vet
         run: go vet ./...
+      # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
+      # deliberate design -- it errors rather than skips), so the test job
+      # needs its own checksum-verified install, independent of the secrets
+      # job's copy.
+      - name: install gitleaks, checksum-verified
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_SHA256_LINUX: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+          # macos-latest runners are arm64.
+          GITLEAKS_SHA256_DARWIN_ARM64: 'b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5'
+        run: |
+          set -euo pipefail
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+              sha256="${GITLEAKS_SHA256_LINUX}"
+              ;;
+            macos-latest)
+              asset="gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz"
+              sha256="${GITLEAKS_SHA256_DARWIN_ARM64}"
+              ;;
+            *)
+              echo "unhandled runner os: ${{ matrix.os }}" >&2
+              exit 1
+              ;;
+          esac
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${asset}"
+          curl -sSfL "$url" -o /tmp/gitleaks.tar.gz
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "${sha256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          else
+            echo "${sha256}  /tmp/gitleaks.tar.gz" | shasum -a 256 -c -
+          fi
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
       # -count=1 is load-bearing. Several tests assert against tracked non-Go
       # files, whose edits do not invalidate a cached pass.
       - name: test
