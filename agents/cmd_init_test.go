@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
 )
@@ -204,6 +205,7 @@ func TestInitRegistersAfterScaffoldEvenWhenWiringFails(t *testing.T) {
 // A message naming a path the tool no longer writes sends its reader to an
 // empty directory to conclude that recording is broken.
 func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	// t.Chdir is not decoration. runInit discovers its repository from the
 	// working directory, so without this the test wired THIS repository with
 	// the ephemeral test binary's path -- once per `go test` run, accumulating,
@@ -223,6 +225,7 @@ func TestInitDoesNotPointAtTheRetiredTrackedTracePath(t *testing.T) {
 // indexes the pre-commit guard regenerates them, finds them unstaged, and
 // blocks -- so `agents init` would produce a tree whose first commit fails.
 func TestInitLeavesARepositoryThatCanCommit(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := newRepo(t)
 	t.Chdir(root)
 	var out bytes.Buffer
@@ -245,5 +248,37 @@ func TestInitLeavesARepositoryThatCanCommit(t *testing.T) {
 	}
 	if s := git(t, root, "status", "--porcelain"); strings.TrimSpace(s) != "" {
 		t.Errorf("init left uncommittable residue:\n%s", s)
+	}
+}
+
+// A test that registers into the machine's real fleet registry is a test that
+// escaped its sandbox. machine.StateDir() reads XDG_STATE_HOME first and
+// os.UserHomeDir() otherwise, so a test that sets neither writes to the
+// developer's own ~/.local/state/agents/registry.json -- measured 2026-08-14 at
+// 56 entries on this machine, of which 2 were real repositories.
+//
+// This asserts containment, not portability. The suite already PASSES under a
+// synthetic HOME; passing was never the question.
+func TestInitDoesNotTouchTheAmbientStateDirectory(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	root := newRepo(t)
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runInit(nil, &out); code != exitcode.OK && code != exitcode.Advisory {
+		t.Fatalf("runInit = %d; %s", code, out.String())
+	}
+
+	registry := filepath.Join(state, "agents", "registry.json")
+	if _, err := os.Stat(registry); err != nil {
+		t.Fatalf("init did not use XDG_STATE_HOME; registry absent at %s: %v", registry, err)
+	}
+	data, err := os.ReadFile(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), root) {
+		t.Errorf("the registry under XDG_STATE_HOME does not name %s:\n%s", root, data)
 	}
 }

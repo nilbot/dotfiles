@@ -439,6 +439,7 @@ func TestHookAutoCacheCanBeTurnedOff(t *testing.T) {
 }
 
 func TestSubagentStopPrunesTheCacheItJustWroteInto(t *testing.T) {
+	thisMachine(t)
 	root := newRepo(t)
 	cacheRoot := filepath.Join(mustStoreDir(t, root), "trace-cache")
 	stale := filepath.Join(cacheRoot, "claude-code", "stale.jsonl")
