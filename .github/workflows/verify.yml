@@ -284,12 +284,75 @@ jobs:
       - name: check converges after apply
         run: ./bootstrap check dotfiles
 
+  # Stage zero for real. `apply workstation` rather than `apply dotfiles`,
+  # because phase.For gives the dotfiles profile only {preflight, config,
+  # verify} and stageZero is called from Packages -- there is no per-phase flag,
+  # so this is the only path to the real code. That also drags in Homebrew, fish
+  # and devtools, which spec 2's Known gaps list as equally unexercised on
+  # Linux; those are in scope here rather than accidental, which is why this job
+  # gets a far longer timeout than the rest: it installs Linuxbrew and every
+  # formula in the Brewfile.
+  #
+  # Both base images lack sudo. It is installed and configured NOPASSWD because
+  # Applier.run sets Stdout and Stderr and leaves Stdin nil, so any prompt is an
+  # immediate "no tty present" -- passwordless is the only shape in which this
+  # code can succeed at all.
+  linux-stage-zero:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:stable-slim
+            prereqs: apt-get update -qq && apt-get install -y -qq sudo golang-go git ca-certificates curl
+          - image: archlinux:base
+            # DisableSandbox under [options], and it must be under [options]:
+            # appended at the end of pacman.conf it lands inside a repo section,
+            # which clears the Landlock error and leaves the sandbox-user
+            # failure behind. Measured both ways. This is the CONTAINER's
+            # configuration -- pacman's sandbox cannot apply a Landlock ruleset
+            # under Docker's default restrictions, which reproduces on native
+            # arm64 and is unaffected by seccomp=unconfined, so it is not an
+            # emulation artefact and --disable-sandbox is deliberately NOT in
+            # the shipped command. See packages.go.
+            prereqs: sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf && pacman -Syu --needed --noconfirm sudo go git curl
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    steps:
+      - name: prerequisites and passwordless sudo
+        run: |
+          set -eux
+          ${{ matrix.prereqs }}
+          echo "root ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci
+          chmod 0440 /etc/sudoers.d/ci
+      - uses: actions/checkout@v4
+      # --system, not --global, for the reason the linux-dotfiles job gives:
+      # `git config --global` creates ~/.gitconfig, which the config phase then
+      # declines to overwrite, and check reports the machine unconverged.
+      - name: git trusts the workspace
+        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
+      - name: provision
+        run: ./bootstrap apply workstation
+      # The assertion Task 13's unit test cannot make. That test pins the
+      # command string; this one pins that the string WORKS -- on Arch it is red
+      # without the -Syu repair, because `pacman -S` against an empty sync
+      # database resolves none of these four.
+      - name: stage zero delivered its four prerequisites
+        run: |
+          set -eux
+          command -v gcc
+          command -v curl
+          command -v file
+          command -v git
+
   # The single required check. Branch protection names this job and nothing
   # else, so adding a job later is a workflow change rather than a
   # repository-settings change.
   gate:
     if: always()
-    needs: [test, secrets, hygiene, docs, linux-dotfiles]
+    needs: [test, secrets, hygiene, docs, linux-dotfiles, linux-stage-zero]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -300,8 +363,10 @@ jobs:
           echo "hygiene: ${{ needs.hygiene.result }}"
           echo "docs:    ${{ needs.docs.result }}"
           echo "linux-dotfiles: ${{ needs.linux-dotfiles.result }}"
+          echo "linux-stage-zero: ${{ needs.linux-stage-zero.result }}"
           [ "${{ needs.test.result }}"    = "success" ] || exit 1
           [ "${{ needs.secrets.result }}" = "success" ] || exit 1
           [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
           [ "${{ needs.docs.result }}"    = "success" ] || exit 1
           [ "${{ needs.linux-dotfiles.result }}" = "success" ] || exit 1
+          [ "${{ needs.linux-stage-zero.result }}" = "success" ] || exit 1
