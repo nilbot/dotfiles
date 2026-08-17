@@ -5,7 +5,19 @@ package main
 // implementation and rendered from here. Nothing writes prose into this file
 // beyond the declarations themselves.
 func rootCommand() *Command {
-	return &Command{Name: "agents", Sub: []*Command{
+	return &Command{Name: "agents", Usage: "agents <command> [flags]", Sub: []*Command{
+		{
+			// help is a command like any other rather than a special case in
+			// dispatch, so its own usage line lives where every other one does.
+			// `agents help --all` was advertised by a hardcoded line in the
+			// renderer and by nothing else; that is the shape of text living
+			// outside the tree that this design is meant to end.
+			Name: "help", Summary: "print the listing, or one command's page",
+			Usage:    "agents help [<command> [<subcommand>...]] [--all]",
+			Detail:   "Prints the command listing, or one command's own page at any depth -- `agents help trace cache prune` reaches the leaf. --all adds the commands only git and harnesses invoke, which the listing a person reads leaves out. --help and -h anywhere in an invocation mean the same as `agents help` for the command path in front of them.",
+			Audience: []Audience{Human, Agent},
+			Run:      func(a []string, io IO) int { return runHelp(a, io.Out) },
+		},
 		{
 			Name: "init", Summary: "create .agents/, triggers, wiring, fleet entry",
 			Usage:    "agents init [--local]",

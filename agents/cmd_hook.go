@@ -39,7 +39,7 @@ var validEvents = map[string]bool{
 
 func recordHook(args []string, stdin io.Reader) error {
 	if len(args) == 0 {
-		return errors.New("usage: agents hook <event> --harness <name>")
+		return errors.New(usageFor("hook"))
 	}
 	event := args[0]
 	if !validEvents[event] {

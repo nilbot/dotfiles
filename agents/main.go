@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/githook"
@@ -66,8 +67,13 @@ func run(args []string) int {
 		RenderUsage(root, os.Stderr, false)
 		return exitcode.Malformed
 	}
-	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
-		return runHelp(args[1:], os.Stdout)
+	// --help and -h ask for help about the command path in front of them, at any
+	// depth. Intercepting only args[0] made the flag a top-level idiom: `agents
+	// trace --help` answered `unknown subcommand "--help"` and `agents doctor
+	// --help` fell through to the flag package's own dump, both exit 3. `agents
+	// help` itself needs no interception -- it is a command in the tree.
+	if i := helpFlagIndex(args); i >= 0 {
+		return runHelp(commandPathPrefix(args[:i]), os.Stdout)
 	}
 	cmd, rest := root.Find(args)
 	if cmd == nil {
@@ -76,18 +82,38 @@ func run(args []string) int {
 		return exitcode.Malformed
 	}
 	if cmd.Run == nil {
+		// stderr, like the two clauses above it. All four are the same event --
+		// nothing ran, because the invocation named nothing runnable -- and the
+		// old code split them across two streams only because the handlers
+		// these clauses replaced happened to print to stdout. A caller piping
+		// `agents trace` somewhere got the complaint in the pipe.
 		if len(rest) > 0 {
-			fmt.Fprintf(os.Stdout, "agents %s: unknown subcommand %q\n", cmd.Name, rest[0])
+			fmt.Fprintf(os.Stderr, "agents %s: unknown subcommand %q\n", cmd.Name, rest[0])
 		} else {
-			fmt.Fprintf(os.Stdout, "usage: %s\n", cmd.Usage)
+			fmt.Fprintf(os.Stderr, "usage: %s\n", cmd.Usage)
 		}
 		return exitcode.Malformed
 	}
 	return cmd.Run(rest, IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr})
 }
 
-// TEMPORARY: replaced in Task 6.
-func runHelp(args []string, w io.Writer) int {
-	RenderUsage(rootCommand(), w, false)
-	return exitcode.OK
+func helpFlagIndex(args []string) int {
+	for i, a := range args {
+		if a == "--help" || a == "-h" {
+			return i
+		}
+	}
+	return -1
+}
+
+// commandPathPrefix keeps the leading command tokens and drops the first flag
+// and everything after it, so `agents trace cache prune --lane x --help` still
+// resolves to the leaf rather than to a path with --lane in it.
+func commandPathPrefix(args []string) []string {
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return args[:i]
+		}
+	}
+	return args
 }

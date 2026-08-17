@@ -21,7 +21,7 @@ import (
 
 func runTrace(args []string, stdout io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: agents trace ls|show|cache [flags]")
+		fmt.Fprintln(stdout, usageFor("trace"))
 		return exitcode.Malformed
 	}
 	switch args[0] {
@@ -192,7 +192,7 @@ func runTraceShow(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 	if fs.NArg() != 1 {
-		fmt.Fprintln(stdout, "usage: agents trace show [--path] <agent-id or session-id prefix>")
+		fmt.Fprintln(stdout, usageFor("trace", "show"))
 		return exitcode.Malformed
 	}
 	want := fs.Arg(0)
@@ -319,8 +319,7 @@ func runTraceCachePrune(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 	if *lane == "" && !*retention {
-		fmt.Fprintln(stdout, "usage: agents trace cache prune --lane <name> [--yes]\n"+
-			"       agents trace cache prune --retention [--age <d>] [--size <bytes>] [--yes]")
+		fmt.Fprintln(stdout, usageFor("trace", "cache", "prune"))
 		return exitcode.Malformed
 	}
 	if *lane != "" && *retention {

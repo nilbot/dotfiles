@@ -20,7 +20,7 @@ func runGuard(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 	if !*staged || fs.NArg() != 0 {
-		fmt.Fprintln(stdout, "usage: agents guard --staged")
+		fmt.Fprintln(stdout, usageFor("guard"))
 		return exitcode.Malformed
 	}
 

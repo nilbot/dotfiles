@@ -115,7 +115,7 @@ func (c *Command) Walk(fn func(path []string, cmd *Command)) {
 // RenderUsage writes the top-level listing. With all=false it shows only
 // commands a person invokes; with all=true it shows everything.
 func RenderUsage(root *Command, w io.Writer, all bool) {
-	fmt.Fprint(w, "usage: agents <command> [flags]\n\n")
+	fmt.Fprintf(w, "usage: %s\n\n", root.Usage)
 	width := 0
 	var rows []*Command
 	for _, c := range root.Sub {
@@ -138,24 +138,43 @@ func RenderUsage(root *Command, w io.Writer, all bool) {
 	RenderExitCodes(w)
 }
 
-// RenderHelp writes one command's own page.
-func RenderHelp(cmd *Command, path []string, w io.Writer) {
+// RenderHelp writes one command's own page. It filters subcommands by audience
+// on the same rule RenderUsage applies to the top level: a subcommand only a
+// harness or git invokes does not belong on the page a person reads, and
+// nesting is no reason for it to escape the filter. Nothing in the tree is
+// hidden this way today -- the filter is here so that adding the first nested
+// `hook`-alike does not silently leak it into its parent's page, which is the
+// shape of omission the whole registry exists to prevent.
+func RenderHelp(cmd *Command, path []string, w io.Writer, all bool) {
 	fmt.Fprintf(w, "agents %s -- %s\n\n", strings.Join(path, " "), cmd.Summary)
 	fmt.Fprintf(w, "usage: %s\n\n", cmd.Usage)
 	fmt.Fprintf(w, "%s\n", cmd.Detail)
-	if len(cmd.Sub) > 0 {
+
+	var rows []*Command
+	hidden := 0
+	for _, s := range cmd.Sub {
+		if !all && !s.visibleToPeople() {
+			hidden++
+			continue
+		}
+		rows = append(rows, s)
+	}
+	if len(rows) > 0 {
 		fmt.Fprint(w, "\nsubcommands:\n")
 		width := 0
-		for _, s := range cmd.Sub {
+		for _, s := range rows {
 			if n := len(s.Name); n > width {
 				width = n
 			}
 		}
-		for _, s := range cmd.Sub {
+		for _, s := range rows {
 			fmt.Fprintf(w, "  %-*s  %s\n", width, s.Name, s.Summary)
 		}
 	}
+	// Filtered content stays discoverable: a reader who can see that something
+	// is missing is told where to look, rather than being left with a gap.
+	if hidden > 0 {
+		fmt.Fprintf(w, "\n  agents help %s --all  include the subcommands invoked by git and harnesses\n",
+			strings.Join(path, " "))
+	}
 }
-
-// TEMPORARY: replaced by the real renderer in Task 6.
-func RenderExitCodes(w io.Writer) {}

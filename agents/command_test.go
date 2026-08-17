@@ -25,7 +25,7 @@ func fixtureTree() *Command {
 		Detail:   "Invoked by a harness. Not for people.",
 		Audience: []Audience{Harness},
 	}
-	return &Command{Name: "agents", Sub: []*Command{trace, hook}}
+	return &Command{Name: "agents", Usage: "agents <command> [flags]", Sub: []*Command{trace, hook}}
 }
 
 func TestFindResolvesANestedPath(t *testing.T) {
@@ -97,7 +97,7 @@ func TestRenderUsageHidesNonHumanCommandsUnlessAllIsSet(t *testing.T) {
 func TestRenderHelpPrintsUsageAndDetail(t *testing.T) {
 	cmd, _ := fixtureTree().Find([]string{"trace", "prune"})
 	var out bytes.Buffer
-	RenderHelp(cmd, []string{"trace", "prune"}, &out)
+	RenderHelp(cmd, []string{"trace", "prune"}, &out, false)
 	for _, want := range []string{"agents trace prune --lane <n>", "Never touches the index"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("help omitted %q:\n%s", want, out.String())
