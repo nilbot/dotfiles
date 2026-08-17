@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"sort"
@@ -19,7 +18,6 @@ type Command struct {
 	Usage    string     // "agents trace cache prune --lane <name>"
 	Detail   string     // paragraph shown by `agents help <path>`
 	Audience []Audience // who invokes this
-	Flags    func(*flag.FlagSet)
 	Run      func(args []string, io IO) int
 	Sub      []*Command
 }
@@ -115,7 +113,7 @@ func (c *Command) Walk(fn func(path []string, cmd *Command)) {
 // RenderUsage writes the top-level listing. With all=false it shows only
 // commands a person invokes; with all=true it shows everything.
 func RenderUsage(root *Command, w io.Writer, all bool) {
-	fmt.Fprintf(w, "usage: %s\n\n", root.Usage)
+	fmt.Fprintf(w, "%s\n\n", usageBlock(root.Usage))
 	width := 0
 	var rows []*Command
 	for _, c := range root.Sub {
@@ -123,13 +121,13 @@ func RenderUsage(root *Command, w io.Writer, all bool) {
 			continue
 		}
 		rows = append(rows, c)
-		if n := len(c.Usage); n > width {
+		if n := len(usageSynopsis(c.Usage)); n > width {
 			width = n
 		}
 	}
 	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Name < rows[j].Name })
 	for _, c := range rows {
-		fmt.Fprintf(w, "  %-*s  %s\n", width, c.Usage, c.Summary)
+		fmt.Fprintf(w, "  %-*s  %s\n", width, usageSynopsis(c.Usage), c.Summary)
 	}
 	if !all {
 		fmt.Fprint(w, "\n  agents help --all            include commands invoked by git and harnesses\n")
@@ -147,7 +145,7 @@ func RenderUsage(root *Command, w io.Writer, all bool) {
 // shape of omission the whole registry exists to prevent.
 func RenderHelp(cmd *Command, path []string, w io.Writer, all bool) {
 	fmt.Fprintf(w, "agents %s -- %s\n\n", strings.Join(path, " "), cmd.Summary)
-	fmt.Fprintf(w, "usage: %s\n\n", cmd.Usage)
+	fmt.Fprintf(w, "%s\n\n", usageBlock(cmd.Usage))
 	fmt.Fprintf(w, "%s\n", cmd.Detail)
 
 	var rows []*Command

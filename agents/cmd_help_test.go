@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -98,32 +99,71 @@ func parsedSources(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	return fset, files
 }
 
+// staticText folds a string literal, or a concatenation of them, into the text
+// it produces. Non-literal operands contribute nothing, which is the point:
+// `"usage: " + cmd.Usage` folds to "usage: " and is rendering from the tree,
+// while `"usage: " + "agents trace show <id>"` folds whole and is not. That
+// second shape is exactly what the deleted cmd_trace.go literal looked like.
+func staticText(e ast.Expr) (string, bool) {
+	switch v := e.(type) {
+	case *ast.BasicLit:
+		return stringLiteral(v)
+	case *ast.ParenExpr:
+		return staticText(v.X)
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			return "", false
+		}
+		l, lok := staticText(v.X)
+		r, rok := staticText(v.Y)
+		if !lok && !rok {
+			return "", false
+		}
+		return l + r, true
+	}
+	return "", false
+}
+
 // No handler may carry its own copy of its usage line.
 //
 // This is the claim the whole registry rests on: help cannot diverge from
 // dispatch. Comparing today's handful of strings against today's tree nodes
 // would not hold it -- the failure mode is a future handler that writes a fresh
 // literal, which no equality check between existing pairs can see. So the test
-// scans the source instead: any string literal that both says "usage:" and
-// names the binary is a restatement of something the tree already declares,
-// wherever it appears and whether or not it happens to agree today.
+// scans the source instead: any static string that both says "usage:" and names
+// the binary is a restatement of something the tree already declares, wherever
+// it appears and whether or not it happens to agree today. Matching is
+// case-insensitive and folds concatenation, so neither "Usage: agents …" nor
+// "usage: " + "agents …" slips through.
+//
+// What it still cannot see: text assembled at run time, of which
+// fmt.Sprintf("usage: %s …", "agents") is the plausible case. Reaching that
+// means interpreting format strings, and a scan that guessed at Sprintf
+// arguments would have to be taught that fmt.Fprintf(w, "usage: %s", cmd.Usage)
+// -- the correct rendering, three lines away in command.go -- is fine. The
+// residual gap is narrower than that false positive would be.
 func TestNoSourceFileRestatesAUsageLine(t *testing.T) {
 	fset, files := parsedSources(t)
 	for _, f := range files {
 		ast.Inspect(f, func(n ast.Node) bool {
-			lit, ok := n.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
+			switch n.(type) {
+			case *ast.BasicLit, *ast.BinaryExpr:
+			default:
 				return true
 			}
-			v, err := strconv.Unquote(lit.Value)
-			if err != nil {
+			v, ok := staticText(n.(ast.Expr))
+			if !ok {
 				return true
 			}
-			if strings.Contains(v, "usage:") && strings.Contains(v, "agents") {
+			lower := strings.ToLower(v)
+			if strings.Contains(lower, "usage:") && strings.Contains(lower, "agents") {
 				t.Errorf("%s: %q restates a usage line; render it from the tree with usageFor(...)",
-					fset.Position(lit.Pos()), v)
+					fset.Position(n.Pos()), v)
 			}
-			return true
+			// A concatenation is checked whole; its operands are parts of that
+			// one string, so descending would report the same text twice.
+			_, isBinary := n.(*ast.BinaryExpr)
+			return !isBinary
 		})
 	}
 }
@@ -175,10 +215,84 @@ func TestEveryUsageForCallSiteNamesARealCommand(t *testing.T) {
 // The rendered line is the tree's line, prefixed and nothing else.
 func TestUsageForRendersTheTreesLine(t *testing.T) {
 	rootCommand().Walk(func(path []string, c *Command) {
-		if got, want := usageFor(path...), "usage: "+c.Usage; got != want {
+		if got, want := usageFor(path...), usageBlock(c.Usage); got != want {
 			t.Errorf("usageFor(%q) = %q, want %q", strings.Join(path, " "), got, want)
 		}
+		// Whatever the wrapping does, the declared text must survive it.
+		for _, form := range strings.Split(c.Usage, "\n") {
+			if !strings.Contains(usageFor(path...), strings.TrimSpace(form)) {
+				t.Errorf("usageFor(%q) dropped the form %q", strings.Join(path, " "), form)
+			}
+		}
 	})
+}
+
+// A command whose flags do not all combine needs more than one usage form --
+// `trace cache prune --lane` and `--retention` are separate operations, and
+// documenting only one of them is how --yes, --age and --size came to be
+// accepted by the handler and named nowhere. Multiple forms must therefore
+// render readably in both places usage appears, and the one-row-per-command
+// listing must not inherit a command's second and third form.
+func TestMultiFormUsageIndentsAndTheListingShowsTheFirstFormOnly(t *testing.T) {
+	if got, want := usageBlock("first form\nsecond form"), "usage: first form\n       second form"; got != want {
+		t.Errorf("usageBlock = %q, want %q; the second form must align under the first", got, want)
+	}
+	if got := usageSynopsis("first form\nsecond form"); got != "first form" {
+		t.Errorf("usageSynopsis = %q, want %q", got, "first form")
+	}
+
+	// The real tree, through the real renderers.
+	prune, _ := rootCommand().Find([]string{"trace", "cache", "prune"})
+	var page bytes.Buffer
+	RenderHelp(prune, []string{"trace", "cache", "prune"}, &page, false)
+	for _, want := range []string{
+		"usage: agents trace cache prune --lane <name> [--yes]",
+		"       agents trace cache prune --retention [--age <d>] [--size <bytes>] [--yes]",
+	} {
+		if !strings.Contains(page.String(), want) {
+			t.Errorf("the leaf's page omitted the line %q:\n%s", want, page.String())
+		}
+	}
+
+	var listing bytes.Buffer
+	RenderUsage(rootCommand(), &listing, true)
+	for _, line := range strings.Split(listing.String(), "\n") {
+		if strings.Count(line, "agents ") > 1 {
+			t.Errorf("a listing row carries more than one usage form: %q", line)
+		}
+	}
+	if strings.Contains(listing.String(), "agents review --stats") {
+		t.Errorf("the listing inherited review's second form:\n%s", listing.String())
+	}
+	if !strings.Contains(listing.String(), "agents review [--lane <l>]") {
+		t.Errorf("the listing lost review's first form:\n%s", listing.String())
+	}
+}
+
+// --render=markdown is a real affordance of `agents help`, so it belongs in the
+// declaration like every other one. It ignored any path given beside it, which
+// is the same defect as a flag a handler accepts and documents nowhere: the
+// caller asked for something and was silently given something else.
+func TestRenderMarkdownFlagIsDeclaredAndRefusesWhatItCannotAnswer(t *testing.T) {
+	help, _ := rootCommand().Find([]string{"help"})
+	if !strings.Contains(help.Usage+help.Detail, "--render=markdown") {
+		t.Errorf("`agents help` accepts --render=markdown and declares it nowhere:\n%s\n%s",
+			help.Usage, help.Detail)
+	}
+
+	for _, args := range [][]string{
+		{"--render=markdown", "trace"},
+		{"--render=markdown", "--all"},
+	} {
+		var out bytes.Buffer
+		if code := runHelp(args, &out); code != exitcode.Malformed {
+			t.Errorf("runHelp(%q) exit = %d, want Malformed (%d); it must not silently ignore the argument",
+				args, code, exitcode.Malformed)
+		}
+		if strings.Contains(out.String(), "|---|---|") {
+			t.Errorf("runHelp(%q) rendered the table anyway:\n%s", args, out.String())
+		}
+	}
 }
 
 // `agents help <command> [subcommands]` must reach every command at any depth.
@@ -262,6 +376,128 @@ func TestBranchWithNoSubcommandReportsOnStderr(t *testing.T) {
 				t.Errorf("stderr = %q, want it to contain %q", stderr, tc.want)
 			}
 		})
+	}
+}
+
+// handlerFlagSets maps each command path to the flag names its handler
+// registers, read out of the source. Every flag.NewFlagSet in this package is
+// named with the command's own path -- "guard", "review", "trace cache prune"
+// -- so the name resolves against the tree directly.
+func handlerFlagSets(t *testing.T) map[string][]string {
+	t.Helper()
+	_, files := parsedSources(t)
+	sets := map[string][]string{}
+	for _, f := range files {
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			name, variable := "", ""
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				as, ok := n.(*ast.AssignStmt)
+				if !ok || len(as.Rhs) != 1 || len(as.Lhs) != 1 {
+					return true
+				}
+				call, ok := as.Rhs[0].(*ast.CallExpr)
+				if !ok || !isSelector(call.Fun, "flag", "NewFlagSet") || len(call.Args) == 0 {
+					return true
+				}
+				if s, ok := stringLiteral(call.Args[0]); ok {
+					name = s
+					if id, ok := as.Lhs[0].(*ast.Ident); ok {
+						variable = id.Name
+					}
+				}
+				return true
+			})
+			if name == "" || variable == "" {
+				continue
+			}
+			var flags []string
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				recv, ok := sel.X.(*ast.Ident)
+				if !ok || recv.Name != variable || !strings.Contains(
+					"Bool String Int Int64 Uint Uint64 Float64 Duration Var",
+					strings.TrimSuffix(sel.Sel.Name, "Var")) {
+					return true
+				}
+				// One rule covers both shapes: fs.String("lane", …) and
+				// fs.StringVar(&f.Lane, "lane", …). The flag's name is the
+				// first string literal in either.
+				for _, a := range call.Args {
+					if s, ok := stringLiteral(a); ok {
+						flags = append(flags, s)
+						break
+					}
+				}
+				return true
+			})
+			if len(flags) > 0 {
+				sets[name] = flags
+			}
+		}
+	}
+	if len(sets) < 10 {
+		t.Fatalf("found only %d flag sets; the scan is broken and would prove nothing", len(sets))
+	}
+	return sets
+}
+
+func isSelector(e ast.Expr, pkg, name string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != name {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == pkg
+}
+
+func stringLiteral(e ast.Expr) (string, bool) {
+	lit, ok := e.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconv.Unquote(lit.Value)
+	return s, err == nil
+}
+
+// A flag a handler accepts but its usage line does not name is documented
+// nowhere at all.
+//
+// This is the other half of the divergence the registry was built to end.
+// Rendering usage from the tree settled which string prints; it could not
+// settle whether that string is complete, and on `trace cache prune` and
+// `review` it was not -- collapsing onto the tree deleted the last mention of
+// --yes, --age, --size, --lane and --since. Fixing those five would fix an
+// instance; the class is "a handler accepts a flag its usage line does not
+// name", and it recurs the next time anyone adds a flag.
+func TestEveryRegisteredFlagIsDocumented(t *testing.T) {
+	root := rootCommand()
+	for name, flags := range handlerFlagSets(t) {
+		path := strings.Fields(name)
+		cmd, rest := root.Find(path)
+		if cmd == nil || len(rest) > 0 {
+			t.Errorf("flag set %q names no command in the tree; name it for the command's own path", name)
+			continue
+		}
+		for _, f := range flags {
+			// -m and --m are the same flag to the flag package, so either
+			// spelling in the usage line documents it.
+			re := regexp.MustCompile(`(^|[^-\w])--?` + regexp.QuoteMeta(f) + `($|[^\w-])`)
+			if !re.MatchString(cmd.Usage) {
+				t.Errorf("`agents %s` accepts --%s, and its usage line does not name it:\n  %s",
+					name, f, cmd.Usage)
+			}
+		}
 	}
 }
 

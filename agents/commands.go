@@ -13,8 +13,8 @@ func rootCommand() *Command {
 			// renderer and by nothing else; that is the shape of text living
 			// outside the tree that this design is meant to end.
 			Name: "help", Summary: "print the listing, or one command's page",
-			Usage:    "agents help [<command> [<subcommand>...]] [--all]",
-			Detail:   "Prints the command listing, or one command's own page at any depth -- `agents help trace cache prune` reaches the leaf. --all adds the commands only git and harnesses invoke, which the listing a person reads leaves out. --help and -h anywhere in an invocation mean the same as `agents help` for the command path in front of them.",
+			Usage:    "agents help [<command> [<subcommand>...]] [--all]\nagents help --render=markdown",
+			Detail:   "Prints the command listing, or one command's own page at any depth -- `agents help trace cache prune` reaches the leaf. --all adds the commands only git and harnesses invoke, which the listing a person reads leaves out. --help and -h anywhere in an invocation mean the same as `agents help` for the command path in front of them. --render=markdown emits the whole surface as a markdown table for the generated README block, and takes no command path.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runHelp(a, io.Out) },
 		},
@@ -34,7 +34,7 @@ func rootCommand() *Command {
 		},
 		{
 			Name: "doctor", Summary: "report wiring, trust evidence, reachability, and lane health",
-			Usage:    "agents doctor",
+			Usage:    "agents doctor\nagents doctor [--lane-window <d>] [--lane-modules <n>] [--lane-days <n>]\n              [--lane-sessions <n>] [--recording-freshness <d>]",
 			Detail:   "Reports what is wired, what the harnesses trust, which pointers are reachable, and how healthy each lane is. Observes; never changes state. Exits 1 when any check is advisory.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runDoctor(a, io.Out) },
@@ -68,7 +68,7 @@ func rootCommand() *Command {
 				},
 				{
 					Name: "draft", Summary: "queue an unreviewed note outside the tracked tree",
-					Usage:    "agents handoff draft --lane <name> --session <id>",
+					Usage:    "agents handoff draft --lane <name> --session <id> [--subject <s>]\nagents handoff draft --lane <name> --session <id> --kind memory\n                     --name <slug> --description <d> --type <type>",
 					Detail:   "Reads the note body on stdin and queues it in the machine-local store. Drafts are untracked until `agents review --keep` promotes one, so drafting costs nothing and commits you to nothing.",
 					Audience: []Audience{Human, Agent},
 					Run:      func(a []string, io IO) int { return runHandoffDraft(a, io.In, io.Out) },
@@ -84,7 +84,7 @@ func rootCommand() *Command {
 		},
 		{
 			Name: "review", Summary: "read pending drafts; promote one, or bin it",
-			Usage:    "agents review [--show|--keep|--bin|--edit <id>] [--stats]",
+			Usage:    "agents review [--lane <l>] [--show|--keep|--bin|--edit <id>]\nagents review --stats [--lane <l>] [--since <d>]",
 			Detail:   "Lists pending drafts, prints one, or promotes it. --keep writes the note into .agents/, regenerates the affected index, and commits, in one act. There is deliberately no --keep --all: promotion is where a human decides.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runReview(a, io.Out) },
@@ -97,7 +97,7 @@ func rootCommand() *Command {
 			Sub: []*Command{
 				{
 					Name: "ls", Summary: "query records",
-					Usage:    "agents trace ls [--lane <n>] [--since <d>] [--machine <m>]",
+					Usage:    "agents trace ls [--lane <n>] [--module <p>] [--machine <m>] [--harness <h>]\n                [--event <e>] [--grep <s>] [--limit <n>] [--since <d>]",
 					Detail:   "Filters the trace index mechanically by lane, module, machine, harness and time. Choosing among the survivors is semantic and falls back to matching on description.",
 					Audience: []Audience{Human, Agent},
 					Run:      func(a []string, io IO) int { return runTraceLS(a, io.Out) },
@@ -118,7 +118,7 @@ func rootCommand() *Command {
 					Sub: []*Command{
 						{
 							Name: "prune", Summary: "remove cached copies, never the records",
-							Usage:    "agents trace cache prune --lane <name> | --retention",
+							Usage:    "agents trace cache prune --lane <name> [--yes]\nagents trace cache prune --retention [--age <d>] [--size <bytes>] [--yes]",
 							Detail:   "Removes cached transcript copies. The index is never touched: it is the record that a transcript existed at all. Dry run unless --yes. Prunability is never inferred from git -- a deleted branch is usually a merged one, and a throwaway worktree is often where the interesting work happened.",
 							Audience: []Audience{Human},
 							Run:      func(a []string, io IO) int { return runTraceCachePrune(a, io.Out) },
@@ -157,7 +157,7 @@ func rootCommand() *Command {
 		},
 		{
 			Name: "hook", Summary: "harness hook entrypoint",
-			Usage:    "agents hook <event> --harness <name>",
+			Usage:    "agents hook <event> --harness <name> [--lane <n>]",
 			Detail:   "Records one harness lifecycle event. Reads the payload on stdin and writes diagnostics to stderr, because the harness consumes stdout. Exits 0 on every path: a failed record must never disrupt a dispatch.",
 			Audience: []Audience{Harness},
 			Run:      func(a []string, io IO) int { return runHook(a, io.In, io.Err) },

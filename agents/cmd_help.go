@@ -31,6 +31,32 @@ func RenderExitCodes(w io.Writer) {
 	}
 }
 
+// usagePrefix is what a usage line is introduced by, and how far a second form
+// has to be indented to line up under the first.
+const usagePrefix = "usage: "
+
+// usageBlock renders a command's declared usage, which may hold more than one
+// form. A command whose flags do not all combine -- `trace cache prune --lane`
+// and `--retention` are separate operations, and half of `review`'s flags only
+// mean anything with --stats -- documents each form on its own line, and the
+// continuation lines align under the first.
+func usageBlock(u string) string {
+	lines := strings.Split(u, "\n")
+	for i := 1; i < len(lines); i++ {
+		lines[i] = strings.Repeat(" ", len(usagePrefix)) + lines[i]
+	}
+	return usagePrefix + strings.Join(lines, "\n")
+}
+
+// usageSynopsis is the first form only. The top-level listing gives each
+// command one row, so it shows the common invocation and `agents help <cmd>`
+// gives the rest; without this a command with three forms would either lose
+// two of them or stretch the column past a terminal's width.
+func usageSynopsis(u string) string {
+	first, _, _ := strings.Cut(u, "\n")
+	return first
+}
+
 // usageFor renders the usage line a handler prints when it was called wrongly,
 // out of the same declaration `agents help` reads.
 //
@@ -52,33 +78,48 @@ func usageFor(path ...string) string {
 		// end, printed by the function that ended it.
 		return fmt.Sprintf("usage: (bug: %q names no command)", strings.Join(path, " "))
 	}
-	return "usage: " + cmd.Usage
+	return usageBlock(cmd.Usage)
 }
 
 // runHelp answers `agents help`, `agents help <path>`, and `--help` at any
 // depth. It exits 0 -- an explicit request for help is not a usage error, which
 // is the one way it differs from a bare `agents`.
 //
-// Everything it prints, including the complaint about an unknown path, goes to
-// the single writer it was handed; dispatch hands it stdout. That is deliberate
-// and it is the one usage-shaped message in this binary that does not go to
-// stderr: `agents help nosuch` was still an explicit request to be told about
-// commands, and the exit code, not the stream, is what marks it malformed.
+// Everything it prints goes to the single writer it was handed, including the
+// complaint about an unknown path; dispatch hands it stdout. That matches every
+// other handler in this binary -- `agents guard`, `agents review foo`, `agents
+// trace show` all print their usage errors to stdout too. It does NOT match
+// dispatch's own usage errors in main.go, which go to stderr. That split is
+// real, it is wider than this function, and settling it means threading a
+// second writer through every handler; it is carried as its own task rather
+// than half-fixed here.
 func runHelp(args []string, w io.Writer) int {
 	root := rootCommand()
 
-	all := false
+	all, markdown := false, false
 	var path []string
 	for _, a := range args {
 		switch a {
 		case "--all":
 			all = true
 		case "--render=markdown":
-			RenderMarkdown(root, w)
-			return exitcode.OK
+			markdown = true
 		default:
 			path = append(path, a)
 		}
+	}
+
+	if markdown {
+		// The table is the whole surface by definition, so a command path or
+		// --all alongside it asks for something it cannot answer. Refusing
+		// beats ignoring: `agents help trace --render=markdown` used to render
+		// the entire tree and say nothing about the path it had dropped.
+		if len(path) > 0 || all {
+			fmt.Fprintln(w, "agents help: --render=markdown renders the whole command surface; it takes no command path and no --all")
+			return exitcode.Malformed
+		}
+		RenderMarkdown(root, w)
+		return exitcode.OK
 	}
 
 	if len(path) == 0 {
