@@ -804,7 +804,7 @@ every pull request wait on the whole Linux port. The job reports `apply`'s exit
 code rather than swallowing it, so a later-phase failure is visible in the log
 without blocking a merge.
 
-Two defects this found, both fixed, neither reproducible on macOS:
+Three defects this found, all fixed, none reproducible on macOS:
 
 - `pacman -S` ran with no prior database sync, so Arch stage zero had never
   worked at all — a fresh Arch system ships an empty sync database.
@@ -813,12 +813,34 @@ Two defects this found, both fixed, neither reproducible on macOS:
   of the running process, and the phase then told the operator to run the
   command that was already running. macOS never showed it because
   `/opt/homebrew/bin` is on PATH there long before bootstrap starts.
+- the `devtools` phase invoked `brew` by bare name for the `uv` install, which
+  is the same defect a third time and in a package where `resolveBrew` already
+  existed. Found 2026-08-17 only after the fish fix let the run get one phase
+  further.
 
-**Still open after stage zero**, and the reason this gap is narrowed rather
-than closed: the `devtools` phase stops at `uv` not on PATH; the fish phase's
-`chsh` and `/etc/shells` handling is executed but its effect on a real login
-shell is not asserted; and `brew bundle` installing all 36 Brewfile formulae on
-Linux is exercised only as far as the next failure.
+**Updated 2026-08-17 after the devtools fix.** `apply workstation` now runs
+every phase to completion on both images and exits 0. That exit code is not a
+convergence claim: `Verify` reports and returns nil by design, so `apply` exits
+0 while its own verify phase reports failures. On Debian it reports `5 ok, 0
+warn, 3 fail`, and those three are what remains open on Linux:
+
+- **`packages` — "Homebrew is not installed".** The same resolve-vs-PATH defect
+  a fourth time, now in `internal/check` rather than `internal/phase`: the
+  check asks PATH for `brew` while Homebrew sits at `/home/linuxbrew/.linuxbrew`.
+  Left unfixed deliberately — `check` is the verb the `linux-dotfiles` job
+  gates on, so it is not a change to make as a close-out chore.
+- **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
+  cannot change underneath it, so the check can only ever report the shell the
+  container started with. Asserting the real effect needs a fresh login.
+- **`agents`** — built to `~/bin`, which is not on the container's PATH.
+
+`brew bundle` is now exercised in full on Debian: `complete! 30 Brewfile
+dependencies now installed`, which is every `brew` line in the file — the
+remaining two entries are casks, and casks are macOS-only. (This sentence
+previously said 36 formulae. The Brewfile holds 30 `brew` and 2 `cask` lines;
+36 was never a count of anything in it.) On Arch it has failed once inside
+`brew bundle` on a corrupted partial download in Homebrew's own cache — not
+this repository's code, and absorbed by the narrowing rather than fixed.
 
 **2. `plan` exits 2 on a machine that lacks Homebrew or fish**, rather than
 previewing. Measured 2026-08-17: this does **not** affect the `dotfiles`
