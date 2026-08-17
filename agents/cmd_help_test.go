@@ -501,6 +501,67 @@ func TestEveryRegisteredFlagIsDocumented(t *testing.T) {
 	}
 }
 
+// usageFlagPattern finds the flag tokens in a usage line: --lane, -m,
+// --recording-freshness. It deliberately does not match <id>, msg or the |
+// separating two forms, none of which are flags.
+var usageFlagPattern = regexp.MustCompile(`(^|[^-\w])(--?[a-z][a-z0-9-]*)`)
+
+// The mirror of TestEveryRegisteredFlagIsDocumented, and it is not redundant
+// with it: that test walks registered -> documented, so it cannot see a usage
+// line naming a flag no handler accepts. Measured before this existed --
+// advertising `agents guard --staged [--nonexistent <x>]` left the whole suite
+// green.
+//
+// The direction matters here more than most places. Closing the first gap meant
+// hand-writing 21 flag names into usage strings across seven commands, and a
+// typo in any of them tells a reader to pass something the handler rejects.
+// Half a check, applied to freshly hand-copied data, is how you document a flag
+// that does not exist.
+func TestNoUsageLineNamesAFlagThatDoesNotExist(t *testing.T) {
+	// `help` parses its own arguments in runHelp rather than through a
+	// flag.FlagSet, because a FlagSet stops at the first non-flag argument and
+	// `agents help trace --all` leads with one. Its flags are therefore real
+	// but unregistered, and the scan below cannot see them. They are covered
+	// behaviourally instead, by TestHelpAllIncludesTheAutomatedCommands and
+	// TestRenderMarkdownListsEveryCommandAtEveryDepth, which invoke them.
+	//
+	// The exemption is a fixed list, not a predicate: a second hand-parser
+	// added later fails here rather than quietly inheriting the hole.
+	handParsed := map[string]bool{"help": true}
+
+	sets := handlerFlagSets(t)
+	checked := 0
+	rootCommand().Walk(func(path []string, c *Command) {
+		name := strings.Join(path, " ")
+		flags, hasSet := sets[name]
+		if handParsed[name] {
+			return
+		}
+		if !hasSet {
+			if usageFlagPattern.MatchString(c.Usage) {
+				t.Errorf("`agents %s` advertises flags but registers no flag set:\n  %s", name, c.Usage)
+			}
+			return
+		}
+		registered := map[string]bool{}
+		for _, f := range flags {
+			registered[f] = true
+		}
+		for _, m := range usageFlagPattern.FindAllStringSubmatch(c.Usage, -1) {
+			flag := strings.TrimLeft(m[2], "-")
+			checked++
+			if !registered[flag] {
+				t.Errorf("`agents %s` advertises --%s, which its handler does not register:\n  %s",
+					name, flag, c.Usage)
+			}
+		}
+	})
+	// A pattern that matched nothing would pass every command silently.
+	if checked < 20 {
+		t.Fatalf("only %d flag tokens found across every usage line; the pattern is broken", checked)
+	}
+}
+
 // The generated README block Task 9 consumes. Every command, at every depth --
 // a table built from root.Sub alone would silently stop at the second level.
 func TestRenderMarkdownListsEveryCommandAtEveryDepth(t *testing.T) {
