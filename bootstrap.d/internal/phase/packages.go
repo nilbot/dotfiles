@@ -81,9 +81,25 @@ func stageZero(c Context) error {
 	}
 	if _, err := c.Change.LookPath("pacman"); err == nil {
 		c.logf("   stage zero  pacman: base-devel curl file git")
-		// --needed rather than a plain -S, so a re-apply does not reinstall four
-		// packages that are already there.
-		return c.Change.Sudo("pacman", "-S", "--needed", "--noconfirm",
+		// -Syu, not -S and not -Sy. The database first, for the same reason the
+		// apt branch above syncs first -- and here it is worse than a stale
+		// index: a fresh Arch system ships an EMPTY sync database, so a bare -S
+		// resolves nothing at all. Measured on archlinux:base and again on
+		// menci/archlinuxarm:base under native arm64: "target not found" for
+		// all four packages, exit 1. Arch stage zero had never worked.
+		//
+		// Not -Sy, because Arch does not support partial upgrades: syncing the
+		// database without upgrading the installed packages against it is a
+		// documented way to break a system.
+		//
+		// The honest cost: installing four packages performs a full system
+		// upgrade. That is the supported shape, and the alternative -- requiring
+		// an already-synced system -- is a precondition nothing can enforce on a
+		// machine being provisioned for the first time.
+		//
+		// --needed still skips what is already present, so a re-apply does not
+		// reinstall four packages.
+		return c.Change.Sudo("pacman", "-Syu", "--needed", "--noconfirm",
 			"base-devel", "curl", "file", "git")
 	}
 
