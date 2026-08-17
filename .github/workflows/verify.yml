@@ -336,18 +336,36 @@ jobs:
       # NARROWED 2026-08-17, deliberately, and spec 2's Known gaps record it.
       # This job gates STAGE ZERO -- what it is named for and what Task 13
       # repaired. `apply workstation` is merely the only route to that code,
-      # and it drags in phases that are not yet verified on Linux: as of today
-      # it reaches devtools and stops at `uv not on PATH`. Gating merges on
-      # those would make every PR wait on the whole Linux port.
+      # and it drags in phases that are not yet verified on Linux. Gating merges
+      # on those would make every PR wait on the whole Linux port -- and the
+      # port is genuinely unfinished: run 32047164383 got past stage zero on
+      # both images and then failed on Debian at devtools (a bare `brew`, since
+      # fixed) and on Arch inside `brew bundle` (a corrupted download in
+      # Homebrew's cache, which is not this repository's code at all). Neither
+      # is a stage-zero fault, and neither should hold a merge.
       #
       # The exit code is reported, never swallowed, and the run must still
       # REACH stage zero -- a `|| true` alone would be a check that cannot
       # fail, which is the defect this entire gate exists to catch.
       - name: provision as far as Linux support currently reaches
         run: |
+          # `set +e`, explicitly, and it has to be explicit: GitHub invokes a
+          # `run:` block as `bash -e {0}`, so errexit is on before this script's
+          # first line and `set -uo pipefail` does not clear it -- setting the
+          # other two options says nothing about the one already set.
+          #
+          # Measured 2026-08-17 on run 32047164383, with only `set -uo pipefail`
+          # here: both legs exited on bootstrap's own code 2 -- Debian at
+          # devtools, Arch at packages -- and neither reached the echo or the
+          # grep. The narrowing this job is named for was written down and never
+          # ran, and the job's redness was reporting the Linux port's known gaps
+          # rather than stage zero.
           set -uo pipefail
+          set +e
           ./bootstrap apply workstation 2>&1 | tee /tmp/apply.log
-          echo "bootstrap apply workstation exited ${PIPESTATUS[0]}"
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "bootstrap apply workstation exited $status"
           grep -q "stage zero" /tmp/apply.log \
             || { echo "the packages phase never reached stage zero" >&2; exit 1; }
       # The assertion Task 13's unit test cannot make. That test pins the
