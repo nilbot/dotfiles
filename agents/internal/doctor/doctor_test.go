@@ -1144,3 +1144,57 @@ func TestStoreSizeCheckWarnsOverTheCap(t *testing.T) {
 		t.Errorf("the remedy does not name the command that fixes it: %q", got.Remedy)
 	}
 }
+
+// A binary stamped to a checkout that no longer exists runs none of the
+// personal git hooks and says nothing about it: githook treats a missing extras
+// directory as "no personal hooks" and carries on at exit 0. Every
+// path-comparing check passes, because the paths agree with each other -- they
+// simply both name nothing.
+//
+// Measured before this test was written, on a real stamped binary with
+// core.hooksPath agreeing with the stamp: doctor's output was byte-identical
+// before and after the worktree was deleted, 2691 bytes each time, and never
+// named the deleted path.
+func TestDoctorFailsWhenTheStampedRootIsGone(t *testing.T) {
+	deps := DependenciesFor(filepath.Join(t.TempDir(), "deleted-worktree"))
+	found := findCheck(t, rootChecks(deps), "root:exists")
+	if found.Status != Fail {
+		t.Errorf("root:exists = %v, want Fail: the consequence is a correctness mechanism silently not running", found.Status)
+	}
+	if !strings.Contains(found.Detail, "deleted-worktree") {
+		t.Errorf("the detail must name the missing checkout, or the reader cannot act on it: %q", found.Detail)
+	}
+}
+
+// The check must pass on a root that is there, or it would fail every healthy
+// machine and be turned off within a day.
+func TestDoctorPassesWhenTheStampedRootExists(t *testing.T) {
+	found := findCheck(t, rootChecks(DependenciesFor(t.TempDir())), "root:exists")
+	if found.Status != OK {
+		t.Errorf("root:exists = %v on an existing checkout, want OK (%q)", found.Status, found.Detail)
+	}
+}
+
+// A path that exists but is a FILE is not a checkout. Statting without asking
+// what was found would call that healthy.
+func TestDoctorFailsWhenTheStampedRootIsAFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "not-a-checkout")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	found := findCheck(t, rootChecks(DependenciesFor(file)), "root:exists")
+	if found.Status != Fail {
+		t.Errorf("root:exists = %v on a regular file, want Fail", found.Status)
+	}
+}
+
+func findCheck(t *testing.T, checks []Check, name string) Check {
+	t.Helper()
+	for _, c := range checks {
+		if c.Name == name {
+			return c
+		}
+	}
+	t.Fatalf("no %s check was produced; got %+v", name, checks)
+	return Check{}
+}

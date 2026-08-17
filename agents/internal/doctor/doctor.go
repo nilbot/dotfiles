@@ -71,6 +71,10 @@ type Dependencies struct {
 	AttributesConfigValue string
 	GlobalGitConfig       string
 	SharedGitConfig       string
+	// Root is the checkout this binary was stamped to. Kept rather than only
+	// derived from, because every other path here is built by joining onto it,
+	// so nothing existing can report that the root itself is gone.
+	Root string
 }
 
 func DefaultThresholds() Thresholds {
@@ -106,6 +110,7 @@ func DependenciesFor(root string) Dependencies {
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
 		SharedGitConfig:       filepath.Join(root, "git", "gitconfig.shared"),
+		Root:                  root,
 	}
 }
 
@@ -171,6 +176,7 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 		checks = append(checks, checkRecording(adapter, traceResult.Records, wiringTimes[adapter.Name()], th.RecordingFreshness, now))
 	}
 	checks = append(checks, checkGitleaks(deps.LookPath))
+	checks = append(checks, rootChecks(deps)...)
 	checks = append(checks, checkGitHooks(repoRoot, binary, deps)...)
 	checks = append(checks, checkGitAttributes(repoRoot, deps))
 	checks = append(checks, checkMachine(thisMachine))
@@ -868,4 +874,44 @@ func LaneHealth(recs []record.Record, th Thresholds, now time.Time) []Check {
 		}
 	}
 	return checks
+}
+
+// rootChecks reports whether the checkout this binary was stamped to still
+// exists.
+//
+// Nothing else did, and that was measured before this was written rather than
+// argued from the code. A binary stamped to a worktree, with core.hooksPath
+// agreeing with the stamp, produces output BYTE-IDENTICAL before and after that
+// worktree is deleted -- 2691 bytes both times, and the deleted path appears
+// nowhere in it. git-hooks:global compares core.hooksPath against HooksDir as
+// strings, so two paths that agree with each other pass whether or not either
+// exists.
+//
+// It fails rather than warns because of what the silence costs: githook treats
+// a missing extras directory as "no personal hooks" and carries on at exit 0,
+// so the whole personal hook chain stops running and every check still says the
+// machine is fine.
+func rootChecks(deps Dependencies) []Check {
+	// An unstamped binary is a different situation and not this check's to
+	// report: a test binary, or `go run`, has no root to have lost.
+	if deps.Root == "" {
+		return nil
+	}
+	remedy := "rebuild from the main checkout: cd <checkout> && make agents"
+	info, err := os.Stat(deps.Root)
+	switch {
+	case err != nil:
+		return []Check{{
+			Name: "root:exists", Status: Fail,
+			Detail: fmt.Sprintf("the stamped checkout %s does not exist", deps.Root),
+			Remedy: remedy,
+		}}
+	case !info.IsDir():
+		return []Check{{
+			Name: "root:exists", Status: Fail,
+			Detail: fmt.Sprintf("the stamped checkout %s is not a directory", deps.Root),
+			Remedy: remedy,
+		}}
+	}
+	return []Check{{Name: "root:exists", Status: OK, Detail: "the stamped checkout exists"}}
 }
