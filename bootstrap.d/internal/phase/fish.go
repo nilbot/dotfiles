@@ -31,7 +31,6 @@ func Fish(c Context) error {
 	if err != nil {
 		return err
 	}
-	c.logf("   fish        %s", fishPath)
 
 	// Validated BEFORE the first step, because the first step is a privileged
 	// append to /etc/shells. A refusal is supposed to mean nothing was performed;
@@ -54,9 +53,17 @@ func Fish(c Context) error {
 		return err
 	}
 
+	// fishPath, not the bare name -- for the same reason resolveFish exists, one
+	// step further on. Measured locally 2026-08-17: resolveFish found the
+	// prefixed fish, /etc/shells and chsh both used it, and THIS line then died
+	// with `exec: "fish": executable file not found in $PATH`, because a name is
+	// resolved against the PATH this process inherited and the Homebrew prefix is
+	// not on it. Finding the binary and then invoking it by name is the same
+	// defect twice.
+	//
 	// fish expands $argv itself, so the root never enters a command string that
 	// something else parses first.
-	return c.Change.Run("fish", "--no-config", "-c",
+	return c.Change.Run(fishPath, "--no-config", "-c",
 		"source $argv[1]/fish/mypre.fish; install_fisher", c.Root)
 }
 

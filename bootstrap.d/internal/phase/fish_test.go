@@ -30,7 +30,7 @@ func TestFishRegistersTheShellThenChangesItThenInstallsPlugins(t *testing.T) {
 	want := []string{
 		`sudo /bin/sh -c "printf '%s\\n' \"$1\" >> /etc/shells" sh /usr/bin/fish`,
 		"sudo chsh -s /usr/bin/fish someone",
-		`run fish --no-config -c "source $argv[1]/fish/mypre.fish; install_fisher" /repo`,
+		`run /usr/bin/fish --no-config -c "source $argv[1]/fish/mypre.fish; install_fisher" /repo`,
 	}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\n\nwant:\n%s",
@@ -232,8 +232,12 @@ func TestFishInstallsPluginsWithoutLoadingTheUsersConfiguration(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	last := fake.Ops[len(fake.Ops)-1]
-	if !strings.HasPrefix(last, "run fish --no-config -c ") {
-		t.Errorf("the plugin install must be last and must use --no-config: %s", last)
+	// The RESOLVED path, not the bare name: this line used to invoke `fish`,
+	// which fails on any machine whose fish is at a prefix this process's PATH
+	// does not carry -- every fresh Linux box, where brew has just installed it.
+	if !strings.HasPrefix(last, "run /usr/bin/fish --no-config -c ") {
+		t.Errorf("the plugin install must be last, must use --no-config, and must "+
+			"name the resolved fish rather than the bare name: %s", last)
 	}
 	if !strings.Contains(last, "$argv[1]") {
 		t.Errorf("the root must reach fish as $argv[1], not interpolated: %s", last)
@@ -819,6 +823,21 @@ func TestFishFindsWhatBrewJustInstalledOutsideThisProcessPATH(t *testing.T) {
 	var out bytes.Buffer
 	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
 		t.Fatalf("fish is installed at the Linuxbrew prefix and the phase did not find it: %v", err)
+	}
+	// EVERY op must name the resolved path. Asserting only that the prefixed
+	// path appears somewhere is what let the first version of this fix ship
+	// half-done: chsh used the resolved path and satisfied the check, while the
+	// fisher line one statement later still invoked the bare name and died with
+	// `exec: "fish": executable file not found in $PATH`. Found by running it in
+	// a container, not by this test -- so the test now asserts the property that
+	// failure had.
+	for _, op := range fake.Ops {
+		for _, field := range strings.Fields(op) {
+			if field == "fish" {
+				t.Errorf("an op invokes fish by bare name, which does not resolve "+
+					"on the machine this phase exists for: %s", op)
+			}
+		}
 	}
 	if !strings.Contains(strings.Join(fake.Ops, "\n"), "/home/linuxbrew/.linuxbrew/bin/fish") {
 		t.Errorf("the phase did not use the prefixed fish:\n%s", strings.Join(fake.Ops, "\n"))
