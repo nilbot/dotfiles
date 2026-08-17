@@ -14,24 +14,6 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
-func runHandoff(args []string, stdin io.Reader, stdout io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stdout, "usage: agents handoff write|draft|prune [flags]")
-		return exitcode.Malformed
-	}
-	switch args[0] {
-	case "write":
-		return runHandoffWrite(args[1:], stdin, stdout)
-	case "draft":
-		return runHandoffDraft(args[1:], stdin, stdout)
-	case "prune":
-		return runHandoffPrune(args[1:], stdout)
-	default:
-		fmt.Fprintf(stdout, "agents handoff: unknown subcommand %q\n", args[0])
-		return exitcode.Malformed
-	}
-}
-
 func runHandoffWrite(args []string, stdin io.Reader, stdout io.Writer) int {
 	fs := flag.NewFlagSet("handoff write", flag.ContinueOnError)
 	fs.SetOutput(stdout)
