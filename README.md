@@ -44,6 +44,48 @@ because it compares paths that agree with each other, while the git hook chain
 finds no extras directory and silently runs none of your personal hooks, at exit
 0. Rebuild from the main checkout to repair.
 
+## The `agents` tool
+
+`agents` maintains the tracked `.agents/` directory in this and every other
+repository on the machine — the memory, handoffs, and the harness wiring that
+feeds them. `agents help <command>` explains any of these in full; **when** to
+reach for one is in the skill under `claude/skills/agents-tool/`.
+
+The prose here is hand-written because knowing *when* to reach for a command is
+judgment. Only the table between the markers is derived, and it comes from the
+same declarations `agents help` reads, so it cannot describe a command set the
+binary does not have. If it drifts, regenerate it rather than editing it:
+
+```bash
+agents help --render=markdown
+```
+
+<!-- BEGIN GENERATED: agents help --render=markdown -->
+| Command | What |
+|---|---|
+| `agents help` | print the listing, or one command's page |
+| `agents init` | create .agents/, triggers, wiring, fleet entry |
+| `agents wire` | regenerate harness configs (merges, never overwrites) |
+| `agents doctor` | report wiring, trust evidence, reachability, and lane health |
+| `agents index` | regenerate memory and handoff indexes |
+| `agents save` | commit .agents/ paths and nothing else (escape hatch) |
+| `agents handoff` | lane-scoped handoff management |
+| `agents handoff write` | write a reviewed note into the tracked tree |
+| `agents handoff draft` | queue an unreviewed note outside the tracked tree |
+| `agents handoff prune` | bound the number of notes per lane |
+| `agents review` | read pending drafts; promote one, or bin it |
+| `agents trace` | query records; read one back; copy reachable ones |
+| `agents trace ls` | query records |
+| `agents trace show` | read one transcript back |
+| `agents trace cache` | copy reachable transcripts into the store |
+| `agents trace cache prune` | remove cached copies, never the records |
+| `agents trace migrate` | move a tracked index into the machine-local store |
+| `agents ls` | list the fleet on this machine |
+| `agents update` | rewire every registered repo (dry run by default) |
+| `agents guard` | pre-commit checks (the only command that blocks) |
+| `agents hook` | harness hook entrypoint |
+<!-- END GENERATED -->
+
 ## Layout
 
 | Path | What |
