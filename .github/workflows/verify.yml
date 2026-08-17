@@ -199,12 +199,52 @@ jobs:
           untracked="$(git status --porcelain -- .agents/)"
           [ -z "$untracked" ] || { echo "agents index left untracked content:" >&2; printf '%s\n' "$untracked" >&2; exit 1; }
 
+  # Derived-artifact checks: the command surface must describe itself honestly.
+  # Task 10 adds the README block and the backward name check to this same job.
+  #
+  # The `test` job already runs these as part of `go test ./...`. Naming them
+  # here is what makes a failure say "the help surface is wrong" instead of
+  # "some test failed", and it is the job branch protection will point at when
+  # someone asks why a usage line is required to match its handler.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: agents/go.sum
+      - name: every command carries help, an audience, and honest flags
+        run: |
+          set -euo pipefail
+          cd agents
+          tests="TestEveryCommandIsDocumented
+          TestEveryLeafHasARunner
+          TestTheKnownCommandSetIsPresent
+          TestEveryCommandDeclaresAKnownAudience
+          TestNoSourceFileRestatesAUsageLine
+          TestEveryUsageForCallSiteNamesARealCommand
+          TestEveryRegisteredFlagIsDocumented
+          TestNoUsageLineNamesAFlagThatDoesNotExist"
+          filter="$(echo $tests | tr ' ' '|')"
+          go test -count=1 -v -run "^(${filter})$" ./... | tee /tmp/docs.log
+          # `go test -run` exits 0 when the filter matches NOTHING -- it prints
+          # "no tests to run" and reports ok. Measured, not assumed. So a
+          # renamed or deleted test would turn this job into a check that
+          # cannot fail: green forever, covering nothing. Assert each name
+          # actually ran.
+          for t in $tests; do
+            grep -q -- "--- PASS: $t" /tmp/docs.log \
+              || { echo "$t did not run; this job names a test that no longer exists" >&2; exit 1; }
+          done
+
   # The single required check. Branch protection names this job and nothing
   # else, so adding a job later is a workflow change rather than a
   # repository-settings change.
   gate:
     if: always()
-    needs: [test, secrets, hygiene]
+    needs: [test, secrets, hygiene, docs]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -213,6 +253,8 @@ jobs:
           echo "test:    ${{ needs.test.result }}"
           echo "secrets: ${{ needs.secrets.result }}"
           echo "hygiene: ${{ needs.hygiene.result }}"
+          echo "docs:    ${{ needs.docs.result }}"
           [ "${{ needs.test.result }}"    = "success" ] || exit 1
           [ "${{ needs.secrets.result }}" = "success" ] || exit 1
           [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
+          [ "${{ needs.docs.result }}"    = "success" ] || exit 1
