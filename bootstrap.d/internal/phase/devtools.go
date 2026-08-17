@@ -23,7 +23,24 @@ func Devtools(c Context) error {
 		c.logf("   uv          already installed (%s)", path)
 	} else {
 		c.logf("   uv          not on PATH")
-		if err := c.Change.Run("brew", "install", "uv"); err != nil {
+		// The resolved brew, not the bare name. Third site to need this, same
+		// mechanism as the two before it: Homebrew's installer appends its
+		// shellenv line to a PROFILE, a profile is read by the next login
+		// shell, and nothing can alter the PATH of a process already running --
+		// so on the fresh machine this phase exists for, brew is installed and
+		// unfindable by name in the same run.
+		//
+		// Measured in CI 2026-08-17 on debian:stable-slim under `apply
+		// workstation`: stage zero succeeded, Homebrew installed to
+		// /home/linuxbrew/.linuxbrew, the fish phase found it there, and THIS
+		// line died with `exec: "brew": executable file not found in $PATH`.
+		// macOS never showed it because /opt/homebrew/bin is on PATH long
+		// before bootstrap runs.
+		brew, err := resolveBrew(c)
+		if err != nil {
+			return err
+		}
+		if err := c.Change.Run(brew, "install", "uv"); err != nil {
 			return err
 		}
 	}

@@ -13,7 +13,10 @@ import (
 
 // The operations the phase owes a machine, in the only order that works.
 const (
-	opInstallUv    = "run brew install uv"
+	// The RESOLVED brew. fakeChange.LookPath answers /usr/bin/<name>, so this
+	// is what the phase gets on a machine that has brew on PATH -- and pinning
+	// it here is what makes a regression to the bare name visible.
+	opInstallUv    = "run /usr/bin/brew install uv"
 	opCheckHooks   = "run bash /repo/git/install-hooks.sh preflight /repo /home /home/bin/agents"
 	opMakeBinDir   = "dir /home/bin"
 	opBuildAgents  = `run go build -C /repo/agents -trimpath -ldflags "-X main.dotfilesRoot=/repo" -o /home/bin/agents .`
@@ -173,6 +176,70 @@ func TestDevtoolsSkipsUvWhenItIsAlreadyOnPath(t *testing.T) {
 	}
 }
 
+// The same finding the fish phase carried, at the third site to have it, and
+// the reason this test does not simply trust LookPath: on a fresh Linux box
+// Homebrew's installer writes a shellenv line into a profile that only the next
+// login shell reads, so brew is installed and unfindable by name in the run that
+// installed it. Measured in CI 2026-08-17 on debian:stable-slim -- stage zero
+// succeeded, Homebrew landed at /home/linuxbrew/.linuxbrew, the fish phase found
+// it there, and this phase died on `exec: "brew": executable file not found in
+// $PATH` one phase later.
+func TestDevtoolsFindsBrewOutsideThisProcessPATH(t *testing.T) {
+	fake := &fakeChange{
+		info: map[string]change.FileInfo{
+			"/home/linuxbrew/.linuxbrew/bin/brew": {Exists: true},
+		},
+		links: map[string]string{},
+		// The WHOLE of what this machine has on PATH: nothing. uv is absent, so
+		// the install runs, and brew is absent, so it must be resolved.
+		lookPathOnly: map[string]bool{},
+	}
+	out := &bytes.Buffer{}
+	ctx := phase.Context{
+		Change: fake, Root: "/repo", Home: "/home", Platform: "linux",
+		Profile: "workstation", Out: out,
+	}
+	if err := phase.Devtools(ctx); err != nil {
+		t.Fatalf("brew is installed at the Linuxbrew prefix and the phase did not find it: %v", err)
+	}
+	// EVERY op, for the reason the fish version of this check records: asserting
+	// only that the prefixed path appears SOMEWHERE is what let that fix ship
+	// half-done, with one call site resolved and the next still on the bare name.
+	for _, op := range fake.Ops {
+		for _, field := range strings.Fields(op) {
+			if field == "brew" {
+				t.Errorf("an op invokes brew by bare name, which does not resolve "+
+					"on the machine this phase exists for: %s", op)
+			}
+		}
+	}
+	if !strings.Contains(strings.Join(fake.Ops, "\n"), "/home/linuxbrew/.linuxbrew/bin/brew install uv") {
+		t.Errorf("the phase did not install uv through the prefixed brew:\n%s",
+			strings.Join(fake.Ops, "\n"))
+	}
+}
+
+// The other direction: the probe widens where it looks, it does not invent a
+// path. With brew genuinely absent everywhere, the phase must refuse rather than
+// hand a guess to Run.
+func TestDevtoolsRefusesWhenNoBrewExistsAnywhere(t *testing.T) {
+	fake := &fakeChange{
+		info: map[string]change.FileInfo{}, links: map[string]string{},
+		lookPathOnly: map[string]bool{},
+	}
+	out := &bytes.Buffer{}
+	if err := phase.Devtools(phase.Context{
+		Change: fake, Root: "/repo", Home: "/home", Platform: "linux",
+		Profile: "workstation", Out: out,
+	}); err == nil {
+		t.Fatal("no brew anywhere, and the phase proceeded")
+	}
+	if len(fake.Ops) != 0 {
+		t.Errorf("the phase performed operations before refusing:\n%s",
+			strings.Join(fake.Ops, "\n"))
+	}
+}
+
 // Every step is a precondition for the ones after it, so a failure must stop the
 // phase rather than be logged and stepped over. The build is the load-bearing
 // case: continuing past it hands install-hooks.sh a binary that was never
@@ -194,7 +261,7 @@ func TestDevtoolsStopsAtTheFirstFailure(t *testing.T) {
 		wantPath string
 		mustNot  []string
 	}{
-		{"uv", "run brew install uv", "brew",
+		{"uv", opInstallUv, "/usr/bin/brew",
 			[]string{opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}},
 		// The reason the preflight moved ahead of the build: a machine that
 		// cannot take the hooks must not pay for a compile to find out.
