@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -49,5 +51,80 @@ func TestReadmeCommandBlockIsCurrent(t *testing.T) {
 	if strings.TrimSpace(block) != strings.TrimSpace(want.String()) {
 		t.Errorf("README command block is stale. Regenerate it:\n"+
 			"  agents help --render=markdown\n\ngot:\n%s\nwant:\n%s", block, want.String())
+	}
+}
+
+// commandSpan matches an inline code span naming an agents command, and only
+// that. Prose mentions of the word "agents" are not command references, and
+// flagging them would produce findings nobody would act on. The character
+// class stops at the first `<`, `=` or `|`, so a span carrying an argument
+// placeholder -- `agents handoff draft --lane <lane>` -- is skipped rather
+// than half-matched.
+var commandSpan = regexp.MustCompile("`agents ([a-z][a-z -]*)`")
+
+// livingDocuments are the files that describe how to use this repository
+// today, as opposed to what was true when they were written.
+//
+// Plans and specs are deliberately excluded. They are dated records: the
+// executed bootstrap plan legitimately names `make githooks`, a target that no
+// longer exists, and a record silently rewritten to stay true is not a record.
+func livingDocuments(t *testing.T, root string) []string {
+	t.Helper()
+	targets := []string{"README.md", "CLAUDE.md", filepath.Join("claude", "CLAUDE.md")}
+	for _, dir := range []string{filepath.Join("claude", "skills"), filepath.Join(".agents", "skills")} {
+		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
+				rel, relErr := filepath.Rel(root, p)
+				if relErr == nil {
+					targets = append(targets, rel)
+				}
+			}
+			return nil
+		})
+	}
+	return targets
+}
+
+// No living document may name an `agents` subcommand the registry does not
+// define.
+//
+// This is the direction the README block cannot cover. Generating the table
+// keeps the reference complete; it does nothing about a skill or a CLAUDE.md
+// that tells its reader to run a command which was renamed two specs ago. The
+// reader in that case is usually an agent, and it will run what it is told.
+func TestLivingDocumentsNameOnlyRealCommands(t *testing.T) {
+	root := task18RepoRoot(t)
+
+	known := map[string]bool{}
+	rootCommand().Walk(func(path []string, _ *Command) { known[strings.Join(path, " ")] = true })
+	if !known["trace cache prune"] {
+		t.Fatal("the tree walk found no three-level command; this check would prove little")
+	}
+
+	spans := 0
+	for _, rel := range livingDocuments(t, root) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			continue // an optional document that does not exist yet
+		}
+		for _, m := range commandSpan.FindAllStringSubmatch(string(data), -1) {
+			spans++
+			// Longest match wins: `agents trace cache prune` is a command, and
+			// so is the `agents trace` inside it. Checking the longest form
+			// first means a real leaf is never reported because its parent
+			// happened to match a shorter prefix.
+			words := strings.Fields(m[1])
+			matched := false
+			for n := len(words); n > 0 && !matched; n-- {
+				matched = known[strings.Join(words[:n], " ")]
+			}
+			if !matched {
+				t.Errorf("%s names `agents %s`, which the registry does not define", rel, m[1])
+			}
+		}
+	}
+	// A pattern that matched nothing would pass every document silently.
+	if spans == 0 {
+		t.Fatal("no `agents ...` code spans found in any living document; the scan is broken")
 	}
 }
