@@ -345,7 +345,29 @@ func runCheck(profile string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "bootstrap: check: %v\n", err)
 		return exitMalformed
 	}
-	return check.ExitCode(results)
+
+	// The shared vocabulary crosses a package boundary here as a bare int, and
+	// that is exactly how `exitAdvisory` came to look like a constant nobody
+	// returns: the 1 is produced in internal/check (its own test calls that
+	// case "a warning is advisory"), the name is declared in this file, and
+	// nothing connected the two. A grep of main.go therefore reported the
+	// behaviour as absent when `bootstrap check` has always had it.
+	//
+	// Mapping explicitly ties each number to the name for it, and the default
+	// fails closed if internal/check ever returns a code this table has no
+	// name for -- rather than passing an unrecognised number to the caller.
+	switch code := check.ExitCode(results); code {
+	case exitOK:
+		return exitOK
+	case exitAdvisory:
+		return exitAdvisory
+	case exitBlock:
+		return exitBlock
+	default:
+		fmt.Fprintf(stderr, "bootstrap: check: internal/check returned %d, "+
+			"which is not in the shared exit-code table\n", code)
+		return exitBlock
+	}
 }
 
 // runMigrate reconciles a machine provisioned by an older layout. With no name

@@ -11,6 +11,9 @@ package main
 
 import (
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
 	"strings"
 	"testing"
@@ -261,5 +264,78 @@ func TestLoginShellRunsNothingWithoutANameOrASupportedPlatform(t *testing.T) {
 				t.Errorf("ran %q; there is nothing to ask", fake.argv)
 			}
 		})
+	}
+}
+
+// declaredExitCodes returns the exit-code constant names declared in main.go,
+// paired with how many times each is USED outside its own declaration.
+//
+// Counting identifiers rather than substrings is the point: a comment that
+// merely mentions exitAdvisory, or a longer name containing a shorter one,
+// would satisfy a strings.Count and leave the hole open. This is the same
+// technique the agents module uses to police its usage lines.
+func declaredExitCodes(t *testing.T) map[string]int {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parsing main.go: %v", err)
+	}
+
+	declared := map[string]int{}
+	var declPos = map[token.Pos]bool{}
+	for _, d := range f.Decls {
+		gen, ok := d.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range vs.Names {
+				if strings.HasPrefix(name.Name, "exit") {
+					declared[name.Name] = 0
+					declPos[name.Pos()] = true
+				}
+			}
+		}
+	}
+	if len(declared) < 4 {
+		t.Fatalf("found only %d exit-code constants; the scan is broken and would prove nothing", len(declared))
+	}
+
+	ast.Inspect(f, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok || declPos[id.Pos()] {
+			return true
+		}
+		if _, isExitCode := declared[id.Name]; isExitCode {
+			declared[id.Name]++
+		}
+		return true
+	})
+	return declared
+}
+
+// A constant no path returns documents a behaviour this binary does not have,
+// and a reader cannot tell it from one that works.
+//
+// exitAdvisory looked like exactly that: declared here, named nowhere else in
+// the module. It was not. `bootstrap check` returns 1 whenever any check warns
+// -- produced inside internal/check as a bare literal and passed straight
+// through by runCheck, so the name and its producer sat in different packages
+// with nothing tying them together. The fix was to give the constant its
+// producer visibly, not to delete the name of a code the binary really
+// returns; the usage text's "1 advisory" line was true all along.
+//
+// So this asserts the general property in both directions: every declared
+// code is used, and each one that reaches a caller does so under its own name.
+func TestEveryDeclaredExitCodeHasAProducer(t *testing.T) {
+	for name, uses := range declaredExitCodes(t) {
+		if uses == 0 {
+			t.Errorf("%s is declared and returned by no path; give it a producer or delete it", name)
+		}
 	}
 }
