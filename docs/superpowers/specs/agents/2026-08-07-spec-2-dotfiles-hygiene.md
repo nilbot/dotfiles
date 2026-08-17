@@ -793,6 +793,33 @@ The profile that is now exercised on Linux is precisely the one designed to
 need none of the above. That is what makes it safe to run in CI, and it is
 also why it cannot stand in for the `workstation` profile.
 
+**Stage zero itself is now covered too, and no further.** Spec 5's
+`linux-stage-zero` job runs `apply workstation` on `debian:stable-slim` and
+`archlinux:base` — the only route to `stageZero`, since `phase.For` excludes
+`packages` from the `dotfiles` profile and there is no per-phase flag. It
+gates two things: that the run reaches stage zero, and that `gcc` and `file`
+exist afterwards. It deliberately does **not** gate the phases after stage
+zero, because those are not yet working on Linux and gating them would make
+every pull request wait on the whole Linux port. The job reports `apply`'s exit
+code rather than swallowing it, so a later-phase failure is visible in the log
+without blocking a merge.
+
+Two defects this found, both fixed, neither reproducible on macOS:
+
+- `pacman -S` ran with no prior database sync, so Arch stage zero had never
+  worked at all — a fresh Arch system ships an empty sync database.
+- the fish phase resolved `fish` by bare name, twice. `brew bundle` installs it
+  into the Homebrew prefix, a shellenv line in a profile cannot change the PATH
+  of the running process, and the phase then told the operator to run the
+  command that was already running. macOS never showed it because
+  `/opt/homebrew/bin` is on PATH there long before bootstrap starts.
+
+**Still open after stage zero**, and the reason this gap is narrowed rather
+than closed: the `devtools` phase stops at `uv` not on PATH; the fish phase's
+`chsh` and `/etc/shells` handling is executed but its effect on a real login
+shell is not asserted; and `brew bundle` installing all 36 Brewfile formulae on
+Linux is exercised only as far as the next failure.
+
 **2. `plan` exits 2 on a machine that lacks Homebrew or fish**, rather than
 previewing. Measured 2026-08-17: this does **not** affect the `dotfiles`
 profile, whose `plan` exits 0 in a container with neither installed — it

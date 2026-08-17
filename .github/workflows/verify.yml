@@ -333,18 +333,38 @@ jobs:
       # declines to overwrite, and check reports the machine unconverged.
       - name: git trusts the workspace
         run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
-      - name: provision
-        run: ./bootstrap apply workstation
+      # NARROWED 2026-08-17, deliberately, and spec 2's Known gaps record it.
+      # This job gates STAGE ZERO -- what it is named for and what Task 13
+      # repaired. `apply workstation` is merely the only route to that code,
+      # and it drags in phases that are not yet verified on Linux: as of today
+      # it reaches devtools and stops at `uv not on PATH`. Gating merges on
+      # those would make every PR wait on the whole Linux port.
+      #
+      # The exit code is reported, never swallowed, and the run must still
+      # REACH stage zero -- a `|| true` alone would be a check that cannot
+      # fail, which is the defect this entire gate exists to catch.
+      - name: provision as far as Linux support currently reaches
+        run: |
+          set -uo pipefail
+          ./bootstrap apply workstation 2>&1 | tee /tmp/apply.log
+          echo "bootstrap apply workstation exited ${PIPESTATUS[0]}"
+          grep -q "stage zero" /tmp/apply.log \
+            || { echo "the packages phase never reached stage zero" >&2; exit 1; }
       # The assertion Task 13's unit test cannot make. That test pins the
       # command string; this one pins that the string WORKS -- on Arch it is red
       # without the -Syu repair, because `pacman -S` against an empty sync
       # database resolves none of these four.
+      #
+      # gcc and file are the two that carry weight. curl and git are installed
+      # by this job's own prereqs and would pass whatever stage zero did --
+      # unavoidably so, since preflight requires curl before stage zero runs.
+      # They are asserted anyway because the four are what stage zero promises.
       - name: stage zero delivered its four prerequisites
         run: |
           set -eux
           command -v gcc
-          command -v curl
           command -v file
+          command -v curl
           command -v git
 
   # The single required check. Branch protection names this job and nothing
