@@ -42,7 +42,7 @@ func rootCommand() *Command {
 		{
 			Name: "index", Summary: "regenerate memory and handoff indexes",
 			Usage:    "agents index",
-			Detail:   "Regenerates .agents/memory/INDEX.md and .agents/reports/handoff/INDEX.md from the frontmatter of the files they describe. A pure function of tracked content.",
+			Detail:   "",
 			Audience: []Audience{Human, Agent, CI},
 			Run:      func(a []string, io IO) int { return runIndex(a, io.Out) },
 		},
