@@ -356,18 +356,23 @@ jobs:
       # REACH stage zero -- a `|| true` alone would be a check that cannot
       # fail, which is the defect this entire gate exists to catch.
       - name: provision as far as Linux support currently reaches
+        # `shell: bash`, declared, because a CONTAINER job does not default to
+        # bash: both legs logged `shell: sh -e {0}`. What /bin/sh IS then decides
+        # the semantics, and the two images disagree -- on archlinux:base it is
+        # bash, on debian:stable-slim it is dash. That is the whole reason run
+        # 32077858991 passed on Arch and failed on Debian with
+        # `/__w/_temp/....sh: 15: Bad substitution`: line 15 was
+        # ${PIPESTATUS[0]}, a bash array, and dash has no such thing. Reproduced
+        # locally in both images before this line was written.
+        #
+        # Correcting commit 120f17f, which fixed the right bug and named the
+        # wrong mechanism: it said GitHub invokes a `run:` block as
+        # `bash -e {0}`. The `-e` was right and is the reason `set +e` below has
+        # to be explicit -- errexit is on before this script's first line, and
+        # `set -uo pipefail` sets two other options while saying nothing about
+        # the one already set. The shell was wrong.
+        shell: bash
         run: |
-          # `set +e`, explicitly, and it has to be explicit: GitHub invokes a
-          # `run:` block as `bash -e {0}`, so errexit is on before this script's
-          # first line and `set -uo pipefail` does not clear it -- setting the
-          # other two options says nothing about the one already set.
-          #
-          # Measured 2026-08-17 on run 32047164383, with only `set -uo pipefail`
-          # here: both legs exited on bootstrap's own code 2 -- Debian at
-          # devtools, Arch at packages -- and neither reached the echo or the
-          # grep. The narrowing this job is named for was written down and never
-          # ran, and the job's redness was reporting the Linux port's known gaps
-          # rather than stage zero.
           set -uo pipefail
           set +e
           ./bootstrap apply workstation 2>&1 | tee /tmp/apply.log
