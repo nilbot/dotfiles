@@ -6,6 +6,14 @@
 # verification for exactly the edits a cached `go test` already fails to notice.
 # A required check skipped by a path filter also reports "Expected" forever and
 # blocks the PR rather than passing it.
+#
+# Every `uses:` below is pinned to a commit SHA, with the release it names in a
+# trailing comment. A tag is a mutable pointer -- `@v4` resolves to whatever the
+# action's maintainer moved it to since the last run -- so a tag reference means
+# this gate's own definition can change under it without a commit here. That is
+# the same class of problem the gate exists to catch, so it does not get an
+# exemption for being upstream. The comment is what makes the pin readable and
+# what a version bump edits alongside the SHA; the SHA is what is enforced.
 name: verify
 
 on:
@@ -35,8 +43,8 @@ jobs:
       run:
         working-directory: ${{ matrix.module }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           # Exact patch, never go-version-file: `go 1.26` in go.mod floats to
           # whatever the runner happens to ship.
@@ -101,7 +109,7 @@ jobs:
       GITLEAKS_VERSION: '8.30.1'
       GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - name: install gitleaks, checksum-verified
@@ -130,8 +138,8 @@ jobs:
       GITLEAKS_VERSION: '8.30.1'
       GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.6'
           cache-dependency-path: agents/go.sum
@@ -210,8 +218,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version: '1.26.6'
           cache-dependency-path: agents/go.sum
@@ -260,7 +268,7 @@ jobs:
       # container, and this image has none.
       - name: minimal prerequisites
         run: apt-get update -qq && apt-get install -y -qq golang-go git ca-certificates
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # --system, never --global. `git config --global` CREATES ~/.gitconfig,
       # and the config phase seeds that file only when it is absent -- it
       # merges and never overwrites, which is the property that protects a real
@@ -327,7 +335,7 @@ jobs:
           ${{ matrix.prereqs }}
           echo "root ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci
           chmod 0440 /etc/sudoers.d/ci
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       # --system, not --global, for the reason the linux-dotfiles job gives:
       # `git config --global` creates ~/.gitconfig, which the config phase then
       # declines to overwrite, and check reports the machine unconverged.
