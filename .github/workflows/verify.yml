@@ -242,12 +242,43 @@ jobs:
               || { echo "$t did not run; this job names a test that no longer exists" >&2; exit 1; }
           done
 
+  # Spec 2's largest known gap: no phase of it had ever run on Linux. The
+  # dotfiles profile is preflight + config + verify -- no sudo, no network, no
+  # package manager, no login-shell change -- which is exactly what makes it
+  # safe to run here.
+  #
+  # Measured in this container before the job existed: plan, apply and check
+  # all exit 0. Spec 2's Known gap 2 predicted `plan` would exit 2 where
+  # Homebrew and fish are absent; it does not, because plan reports intent and
+  # the "missing, want a symlink" rows are the state it intends to change.
+  linux-dotfiles:
+    runs-on: ubuntu-latest
+    container: debian:stable-slim
+    timeout-minutes: 15
+    steps:
+      # Before checkout, deliberately: actions/checkout needs git in the
+      # container, and this image has none.
+      - name: minimal prerequisites
+        run: apt-get update -qq && apt-get install -y -qq golang-go git ca-certificates
+      - uses: actions/checkout@v4
+      - name: git trusts the workspace
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: plan
+        run: ./bootstrap plan dotfiles
+      - name: apply
+        run: ./bootstrap apply dotfiles
+      # Not a repeat of the verify phase apply just ran: this asserts the
+      # machine STAYS converged once the applier has exited, which is the
+      # property a second `apply` would hide by fixing what it measured.
+      - name: check converges after apply
+        run: ./bootstrap check dotfiles
+
   # The single required check. Branch protection names this job and nothing
   # else, so adding a job later is a workflow change rather than a
   # repository-settings change.
   gate:
     if: always()
-    needs: [test, secrets, hygiene, docs]
+    needs: [test, secrets, hygiene, docs, linux-dotfiles]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -257,7 +288,9 @@ jobs:
           echo "secrets: ${{ needs.secrets.result }}"
           echo "hygiene: ${{ needs.hygiene.result }}"
           echo "docs:    ${{ needs.docs.result }}"
+          echo "linux-dotfiles: ${{ needs.linux-dotfiles.result }}"
           [ "${{ needs.test.result }}"    = "success" ] || exit 1
           [ "${{ needs.secrets.result }}" = "success" ] || exit 1
           [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
           [ "${{ needs.docs.result }}"    = "success" ] || exit 1
+          [ "${{ needs.linux-dotfiles.result }}" = "success" ] || exit 1
