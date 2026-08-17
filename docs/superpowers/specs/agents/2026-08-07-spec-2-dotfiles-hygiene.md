@@ -5,8 +5,10 @@
 [2026-08-10-dotfiles-bootstrap](../../plans/2026-08-10-dotfiles-bootstrap.md),
 executed on branch `claude/spec-2-dotfiles-hygiene-5f92d4`.
 **Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
-that is not this one.** The first of the three is that **no phase of this design
-has ever run on Linux**.
+that is not this one.** The first of the three was that no phase of this design
+had ever run on Linux. Since 2026-08-17 the **`dotfiles` profile** does, on
+every pull request, in a Debian container — see Known gap 1 for what that
+covers and the larger part it does not.
 **Implementation language:** Go, with a shell shim for stage zero (§2.1). The
 first implementation was shell throughout and was reversed after one task; the
 evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
@@ -771,14 +773,31 @@ Measured at the end of implementation. These are facts about what was built, not
 caveats: each is stated here so that nobody has to rediscover it on a machine
 where it matters.
 
-**1. Linux is untested.** No phase in this design has run on Linux. The
-stage-zero package selection, the Homebrew prefix at `/home/linuxbrew/.linuxbrew`,
-and `chsh` under a different `/etc/shells` convention are all unexercised.
-`Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need cached
-sudo credentials or they fail with "no tty present".
+**1. Linux is partly tested — the `dotfiles` profile only.** Narrowed
+2026-08-17 by spec 5's `linux-dotfiles` job, which runs `plan`, `apply` and
+`check` for that profile in a `debian:stable-slim` container on every pull
+request. All three exit 0, and `check` after `apply` asserts the machine stays
+converged rather than merely that the applier reported success.
+
+What that covers: preflight, the config phase's ten manifest rows on Linux
+paths, and the verify phase. What it does not, which is the larger part:
+
+- the stage-zero package selection, and any distribution other than Debian
+- the Homebrew prefix at `/home/linuxbrew/.linuxbrew`
+- `chsh` under a different `/etc/shells` convention
+- `Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need
+  cached sudo credentials or they fail with "no tty present" — untested,
+  because the `dotfiles` profile takes no sudo at all
+
+The profile that is now exercised on Linux is precisely the one designed to
+need none of the above. That is what makes it safe to run in CI, and it is
+also why it cannot stand in for the `workstation` profile.
 
 **2. `plan` exits 2 on a machine that lacks Homebrew or fish**, rather than
-previewing. `Planner` records a command without performing it, and nothing in
+previewing. Measured 2026-08-17: this does **not** affect the `dotfiles`
+profile, whose `plan` exits 0 in a container with neither installed — it
+reports the missing links as the state it intends to change. The gap stands for
+`workstation`, which is still unexercised on Linux. `Planner` records a command without performing it, and nothing in
 `Machine` reports which happened, so a read that depends on a prior `Run` cannot
 tell "it ran and produced nothing" from "it was only recorded". Closing this
 needs a design decision about how `Planner` represents a command's effects.
@@ -878,7 +897,7 @@ exchange for one convenience command.
 
 | Risk | Mitigation |
 |---|---|
-| Linux support is written but never executed on Linux — no phase of this design has run there | Not mitigated. Stated plainly rather than claimed as working: see [Known gaps](#known-gaps-2026-08-11) 1. Plan-mode and stub tests cover the logic; end-to-end verification is owed before the Linux path is described as supported. |
+| Linux support is written but never executed on Linux — no phase of this design has run there | Partly mitigated 2026-08-17. Spec 5's `linux-dotfiles` job runs the `dotfiles` profile's `plan`, `apply` and `check` in a Debian container on every pull request. The `workstation` profile, every non-Debian distribution, and all of stage zero remain unexecuted on Linux: see [Known gaps](#known-gaps-2026-08-11) 1. |
 | `plan` exits 2 on a machine that lacks Homebrew or fish, instead of previewing | Accepted deliberately, not mitigated. [Known gaps](#known-gaps-2026-08-11) 2 records why, and what closing it would cost. |
 | Linux has no managed nerd font | Not mitigated. The cask is macOS-only and the vendored Linux installer was removed. [Known gaps](#known-gaps-2026-08-11) 3. |
 | The `gitconfig.shared` rename silently empties shared git config on existing machines | `migrate` repoints the include; `check` #5 detects a stale one. |
