@@ -605,15 +605,34 @@ between accepting it and requiring an already-synced system as an explicit
 precondition. It does not ship `-Sy`.
 
 **`-Syu` was verified in the same session: same image, same four packages, exit
-0.** The verifying run needed `--disable-sandbox`, because pacman's seccomp
-sandbox fails under amd64 emulation (`error restricting syscalls via seccomp:
-22`). **That flag is an emulation artefact and stage zero must not ship it** —
-disabling pacman's sandbox on a real machine is a security regression working
-around a problem that machine does not have.
+0.** The verifying run needed the package sandbox disabled. **That belongs to
+the container and stage zero must not ship it** — disabling pacman's sandbox on
+a real machine is a security regression working around a problem that machine
+does not have.
 
-`archlinux` publishes **no arm64 manifest**, so with the sandbox issue on top,
-the Arch job is not locally reproducible on Apple Silicon. It runs on CI's
-x86_64 runners or nowhere.
+> **Corrected 2026-08-17.** Two claims in the paragraphs above were wrong when
+> written, and the corrections change what the Arch job must do.
+>
+> **It is not an emulation artefact.** Re-measured on `menci/archlinuxarm:base`
+> running natively on aarch64, no emulation anywhere: `pacman -Syu` fails with
+> `restricting filesystem access failed because the Landlock ruleset could not
+> be applied: Operation not permitted`, then `switching to sandbox user 'alpm'
+> failed`. It is Landlock under Docker's default restrictions, not seccomp
+> under emulation — and `--security-opt seccomp=unconfined` does **not** fix it,
+> which is the measurement that disproves the original diagnosis outright.
+>
+> The fix is `DisableSandbox` under `[options]` in the container's
+> `/etc/pacman.conf`, which takes plain `pacman -Syu` to exit 0 with the full
+> install. It must be placed under `[options]`: appended at the end of the file
+> it lands inside a repo section, where it clears the Landlock error and leaves
+> the sandbox-user failure — measured both ways. Configuring the container is
+> also why the flag stays out of the command, so the original conclusion
+> survives its reasoning being wrong.
+>
+> **It is not "CI or nowhere".** `archlinux` publishes no arm64 manifest, but
+> `menci/archlinuxarm` does, and every measurement in this correction was taken
+> locally on Apple Silicon. The Arch job is locally reproducible; the belief
+> that it was not is what left the original diagnosis unchecked.
 
 **Verified by:** the three container jobs green, with the `dotfiles` profile
 asserted at exit `0` for `plan`, `apply` and `check`, and both stage-zero
@@ -697,13 +716,18 @@ latest Go toolchain; changing what `agents doctor` checks beyond phase 6.
 
 Three, all narrow, all resolved by running the thing rather than by discussion:
 
-- Does `./bootstrap plan dotfiles` exit `0` in an unprivileged container? Spec 2's
-  Known gap 2 says `plan` exits `2` on a machine lacking Homebrew or fish. If that
-  reaches the `dotfiles` profile it is **a finding to fix, not a reason to weaken
-  the job** — a profile designed to be safe where nothing is installed, which
-  refuses where nothing is installed, is not doing its job.
-- Does plain `-Syu` suffice on a native x86_64 runner, without the
-  `--disable-sandbox` the emulated verification needed?
+- ~~Does `./bootstrap plan dotfiles` exit `0` in an unprivileged container?~~
+  **Answered 2026-08-17: yes.** `plan`, `apply` and `check` all exit 0 in
+  `debian:stable-slim`. Spec 2's Known gap 2 does not reach this profile —
+  `plan` reports the missing links as the state it intends to change. That gap
+  is now scoped to `workstation` in spec 2.
+- ~~Does plain `-Syu` suffice on a native x86_64 runner, without the
+  `--disable-sandbox` the emulated verification needed?~~ **The question was
+  built on a wrong diagnosis** (see the correction above): the sandbox failure
+  is Landlock under Docker, not seccomp under emulation, and it reproduces on
+  native arm64. The answerable form is *does the runner's container permit
+  Landlock*, and the job does not depend on the answer, because it configures
+  `DisableSandbox` in the container either way.
 - Which `bootstrap` paths return `2` where they mean `5`, and does `exitAdvisory`
   have a path that should return it, or should it be deleted?
 
@@ -723,9 +747,21 @@ precedent as this repository's first experience of CI.
 
 **Fixes first, gate last** — reconcile everything locally, then add one workflow
 that arrives green. Rejected: it leaves the repository unguarded for the whole
-duration, and local Docker cannot stand in for the runner anyway, since
-`archlinux` has no arm64 manifest and pacman needs a flag under emulation that
-production must not ship.
+duration.
+
+> **Corrected 2026-08-17.** This rejection originally carried a second reason —
+> that local Docker could not stand in for the runner, since `archlinux` has no
+> arm64 manifest and pacman needed an emulation-only flag. Both halves were
+> wrong (see the correction in the Arch section), and the leg has been removed
+> rather than quietly left standing. The rejection holds on the first reason
+> alone, which is the one that decided it.
+>
+> The execution bore this out in the opposite direction to the deleted claim:
+> local Docker caught the Arch defects, and CI caught a defect local Docker
+> could not — a linked worktree's `.git` is a pointer file, so a `git config
+> --global` in the container silently did nothing and the `dotfiles` profile
+> appeared to converge when part of the setup had not run. Neither substitutes
+> for the other; the argument for the gate is that they fail differently.
 
 **Extending `agents index` to write the README block** — tempting, because
 `index` already owns generated content and the `generated-file` guard rule would
