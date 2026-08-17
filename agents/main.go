@@ -59,62 +59,35 @@ func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.W
 }
 
 func run(args []string) int {
+	root := rootCommand()
 	if len(args) == 0 {
-		usage()
+		// Still exit 3 on stderr: a bare invocation is a usage error, while an
+		// explicit `agents help` is not. Same text, different disposition.
+		RenderUsage(root, os.Stderr, false)
 		return exitcode.Malformed
 	}
-	switch args[0] {
-	case "hook":
-		return runHook(args[1:], os.Stdin, os.Stderr)
-	case "init":
-		return runInit(args[1:], os.Stdout)
-	case "wire":
-		return runWire(args[1:], os.Stdout)
-	case "trace":
-		return runTrace(args[1:], os.Stdout)
-	case "handoff":
-		return runHandoff(args[1:], os.Stdin, os.Stdout)
-	case "review":
-		return runReview(args[1:], os.Stdout)
-	case "index":
-		return runIndex(args[1:], os.Stdout)
-	case "save":
-		return runSave(args[1:], os.Stdout)
-	case "guard":
-		return runGuard(args[1:], os.Stdout)
-	case "ls":
-		return runFleetLS(args[1:], os.Stdout)
-	case "update":
-		return runFleetUpdate(args[1:], os.Stdout)
-	case "doctor":
-		return runDoctor(args[1:], os.Stdout)
-	default:
+	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
+		return runHelp(args[1:], os.Stdout)
+	}
+	cmd, rest := root.Find(args)
+	if cmd == nil {
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
-		usage()
+		RenderUsage(root, os.Stderr, false)
 		return exitcode.Malformed
 	}
+	if cmd.Run == nil {
+		if len(rest) > 0 {
+			fmt.Fprintf(os.Stdout, "agents %s: unknown subcommand %q\n", cmd.Name, rest[0])
+		} else {
+			fmt.Fprintf(os.Stdout, "usage: %s\n", cmd.Usage)
+		}
+		return exitcode.Malformed
+	}
+	return cmd.Run(rest, IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr})
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `usage: agents <command> [flags]
-
-  init [--local]              create .agents/, triggers, wiring, fleet entry
-  wire                        regenerate harness configs (merges, never overwrites)
-  doctor                      report wiring, trust evidence, reachability, and lane health
-  index                       regenerate memory and handoff indexes
-  save [-m msg]               commit .agents/ paths and nothing else (escape hatch)
-  handoff write|draft|prune   write a reviewed note, queue an unreviewed one, prune
-  review [--keep|--bin <id>]  read pending drafts; promote one, or bin it
-  trace ls|show|cache         query records; read one back; copy reachable ones
-  trace cache prune --lane    remove one lane's cached copies (never the records)
-  trace cache prune --retention  evict by age and size
-  trace migrate [--yes]       move a tracked index into the machine-local store
-  ls [--prune]                list the fleet on this machine
-  update --all [--apply]      rewire every registered repo (dry run by default)
-  guard --staged              pre-commit checks (the only command that blocks)
-  hook <event> --harness <n>  harness hook entrypoint
-
-exit codes: 0 ok, 1 advisory, 2 block, 3 malformed, 4 skip,
-            5 could not complete the operation
-`)
+// TEMPORARY: replaced in Task 6.
+func runHelp(args []string, w io.Writer) int {
+	RenderUsage(rootCommand(), w, false)
+	return exitcode.OK
 }
