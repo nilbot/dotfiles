@@ -261,8 +261,19 @@ jobs:
       - name: minimal prerequisites
         run: apt-get update -qq && apt-get install -y -qq golang-go git ca-certificates
       - uses: actions/checkout@v4
+      # --system, never --global. `git config --global` CREATES ~/.gitconfig,
+      # and the config phase seeds that file only when it is absent -- it
+      # merges and never overwrites, which is the property that protects a real
+      # machine's hand-edited config. So a --global setup step here left an
+      # unmanaged ~/.gitconfig behind, apply correctly declined to touch it, and
+      # `check` then failed with "does not include git/gitconfig.shared".
+      # Measured: --global -> check exits 2, --system -> check exits 0.
+      #
+      # The job was contaminating the home directory whose convergence it
+      # exists to measure. /etc/gitconfig grants the same trust and leaves that
+      # home directory to the profile.
       - name: git trusts the workspace
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
       - name: plan
         run: ./bootstrap plan dotfiles
       - name: apply
