@@ -27,10 +27,9 @@ const appendShell = `printf '%s\n' "$1" >> /etc/shells`
 func Fish(c Context) error {
 	c.logf("== fish")
 
-	fishPath, err := c.Change.LookPath("fish")
+	fishPath, err := resolveFish(c)
 	if err != nil {
-		return fmt.Errorf("fish is not on PATH; the packages phase installs it -- " +
-			"run './bootstrap apply workstation'")
+		return err
 	}
 	c.logf("   fish        %s", fishPath)
 
@@ -98,4 +97,54 @@ func loginShell(c Context, fishPath string) error {
 	}
 	c.logf("   chsh        %s -> %s for %s", c.Shell, fishPath, c.User)
 	return c.Change.Sudo("chsh", "-s", fishPath, c.User)
+}
+
+// resolveFish finds the fish the packages phase just installed, which is not
+// necessarily one this process can see.
+//
+// resolveBrew documents the mechanism for `brew` itself: Homebrew's installer
+// appends a shellenv line to a shell PROFILE, a profile is read by the next
+// login shell, and nothing can alter the PATH of a process already running. The
+// same is true of everything `brew bundle` then installs INTO that prefix. On
+// the fresh machine this phase exists for, fish is installed and unfindable by
+// name in the same run.
+//
+// Measured in CI 2026-08-17 on archlinux:base and debian:stable-slim under
+// `apply workstation`: stage zero succeeded, Homebrew installed to
+// /home/linuxbrew/.linuxbrew, fish was installed there, and this phase failed
+// telling the operator to run the command that was already running. macOS never
+// showed it because /opt/homebrew/bin is already on PATH there long before
+// bootstrap runs.
+//
+// LookPath is still tried first, and still wins when it answers: a machine that
+// already has fish somewhere deliberate should use that one, not a Homebrew
+// copy.
+func resolveFish(c Context) (string, error) {
+	if path, err := c.Change.LookPath("fish"); err == nil {
+		return path, nil
+	}
+	for _, brew := range brewLocations {
+		candidate := filepath.Join(filepath.Dir(brew), "fish")
+		info, err := c.Change.Lstat(candidate)
+		// Continue rather than return, for the reason resolveBrew gives: an
+		// unreadable candidate is not an answer about the others.
+		if err != nil {
+			c.logf("   fish        %s could not be read (%v); trying the next prefix",
+				candidate, err)
+			continue
+		}
+		if info.Exists {
+			c.logf("   fish        %s (not yet on PATH -- Homebrew's shellenv "+
+				"line is read by the next login shell)", candidate)
+			return candidate, nil
+		}
+	}
+	// Unchanged in substance from the original message, minus the instruction to
+	// run the command that is running. Under `plan` this is still the accepted
+	// limitation the doc comment above describes; under `apply` it now means
+	// fish is genuinely absent from PATH and from every Homebrew prefix.
+	return "", fmt.Errorf("fish is not on PATH, and is absent from every " +
+		"Homebrew prefix; the packages phase installs it, so under `plan` on a " +
+		"machine without fish this is expected -- under `apply` it means the " +
+		"packages phase did not install it")
 }

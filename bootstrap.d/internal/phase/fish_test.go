@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nilbot/dotfiles/bootstrap/internal/change"
 	"github.com/nilbot/dotfiles/bootstrap/internal/phase"
 )
 
@@ -791,5 +792,45 @@ func TestMypreNamesTheFisherInstallerDirectly(t *testing.T) {
 	if !strings.Contains(body,
 		"https://raw.githubusercontent.com/jorgebucaran/fisher/HEAD/functions/fisher.fish") {
 		t.Error("install_fisher must fetch the installer from its canonical URL")
+	}
+}
+
+// Measured in CI 2026-08-17, archlinux:base and debian:stable-slim, under
+// `apply workstation` -- not `plan`: stage zero succeeded, Homebrew installed
+// to /home/linuxbrew/.linuxbrew, `brew bundle` installed fish into that
+// prefix, and this phase then failed with "fish is not on PATH; the packages
+// phase installs it -- run './bootstrap apply workstation'". That message told
+// the operator to run the command that was already running.
+//
+// The packages phase had already worked this out for `brew` itself: the
+// installer appends a shellenv line to a PROFILE, which the next login shell
+// reads and which cannot alter the PATH of the process running now, so
+// resolveBrew probes the prefixes instead of trusting LookPath. Nothing
+// applied that reasoning to what `brew bundle` installs, so on a machine whose
+// Homebrew prefix is new -- every fresh Linux box -- this phase could not see
+// the fish that had just been installed for it.
+func TestFishFindsWhatBrewJustInstalledOutsideThisProcessPATH(t *testing.T) {
+	fake := &fakeChange{
+		lookPathOnly: map[string]bool{},
+		info: map[string]change.FileInfo{
+			"/home/linuxbrew/.linuxbrew/bin/fish": {Exists: true},
+		},
+	}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err != nil {
+		t.Fatalf("fish is installed at the Linuxbrew prefix and the phase did not find it: %v", err)
+	}
+	if !strings.Contains(strings.Join(fake.Ops, "\n"), "/home/linuxbrew/.linuxbrew/bin/fish") {
+		t.Errorf("the phase did not use the prefixed fish:\n%s", strings.Join(fake.Ops, "\n"))
+	}
+}
+
+// The error must still arrive when fish is genuinely absent -- the probe widens
+// where it looks, it does not invent a path and hand it to chsh.
+func TestFishStillRefusesWhenNothingInstalledIt(t *testing.T) {
+	fake := &fakeChange{lookPathOnly: map[string]bool{}}
+	var out bytes.Buffer
+	if err := phase.Fish(fishContext(fake, &out, "/bin/bash")); err == nil {
+		t.Fatal("no fish anywhere, and the phase proceeded")
 	}
 }
