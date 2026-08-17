@@ -128,3 +128,41 @@ func TestLivingDocumentsNameOnlyRealCommands(t *testing.T) {
 		t.Fatal("no `agents ...` code spans found in any living document; the scan is broken")
 	}
 }
+
+// A command an agent may invoke must appear in the fleet-wide guidance, or a
+// harness never learns to reach for it.
+//
+// Spec 7 measured this exact shape: the instruction said HOW to write a handoff
+// and never THAT one should, and twenty sessions produced none. A generated
+// reference answers "what is this command"; only the skill answers "which
+// command is this situation", and that is judgment, so it cannot be generated
+// -- which is precisely why it needs a check that it stayed complete.
+func TestHarnessSkillCoversAgentCommands(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(task18RepoRoot(t),
+		"claude", "skills", "agents-tool", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("the fleet-wide agents skill is missing: %v", err)
+	}
+	text := string(data)
+
+	var missing []string
+	agentFacing := 0
+	rootCommand().Walk(func(path []string, c *Command) {
+		for _, a := range c.Audience {
+			if a != Agent {
+				continue
+			}
+			agentFacing++
+			if !strings.Contains(text, "`agents "+strings.Join(path, " ")+"`") {
+				missing = append(missing, strings.Join(path, " "))
+			}
+			return
+		}
+	})
+	if agentFacing == 0 {
+		t.Fatal("no agent-facing commands found; this check would prove nothing")
+	}
+	if len(missing) > 0 {
+		t.Errorf("agent-facing commands absent from the skill:\n  %s", strings.Join(missing, "\n  "))
+	}
+}
