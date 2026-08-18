@@ -369,9 +369,14 @@ jobs:
         #                       Under `sh -e` the script aborts with that exact
         #                       message and exit 2; under `bash -e` it passes.
         #   archlinux:base      /bin/sh -> /usr/bin/bash, ${PIPESTATUS[0]} expands.
-        #                       Needs --platform linux/amd64 to run here at all --
-        #                       that image publishes no arm64 manifest, the same
-        #                       fact Task 13 ran into.
+        #   menci/archlinuxarm  same answer, natively on aarch64, no emulation.
+        #
+        # Two routes for Arch because `archlinux` publishes no arm64 manifest,
+        # so on Apple Silicon it needs --platform linux/amd64 -- but
+        # menci/archlinuxarm does publish one, and native is the route to reach
+        # for first. This job's Arch leg IS locally reproducible. Spec 5 records
+        # what it cost to believe otherwise: that belief is what left an earlier
+        # Arch diagnosis unchecked long enough to ship it wrong.
         #
         # Correcting commit 120f17f, which fixed the right bug and named the
         # wrong mechanism: it said GitHub invokes a `run:` block as
