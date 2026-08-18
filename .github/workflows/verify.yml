@@ -362,8 +362,16 @@ jobs:
         # bash, on debian:stable-slim it is dash. That is the whole reason run
         # 32077858991 passed on Arch and failed on Debian with
         # `/__w/_temp/....sh: 15: Bad substitution`: line 15 was
-        # ${PIPESTATUS[0]}, a bash array, and dash has no such thing. Reproduced
-        # locally in both images before this line was written.
+        # ${PIPESTATUS[0]}, a bash array, and dash has no such thing.
+        #
+        # Both measured, in the images themselves:
+        #   debian:stable-slim  /bin/sh -> dash, and bash present at /usr/bin/bash.
+        #                       Under `sh -e` the script aborts with that exact
+        #                       message and exit 2; under `bash -e` it passes.
+        #   archlinux:base      /bin/sh -> /usr/bin/bash, ${PIPESTATUS[0]} expands.
+        #                       Needs --platform linux/amd64 to run here at all --
+        #                       that image publishes no arm64 manifest, the same
+        #                       fact Task 13 ran into.
         #
         # Correcting commit 120f17f, which fixed the right bug and named the
         # wrong mechanism: it said GitHub invokes a `run:` block as
