@@ -6,6 +6,12 @@ regenerates this file and blocks the commit if it differs.
 `reviewed` was written deliberately. `draft` was written automatically at
 session end and has not been checked by anyone. Weigh them differently.
 
+## spec-5-verification-gate
+
+| when | status | session | file |
+|---|---|---|---|
+| 2026-08-13 21:50 | reviewed | f6e3b654-1b49-401a-bce7-3962ec31cd9c | [2026-08-13-f6e3b654-1b49-401a-bce7-3962ec31cd9c.md](spec-5-verification-gate/2026-08-13-f6e3b654-1b49-401a-bce7-3962ec31cd9c.md) |
+
 ## spec-7-capture-and-review
 
 | when | status | session | file |

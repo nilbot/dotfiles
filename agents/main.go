@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/githook"
@@ -59,62 +60,73 @@ func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.W
 }
 
 func run(args []string) int {
+	root := rootCommand()
 	if len(args) == 0 {
-		usage()
+		// Still exit 3 on stderr: a bare invocation is a usage error, while an
+		// explicit `agents help` is not. Same text, different disposition.
+		RenderUsage(root, os.Stderr, false)
 		return exitcode.Malformed
 	}
-	switch args[0] {
-	case "hook":
-		return runHook(args[1:], os.Stdin, os.Stderr)
-	case "init":
-		return runInit(args[1:], os.Stdout)
-	case "wire":
-		return runWire(args[1:], os.Stdout)
-	case "trace":
-		return runTrace(args[1:], os.Stdout)
-	case "handoff":
-		return runHandoff(args[1:], os.Stdin, os.Stdout)
-	case "review":
-		return runReview(args[1:], os.Stdout)
-	case "index":
-		return runIndex(args[1:], os.Stdout)
-	case "save":
-		return runSave(args[1:], os.Stdout)
-	case "guard":
-		return runGuard(args[1:], os.Stdout)
-	case "ls":
-		return runFleetLS(args[1:], os.Stdout)
-	case "update":
-		return runFleetUpdate(args[1:], os.Stdout)
-	case "doctor":
-		return runDoctor(args[1:], os.Stdout)
-	default:
+	// --help and -h ask for help about the command path in front of them, at any
+	// depth. Intercepting only args[0] made the flag a top-level idiom: `agents
+	// trace --help` answered `unknown subcommand "--help"` and `agents doctor
+	// --help` fell through to the flag package's own dump, both exit 3. `agents
+	// help` itself needs no interception -- it is a command in the tree.
+	if i := helpFlagIndex(args); i >= 0 {
+		return runHelp(commandPathPrefix(args[:i]), os.Stdout)
+	}
+	cmd, rest := root.Find(args)
+	if cmd == nil {
 		fmt.Fprintf(os.Stderr, "agents: unknown command %q\n", args[0])
-		usage()
+		RenderUsage(root, os.Stderr, false)
 		return exitcode.Malformed
 	}
+	if cmd.Run == nil {
+		// stderr, like the two clauses above it. All three are the same event --
+		// nothing ran, because the invocation named nothing runnable -- and the
+		// old code split them across two streams only because the handlers
+		// these clauses replaced happened to print to stdout. A caller piping
+		// `agents trace` somewhere got the complaint in the pipe.
+		//
+		// This unifies dispatch, not the binary: the handlers still print their
+		// own usage errors to stdout, so `agents trace` reports on stderr while
+		// `agents trace show` reports on stdout. Settling that means threading a
+		// second writer through every handler and is carried as its own task.
+		if len(rest) > 0 {
+			fmt.Fprintf(os.Stderr, "agents %s: unknown subcommand %q\n", cmd.Name, rest[0])
+		} else {
+			fmt.Fprintln(os.Stderr, usageBlock(cmd.Usage))
+		}
+		return exitcode.Malformed
+	}
+	return cmd.Run(rest, IO{In: os.Stdin, Out: os.Stdout, Err: os.Stderr})
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `usage: agents <command> [flags]
+// helpFlagIndex finds --help or -h anywhere in the arguments, including in a
+// position where it is really a flag's value: `agents save -m -h` prints help
+// rather than committing with the message "-h". Every alternative rule is
+// worse. Stopping the scan at the first flag breaks `agents trace cache prune
+// --lane x --help`, and knowing that -m takes a value while -h does not means
+// teaching dispatch which flags each command declares -- a second copy of the
+// thing the tree exists to hold once. `-m -h` is a malformed invocation either
+// way, so the cheap rule loses nothing real.
+func helpFlagIndex(args []string) int {
+	for i, a := range args {
+		if a == "--help" || a == "-h" {
+			return i
+		}
+	}
+	return -1
+}
 
-  init [--local]              create .agents/, triggers, wiring, fleet entry
-  wire                        regenerate harness configs (merges, never overwrites)
-  doctor                      report wiring, trust evidence, reachability, and lane health
-  index                       regenerate memory and handoff indexes
-  save [-m msg]               commit .agents/ paths and nothing else (escape hatch)
-  handoff write|draft|prune   write a reviewed note, queue an unreviewed one, prune
-  review [--keep|--bin <id>]  read pending drafts; promote one, or bin it
-  trace ls|show|cache         query records; read one back; copy reachable ones
-  trace cache prune --lane    remove one lane's cached copies (never the records)
-  trace cache prune --retention  evict by age and size
-  trace migrate [--yes]       move a tracked index into the machine-local store
-  ls [--prune]                list the fleet on this machine
-  update --all [--apply]      rewire every registered repo (dry run by default)
-  guard --staged              pre-commit checks (the only command that blocks)
-  hook <event> --harness <n>  harness hook entrypoint
-
-exit codes: 0 ok, 1 advisory, 2 block, 3 malformed, 4 skip,
-            5 could not complete the operation
-`)
+// commandPathPrefix keeps the leading command tokens and drops the first flag
+// and everything after it, so `agents trace cache prune --lane x --help` still
+// resolves to the leaf rather than to a path with --lane in it.
+func commandPathPrefix(args []string) []string {
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			return args[:i]
+		}
+	}
+	return args
 }

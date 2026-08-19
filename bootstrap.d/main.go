@@ -155,7 +155,14 @@ func runCommand(name string, args ...string) ([]byte, error) {
 func runCommandWithin(limit time.Duration, name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// The context kills the process, but Output() waits for every writer of the
+	// stdout pipe to close -- and a shell's grandchild inherits that pipe and
+	// outlives the kill, so the deadline bounded nothing. Measured on
+	// ubuntu-latest: a 50ms deadline waited the full 10s. WaitDelay bounds the
+	// post-cancel I/O wait to one second, then closes the pipes and returns.
+	cmd.WaitDelay = 1 * time.Second
+	return cmd.Output()
 }
 
 // loginShell reports the shell this account logs in with, which is a property
@@ -338,7 +345,29 @@ func runCheck(profile string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "bootstrap: check: %v\n", err)
 		return exitMalformed
 	}
-	return check.ExitCode(results)
+
+	// The shared vocabulary crosses a package boundary here as a bare int, and
+	// that is exactly how `exitAdvisory` came to look like a constant nobody
+	// returns: the 1 is produced in internal/check (its own test calls that
+	// case "a warning is advisory"), the name is declared in this file, and
+	// nothing connected the two. A grep of main.go therefore reported the
+	// behaviour as absent when `bootstrap check` has always had it.
+	//
+	// Mapping explicitly ties each number to the name for it, and the default
+	// fails closed if internal/check ever returns a code this table has no
+	// name for -- rather than passing an unrecognised number to the caller.
+	switch code := check.ExitCode(results); code {
+	case exitOK:
+		return exitOK
+	case exitAdvisory:
+		return exitAdvisory
+	case exitBlock:
+		return exitBlock
+	default:
+		fmt.Fprintf(stderr, "bootstrap: check: internal/check returned %d, "+
+			"which is not in the shared exit-code table\n", code)
+		return exitBlock
+	}
 }
 
 // runMigrate reconciles a machine provisioned by an older layout. With no name

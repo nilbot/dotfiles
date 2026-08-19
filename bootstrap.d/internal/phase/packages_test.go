@@ -19,7 +19,7 @@ import (
 const (
 	opAptUpdate  = "sudo apt-get update"
 	opAptInstall = "sudo apt-get install -y build-essential curl file git"
-	opPacman     = "sudo pacman -S --needed --noconfirm base-devel curl file git"
+	opPacman     = "sudo pacman -Syu --needed --noconfirm base-devel curl file git"
 	// The installer script is one argv element, and the fake quotes it because a
 	// bare join could not say so: `-c` takes the whole `/bin/bash -c "$(curl
 	// ...)"` string, and an implementation that split it into words would render
@@ -660,4 +660,46 @@ func quotedArgument(line string) (string, bool) {
 		return "", false
 	}
 	return rest[:closing], true
+}
+
+// Measured 2026-08-13 and re-measured 2026-08-17 on menci/archlinuxarm:base
+// running natively on aarch64: `pacman -S` with no prior sync exits 1 with
+// "target not found" for all four packages, because a fresh Arch system ships
+// an empty sync database. Arch stage zero has therefore never worked.
+//
+// The repair is -Syu and NOT -Sy: Arch does not support partial upgrades, and
+// syncing the database without upgrading installed packages is a documented
+// way to break a system.
+//
+// --disable-sandbox must never ship. `pacman -Syu` also fails inside Docker
+// with "the Landlock ruleset could not be applied", and that is a property of
+// the CONTAINER, not of this code -- it reproduces on native arm64 with no
+// emulation, and `--security-opt seccomp=unconfined` does not change it. The
+// container is configured with DisableSandbox in /etc/pacman.conf instead;
+// putting the flag in the command would disable a real machine's package
+// sandbox to work around a problem that machine does not have.
+func TestArchStageZeroSynchronizesBeforeInstalling(t *testing.T) {
+	fake, ctx, _ := packagesCtx("linux", "apt-get")
+	if err := phase.Packages(ctx); err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+
+	var pacman string
+	for _, op := range fake.Ops {
+		if strings.HasPrefix(op, "sudo pacman") {
+			pacman = op
+		}
+	}
+	if pacman == "" {
+		t.Fatalf("stage zero ran no pacman command; Ops = %v", fake.Ops)
+	}
+	if !strings.Contains(pacman, "-Syu") {
+		t.Errorf("pacman must sync and upgrade before installing; got %q", pacman)
+	}
+	if strings.Contains(pacman, "-Sy ") || strings.HasSuffix(pacman, "-Sy") {
+		t.Errorf("-Sy alone is a partial upgrade and is unsupported on Arch; got %q", pacman)
+	}
+	if strings.Contains(pacman, "--disable-sandbox") {
+		t.Errorf("--disable-sandbox belongs to the container, never to the shipped command; got %q", pacman)
+	}
 }

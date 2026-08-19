@@ -1,0 +1,436 @@
+# The verification gate. See docs/superpowers/specs/agents/2026-08-11-spec-5-verification-gate.md
+#
+# There are deliberately no `paths:` filters. bootstrap.d/makefile_test.go reads
+# the Makefile and agents/internal/doctor/doctor_test.go reads
+# git/gitconfig.shared, so a filter keyed on the module directories would skip
+# verification for exactly the edits a cached `go test` already fails to notice.
+# A required check skipped by a path filter also reports "Expected" forever and
+# blocks the PR rather than passing it.
+#
+# Every `uses:` below is pinned to a commit SHA, with the release it names in a
+# trailing comment. A tag is a mutable pointer -- `@v4` resolves to whatever the
+# action's maintainer moved it to since the last run -- so a tag reference means
+# this gate's own definition can change under it without a commit here. That is
+# the same class of problem the gate exists to catch, so it does not get an
+# exemption for being upstream. The comment is what makes the pin readable and
+# what a version bump edits alongside the SHA; the SHA is what is enforced.
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # A stray go.work -- a runner's or a contributor's -- must never change what
+  # CI resolves. Spec 2 §11 chose two modules with no workspace deliberately.
+  GOWORK: off
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        module: [agents, bootstrap.d]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          # Exact patch, never go-version-file: `go 1.26` in go.mod floats to
+          # whatever the runner happens to ship.
+          go-version: '1.26.6'
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+      - name: build
+        run: go build ./...
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: vet
+        run: go vet ./...
+      # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
+      # deliberate design -- it errors rather than skips), so the test job
+      # needs its own checksum-verified install, independent of the secrets
+      # job's copy.
+      - name: install gitleaks, checksum-verified
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_SHA256_LINUX: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+          # macos-latest runners are arm64.
+          GITLEAKS_SHA256_DARWIN_ARM64: 'b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5'
+        run: |
+          set -euo pipefail
+          case "${{ matrix.os }}" in
+            ubuntu-latest)
+              asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+              sha256="${GITLEAKS_SHA256_LINUX}"
+              ;;
+            macos-latest)
+              asset="gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz"
+              sha256="${GITLEAKS_SHA256_DARWIN_ARM64}"
+              ;;
+            *)
+              echo "unhandled runner os: ${{ matrix.os }}" >&2
+              exit 1
+              ;;
+          esac
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${asset}"
+          curl -sSfL "$url" -o /tmp/gitleaks.tar.gz
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "${sha256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          else
+            echo "${sha256}  /tmp/gitleaks.tar.gz" | shasum -a 256 -c -
+          fi
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          resolved="$(command -v gitleaks)"
+          [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
+          installed="$(gitleaks version)"
+          [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
+      # -count=1 is load-bearing. Several tests assert against tracked non-Go
+      # files, whose edits do not invalidate a cached pass.
+      - name: test
+        run: go test -count=1 ./...
+      - name: test -race
+        run: go test -count=1 -race ./...
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+      GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: install gitleaks, checksum-verified
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$url" -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          resolved="$(command -v gitleaks)"
+          [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
+          installed="$(gitleaks version)"
+          [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
+      - name: scan
+        run: gitleaks git --config git/gitleaks.toml --redact --exit-code 1
+
+  # Two checks, one property: the tools are a function of the repository, not of
+  # the machine. See the spec's phase 2 -- the first check asserts CONTAINMENT
+  # (the suite must not write to $HOME), not portability. The suite already
+  # passes under a synthetic HOME; that was never the question.
+  hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+      GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: agents/go.sum
+      # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
+      # deliberate design -- it errors rather than skips), and this job's own
+      # `go test` runs exercise that command, same as the test job's matrix.
+      - name: install gitleaks, checksum-verified
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$url" -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          resolved="$(command -v gitleaks)"
+          [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
+          installed="$(gitleaks version)"
+          [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
+      - name: suites must not write to $HOME
+        run: |
+          set -euo pipefail
+          # Pin Go's own caches outside the synthetic HOME, so the only writer that
+          # can dirty it is the code under test -- and $HOME can then be asserted
+          # completely empty rather than spot-checked at one known path. This
+          # includes XDG_CONFIG_HOME: `go test` itself writes toolchain telemetry
+          # (GOTELEMETRYDIR, under os.UserConfigDir()) on every invocation, so
+          # without pinning it every run would fail here regardless of the code
+          # under test.
+          GOMODCACHE_REAL=$(go env GOMODCACHE)
+          GOPATH_REAL=$(go env GOPATH)
+          H=$(mktemp -d); X=$(mktemp -d)
+          for module in agents bootstrap.d; do
+            ( cd "$module" && HOME="$H" XDG_CACHE_HOME="$X" XDG_CONFIG_HOME="$X/config" \
+                GOMODCACHE="$GOMODCACHE_REAL" GOPATH="$GOPATH_REAL" \
+                go test -count=1 ./... )
+          done
+          # Without this guard the check passes vacuously if $H is gone: find
+          # errors, the substitution is empty, and the surrounding `if` suppresses
+          # errexit. An absent HOME is not a contained one.
+          [ -d "$H" ] || { echo "synthetic \$HOME vanished; the check proved nothing" >&2; exit 1; }
+          if [ -n "$(find "$H" -mindepth 1 -print -quit)" ]; then
+            echo "a test wrote into \$HOME:" >&2
+            find "$H" >&2
+            exit 1
+          fi
+      - name: bootstrap.d under a restrictive umask
+        run: ( umask 077 && cd bootstrap.d && go test -count=1 ./... )
+      - name: agents index is a pure function of tracked content
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          # The stamp is belt-and-braces, not load-bearing: `index` resolves its
+          # repository from the working directory (runIndex -> agentsDirHere ->
+          # repoHere -> os.Getwd()), and DotfilesRoot() is read only by the
+          # git-hook path and doctor. It is stamped anyway so this binary cannot
+          # quietly fall back to $HOME/dotfiles if index ever starts reading it.
+          ( cd agents && go build -trimpath -ldflags "-X main.dotfilesRoot=$GITHUB_WORKSPACE" -o "$HOME/bin/agents" . )
+          "$HOME/bin/agents" index
+          # Scoped to .agents/ so the command means the same thing here as it
+          # does on a developer's dirty working tree.
+          git diff --exit-code -- .agents/
+          # --exit-code compares tracked content only, so a NEWLY generated file
+          # would pass unnoticed. On a clean CI checkout, untracked content under
+          # .agents/ can only have come from the index run above.
+          untracked="$(git status --porcelain -- .agents/)"
+          [ -z "$untracked" ] || { echo "agents index left untracked content:" >&2; printf '%s\n' "$untracked" >&2; exit 1; }
+
+  # Derived-artifact checks: the command surface must describe itself honestly.
+  # Task 10 adds the README block and the backward name check to this same job.
+  #
+  # The `test` job already runs these as part of `go test ./...`. Naming them
+  # here is what makes a failure say "the help surface is wrong" instead of
+  # "some test failed", and it is the job branch protection will point at when
+  # someone asks why a usage line is required to match its handler.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: '1.26.6'
+          cache-dependency-path: agents/go.sum
+      - name: every command carries help, an audience, and honest flags
+        run: |
+          set -euo pipefail
+          cd agents
+          tests="TestEveryCommandIsDocumented
+          TestEveryLeafHasARunner
+          TestTheKnownCommandSetIsPresent
+          TestEveryCommandDeclaresAKnownAudience
+          TestNoSourceFileRestatesAUsageLine
+          TestEveryUsageForCallSiteNamesARealCommand
+          TestEveryRegisteredFlagIsDocumented
+          TestNoUsageLineNamesAFlagThatDoesNotExist
+          TestReadmeCommandBlockIsCurrent
+          TestLivingDocumentsNameOnlyRealCommands
+          TestHarnessSkillCoversAgentCommands"
+          filter="$(echo $tests | tr ' ' '|')"
+          go test -count=1 -v -run "^(${filter})$" ./... | tee /tmp/docs.log
+          # `go test -run` exits 0 when the filter matches NOTHING -- it prints
+          # "no tests to run" and reports ok. Measured, not assumed. So a
+          # renamed or deleted test would turn this job into a check that
+          # cannot fail: green forever, covering nothing. Assert each name
+          # actually ran.
+          for t in $tests; do
+            grep -q -- "--- PASS: $t" /tmp/docs.log \
+              || { echo "$t did not run; this job names a test that no longer exists" >&2; exit 1; }
+          done
+
+  # Spec 2's largest known gap: no phase of it had ever run on Linux. The
+  # dotfiles profile is preflight + config + verify -- no sudo, no network, no
+  # package manager, no login-shell change -- which is exactly what makes it
+  # safe to run here.
+  #
+  # Measured in this container before the job existed: plan, apply and check
+  # all exit 0. Spec 2's Known gap 2 predicted `plan` would exit 2 where
+  # Homebrew and fish are absent; it does not, because plan reports intent and
+  # the "missing, want a symlink" rows are the state it intends to change.
+  linux-dotfiles:
+    runs-on: ubuntu-latest
+    container: debian:stable-slim
+    timeout-minutes: 15
+    steps:
+      # Before checkout, deliberately: actions/checkout needs git in the
+      # container, and this image has none.
+      - name: minimal prerequisites
+        run: apt-get update -qq && apt-get install -y -qq golang-go git ca-certificates
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # --system, never --global. `git config --global` CREATES ~/.gitconfig,
+      # and the config phase seeds that file only when it is absent -- it
+      # merges and never overwrites, which is the property that protects a real
+      # machine's hand-edited config. So a --global setup step here left an
+      # unmanaged ~/.gitconfig behind, apply correctly declined to touch it, and
+      # `check` then failed with "does not include git/gitconfig.shared".
+      # Measured: --global -> check exits 2, --system -> check exits 0.
+      #
+      # The job was contaminating the home directory whose convergence it
+      # exists to measure. /etc/gitconfig grants the same trust and leaves that
+      # home directory to the profile.
+      - name: git trusts the workspace
+        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
+      - name: plan
+        run: ./bootstrap plan dotfiles
+      - name: apply
+        run: ./bootstrap apply dotfiles
+      # Not a repeat of the verify phase apply just ran: this asserts the
+      # machine STAYS converged once the applier has exited, which is the
+      # property a second `apply` would hide by fixing what it measured.
+      - name: check converges after apply
+        run: ./bootstrap check dotfiles
+
+  # Stage zero for real. `apply workstation` rather than `apply dotfiles`,
+  # because phase.For gives the dotfiles profile only {preflight, config,
+  # verify} and stageZero is called from Packages -- there is no per-phase flag,
+  # so this is the only path to the real code. That also drags in Homebrew, fish
+  # and devtools, which spec 2's Known gaps list as equally unexercised on
+  # Linux; those are in scope here rather than accidental, which is why this job
+  # gets a far longer timeout than the rest: it installs Linuxbrew and every
+  # formula in the Brewfile.
+  #
+  # Both base images lack sudo. It is installed and configured NOPASSWD because
+  # Applier.run sets Stdout and Stderr and leaves Stdin nil, so any prompt is an
+  # immediate "no tty present" -- passwordless is the only shape in which this
+  # code can succeed at all.
+  linux-stage-zero:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:stable-slim
+            prereqs: apt-get update -qq && apt-get install -y -qq sudo golang-go git ca-certificates curl
+          - image: archlinux:base
+            # DisableSandbox under [options], and it must be under [options]:
+            # appended at the end of pacman.conf it lands inside a repo section,
+            # which clears the Landlock error and leaves the sandbox-user
+            # failure behind. Measured both ways. This is the CONTAINER's
+            # configuration -- pacman's sandbox cannot apply a Landlock ruleset
+            # under Docker's default restrictions, which reproduces on native
+            # arm64 and is unaffected by seccomp=unconfined, so it is not an
+            # emulation artefact and --disable-sandbox is deliberately NOT in
+            # the shipped command. See packages.go.
+            prereqs: sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf && pacman -Syu --needed --noconfirm sudo go git curl
+    container:
+      image: ${{ matrix.image }}
+      options: --user root
+    steps:
+      - name: prerequisites and passwordless sudo
+        run: |
+          set -eux
+          ${{ matrix.prereqs }}
+          echo "root ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci
+          chmod 0440 /etc/sudoers.d/ci
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # --system, not --global, for the reason the linux-dotfiles job gives:
+      # `git config --global` creates ~/.gitconfig, which the config phase then
+      # declines to overwrite, and check reports the machine unconverged.
+      - name: git trusts the workspace
+        run: git config --system --add safe.directory "$GITHUB_WORKSPACE"
+      # NARROWED 2026-08-17, deliberately, and spec 2's Known gaps record it.
+      # This job gates STAGE ZERO -- what it is named for and what Task 13
+      # repaired. `apply workstation` is merely the only route to that code,
+      # and it drags in phases that are not yet verified on Linux. Gating merges
+      # on those would make every PR wait on the whole Linux port -- and the
+      # port is genuinely unfinished: run 32047164383 got past stage zero on
+      # both images and then failed on Debian at devtools (a bare `brew`, since
+      # fixed) and on Arch inside `brew bundle` (a corrupted download in
+      # Homebrew's cache, which is not this repository's code at all). Neither
+      # is a stage-zero fault, and neither should hold a merge.
+      #
+      # The exit code is reported, never swallowed, and the run must still
+      # REACH stage zero -- a `|| true` alone would be a check that cannot
+      # fail, which is the defect this entire gate exists to catch.
+      - name: provision as far as Linux support currently reaches
+        # `shell: bash`, declared, because a CONTAINER job does not default to
+        # bash: both legs logged `shell: sh -e {0}`. What /bin/sh IS then decides
+        # the semantics, and the two images disagree -- on archlinux:base it is
+        # bash, on debian:stable-slim it is dash. That is the whole reason run
+        # 32077858991 passed on Arch and failed on Debian with
+        # `/__w/_temp/....sh: 15: Bad substitution`: line 15 was
+        # ${PIPESTATUS[0]}, a bash array, and dash has no such thing.
+        #
+        # Both measured, in the images themselves:
+        #   debian:stable-slim  /bin/sh -> dash, and bash present at /usr/bin/bash.
+        #                       Under `sh -e` the script aborts with that exact
+        #                       message and exit 2; under `bash -e` it passes.
+        #   archlinux:base      /bin/sh -> /usr/bin/bash, ${PIPESTATUS[0]} expands.
+        #   menci/archlinuxarm  same answer, natively on aarch64, no emulation.
+        #
+        # Two routes for Arch because `archlinux` publishes no arm64 manifest,
+        # so on Apple Silicon it needs --platform linux/amd64 -- but
+        # menci/archlinuxarm does publish one, and native is the route to reach
+        # for first. This job's Arch leg IS locally reproducible. Spec 5 records
+        # what it cost to believe otherwise: that belief is what left an earlier
+        # Arch diagnosis unchecked long enough to ship it wrong.
+        #
+        # Correcting commit 120f17f, which fixed the right bug and named the
+        # wrong mechanism: it said GitHub invokes a `run:` block as
+        # `bash -e {0}`. The `-e` was right and is the reason `set +e` below has
+        # to be explicit -- errexit is on before this script's first line, and
+        # `set -uo pipefail` sets two other options while saying nothing about
+        # the one already set. The shell was wrong.
+        shell: bash
+        run: |
+          set -uo pipefail
+          set +e
+          ./bootstrap apply workstation 2>&1 | tee /tmp/apply.log
+          status=${PIPESTATUS[0]}
+          set -e
+          echo "bootstrap apply workstation exited $status"
+          grep -q "stage zero" /tmp/apply.log \
+            || { echo "the packages phase never reached stage zero" >&2; exit 1; }
+      # The assertion Task 13's unit test cannot make. That test pins the
+      # command string; this one pins that the string WORKS -- on Arch it is red
+      # without the -Syu repair, because `pacman -S` against an empty sync
+      # database resolves none of these four.
+      #
+      # gcc and file are the two that carry weight. curl and git are installed
+      # by this job's own prereqs and would pass whatever stage zero did --
+      # unavoidably so, since preflight requires curl before stage zero runs.
+      # They are asserted anyway because the four are what stage zero promises.
+      - name: stage zero delivered its four prerequisites
+        run: |
+          set -eux
+          command -v gcc
+          command -v file
+          command -v curl
+          command -v git
+
+  # The single required check. Branch protection names this job and nothing
+  # else, so adding a job later is a workflow change rather than a
+  # repository-settings change.
+  gate:
+    if: always()
+    needs: [test, secrets, hygiene, docs, linux-dotfiles, linux-stage-zero]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: require every dependency to have succeeded
+        run: |
+          echo "test:    ${{ needs.test.result }}"
+          echo "secrets: ${{ needs.secrets.result }}"
+          echo "hygiene: ${{ needs.hygiene.result }}"
+          echo "docs:    ${{ needs.docs.result }}"
+          echo "linux-dotfiles: ${{ needs.linux-dotfiles.result }}"
+          echo "linux-stage-zero: ${{ needs.linux-stage-zero.result }}"
+          [ "${{ needs.test.result }}"    = "success" ] || exit 1
+          [ "${{ needs.secrets.result }}" = "success" ] || exit 1
+          [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
+          [ "${{ needs.docs.result }}"    = "success" ] || exit 1
+          [ "${{ needs.linux-dotfiles.result }}" = "success" ] || exit 1
+          [ "${{ needs.linux-stage-zero.result }}" = "success" ] || exit 1

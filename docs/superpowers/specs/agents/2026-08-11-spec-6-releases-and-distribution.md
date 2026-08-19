@@ -107,7 +107,7 @@ A second instance was worse because it was silent: `ExtrasDir` pointed at
 `$HOME/dotfiles/git/hooks`, and `githook.go:127` reads a missing extras directory
 as "no personal hooks", so a relocated checkout ran none and said nothing.
 
-Spec 5 §8 adds the doctor check that the resolved root still exists. That guards
+Spec 5 phase 6 adds the doctor check that the resolved root still exists. That guards
 the local case. It does not answer what a distributed binary should resolve.
 
 ## Scope
@@ -197,5 +197,5 @@ the local case. It does not answer what a distributed binary should resolve.
   What remains is the narrower question of what a binary belonging to no checkout
   should stamp.
 - ~~Which Linux distributions does a runner actually verify?~~ **Answered by
-  [spec 5 §7](2026-08-11-spec-5-verification-gate.md#7-linux):** Debian and Arch
+  [spec 5 phase 5](2026-08-11-spec-5-verification-gate.md#phase-5--linux):** Debian and Arch
   containers, the same two families spec 2 targets on paper.

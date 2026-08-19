@@ -46,7 +46,7 @@ func runReview(args []string, stdout io.Writer) int {
 		return exitcode.Malformed
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stdout, "usage: agents review [--lane <l>] [--show|--keep|--bin|--edit <id>]")
+		fmt.Fprintln(stdout, usageFor("review"))
 		return exitcode.Malformed
 	}
 	chosen := 0

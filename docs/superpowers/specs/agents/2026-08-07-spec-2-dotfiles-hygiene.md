@@ -5,8 +5,10 @@
 [2026-08-10-dotfiles-bootstrap](../../plans/2026-08-10-dotfiles-bootstrap.md),
 executed on branch `claude/spec-2-dotfiles-hygiene-5f92d4`.
 **Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
-that is not this one.** The first of the three is that **no phase of this design
-has ever run on Linux**.
+that is not this one.** The first of the three was that no phase of this design
+had ever run on Linux. Since 2026-08-17 the **`dotfiles` profile** does, on
+every pull request, in a Debian container — see Known gap 1 for what that
+covers and the larger part it does not.
 **Implementation language:** Go, with a shell shim for stage zero (§2.1). The
 first implementation was shell throughout and was reversed after one task; the
 evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
@@ -771,14 +773,80 @@ Measured at the end of implementation. These are facts about what was built, not
 caveats: each is stated here so that nobody has to rediscover it on a machine
 where it matters.
 
-**1. Linux is untested.** No phase in this design has run on Linux. The
-stage-zero package selection, the Homebrew prefix at `/home/linuxbrew/.linuxbrew`,
-and `chsh` under a different `/etc/shells` convention are all unexercised.
-`Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need cached
-sudo credentials or they fail with "no tty present".
+**1. Linux is partly tested — the `dotfiles` profile only.** Narrowed
+2026-08-17 by spec 5's `linux-dotfiles` job, which runs `plan`, `apply` and
+`check` for that profile in a `debian:stable-slim` container on every pull
+request. All three exit 0, and `check` after `apply` asserts the machine stays
+converged rather than merely that the applier reported success.
+
+What that covers: preflight, the config phase's ten manifest rows on Linux
+paths, and the verify phase. What it does not, which is the larger part:
+
+- the stage-zero package selection, and any distribution other than Debian
+- the Homebrew prefix at `/home/linuxbrew/.linuxbrew`
+- `chsh` under a different `/etc/shells` convention
+- `Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need
+  cached sudo credentials or they fail with "no tty present" — untested,
+  because the `dotfiles` profile takes no sudo at all
+
+The profile that is now exercised on Linux is precisely the one designed to
+need none of the above. That is what makes it safe to run in CI, and it is
+also why it cannot stand in for the `workstation` profile.
+
+**Stage zero itself is now covered too, and no further.** Spec 5's
+`linux-stage-zero` job runs `apply workstation` on `debian:stable-slim` and
+`archlinux:base` — the only route to `stageZero`, since `phase.For` excludes
+`packages` from the `dotfiles` profile and there is no per-phase flag. It
+gates two things: that the run reaches stage zero, and that `gcc` and `file`
+exist afterwards. It deliberately does **not** gate the phases after stage
+zero, because those are not yet working on Linux and gating them would make
+every pull request wait on the whole Linux port. The job reports `apply`'s exit
+code rather than swallowing it, so a later-phase failure is visible in the log
+without blocking a merge.
+
+Three defects this found, all fixed, none reproducible on macOS:
+
+- `pacman -S` ran with no prior database sync, so Arch stage zero had never
+  worked at all — a fresh Arch system ships an empty sync database.
+- the fish phase resolved `fish` by bare name, twice. `brew bundle` installs it
+  into the Homebrew prefix, a shellenv line in a profile cannot change the PATH
+  of the running process, and the phase then told the operator to run the
+  command that was already running. macOS never showed it because
+  `/opt/homebrew/bin` is on PATH there long before bootstrap starts.
+- the `devtools` phase invoked `brew` by bare name for the `uv` install, which
+  is the same defect a third time and in a package where `resolveBrew` already
+  existed. Found 2026-08-17 only after the fish fix let the run get one phase
+  further.
+
+**Updated 2026-08-17 after the devtools fix.** `apply workstation` now runs
+every phase to completion on both images and exits 0. That exit code is not a
+convergence claim: `Verify` reports and returns nil by design, so `apply` exits
+0 while its own verify phase reports failures. On Debian it reports `5 ok, 0
+warn, 3 fail`, and those three are what remains open on Linux:
+
+- **`packages` — "Homebrew is not installed".** The same resolve-vs-PATH defect
+  a fourth time, now in `internal/check` rather than `internal/phase`: the
+  check asks PATH for `brew` while Homebrew sits at `/home/linuxbrew/.linuxbrew`.
+  Left unfixed deliberately — `check` is the verb the `linux-dotfiles` job
+  gates on, so it is not a change to make as a close-out chore.
+- **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
+  cannot change underneath it, so the check can only ever report the shell the
+  container started with. Asserting the real effect needs a fresh login.
+- **`agents`** — built to `~/bin`, which is not on the container's PATH.
+
+`brew bundle` is now exercised in full on Debian: `complete! 30 Brewfile
+dependencies now installed`, which is every `brew` line in the file — the
+remaining two entries are casks, and casks are macOS-only. (This sentence
+previously said 36 formulae. The Brewfile holds 30 `brew` and 2 `cask` lines;
+36 was never a count of anything in it.) On Arch it has failed once inside
+`brew bundle` on a corrupted partial download in Homebrew's own cache — not
+this repository's code, and absorbed by the narrowing rather than fixed.
 
 **2. `plan` exits 2 on a machine that lacks Homebrew or fish**, rather than
-previewing. `Planner` records a command without performing it, and nothing in
+previewing. Measured 2026-08-17: this does **not** affect the `dotfiles`
+profile, whose `plan` exits 0 in a container with neither installed — it
+reports the missing links as the state it intends to change. The gap stands for
+`workstation`, which is still unexercised on Linux. `Planner` records a command without performing it, and nothing in
 `Machine` reports which happened, so a read that depends on a prior `Run` cannot
 tell "it ran and produced nothing" from "it was only recorded". Closing this
 needs a design decision about how `Planner` represents a command's effects.
@@ -878,7 +946,7 @@ exchange for one convenience command.
 
 | Risk | Mitigation |
 |---|---|
-| Linux support is written but never executed on Linux — no phase of this design has run there | Not mitigated. Stated plainly rather than claimed as working: see [Known gaps](#known-gaps-2026-08-11) 1. Plan-mode and stub tests cover the logic; end-to-end verification is owed before the Linux path is described as supported. |
+| Linux support is written but never executed on Linux — no phase of this design has run there | Partly mitigated 2026-08-17. Spec 5's `linux-dotfiles` job runs the `dotfiles` profile's `plan`, `apply` and `check` in a Debian container on every pull request. The `workstation` profile, every non-Debian distribution, and all of stage zero remain unexecuted on Linux: see [Known gaps](#known-gaps-2026-08-11) 1. |
 | `plan` exits 2 on a machine that lacks Homebrew or fish, instead of previewing | Accepted deliberately, not mitigated. [Known gaps](#known-gaps-2026-08-11) 2 records why, and what closing it would cost. |
 | Linux has no managed nerd font | Not mitigated. The cask is macOS-only and the vendored Linux installer was removed. [Known gaps](#known-gaps-2026-08-11) 3. |
 | The `gitconfig.shared` rename silently empties shared git config on existing machines | `migrate` repoints the include; `check` #5 detects a stale one. |

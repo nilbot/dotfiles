@@ -497,7 +497,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -n "$config" ] || exit 8
 printf '%s\n' "$config" > "$OBSERVED_CONFIG"
-[ "$(stat -f '%Lp' "$config")" = 600 ] || exit 9
+case "$(ls -l "$config")" in -rw-------*) ;; *) exit 9 ;; esac
 grep -q '^ORIGINAL-CONFIG$' "$config" || exit 10
 exit 0`)
 		root := newGuardRepo(t)
