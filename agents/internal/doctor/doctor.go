@@ -18,8 +18,6 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
-	"github.com/nilbot/dotfiles/agents/internal/memory"
-	"github.com/nilbot/dotfiles/agents/internal/queue"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safeio"
@@ -193,10 +191,8 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 		cacheRoot, _ = deps.TraceCacheDir(repoRoot)
 	}
 	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
-	checks = append(checks, checkMemorySources(agentsDir, thisMachine)...)
 	checks = append(checks, checkScaffoldInstruction(repoRoot))
-	checks = append(checks, checkScaffoldCaptureInstruction(repoRoot))
-	checks = append(checks, checkQueue(storeDir, th.QueueDepth))
+	checks = append(checks, checkDocsFreshness(repoRoot, now))
 	checks = append(checks, checkStoreSize(cacheRoot, th.CacheMaxBytes))
 	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
 	return checks, nil
@@ -681,46 +677,6 @@ func checkPointers(recs []record.Record, thisMachine, cacheRoot string) []Check 
 	return checks
 }
 
-func checkMemorySources(agentsDir, thisMachine string) []Check {
-	entries, err := memory.List(filepath.Join(agentsDir, "memory"))
-	if err != nil {
-		return []Check{{Name: "memory", Status: Fail, Detail: "memory entries could not be read safely", Remedy: "fix memory frontmatter, then run `agents index`"}}
-	}
-	remote := map[string]int{}
-	unknown := 0
-	unclassified := 0
-	for _, entry := range entries {
-		for _, source := range entry.Sources {
-			if source.Machine == "" {
-				unknown++
-			} else if thisMachine == "" {
-				unclassified++
-			} else if source.Machine != thisMachine {
-				remote[source.Machine]++
-			}
-		}
-	}
-	if len(remote) == 0 && unknown == 0 && unclassified == 0 {
-		return []Check{{Name: "memory", Status: OK, Detail: "memory source dependencies are locally classified"}}
-	}
-	machines := make([]string, 0, len(remote))
-	for machine := range remote {
-		machines = append(machines, machine)
-	}
-	sort.Strings(machines)
-	parts := make([]string, 0, len(machines)+1)
-	for _, machine := range machines {
-		parts = append(parts, fmt.Sprintf("%s=%d", machine, remote[machine]))
-	}
-	if unknown > 0 {
-		parts = append(parts, fmt.Sprintf("unknown=%d", unknown))
-	}
-	if unclassified > 0 {
-		parts = append(parts, fmt.Sprintf("unclassified=%d", unclassified))
-	}
-	return []Check{{Name: "memory", Status: Warn, Detail: "remote or unclassified source dependencies: " + strings.Join(parts, ", "), Remedy: "the entry claim must stand alone; visit the source machine only for corroborating detail"}}
-}
-
 func checkMachine(thisMachine string) Check {
 	if thisMachine == "" {
 		return Check{Name: "machine-id", Status: Warn, Detail: "machine identity is missing or unreadable", Remedy: "restore the machine-local identity; doctor does not create it"}
@@ -728,41 +684,46 @@ func checkMachine(thisMachine string) Check {
 	return Check{Name: "machine-id", Status: OK, Detail: "machine identity is readable"}
 }
 
-// checkScaffoldCaptureInstruction guards the capture mechanism itself.
+// checkDocsFreshness is the write-side leading indicator, and the only one.
 //
-// Under the shipped phases the paragraph in CLAUDE.md IS the capture
-// mechanism: nothing else asks an agent to record what it learned. Its silent
-// absence would be the entire feature silently absent, which is the failure
-// mode that produced zero handoffs in twenty sessions. Warn rather than fail,
-// for the same reason the doctor-instruction check warns: Create never
-// rewrites an existing CLAUDE.md, so an older repository legitimately lacks it
-// until someone decides to add it.
-func checkScaffoldCaptureInstruction(repoRoot string) Check {
-	b, err := safeio.ReadRegular(filepath.Join(repoRoot, "CLAUDE.md"))
-	if err != nil || !strings.Contains(string(b), scaffold.CaptureInstruction) {
-		return Check{Name: "scaffold:capture-instruction", Status: Warn, Detail: "CLAUDE.md lacks the capture instruction, which is what asks an agent to record anything at all", Remedy: "add the current capture instruction manually; existing user files are never migrated"}
-	}
-	return Check{Name: "scaffold:capture-instruction", Status: OK, Detail: "CLAUDE.md carries the capture instruction"}
-}
-
-// checkQueue reports what is waiting to be reviewed.
+// The capture apparatus this replaced measured itself thoroughly -- draft rate,
+// promotion rate, the age of the oldest pending draft -- and measured retrieval
+// not at all. Deleting it without leaving anything behind would have ended with
+// less instrumentation than before, so this is what remains: how long since the
+// repository last learned something it wrote down.
 //
-// Depth is news, not a defect: drafts accumulating means capture is working.
-// It warns only past a threshold, where the queue has stopped being a backlog
-// and started being an inbox nobody empties -- which is precisely how the
-// handoff directory got to zero.
-func checkQueue(storeDir string, threshold int) Check {
-	drafts, err := queue.List(storeDir)
+// It is deliberately weak. It cannot tell a quiet fortnight from a broken
+// habit, and it says nothing about whether an entry was ever read. Both limits
+// are stated in docs/design/2026-08-19-knowledge-is-documentation.md rather than
+// papered over with a proxy metric that would measure what is easy instead of
+// what matters.
+//
+// Absent docs/qna/ is not applicable rather than a failure: most repositories
+// have not adopted this, and a check that fails everywhere teaches people to
+// ignore the whole report.
+func checkDocsFreshness(repoRoot string, now time.Time) Check {
+	dir := filepath.Join(repoRoot, "docs", "qna")
+	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return Check{Name: "queue:pending", Status: Warn, Detail: "the draft queue could not be read", Remedy: "inspect the machine-local store"}
+		return Check{Name: "docs:qna", Status: OK, Detail: "no docs/qna in this repository"}
 	}
-	if len(drafts) == 0 {
-		return Check{Name: "queue:pending", Status: OK, Detail: "no drafts pending review"}
+	var newest time.Time
+	count := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
+			continue
+		}
+		count++
+		if info, err := e.Info(); err == nil && info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
 	}
-	if len(drafts) >= threshold {
-		return Check{Name: "queue:pending", Status: Warn, Detail: fmt.Sprintf("%d draft(s) pending review", len(drafts)), Remedy: "run `agents review`; an unreviewed queue is where handoffs went to die"}
+	if count == 0 {
+		return Check{Name: "docs:qna", Status: OK, Detail: "docs/qna is empty; nothing recorded yet"}
 	}
-	return Check{Name: "queue:pending", Status: OK, Detail: fmt.Sprintf("%d draft(s) pending review", len(drafts))}
+	days := int(now.Sub(newest).Hours() / 24)
+	return Check{Name: "docs:qna", Status: OK,
+		Detail: fmt.Sprintf("%d entr(ies); newest written %d day(s) ago", count, days)}
 }
 
 // checkStoreSize reports the cache against the caps the hook enforces.

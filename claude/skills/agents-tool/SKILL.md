@@ -42,14 +42,12 @@ Use the `recording-what-you-learn` skill. Findings go to `docs/qna/`, work
 records to `docs/journal/`, written directly and committed — no queue, no
 promotion step.
 
-**Retiring, do not reach for these.** The `agents handoff` family and
-`agents review` were the old path: `agents handoff draft` and
-`agents handoff write` queued and committed notes into `.agents/`;
-promotion wrote them into the tree; `agents handoff prune` bounded them. They still
-exist in the binary and are being removed. The design that retires them, with
+The commands that used to do this — a handoff family, a draft queue and a
+promotion step — were removed on 2026-08-20. If you meet them in an older
+document, that document predates the change. The design that retired them, with
 the evidence, is `docs/design/2026-08-19-knowledge-is-documentation.md` in the
-dotfiles repository — the short version is that the queue solved a problem the
-measurements do not support, and the store it fed was starved while a plain
+dotfiles repository; the short version is that the queue solved a problem the
+measurements do not support, and the store it fed stayed starved while a plain
 `docs/` directory in another repository filled up on its own.
 
 ## When a question needs evidence rather than recall
@@ -89,10 +87,7 @@ copies only, never records. Never infer that a lane is prunable from its branch
 or worktree being gone: a deleted branch is usually a merged one, and a throwaway
 worktree is often where the interesting work happened.
 
-## Recording and committing
-
-`agents index` regenerates the generated indexes. The pre-commit guard runs it
-too, so a stale index blocks a commit rather than landing.
+## Committing
 
 `agents save` is an escape hatch for committing `.agents/` paths alone — the normal
 path is promotion, which commits on its own.

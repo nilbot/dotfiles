@@ -5,12 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
-	"github.com/nilbot/dotfiles/agents/internal/handoff"
-	"github.com/nilbot/dotfiles/agents/internal/memory"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
@@ -77,16 +74,6 @@ func runSave(args []string, stdout io.Writer) int {
 	// Regenerate before staging so the generated files land in the same commit
 	// as what they describe. Otherwise the pre-commit guard blocks on a
 	// mismatch that this command itself created.
-	if err := memory.WriteIndex(filepath.Join(agentsDir, "memory")); err != nil {
-		fmt.Fprintf(stdout, "agents save: %v\n", err)
-		return exitcode.NoRecord
-	}
-	// handoff.WriteIndex takes the .agents/ directory and finds reports/handoff
-	// under it itself, the same way handoff.Write and handoff.Prune do.
-	if err := handoff.WriteIndex(agentsDir); err != nil {
-		fmt.Fprintf(stdout, "agents save: %v\n", err)
-		return exitcode.NoRecord
-	}
 
 	// repo.Git, not exec.Command: it strips the GIT_* variables git exports into
 	// every hook, which would otherwise aim `git commit` at the repository the

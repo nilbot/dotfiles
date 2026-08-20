@@ -191,56 +191,6 @@ func TestDoctorMapsUnsafeTraceLeavesToContentSafeNoRecord(t *testing.T) {
 	}
 }
 
-func TestDoctorCompletesWithFailAdvisoryForUnsafeMemoryLeaves(t *testing.T) {
-	for _, kind := range []string{"symlink", "fifo"} {
-		t.Run(kind, func(t *testing.T) {
-			root := newRepo(t)
-			memoryDir := filepath.Join(root, ".agents", "memory")
-			if err := os.MkdirAll(memoryDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			memoryLeaf := filepath.Join(memoryDir, "entry.md")
-			private := "PRIVATE-doctor-memory-sentinel"
-			var stop chan struct{}
-			var released <-chan struct{}
-			if kind == "symlink" {
-				target := filepath.Join(t.TempDir(), "outside.md")
-				body := "---\nname: " + private + "\ndescription: outside\nmetadata:\n  type: project\n---\n\nbody\n"
-				if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, memoryLeaf); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				if err := syscall.Mkfifo(memoryLeaf, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				stop = make(chan struct{})
-				released = releaseFIFOAfter(memoryLeaf, 300*time.Millisecond, stop)
-			}
-
-			var out bytes.Buffer
-			start := time.Now()
-			code := runDoctorWithDependencies(nil, &out, realDoctorCommandDeps(t, root))
-			elapsed := time.Since(start)
-			if stop != nil {
-				close(stop)
-				<-released
-				if elapsed >= 150*time.Millisecond {
-					t.Fatalf("doctor blocked on memory FIFO for %v", elapsed)
-				}
-			}
-			if code != exitcode.Advisory || !strings.Contains(out.String(), "FAIL  memory") {
-				t.Fatalf("memory %s: exit=%d output=%q, want completed fail/advisory", kind, code, out.String())
-			}
-			if strings.Contains(out.String(), private) {
-				t.Fatalf("memory %s exposed target content: %q", kind, out.String())
-			}
-		})
-	}
-}
-
 func TestDoctorOutsideRepositorySkips(t *testing.T) {
 	deps := commandDepsForDoctor(t, nil, nil)
 	dir := t.TempDir()

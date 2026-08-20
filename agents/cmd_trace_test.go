@@ -677,15 +677,17 @@ func TestCommandsThatNeedAgentsDirSkipWhereInitNeverRan(t *testing.T) {
 		setup func(*testing.T, string)
 		run   func(io.Writer) int
 	}{
-		{"index", func(*testing.T, string) {}, func(w io.Writer) int { return runIndex(nil, w) }},
 		{"trace ls", seedTraces, func(w io.Writer) int { return runTrace([]string{"ls"}, w) }},
 		// No records: seeded ones point at another machine, which is Advisory
 		// rather than OK and would say nothing extra about the directory check.
 		{"trace cache", func(*testing.T, string) {}, func(w io.Writer) int { return runTrace([]string{"cache"}, w) }},
 		// save reaches the same rule through repoHere, which also hands it the
-		// worktree root. Its positive control needs no setup: an initialized
-		// repo always has the two generated indexes to write and commit.
-		{"save", func(*testing.T, string) {}, func(w io.Writer) int { return runSave(nil, w) }},
+		// worktree root.
+		// save needs something in .agents/ to commit: with the generated
+		// indexes gone, an initialized repository has nothing staged of its own.
+		{"save", func(t *testing.T, root string) {
+			writeFileAt(t, root, ".agents/skills/a.md", "# a\n")
+		}, func(w io.Writer) int { return runSave(nil, w) }},
 	}
 
 	for _, c := range commands {
@@ -737,8 +739,8 @@ func TestInitStillScaffoldsWhereThereIsNoAgentsDir(t *testing.T) {
 	if code := runInit(nil, &out); code != exitcode.Advisory {
 		t.Fatalf("exit = %d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
 	}
-	if fi, err := os.Stat(filepath.Join(root, ".agents", "memory")); err != nil || !fi.IsDir() {
-		t.Fatalf(".agents/memory/ must exist after init: %v; output:\n%s", err, out.String())
+	if fi, err := os.Stat(filepath.Join(root, ".agents", "skills")); err != nil || !fi.IsDir() {
+		t.Fatalf(".agents/skills/ must exist after init: %v; output:\n%s", err, out.String())
 	}
 }
 

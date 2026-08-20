@@ -22,5 +22,7 @@ skill; it is not repo-specific and is not restated here. What is repo-specific:
 findings go in `docs/qna/`, work records in `docs/journal/`, and both are written
 directly and committed — there is no draft queue and no promotion step.
 
-`.agents/memory/` and `.agents/reports/handoff/` are being retired; see
-`docs/design/2026-08-19-knowledge-is-documentation.md`. Do not add to them.
+`.agents/memory/` and `.agents/reports/handoff/` were removed on 2026-08-20,
+along with `agents handoff`, `agents review` and `agents index`. If you meet
+them in an archived document, that document predates the change; see
+`docs/design/2026-08-19-knowledge-is-documentation.md`.

@@ -85,7 +85,7 @@ func parsedSources(t *testing.T) (*token.FileSet, map[string]*ast.File) {
 	}
 	// A scan that matched nothing would pass silently and prove nothing, so
 	// pin that the sources this is meant to police were actually read.
-	for _, want := range []string{"cmd_trace.go", "cmd_review.go", "cmd_guard.go", "cmd_hook.go", "main.go"} {
+	for _, want := range []string{"cmd_trace.go", "cmd_doctor.go", "cmd_guard.go", "cmd_hook.go", "main.go"} {
 		found := false
 		for name := range files {
 			if strings.HasSuffix(name, "/"+want) {
@@ -261,11 +261,11 @@ func TestMultiFormUsageIndentsAndTheListingShowsTheFirstFormOnly(t *testing.T) {
 			t.Errorf("a listing row carries more than one usage form: %q", line)
 		}
 	}
-	if strings.Contains(listing.String(), "agents review --stats") {
-		t.Errorf("the listing inherited review's second form:\n%s", listing.String())
+	if strings.Contains(listing.String(), "agents doctor [--lane-window") {
+		t.Errorf("the listing inherited doctor's second form:\n%s", listing.String())
 	}
-	if !strings.Contains(listing.String(), "agents review [--lane <l>]") {
-		t.Errorf("the listing lost review's first form:\n%s", listing.String())
+	if !strings.Contains(listing.String(), "agents doctor  ") {
+		t.Errorf("the listing lost doctor's first form:\n%s", listing.String())
 	}
 }
 

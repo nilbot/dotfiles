@@ -29,7 +29,7 @@ func TestInitScaffoldsWiresAndReportsTrust(t *testing.T) {
 	}
 
 	for _, rel := range []string{
-		".agents/memory", "CLAUDE.md", "AGENTS.md",
+		".agents/skills", "CLAUDE.md", "AGENTS.md",
 		".claude/settings.json", ".codex/hooks.json",
 	} {
 		if _, err := os.Lstat(filepath.Join(root, rel)); err != nil {
@@ -163,7 +163,7 @@ func TestInitWarnsButContinuesWhenRegistryIsUnavailable(t *testing.T) {
 	if code := runInit(nil, &out); code != 1 {
 		t.Fatalf("exit = %d, want advisory despite unavailable cache; output:\n%s", code, out.String())
 	}
-	if _, err := os.Stat(filepath.Join(root, ".agents", "memory")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".agents", "skills")); err != nil {
 		t.Fatalf("init did not scaffold after cache warning: %v", err)
 	}
 	if !strings.Contains(out.String(), "registry unavailable") {
@@ -231,12 +231,14 @@ func TestInitLeavesARepositoryThatCanCommit(t *testing.T) {
 	var out bytes.Buffer
 	runInit(nil, &out)
 
+	// The generated indexes went with the stores they described. What init
+	// still owes a repository is the scaffolding that makes it usable at all.
 	for _, rel := range []string{
-		filepath.Join(".agents", "memory", "INDEX.md"),
-		filepath.Join(".agents", "reports", "handoff", "INDEX.md"),
+		"CLAUDE.md",
+		filepath.Join(".agents", "skills"),
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
-			t.Errorf("init did not write %s: %v", rel, err)
+			t.Errorf("init did not create %s: %v", rel, err)
 		}
 	}
 
