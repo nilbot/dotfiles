@@ -96,6 +96,17 @@ Q&A form, taken from `autogo-mlx` unchanged:
 [the mechanism, with evidence]
 ```
 
+**Constrain shape, not length.** Measured 2026-08-20 across both repositories:
+the four session-end drafts span 175-243 words (spread 68) while `autogo-mlx`'s
+nine Q&A entries span 418-701 (spread 283). The drafts are uniform because a rule
+set their size -- spec 7 bounds a draft to three bullets -- and the Q&A entries
+vary because the finding set theirs. Spec 7's answer to that bound was that a
+draft "grows at review"; the two promoted handoffs are 46 and 257 words, so it
+did not. Note what this does *not* show: the two `.agents/memory/` entries are 570
+and 746 words, larger than the Q&A average, so the store never produced poor
+artifacts. It produced two, by hand -- only one draft of seven was ever promoted.
+The mechanism did not make the good entries; deliberate writing did.
+
 **Question-first, not claim-first.** `.agents/memory/` indexed entries by what
 they concluded; a reader arrives with a question, not a conclusion. No
 frontmatter, no schema, no generated index — `ls` is the index at this scale and
