@@ -68,6 +68,27 @@ tree no longer contains the attempt that failed.
 so they survive the harness pruning its own. It is the difference between a
 pointer and a record.
 
+**Cache everything reachable; never select by age.** Claude Code prunes subagent
+transcripts *during* the session that produced them, and the losses are not
+age-ordered in either direction — measured both ways, in two sessions that
+disagreed about everything else. Any policy shaped as "cache things once they get
+old" salvages the wrong set, and a `--since` window silently spans a period in
+which most of the content is already gone. Reachability is the only signal that
+means anything. See `docs/qna/why-are-subagent-transcripts-gone.md` in the
+dotfiles repository for the census.
+
+`pointer_verified: true` says the path existed **when the pointer was written**.
+It is not a claim about now, and the gap between the two can be minutes.
+
+The cache lives in the git **common** directory, so every worktree shares one and
+it outlives any of them — and it is unstageable structurally, because git does
+not track its own directory, so no ignore rule has to be remembered.
+
+`agents trace cache prune --lane <name>` is dry-run unless `--yes` and removes
+copies only, never records. Never infer that a lane is prunable from its branch
+or worktree being gone: a deleted branch is usually a merged one, and a throwaway
+worktree is often where the interesting work happened.
+
 ## Recording and committing
 
 `agents index` regenerates the generated indexes. The pre-commit guard runs it
