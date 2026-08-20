@@ -96,8 +96,11 @@ stays the single source for the machinery that produces them.
 
 - **Retro-fitting history.** Records that were never captured are not
   reconstructed. Synthesising them would misrepresent coverage.
-- **Antigravity (`agy`) and Gemini CLI support.** Out of scope — `agy` 1.1.0 does
-  not read workspace-local hook config (see [Measured facts](#measured-facts-2026-08-07)).
+- **Antigravity (`agy`) and Gemini CLI support.** Out of scope *as of 2026-08-07*,
+  because `agy` 1.1.0 did not read workspace-local hook config. **That premise
+  expired in 1.1.1** and was re-tested on 1.1.16; see
+  [Measured facts](#measured-facts-2026-08-07). Whether to wire it is now an
+  open decision rather than a settled exclusion.
 - Everything listed under [Roadmap](#roadmap-specs-2-to-5).
 
 ---
@@ -927,6 +930,18 @@ environment unfiltered to anything it spawns.
 - The published documentation describes `.agents/hooks.json` as a workspace
   customization directory. That is either IDE-only or newer than the 1.1.0 CLI.
 - **Re-test trigger:** any `agy` upgrade.
+- **Re-tested 2026-08-20 on `agy` 1.1.16 — the finding is expired.** Upstream
+  fixed this in **1.1.1**, the patch immediately after the version measured
+  here, and `<workspace>/.agents/hooks.json` now loads once the folder is
+  trusted (`loaded 1 named hooks from 1 hooks.json file(s)`, three seconds after
+  trust, on the reload the fix describes). The measurement above was correct
+  when taken and wrong for fifteen releases while the trigger went unwatched.
+  `.agents/` is Antigravity's own customization root, so rules and skills load
+  there natively too. What does **not** exist is any subagent or session-start
+  event -- the hook events are `PreToolUse`, `PostToolUse`, `PreInvocation`,
+  `PostInvocation`, `Stop` -- so the transcript cache has no trigger here. Full
+  method, including two probes that produced convincing wrong answers, in
+  `docs/qna/is-antigravity-really-out-of-scope.md`.
 
 ### Claude Code 2.1.224
 
