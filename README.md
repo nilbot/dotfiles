@@ -23,11 +23,26 @@ applicable. `./bootstrap --help` prints the full surface.
 it. It installs nothing: on a machine without Go it refuses and names the exact
 command to run first.
 
-**Linux is untested.** No phase of this has ever run on Linux. The code is
-written and unit-tested for Debian/Ubuntu and Arch/Manjaro; nothing more than
-that is claimed. Two further gaps — `plan` refusing on a machine that lacks
-Homebrew or fish, and no managed nerd font on Linux — are recorded with the rest
-in [spec 2](docs/design/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11).
+**Linux is partly proven, and the boundary matters.** Every pull request and
+every push to `master` runs two container jobs:
+
+- **the `dotfiles` profile, gated in full** on `debian:stable-slim` — `plan`,
+  `apply` and `check` all exit 0, and `check` runs *after* `apply` so the claim
+  is convergence rather than "the applier reported success".
+- **the `workstation` profile, gated as far as stage zero** on
+  `debian:stable-slim` and `archlinux:base`, asserting the run reaches stage
+  zero and that its prerequisites exist afterwards.
+
+Beyond stage zero, `apply workstation` has been observed running every phase to
+completion and exiting 0 on both images (2026-08-17), but that is **not gated,
+and its exit code is not a convergence claim** — the verify phase reports and
+returns nil by design, so `apply` exits 0 while verify reports 3 failures on
+Debian. Those three, plus the two standing gaps — `plan` exits 2 for
+`workstation` on a machine lacking Homebrew or fish, and Linux has no managed
+nerd font — are recorded with the rest in
+[spec 2](docs/design/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11),
+which is the authority. This paragraph is a summary of it and will go stale
+first.
 
 ## The Makefile
 
@@ -46,10 +61,16 @@ finds no extras directory and silently runs none of your personal hooks, at exit
 
 ## The `agents` tool
 
-`agents` maintains the tracked `.agents/` directory in this and every other
-repository on the machine — the memory, handoffs, and the harness wiring that
-feeds them. `agents help <command>` explains any of these in full; **when** to
-reach for one is in the skill under `claude/skills/agents-tool/`.
+`agents` manages the machine: harness wiring, the git hook chain, the
+pre-commit guard, and the machine-local cache of agent transcripts. It does
+**not** manage knowledge — that half was retired on 2026-08-20, and what a
+repository knows now lives in its own `docs/`, written by instruction rather
+than by a command. See
+[knowledge is documentation](docs/design/2026-08-19-knowledge-is-documentation.md).
+
+`agents help <command>` explains any command in full; **when** to reach for one
+is in the skill under `claude/skills/agents-tool/`, and when to write something
+down is in `claude/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is
 judgment. Only the table between the markers is derived, and it comes from the
@@ -88,6 +109,6 @@ agents help --render=markdown
 | `agents/` | the `agents` binary — repo-tracked agent context (spec 1) |
 | `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
-| `docs/design/` | the specs that carry the reasoning; `docs/archive/` for executed plans |
+| `docs/` | `design/` the reasoning still in force, `qna/` answers by question, `journal/` by date, `archive/` never rewritten |
 
 Start with [the spec index](docs/design/README.md).
