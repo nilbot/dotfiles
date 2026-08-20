@@ -1,4 +1,4 @@
-# The verification gate. See docs/superpowers/specs/agents/2026-08-11-spec-5-verification-gate.md
+# The verification gate. See docs/design/2026-08-11-spec-5-verification-gate.md
 #
 # There are deliberately no `paths:` filters. bootstrap.d/makefile_test.go reads
 # the Makefile and agents/internal/doctor/doctor_test.go reads

@@ -9,7 +9,7 @@
 # build as an empty command. Refusing with the exact one-liner deletes that
 # whole class of bug instead of trying to be careful around it.
 #
-# See docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md §2.1
+# See docs/design/2026-08-07-spec-2-dotfiles-hygiene.md §2.1
 
 set -euo pipefail
 

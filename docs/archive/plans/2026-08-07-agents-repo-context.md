@@ -8,7 +8,7 @@
 
 **Tech Stack:** Go 1.26 (stdlib only, plus `gopkg.in/yaml.v3` for memory frontmatter). Shells out to `git` for repository facts. No test framework beyond `go test`.
 
-**Spec:** [docs/superpowers/specs/agents/2026-08-07-agents-repo-context-design.md](../specs/agents/2026-08-07-agents-repo-context-design.md). Section references below (§3.5, §8.3, …) point there.
+**Spec:** [docs/superpowers/specs/agents/2026-08-07-agents-repo-context-design.md](../../design/2026-08-07-agents-repo-context-design.md). Section references below (§3.5, §8.3, …) point there.
 
 ## Global Constraints
 

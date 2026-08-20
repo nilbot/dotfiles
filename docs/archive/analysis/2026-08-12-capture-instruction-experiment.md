@@ -3,7 +3,7 @@
 **Date:** 2026-08-12, redesigned 2026-08-13 after the first run
 **Status:** v2 run 2026-08-13 — [results](#v2-results-2026-08-13).
 [v1 results](#v1-results-2026-08-12) below.
-**Measures:** [spec 7](../specs/agents/2026-08-12-spec-7-capture-and-review.md) §3a
+**Measures:** [spec 7](../../design/2026-08-12-spec-7-capture-and-review.md) §3a
 **Harness:** [`agents/experiment/capture-setup.sh`](../../../agents/experiment/capture-setup.sh)
 **Reported by:** `agents review --stats [--lane <scenario>]`
 

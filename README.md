@@ -27,7 +27,7 @@ command to run first.
 written and unit-tested for Debian/Ubuntu and Arch/Manjaro; nothing more than
 that is claimed. Two further gaps — `plan` refusing on a machine that lacks
 Homebrew or fish, and no managed nerd font on Linux — are recorded with the rest
-in [spec 2](docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11).
+in [spec 2](docs/design/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11).
 
 ## The Makefile
 
@@ -94,6 +94,6 @@ agents help --render=markdown
 | `agents/` | the `agents` binary — repo-tracked agent context (spec 1) |
 | `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
-| `docs/superpowers/` | the specs and plans that carry the reasoning |
+| `docs/design/` | the specs that carry the reasoning; `docs/archive/` for executed plans |
 
-Start with [the spec index](docs/superpowers/specs/agents/README.md).
+Start with [the spec index](docs/design/README.md).

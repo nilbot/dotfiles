@@ -1,5 +1,5 @@
 // Command bootstrap provisions this workstation.
-// See docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md
+// See docs/design/2026-08-07-spec-2-dotfiles-hygiene.md
 package main
 
 import (

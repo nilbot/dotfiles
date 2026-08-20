@@ -8,10 +8,18 @@ the record schema, the hook adapters, and the exit-code contract.
 **Amends:** spec 1 §1, §2, §3.6, §3.7, §4. See
 [Cross-spec impact](#cross-spec-impact). §6's exit-code rule is amended only if
 §3c is built.
-**Changes the premise of:** [spec 3](2026-08-07-spec-3-agents-distill.md), which
+**Changes the premise of:** [spec 3](../archive/specs/2026-08-07-spec-3-agents-distill.md), which
 is scope-only and must not be designed against its current primary path.
 
 ---
+
+> **PARTIALLY RETIRED 2026-08-20.** §1 and §2 are in force — untracking the
+> trace index, one machine-local store under the git common directory, retention
+> caps. §3 (capture triggers) and §4 (the review queue) are retired by
+> [knowledge is documentation](2026-08-19-knowledge-is-documentation.md), which
+> found the apparatus was solving a problem the evidence does not support. §3a's
+> measurement stands and is cited there; it is the conclusion drawn around it
+> that changed.
 
 ## Origin
 
@@ -75,7 +83,7 @@ measurements were produced by a single design conversation that wrote no code.
   `pointers:local-unreachable — 30 verified local pointer(s) are unreachable and
   uncached`, remediation *"run `agents trace cache` sooner; subagent transcripts
   are deleted mid-session."* That is advice to win a race that
-  [`harness-transcript-retention`](../../../../.agents/memory/harness-transcript-retention.md)
+  [`harness-transcript-retention`](../../.agents/memory/harness-transcript-retention.md)
   records as unwinnable.
 
 **Exposure**
@@ -368,7 +376,7 @@ designed is a contingency nobody can cost — but nothing in it is built until t
 measurement below says the cheaper triggers were not enough.
 
 **What decided it. Measured 2026-08-13, seven scenarios per arm — see
-[the results](../../analysis/2026-08-12-capture-instruction-experiment.md#v2-results-2026-08-13).**
+[the results](../archive/analysis/2026-08-12-capture-instruction-experiment.md#v2-results-2026-08-13).**
 
 | | treatment | control |
 |---|---|---|
@@ -386,7 +394,7 @@ It also discriminated where it should. The two scenarios with no conclusion to
 record — mechanical type hints, and a question — drafted nothing in either arm.
 
 The protocol: two arms of scripted scenarios in a throwaway repository —
-[the capture experiment](../../analysis/2026-08-12-capture-instruction-experiment.md).
+[the capture experiment](../archive/analysis/2026-08-12-capture-instruction-experiment.md).
 One arm carries the instruction, one has it stripped. `agents review --stats`
 reports the draft rate over sessions that *did work*, taken from the trace
 index, plus what was promoted and what was binned.

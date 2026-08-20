@@ -13,7 +13,7 @@
 # in mind before blaming a population difference for a zero.
 #
 # Protocol and results:
-# docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md
+# docs/archive/analysis/2026-08-12-capture-instruction-experiment.md
 #
 # Usage:  agents/experiment/capture-run.sh <treatment-dir> [control-dir]
 

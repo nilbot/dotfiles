@@ -24,7 +24,7 @@ binary stamps, which live in
 > This is recorded because the false conclusion is easy to re-derive:
 > `githook.builtin` (`githook.go:354`) returns `0` for `pre-commit`, which reads
 > like an absent guard. It returns `0` because the wiring is in `main.go`,
-> exactly as [spec 1's plan](../../plans/2026-08-07-agents-repo-context.md)
+> exactly as [spec 1's plan](../archive/plans/2026-08-07-agents-repo-context.md)
 > Task 17 said it would be. **Anyone auditing this must read `runGitHook` to its
 > end; `internal/githook` alone shows the opposite.**
 
@@ -499,7 +499,7 @@ exists.
 **Scope of the backward check:** `README.md`, both `CLAUDE.md` files — the
 project one and the tracked global `claude/CLAUDE.md` — and everything under
 `claude/skills/` and `.agents/skills/`. It **excludes**
-`docs/superpowers/plans/` and `docs/superpowers/specs/`: those are dated records
+`docs/archive/plans/` and `docs/design/`: those are dated records
 of what was true when written, the executed bootstrap plan legitimately names
 `make githooks`, and a record silently rewritten to stay true is not a record.
 

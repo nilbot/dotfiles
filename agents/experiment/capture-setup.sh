@@ -2,7 +2,7 @@
 # Build a throwaway repository for measuring the capture instruction.
 #
 # The protocol this serves lives in
-# docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md.
+# docs/archive/analysis/2026-08-12-capture-instruction-experiment.md.
 #
 # Every scenario gets its own file, so one scenario's changes never commingle
 # with another's, and its own branch, so the lane names the scenario and
@@ -243,7 +243,7 @@ else
 fi
 echo
 echo "Run the scenarios from"
-echo "  docs/superpowers/analysis/2026-08-12-capture-instruction-experiment.md"
+echo "  docs/archive/analysis/2026-08-12-capture-instruction-experiment.md"
 echo "one fresh Claude Code session each, from inside this directory."
 echo "Each scenario says which branch to create first -- the branch names the lane,"
 echo "and the lane is what slices the result:"

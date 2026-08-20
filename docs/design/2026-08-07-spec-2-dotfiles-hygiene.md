@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-07 (scope) / 2026-08-10 (design; language reversed same day)
 **Status:** implemented — plan
-[2026-08-10-dotfiles-bootstrap](../../plans/2026-08-10-dotfiles-bootstrap.md),
+[2026-08-10-dotfiles-bootstrap](../archive/plans/2026-08-10-dotfiles-bootstrap.md),
 executed on branch `claude/spec-2-dotfiles-hygiene-5f92d4`.
 **Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
 that is not this one.** The first of the three was that no phase of this design
