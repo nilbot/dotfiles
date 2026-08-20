@@ -83,7 +83,7 @@ measurements were produced by a single design conversation that wrote no code.
   `pointers:local-unreachable — 30 verified local pointer(s) are unreachable and
   uncached`, remediation *"run `agents trace cache` sooner; subagent transcripts
   are deleted mid-session."* That is advice to win a race that
-  [`harness-transcript-retention`](../../.agents/memory/harness-transcript-retention.md)
+  [`harness-transcript-retention`](../qna/why-are-subagent-transcripts-gone.md)
   records as unwinnable.
 
 **Exposure**

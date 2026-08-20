@@ -23,6 +23,6 @@ findings go in `docs/qna/`, work records in `docs/journal/`, and both are writte
 directly and committed — there is no draft queue and no promotion step.
 
 `.agents/memory/` and `.agents/reports/handoff/` were removed on 2026-08-20,
-along with `agents handoff`, `agents review` and `agents index`. If you meet
-them in an archived document, that document predates the change; see
+along with the handoff, review and index commands that maintained them. If an
+archived document tells you to run one, that document predates the change; see
 `docs/design/2026-08-19-knowledge-is-documentation.md`.

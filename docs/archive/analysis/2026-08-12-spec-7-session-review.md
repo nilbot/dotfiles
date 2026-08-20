@@ -121,7 +121,7 @@ using `doctor.Dependencies{}` then resolved the store to nothing and doctor
 reported *"all trace index lines are readable"* and *"this harness has never
 recorded here"* — a clean bill of health from a diagnostic that never found the
 index. That is exactly the undiscriminating double
-[`.agents/memory/undiscriminating-test-doubles.md`](../../../.agents/memory/undiscriminating-test-doubles.md)
+[`.agents/memory/undiscriminating-test-doubles.md`](../../qna/tests-that-pass-no-matter-what.md)
 warns about. An explicit parameter has no nil case to be wrong about.
 
 **3. `merge=union` also had to retire at the global tier.** The plan only

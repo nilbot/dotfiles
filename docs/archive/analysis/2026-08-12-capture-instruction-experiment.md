@@ -4,7 +4,7 @@
 **Status:** v2 run 2026-08-13 — [results](#v2-results-2026-08-13).
 [v1 results](#v1-results-2026-08-12) below.
 **Measures:** [spec 7](../../design/2026-08-12-spec-7-capture-and-review.md) §3a
-**Harness:** [`agents/experiment/capture-setup.sh`](../../../agents/experiment/capture-setup.sh)
+**Harness:** [`../experiment/capture-setup.sh`](../../../../experiment/capture-setup.sh)
 **Reported by:** `agents review --stats [--lane <scenario>]`
 
 The question: **does an agent record a durable conclusion when it is asked
@@ -36,9 +36,9 @@ of easy negatives measures politeness rather than judgement.
 ## Setup
 
 ```bash
-agents/experiment/capture-setup.sh /tmp/cap-treatment
-agents/experiment/capture-setup.sh /tmp/cap-control --no-instruction
-agents/experiment/capture-run.sh   /tmp/cap-treatment /tmp/cap-control
+../experiment/capture-setup.sh /tmp/cap-treatment
+../experiment/capture-setup.sh /tmp/cap-control --no-instruction
+../experiment/capture-run.sh   /tmp/cap-treatment /tmp/cap-control
 ```
 
 Run from the dotfiles checkout root; setup takes a second and needs `agents` on
