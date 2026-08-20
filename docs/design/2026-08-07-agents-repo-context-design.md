@@ -27,6 +27,17 @@
 > demoted to a contingency (spec 7 §3c) and is **not built**, so "`agents guard`
 > is the sole deliberate exception" remains true. If §3c is ever built, this rule
 > is what it amends.
+>
+> **Amended again 2026-08-20 by [knowledge is
+> documentation](2026-08-19-knowledge-is-documentation.md).** The capture half is
+> retired and the code deleted. Gone from **§2** (`.agents/memory/`,
+> `reports/handoff/`, and both `INDEX.md` files — every tree diagram below still
+> draws them), **§4** and **§6** (`agents handoff`, `agents review`, `agents
+> index`), and the scaffolded `CLAUDE.md`'s capture paragraph together with the
+> `doctor` check that enforced it. Knowledge moved to a repository's own `docs/`,
+> governed by instruction rather than by a queue. **Still in force, and the
+> reason this document is not archived:** §1's placement rule and tiers, §3.3-3.4
+> on what a record must carry, and §6's exit-code vocabulary.
 
 ---
 

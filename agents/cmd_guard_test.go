@@ -36,10 +36,6 @@ func TestGuardCommandExitClasses(t *testing.T) {
 			writeGuardFile(t, filepath.Join(root, "main.go"), "package main\n")
 			git(t, root, "add", "-A")
 		}, exitcode.Advisory, "warning [mixed-commit]"},
-		{"generated block", func(t *testing.T, root string) {
-			writeGuardFile(t, filepath.Join(root, ".agents", "memory", "a.md"), memoryEntryForCommand)
-			git(t, root, "add", "-A")
-		}, exitcode.Block, `BLOCKED ".agents/memory/INDEX.md":0 [generated-file]`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

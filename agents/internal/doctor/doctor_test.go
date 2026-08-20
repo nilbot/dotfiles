@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"github.com/nilbot/dotfiles/agents/internal/queue"
-	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"os"
 	"path/filepath"
 	"strings"
@@ -726,162 +724,6 @@ func TestAttributeDiagnosticsReadOnlyVerifiedRegularLeaves(t *testing.T) {
 	}
 }
 
-func TestAttributeDiagnosticsRejectWrongConfigTargetAndSource(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		breakFixture func(t *testing.T, deps *Dependencies)
-	}{
-		{"config", func(t *testing.T, deps *Dependencies) {
-			git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
-			git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")] = GitResult{Output: originValue(deps.SharedGitConfig, "/other")}
-			deps.Git = git.run
-		}},
-		{"included same-value origin", func(t *testing.T, deps *Dependencies) {
-			git := goodGitFixture(deps.HooksDir, deps.GlobalGitConfig, deps.SharedGitConfig)
-			git[gitKey("config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")] = GitResult{Output: originValue(filepath.Join(t.TempDir(), "included"), deps.AttributesConfigValue)}
-			deps.Git = git.run
-		}},
-		{"wrong link target", func(t *testing.T, deps *Dependencies) {
-			if err := os.Remove(deps.AttributesLink); err != nil {
-				t.Fatal(err)
-			}
-			other := filepath.Join(t.TempDir(), "attrs")
-			if err := os.WriteFile(other, []byte("*.txt text\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Symlink(other, deps.AttributesLink); err != nil {
-				t.Fatal(err)
-			}
-		}},
-		{"unreadable source", func(t *testing.T, deps *Dependencies) {
-			if err := os.Remove(deps.AttributesSource); err != nil {
-				t.Fatal(err)
-			}
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			deps, _, _ := newGitFiles(t)
-			repoRoot := t.TempDir()
-			if err := os.WriteFile(filepath.Join(repoRoot, ".gitattributes"), []byte(".agents/reports/traces/*.jsonl merge=union\n.agents/** linguist-generated=true\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			tc.breakFixture(t, &deps)
-			if got := checkGitAttributes(repoRoot, deps); got.Status != Fail {
-				t.Fatalf("%s mutation = %+v", tc.name, got)
-			}
-		})
-	}
-}
-
-func TestPointerClassesAndMissingMachineIdentity(t *testing.T) {
-	local := filepath.Join(t.TempDir(), "gone")
-	recs := []record.Record{
-		{Transcript: "", PointerVerified: false, Machine: "m1"},
-		{Transcript: "/also/unverified", PointerVerified: false, Machine: "m1"},
-		{Transcript: local, PointerVerified: true, Machine: "m1"},
-		{Transcript: "/remote/a", PointerVerified: true, Machine: "m2"},
-		{Transcript: "/remote/b", PointerVerified: true, Machine: "m2"},
-	}
-	checks := checkPointers(recs, "m1", t.TempDir())
-	if !strings.Contains(checkByName(t, checks, "pointers:unverified").Detail, "2") ||
-		!strings.Contains(checkByName(t, checks, "pointers:remote").Detail, "m2=2") {
-		t.Fatalf("pointer classes = %+v", checks)
-	}
-	// Locally unreachable pointers are deliberately not a class any more: the
-	// remedy was to win an unwinnable race, and it warned on every healthy
-	// machine every day.
-	for _, c := range checks {
-		if c.Name == "pointers:local-unreachable" {
-			t.Errorf("the unreachable-pointer warning came back: %+v", c)
-		}
-	}
-	withoutID := checkPointers(recs, "", t.TempDir())
-	for _, name := range []string{"pointers:remote"} {
-		for _, check := range withoutID {
-			if check.Name == name {
-				t.Fatalf("missing machine id misclassified ownership: %+v", withoutID)
-			}
-		}
-	}
-	if got := checkByName(t, withoutID, "pointers:ownership"); got.Status != Warn {
-		t.Fatalf("missing-id ownership = %+v", got)
-	}
-}
-
-func TestMemoryMachineAndScaffoldDiagnostics(t *testing.T) {
-	agentsDir := filepath.Join(t.TempDir(), ".agents")
-	if err := os.MkdirAll(filepath.Join(agentsDir, "memory"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	entry := "---\nname: remote\ndescription: safe\nsources:\n  - kind: transcript\n    machine: m2\n    ref: a\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(agentsDir, "memory", "remote.md"), []byte(entry), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if got := checkByName(t, checkMemorySources(agentsDir, "m1"), "memory"); got.Status != Warn || !strings.Contains(got.Detail, "m2") {
-		t.Fatalf("remote memory = %+v", got)
-	}
-	if got := checkMachine(""); got.Status != Warn {
-		t.Fatalf("missing machine = %+v", got)
-	}
-	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("user file\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if got := checkScaffoldInstruction(root); got.Status != Warn {
-		t.Fatalf("missing scaffold marker = %+v", got)
-	}
-	b, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
-	if err != nil || string(b) != "user file\n" {
-		t.Fatalf("doctor changed existing CLAUDE.md: %q %v", b, err)
-	}
-}
-
-func TestScaffoldInstructionRejectsSymlinkLeaf(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(t.TempDir(), "CLAUDE.md")
-	if err := os.WriteFile(target, []byte("Run `agents doctor` early and surface any advisory or failing checks.\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(target, filepath.Join(root, "CLAUDE.md")); err != nil {
-		t.Fatal(err)
-	}
-	if got := checkScaffoldInstruction(root); got.Status != Warn {
-		t.Fatalf("symlinked CLAUDE.md = %+v, want warn", got)
-	}
-}
-
-func TestMemoryParseFailureDoesNotExposeContent(t *testing.T) {
-	agentsDir := filepath.Join(t.TempDir(), ".agents")
-	dir := filepath.Join(agentsDir, "memory")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	secret := "PRIVATE-memory-value"
-	if err := os.WriteFile(filepath.Join(dir, "bad.md"), []byte("---\nname: ["+secret+"\n---\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := checkByName(t, checkMemorySources(agentsDir, "m1"), "memory")
-	if got.Status != Fail || strings.Contains(got.Detail, secret) {
-		t.Fatalf("memory failure = %+v", got)
-	}
-}
-
-func TestMemorySourcesStayUnclassifiedWhenMachineIDIsMissing(t *testing.T) {
-	agentsDir := filepath.Join(t.TempDir(), ".agents")
-	dir := filepath.Join(agentsDir, "memory")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	entry := "---\nname: source\ndescription: safe\nsources:\n  - kind: transcript\n    machine: m2\n---\nbody\n"
-	if err := os.WriteFile(filepath.Join(dir, "source.md"), []byte(entry), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := checkByName(t, checkMemorySources(agentsDir, ""), "memory")
-	if got.Status != Warn || !strings.Contains(got.Detail, "unclassified=1") || strings.Contains(got.Detail, "m2=") {
-		t.Fatalf("missing machine identity classified memory ownership: %+v", got)
-	}
-}
-
 func TestLaneHealthModuleAndSessionBoundaries(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	th := Thresholds{Window: 30 * 24 * time.Hour, Modules: 3, Days: 14, Sessions: 3}
@@ -959,7 +801,7 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "trust:codex", "recording:claude-code", "recording:codex", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "memory", "scaffold:doctor-instruction"} {
+	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "trust:codex", "recording:claude-code", "recording:codex", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:doctor-instruction"} {
 		_ = checkByName(t, checks, name)
 	}
 	if got := checkByName(t, checks, "trace-index"); got.Status != Warn || !strings.Contains(got.Detail, "1") {
@@ -1079,48 +921,45 @@ func TestPointersReportNoCachedRowWhenNothingWasSaved(t *testing.T) {
 	}
 }
 
-func TestCaptureInstructionCheckReportsItsAbsence(t *testing.T) {
-	root := t.TempDir()
-	// Present.
-	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(scaffold.ClaudeMD), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if got := checkScaffoldCaptureInstruction(root); got.Status != OK {
-		t.Errorf("with the instruction present: %+v", got)
-	}
-	// Absent. Under the shipped phases this paragraph is the whole capture
-	// mechanism, so its silent absence is the feature silently absent.
-	if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte("# nothing\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got := checkScaffoldCaptureInstruction(root)
-	if got.Status != Warn {
-		t.Errorf("with the instruction missing: %+v, want warn", got)
-	}
-	if got.Remedy == "" {
-		t.Error("the check names no remedy")
-	}
-}
+// The write-side indicator that replaced the queue depth check.
+//
+// Three states, and the first is the one that matters: a repository with no
+// docs/qna must not be reported as unhealthy. Most repositories have not
+// adopted this, and a check that fails everywhere teaches people to skim past
+// the whole report.
+func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
+	now := time.Now()
 
-func TestQueueCheckWarnsOnlyPastTheThreshold(t *testing.T) {
-	store := t.TempDir()
-	if got := checkQueue(store, 3); got.Status != OK || !strings.Contains(got.Detail, "no drafts") {
-		t.Errorf("empty queue = %+v", got)
+	root := t.TempDir()
+	got := checkDocsFreshness(root, now)
+	if got.Status != OK || !strings.Contains(got.Detail, "no docs/qna") {
+		t.Errorf("a repository without docs/qna = %+v, want a quiet OK", got)
 	}
-	for i := 0; i < 2; i++ {
-		if _, err := queue.Write(store, queue.Draft{
-			Kind: queue.KindHandoff, Lane: "master", Session: "s1",
-			When: time.Now().UTC(), Body: "- x\n",
-		}); err != nil {
-			t.Fatal(err)
-		}
+
+	dir := filepath.Join(root, "docs", "qna")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	// Below the threshold a backlog is news, not a defect.
-	if got := checkQueue(store, 3); got.Status != OK || !strings.Contains(got.Detail, "2") {
-		t.Errorf("two pending under a threshold of three = %+v", got)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# form\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if got := checkQueue(store, 2); got.Status != Warn {
-		t.Errorf("at the threshold = %+v, want warn", got)
+	// The README describes the form; it is not an entry, and counting it would
+	// report a store as populated the moment it was created.
+	if got := checkDocsFreshness(root, now); !strings.Contains(got.Detail, "nothing recorded yet") {
+		t.Errorf("README.md counted as an entry: %+v", got)
+	}
+
+	entry := filepath.Join(dir, "why-x-happens.md")
+	if err := os.WriteFile(entry, []byte("# why\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-72 * time.Hour)
+	if err := os.Chtimes(entry, old, old); err != nil {
+		t.Fatal(err)
+	}
+	got = checkDocsFreshness(root, now)
+	if got.Status != OK || !strings.Contains(got.Detail, "1 entr") || !strings.Contains(got.Detail, "3 day") {
+		t.Errorf("one entry three days old = %+v", got)
 	}
 }
 

@@ -267,28 +267,6 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 		}
 	})
 
-	t.Run("foreign repo hook mutation reaches guard once", func(t *testing.T) {
-		repo := newLiveHookRepo(t, binary)
-		t.Setenv("HOME", repo.home)
-		installHookTestPath(t, gitBinary, "exit 0")
-		count := filepath.Join(t.TempDir(), "repo-count")
-		t.Setenv("REPO_COUNT", count)
-		writeLiveFile(t, repo.root, ".git/hooks/pre-commit", "#!/bin/sh\nprintf 'repo\\n' >> \"$REPO_COUNT\"\n/bin/mkdir -p .agents/memory\nprintf 'hand edited\\n' > .agents/memory/INDEX.md\ngit add .agents/memory/INDEX.md\n", 0o755)
-		writeLiveFile(t, repo.root, "plain.txt", "plain\n", 0o644)
-		stageLive(t, repo.root)
-		out, err := gitAttempt(repo.root, "commit", "-m", "blocked")
-		if err == nil {
-			t.Fatalf("guard missed final index mutation: %s", out)
-		}
-		if strings.Count(string(out), "[generated-file]") != 1 {
-			t.Fatalf("guard did not report final index exactly once: %q", out)
-		}
-		got, readErr := os.ReadFile(count)
-		if readErr != nil || string(got) != "repo\n" {
-			t.Fatalf("foreign hook count=%q err=%v", got, readErr)
-		}
-	})
-
 	t.Run("foreign failure stops extras and guard", func(t *testing.T) {
 		repo := newLiveHookRepo(t, binary)
 		t.Setenv("HOME", repo.home)

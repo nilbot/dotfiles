@@ -67,13 +67,7 @@ agents help --render=markdown
 | `agents init` | create .agents/, triggers, wiring, fleet entry |
 | `agents wire` | regenerate harness configs (merges, never overwrites) |
 | `agents doctor` | report wiring, trust evidence, reachability, and lane health |
-| `agents index` | regenerate memory and handoff indexes |
 | `agents save` | commit .agents/ paths and nothing else (escape hatch) |
-| `agents handoff` | lane-scoped handoff management |
-| `agents handoff write` | write a reviewed note into the tracked tree |
-| `agents handoff draft` | queue an unreviewed note outside the tracked tree |
-| `agents handoff prune` | bound the number of notes per lane |
-| `agents review` | read pending drafts; promote one, or bin it |
 | `agents trace` | query records; read one back; copy reachable ones |
 | `agents trace ls` | query records |
 | `agents trace show` | read one transcript back |

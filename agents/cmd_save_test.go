@@ -64,6 +64,15 @@ func writeFileAt(t *testing.T, root, rel, body string) {
 	}
 }
 
+// writeAgentsEntry drops a file under .agents/ so a test has something in the
+// agent tier to commit. It used to write a memory entry; that store is retired,
+// and these tests were never about memory -- they are about `save` committing
+// .agents/ paths and nothing else.
+func writeAgentsEntry(t *testing.T, root, name, body string) {
+	t.Helper()
+	writeFileAt(t, root, ".agents/skills/"+name, body)
+}
+
 func writeHandoffEntry(t *testing.T, root, lane, name, body string) {
 	t.Helper()
 	writeFileAt(t, root, ".agents/reports/handoff/"+lane+"/"+name, body)
@@ -108,7 +117,7 @@ func TestSaveCommitsOnlyAgentsPaths(t *testing.T) {
 	gitOut(t, root, "add", "tracked.go", "code.go")
 	writeFileAt(t, root, "tracked.go", "package main // v3\n")
 
-	writeMemory(t, root, "a.md", memEntryA)
+	writeAgentsEntry(t, root, "a.md", memEntryA)
 	writeHandoffEntry(t, root, "lane-a", "2026-08-10-s1.md", handoffEntA)
 
 	var out bytes.Buffer
@@ -120,10 +129,8 @@ func TestSaveCommitsOnlyAgentsPaths(t *testing.T) {
 	// they land in the same commit and the pre-commit guard has nothing to
 	// complain about.
 	want := []string{
-		".agents/memory/INDEX.md",
-		".agents/memory/a.md",
-		".agents/reports/handoff/INDEX.md",
 		".agents/reports/handoff/lane-a/2026-08-10-s1.md",
+		".agents/skills/a.md",
 	}
 	if got := committedFiles(t, root); !slices.Equal(got, want) {
 		t.Errorf("committed files = %v, want %v", got, want)
@@ -152,7 +159,7 @@ func TestSaveCommitsOnlyAgentsPaths(t *testing.T) {
 func TestSaveUsesItsDefaultMessage(t *testing.T) {
 	root := newRepo(t)
 	t.Chdir(root)
-	writeMemory(t, root, "a.md", memEntryA)
+	writeAgentsEntry(t, root, "a.md", memEntryA)
 
 	var out bytes.Buffer
 	if code := runSave(nil, &out); code != exitcode.OK {
@@ -176,7 +183,7 @@ func TestSaveUsesItsDefaultMessage(t *testing.T) {
 func TestSaveWithNothingToDo(t *testing.T) {
 	root := newRepo(t)
 	t.Chdir(root)
-	writeMemory(t, root, "a.md", memEntryA)
+	writeAgentsEntry(t, root, "a.md", memEntryA)
 
 	var first bytes.Buffer
 	if code := runSave(nil, &first); code != exitcode.OK {
@@ -297,7 +304,7 @@ func TestSaveRefusesWhileAGitOperationIsInProgress(t *testing.T) {
 			}
 
 			t.Chdir(root)
-			writeMemory(t, root, "a.md", memEntryA)
+			writeAgentsEntry(t, root, "a.md", memEntryA)
 			head := gitOut(t, root, "rev-parse", "HEAD")
 			// Snapshotted after the memory entry exists, so the only thing that
 			// could move these is `save` itself.
@@ -352,12 +359,12 @@ func TestSaveWorksOnAPlainDetachedHead(t *testing.T) {
 	}
 
 	t.Chdir(root)
-	writeMemory(t, root, "a.md", memEntryA)
+	writeAgentsEntry(t, root, "a.md", memEntryA)
 	var out bytes.Buffer
 	if code := runSave([]string{"-m", "chore: note a"}, &out); code != exitcode.OK {
 		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
 	}
-	if !slices.Contains(committedFiles(t, root), ".agents/memory/a.md") {
+	if !slices.Contains(committedFiles(t, root), ".agents/skills/a.md") {
 		t.Errorf("committed files = %v, want the memory entry", committedFiles(t, root))
 	}
 }
@@ -374,7 +381,7 @@ func TestSaveWorksOnAPlainDetachedHead(t *testing.T) {
 // the diff --cached and the commit would each still be scoped to the wrong place.
 func TestSaveFromASubdirectory(t *testing.T) {
 	root := newRepo(t)
-	writeMemory(t, root, "a.md", memEntryA)
+	writeAgentsEntry(t, root, "a.md", memEntryA)
 	deep := filepath.Join(root, "pkg", "deep")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatal(err)
@@ -385,7 +392,7 @@ func TestSaveFromASubdirectory(t *testing.T) {
 	if code := runSave([]string{"-m", "chore: note a"}, &out); code != exitcode.OK {
 		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
 	}
-	want := []string{".agents/memory/INDEX.md", ".agents/memory/a.md", ".agents/reports/handoff/INDEX.md"}
+	want := []string{".agents/skills/a.md"}
 	if got := committedFiles(t, root); !slices.Equal(got, want) {
 		t.Errorf("committed files = %v, want %v", got, want)
 	}
@@ -443,7 +450,7 @@ func TestSaveReportsNoRecordWhenTheCommitFails(t *testing.T) {
 			c.setup(t, root)
 
 			t.Chdir(root)
-			writeMemory(t, root, "a.md", memEntryA)
+			writeAgentsEntry(t, root, "a.md", memEntryA)
 			head := gitOut(t, root, "rev-parse", "HEAD")
 
 			var out bytes.Buffer
@@ -504,38 +511,6 @@ func TestSaveRefusesASymlinkedAgentsDir(t *testing.T) {
 	}
 }
 
-// The other half of that decision: the refusal is save's own, not the shared
-// rule's. repoHere still follows the link, because for a command that only reads
-// and writes inside .agents/ a context directory kept elsewhere and linked in is
-// a working setup -- `agents init --local` plus a symlink shared between
-// worktrees. Only the command that COMMITS the directory is harmed by it.
-//
-// Kills: moving the symlink check into repoHere, which would take `agents
-// index`, `agents trace` and `agents handoff` out with it for no gain.
-func TestIndexStillFollowsASymlinkedAgentsDir(t *testing.T) {
-	root := newRepo(t)
-	outside := filepath.Join(t.TempDir(), "context")
-	if err := os.MkdirAll(filepath.Join(outside, "memory"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFileAt(t, outside, "memory/a.md", memEntryA)
-	if err := os.RemoveAll(filepath.Join(root, ".agents")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(outside, filepath.Join(root, ".agents")); err != nil {
-		t.Fatal(err)
-	}
-	t.Chdir(root)
-
-	var out bytes.Buffer
-	if code := runIndex(nil, &out); code != exitcode.OK {
-		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
-	}
-	if _, err := os.Stat(filepath.Join(outside, "memory", "INDEX.md")); err != nil {
-		t.Errorf("index did not regenerate through the link: %v", err)
-	}
-}
-
 // git exports GIT_DIR into every hook it runs, and `agents save` is a command a
 // hook or a harness can reach. An inherited GIT_DIR makes git operate on
 // whatever repository fired the hook while the working tree stays the caller's
@@ -548,7 +523,7 @@ func TestIndexStillFollowsASymlinkedAgentsDir(t *testing.T) {
 func TestSaveIgnoresAnInheritedGitDir(t *testing.T) {
 	root := newRepo(t)
 	decoy := newRepo(t)
-	writeMemory(t, root, "a.md", memEntryA)
+	writeAgentsEntry(t, root, "a.md", memEntryA)
 	t.Chdir(root)
 	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
 
@@ -562,7 +537,7 @@ func TestSaveIgnoresAnInheritedGitDir(t *testing.T) {
 	if got := gitOut(t, root, "rev-list", "--count", "--all"); got != "1" {
 		t.Fatalf("intended repo has %s commits, want 1", got)
 	}
-	if got := committedFiles(t, root); !slices.Contains(got, ".agents/memory/a.md") {
+	if got := committedFiles(t, root); !slices.Contains(got, ".agents/skills/a.md") {
 		t.Errorf("committed files = %v, want the memory entry", got)
 	}
 }
@@ -580,13 +555,13 @@ func TestSaveIgnoresAnInheritedGitDir(t *testing.T) {
 func TestSaveWithAgentsChangesAlreadyStaged(t *testing.T) {
 	root := newRepo(t)
 	t.Chdir(root)
-	writeMemory(t, root, "a.md", strings.Replace(memEntryA, "description: A", "description: v1-committed", 1))
+	writeAgentsEntry(t, root, "a.md", strings.Replace(memEntryA, "description: A", "description: v1-committed", 1))
 	gitOut(t, root, "add", "--", ".agents")
 	gitOut(t, root, "commit", "-m", "base")
 
-	writeMemory(t, root, "a.md", strings.Replace(memEntryA, "description: A", "description: v2-staged", 1))
+	writeAgentsEntry(t, root, "a.md", strings.Replace(memEntryA, "description: A", "description: v2-staged", 1))
 	gitOut(t, root, "add", "--", ".agents")
-	writeMemory(t, root, "a.md", strings.Replace(memEntryA, "description: A", "description: v3-worktree", 1))
+	writeAgentsEntry(t, root, "a.md", strings.Replace(memEntryA, "description: A", "description: v3-worktree", 1))
 
 	writeFileAt(t, root, "code.go", "package main\n")
 	gitOut(t, root, "add", "code.go")
@@ -595,7 +570,7 @@ func TestSaveWithAgentsChangesAlreadyStaged(t *testing.T) {
 	if code := runSave([]string{"-m", "chore: note a"}, &out); code != exitcode.OK {
 		t.Fatalf("exit = %d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
 	}
-	if got := gitOut(t, root, "show", "HEAD:.agents/memory/a.md"); !strings.Contains(got, "v3-worktree") {
+	if got := gitOut(t, root, "show", "HEAD:.agents/skills/a.md"); !strings.Contains(got, "v3-worktree") {
 		t.Errorf("committed entry is not the worktree version:\n%s", got)
 	}
 	if slices.Contains(committedFiles(t, root), "code.go") {
@@ -638,7 +613,7 @@ func TestSaveIsNotBlockedByAnotherWorktreesMerge(t *testing.T) {
 		t.Fatalf("fixture: no MERGE_HEAD in the main worktree: %v", err)
 	}
 
-	writeMemory(t, linked, "a.md", memEntryA)
+	writeAgentsEntry(t, linked, "a.md", memEntryA)
 	t.Chdir(linked)
 	var out bytes.Buffer
 	if code := runSave([]string{"-m", "chore: note a"}, &out); code != exitcode.OK {

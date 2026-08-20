@@ -1,7 +1,7 @@
 # Knowledge is documentation, not a subsystem
 
 **Date:** 2026-08-19
-**Status:** design — approved; execution not started
+**Status:** executed 2026-08-20 — the retired code and stores are deleted
 **Retires:** spec 7's capture half (queue, review, promotion); spec 3 in full
 **Leaves intact:** spec 1's placement rule, tiers and record schema; specs 2, 5, 6
 

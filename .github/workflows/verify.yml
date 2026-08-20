@@ -187,25 +187,6 @@ jobs:
           fi
       - name: bootstrap.d under a restrictive umask
         run: ( umask 077 && cd bootstrap.d && go test -count=1 ./... )
-      - name: agents index is a pure function of tracked content
-        run: |
-          set -euo pipefail
-          mkdir -p "$HOME/bin"
-          # The stamp is belt-and-braces, not load-bearing: `index` resolves its
-          # repository from the working directory (runIndex -> agentsDirHere ->
-          # repoHere -> os.Getwd()), and DotfilesRoot() is read only by the
-          # git-hook path and doctor. It is stamped anyway so this binary cannot
-          # quietly fall back to $HOME/dotfiles if index ever starts reading it.
-          ( cd agents && go build -trimpath -ldflags "-X main.dotfilesRoot=$GITHUB_WORKSPACE" -o "$HOME/bin/agents" . )
-          "$HOME/bin/agents" index
-          # Scoped to .agents/ so the command means the same thing here as it
-          # does on a developer's dirty working tree.
-          git diff --exit-code -- .agents/
-          # --exit-code compares tracked content only, so a NEWLY generated file
-          # would pass unnoticed. On a clean CI checkout, untracked content under
-          # .agents/ can only have come from the index run above.
-          untracked="$(git status --porcelain -- .agents/)"
-          [ -z "$untracked" ] || { echo "agents index left untracked content:" >&2; printf '%s\n' "$untracked" >&2; exit 1; }
 
   # Derived-artifact checks: the command surface must describe itself honestly.
   # Task 10 adds the README block and the backward name check to this same job.

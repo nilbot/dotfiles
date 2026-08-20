@@ -26,45 +26,30 @@ var ErrLocalInLinkedWorktree = errors.New("--local is not supported inside a lin
 // rewrites an existing CLAUDE.md, so restoring this marker is not a migration.
 const DoctorInstruction = "Run `agents doctor` early and report any warnings before relying on this context."
 
-// CaptureInstruction is the capture mechanism.
-//
-// The sentence it replaces -- "Write handoffs with `agents handoff write`, not
-// by hand" -- instructs HOW and never WHETHER or WHEN. An agent following it
-// perfectly writes zero handoffs, which is exactly what twenty sessions of this
-// repository produced. That is not a failed instruction; it is an instruction
-// that was never given.
-//
-// Three properties do the work here, and the sentence it replaces has none of
-// them. It names the moment rather than the tool. It bounds the output, because
-// an unbounded ask reads as expensive and gets deferred. And it says the cost
-// is nothing, which is true only because the queue is untracked -- if that ever
-// stops being true, this sentence becomes a lie and the mechanism goes with it.
-const CaptureInstruction = "When a stretch of work concludes — a bug understood, a decision made, an approach abandoned — record it before moving on: at most three bullets, covering what a future agent could not get from the code or the git log. Write it with `agents handoff draft --lane <lane> --session <id>`. Drafts are untracked until you review them, so drafting costs nothing and commits you to nothing."
-
 // ClaudeMD is the trigger, not the payload.
 //
 // It is the only file every harness loads automatically, so it costs context in
 // every session -- including the ones that never touch .agents/. Keep it short.
 const ClaudeMD = `# Agent context
 
-Durable context for this repo lives in ` + "`.agents/`" + `. Read it before assuming;
+Durable context for this repo lives in ` + "`docs/`" + `. Read it before assuming;
 it is the record, and this file is only the pointer to it.
 
-- ` + "`.agents/memory/INDEX.md`" + ` — curated knowledge about this codebase (generated)
-- ` + "`.agents/reports/handoff/INDEX.md`" + ` — work in flight, by lane (generated)
-- ` + "`.agents/reports/`" + ` — specs, plans, analysis, and trace pointers
-- ` + "`.agents/skills/`" + ` — procedures specific to this repo
+- ` + "`docs/qna/`" + ` — answers indexed by the question you would ask again
+- ` + "`docs/journal/`" + ` — dated record of what happened
+- ` + "`docs/design/`" + ` — the design still in force
 
-A hook cannot install itself and a missing hook fails silently: an empty or
-stale ` + "`.agents/`" + ` means the setup is broken, not that there is nothing to
+` + "`.agents/`" + ` holds machine wiring, not knowledge: harness hooks, the trace
+cache, and ` + "`.agents/skills/`" + ` for procedures specific to this repo. A hook
+cannot install itself and a missing hook fails silently, so an empty or stale
+` + "`.agents/`" + ` means the setup is broken rather than that there is nothing to
 say -- report it rather than working around it.
 
 ` + DoctorInstruction + `
 
-` + CaptureInstruction + `
-
-Review what has been drafted with ` + "`agents review`" + `; promoting one writes it
-into ` + "`.agents/`" + ` and commits it in the same act.
+Recording is covered by the global instruction and the
+` + "`recording-what-you-learn`" + ` skill; it is not repo-specific and is not
+restated here.
 `
 
 // gitattributesLines are tracked on purpose: they are a statement about how this
@@ -91,12 +76,14 @@ var excludeLines = []string{
 	"/.codex/skills",
 }
 
+// dirs is what .agents/ is for after the 2026-08-19 redesign: machine wiring
+// and repo-specific procedure, nothing else.
+//
+// memory/ and reports/handoff/ held knowledge and were retired with the
+// apparatus that filled them. reports/{specs,plans,analysis} went with them for
+// the same reason -- they duplicated a docs/ directory every repository already
+// has, which is the tier error the redesign exists to correct.
 var dirs = []string{
-	"memory",
-	"reports/handoff",
-	"reports/specs",
-	"reports/plans",
-	"reports/analysis",
 	"skills",
 }
 

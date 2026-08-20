@@ -76,11 +76,7 @@ func TestCreateBuildsLayout(t *testing.T) {
 	}
 
 	for _, rel := range []string{
-		".agents/memory",
-		".agents/reports/handoff",
-		".agents/reports/specs",
-		".agents/reports/plans",
-		".agents/reports/analysis",
+		".agents/skills",
 		".agents/skills",
 	} {
 		if fi, err := os.Stat(filepath.Join(root, rel)); err != nil || !fi.IsDir() {
@@ -183,7 +179,7 @@ func TestCreateWorksInALinkedWorktree(t *testing.T) {
 	assertIgnored(t, linked, ".codex/hooks.json")
 	assertIgnored(t, linked, ".codex/.agents-wire.lock")
 
-	if _, err := os.Stat(filepath.Join(linked, ".agents", "memory")); err != nil {
+	if _, err := os.Stat(filepath.Join(linked, ".agents", "skills")); err != nil {
 		t.Errorf("layout missing in the worktree: %v", err)
 	}
 }
@@ -386,25 +382,30 @@ func TestCreateNoLongerScaffoldsATrackedTraceDirectory(t *testing.T) {
 	}
 }
 
-func TestClaudeMDCarriesTheCaptureInstruction(t *testing.T) {
-	if !strings.Contains(ClaudeMD, CaptureInstruction) {
-		t.Fatal("the scaffolded CLAUDE.md does not carry the capture instruction")
-	}
-	// The three properties the replaced sentence lacked. An instruction that
-	// names the tool and not the moment is what produced zero handoffs in
-	// twenty sessions, so each is asserted rather than assumed.
-	for _, want := range []struct{ property, needle string }{
-		{"names the moment", "concludes"},
-		{"bounds the output", "three bullets"},
-		{"names the command", "agents handoff draft"},
-		{"removes the perceived stake", "untracked"},
+// The scaffolded CLAUDE.md must not name a command the binary no longer has.
+//
+// Scaffolding is written into repositories that this session will never see
+// again, so a stale command name here is a dead instruction with a long half
+// life. The capture instruction it used to carry -- "record it before moving
+// on ... write it with `agents handoff draft`" -- went with the apparatus on
+// 2026-08-20; recording is a global instruction now and is deliberately not
+// restated per repository.
+func TestClaudeMDNamesNoRetiredCommand(t *testing.T) {
+	for _, dead := range []string{
+		"agents handoff", "agents review", "agents index",
+		".agents/memory", ".agents/reports/handoff",
 	} {
-		if !strings.Contains(CaptureInstruction, want.needle) {
-			t.Errorf("the capture instruction never %s (no %q)", want.property, want.needle)
+		if strings.Contains(ClaudeMD, dead) {
+			t.Errorf("the scaffolded CLAUDE.md still names %q, which no longer exists", dead)
 		}
 	}
-	// The old sentence must be gone: it told an agent how and never whether.
-	if strings.Contains(ClaudeMD, "Write handoffs with `agents handoff write`, not by hand") {
-		t.Error("the instruction that produced zero handoffs is still in the scaffold")
+	// It still has to point somewhere, and at the thing that survived.
+	for _, want := range []string{"docs/qna/", "docs/journal/", ".agents/skills/"} {
+		if !strings.Contains(ClaudeMD, want) {
+			t.Errorf("the scaffolded CLAUDE.md does not point at %s", want)
+		}
+	}
+	if !strings.Contains(ClaudeMD, DoctorInstruction) {
+		t.Error("the scaffolded CLAUDE.md dropped the doctor instruction")
 	}
 }

@@ -64,7 +64,7 @@ func repoHere(stdout io.Writer) (*repo.Context, string, int) {
 	dir := repo.AgentsDir(rc.Root)
 	// Being in a git repo is not the same as being in a repo that opted into
 	// this tool, and every caller of this function goes on to read or write
-	// inside .agents/. Left unchecked, `agents index` MkdirAll'd the tree and
+	// inside .agents/. Left unchecked, the retired index writer MkdirAll'd the tree and
 	// `agents trace cache` wrote a .gitignore into a repo where init had never
 	// run -- at exit 0, so nothing said a word about it. exitcode.Skip already
 	// documents "no .agents/" as one of the things it means; the check belongs
