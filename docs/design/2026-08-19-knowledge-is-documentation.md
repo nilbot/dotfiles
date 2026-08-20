@@ -1,7 +1,7 @@
 # Knowledge is documentation, not a subsystem
 
 **Date:** 2026-08-19
-**Status:** design — approved to execute
+**Status:** design — approved; execution not started
 **Retires:** spec 7's capture half (queue, review, promotion); spec 3 in full
 **Leaves intact:** spec 1's placement rule, tiers and record schema; specs 2, 5, 6
 
@@ -63,13 +63,58 @@ beside the one that already existed, and then starved.
 
 Nothing fires at session end. No gate, no queue, no promotion.
 
-The read trigger is not decoration. Twice in the session that produced this
-document, an agent asserted a thing was true when the repository already recorded
-the correction — that the Arch CI leg was not locally reproducible, and that a
-gitleaks allowlist was missing. Both were one `grep` away. The moment that needs
-a reader is mid-work, when a claim is about to be made, which is why this is an
-instruction and not a `session-start` hook. Spec 7 rejected a session-start
-banner in its own words: it could not fire without becoming wallpaper.
+The read trigger is not decoration. In the session that produced this document an
+agent asserted that the Arch CI leg was not locally reproducible, while spec 5
+recorded the opposite correction — and recorded that believing it was what left
+an earlier diagnosis unchecked. It was one `grep` away. (A second error the same
+session, about a gitleaks allowlist, was cwd drift rather than a retrieval
+failure, and is not evidence for this.)
+
+The moment that needs a reader is mid-work, when a claim is about to be made.
+That rules out a `session-start` hook, which fires when relevance is still
+unknown — spec 7 rejected a session-start banner in its own words, as something
+that could not fire without becoming wallpaper. It does not rule out a hook at
+the moment text is written, which has a concrete subject and can stay silent on
+no match. See **The subagent hole** below, which decides whether such a hook
+could work at all.
+
+## The subagent hole
+
+Spec 1 measured this on Claude Code 2.1.224 and it constrains both triggers:
+
+> `SessionStart` does **not** fire for subagents … Subagents inherit `CLAUDE.md`
+> but do not act on it — 0 of 31 observed subagents followed an inherited
+> bootstrap directive.
+
+Read precisely, because the direction matters. Subagents **see** the instruction
+and ignore it; `SubagentStart` and `SubagentStop` were both observed **firing**.
+For subagents it is the instruction that fails, not the hook — the reverse of
+this document's general argument, and the reason spec 1 concluded that recording
+must be a hook.
+
+Two consequences, both recorded here rather than discovered later.
+
+**Trigger 2 does not fire inside subagents.** The human-recognition trigger is
+safe: a human addresses the controller, which acts. But the event trigger — a bug
+understood, a run collapsed, an approach abandoned — describes things that happen
+*inside a child* during subagent-driven work, which is how this repository
+executes plans. A child will not act on the inherited instruction. Capture there
+degrades to the controller noticing from the child's report. Weaker, not absent,
+and the fleet skill should say so rather than imply coverage the measurement
+denies.
+
+**Whether a write-time read hook can cover subagents is unmeasured.** The events
+that experiment dumped were `SessionStart`, `SubagentStart`, `SubagentStop` and
+`Stop`. `PreToolUse` was not among them, so whether it fires inside a child is
+unknown — and that single fact decides whether the read trigger can be
+mechanised where instructions demonstrably fail. Measure it with the same
+throwaway-repo dump script spec 1 used, before building anything.
+
+**One caution on spec 1's own generalisation.** "Recording must be a hook and
+never an instruction" is broader than 0-of-31 on a single directive type
+supports. `autogo-mlx` is a live counter-example of an inherited instruction that
+*is* acted on — by main agents. Narrowed to what was measured: *subagents* do not
+act on inherited directives.
 
 ## Two stores, one retrieval axis each
 
@@ -99,12 +144,12 @@ Q&A form, taken from `autogo-mlx` unchanged:
 **Constrain shape, not length.** Measured 2026-08-20 across both repositories:
 the four session-end drafts span 175-243 words (spread 68) while `autogo-mlx`'s
 nine Q&A entries span 418-701 (spread 283). The drafts are uniform because a rule
-set their size -- spec 7 bounds a draft to three bullets -- and the Q&A entries
+set their size — spec 7 bounds a draft to three bullets — and the Q&A entries
 vary because the finding set theirs. Spec 7's answer to that bound was that a
 draft "grows at review"; the two promoted handoffs are 46 and 257 words, so it
 did not. Note what this does *not* show: the two `.agents/memory/` entries are 570
 and 746 words, larger than the Q&A average, so the store never produced poor
-artifacts. It produced two, by hand -- only one draft of seven was ever promoted.
+artifacts. It produced two, by hand — only one draft of seven was ever promoted.
 The mechanism did not make the good entries; deliberate writing did.
 
 **Question-first, not claim-first.** `.agents/memory/` indexed entries by what
@@ -166,8 +211,7 @@ deleting code that exists, which is cheap and reversible.
 
 State it now, while it is cheap to be honest.
 
-**Not emptiness.** An earlier draft of this section said an empty `docs/qna/`
-after four weeks would refute the design. It would not. The write trigger is
+**Not emptiness.** An empty `docs/qna/` refutes nothing. The write trigger is
 conditioned on a human recognising something, so the absence of recognition
 produces zero entries *correctly* — a true negative, not a failure. Two cases
 make this concrete: work run autonomously, where the human has no context from
@@ -191,17 +235,14 @@ review is a gate this repository already runs.
 read"; the fleet skill names the store, so agents will visit it. The measured
 problem is narrower and worse. This repository's `CLAUDE.md` already says "Read
 it before assuming; it is the record", and in the session that produced this
-document an agent twice asserted a claim the repository had already corrected —
-about Arch reproducibility, and about a gitleaks allowlist. The instruction was
-present and did not fire. If corrections keep being missed while sitting in
-`docs/qna/`, the read trigger has failed, and that is the one place in this
-design where a mechanism would beat an instruction.
+document an agent asserted a claim about Arch reproducibility that spec 5 had
+already corrected. The instruction was present and did not fire. If corrections
+keep being missed while sitting in `docs/qna/`, the read trigger has failed —
+which, together with subagents, is where a mechanism earns its place in a design
+that otherwise prefers instructions.
 
-**A comparison available now, not in four weeks.** Seven drafts were written
-under the session-end instruction; four are still pending and can be read today
-against `autogo-mlx`'s Q&A entries. That comparison is the cheap way to sharpen
-what "better material" means before any claim rests on it. Note what it cannot
-settle: this repository's work *was* the toolchain, so both triggers would draw
-on the same subject matter. Trigger-invariance here would support this document's
-thesis — that content decided — rather than refute it, which is why the earlier
-version of this bullet was circular.
+**The subagent hole widens.** If trigger 2 proves unrecoverable inside
+subagent-driven work — findings made in a child and never surfaced by the
+controller — then instruction-based capture does not cover the way this
+repository actually executes plans, and the hole is structural rather than
+incidental.
