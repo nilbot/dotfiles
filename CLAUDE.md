@@ -15,7 +15,7 @@ itself and a missing hook fails silently, so an empty or stale `.agents/` means
 the setup is broken rather than that there is nothing to say — report it instead
 of working around it.
 
-Run `agents doctor` early and report any warnings before relying on any of this.
+Run `agents doctor` early and report any warnings before relying on this context.
 
 Recording is covered by the global instruction and the `recording-what-you-learn`
 skill; it is not repo-specific and is not restated here. What is repo-specific:
