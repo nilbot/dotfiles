@@ -4,7 +4,8 @@
 2026-08-11 (design, narrowed to verification) / 2026-08-13 (measured against
 master) / 2026-08-14 (restructured phase-first; every verification command
 executed, which changed phase 2)
-**Status:** designed — not implemented
+**Status:** implemented and merged 2026-08-19. Check 2 was deleted 2026-08-20
+with the command it measured; see the note on it below.
 **Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the Go
 module, the exit-code table, and the security boundaries CI must not cross.
 **Carries obligations from:** [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md),
@@ -324,6 +325,14 @@ a tracked fixture must do the same.
 by hand and which nothing currently keeps verified.
 
 ### Check 2 — `agents index` is a pure function of tracked content
+
+> **Retired 2026-08-20, with its subject.** `agents index` and both `INDEX.md`
+> generators were deleted by
+> `docs/design/2026-08-19-knowledge-is-documentation.md`, so this check had
+> nothing left to hold pure. It is kept here rather than cut because the
+> reasoning below — CI must not depend on the reviewer's machine being
+> provisioned — outlives the command it was written about. Everything after
+> this note describes a check that no longer runs.
 
 Build `agents`, run `agents index`, require `git diff --exit-code` clean. The
 `generated-file` guard rule already blocks a stale index at commit time via
