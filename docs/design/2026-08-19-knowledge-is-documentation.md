@@ -155,12 +155,42 @@ deleting code that exists, which is cheap and reversible.
 
 State it now, while it is cheap to be honest.
 
-- If `docs/qna/` in an actively worked repository is still empty after four weeks,
-  instruction-only has failed too, and the problem is neither capture nor review
-  but that the work is not producing findings worth keeping.
-- If entries accumulate and are never read — no grep ever hits, no claim is ever
-  corrected by one — then the store has writers and no readers, and the correct
-  response is to stop writing, not to build retrieval.
-- If the two triggers produce material indistinguishable from what the session-end
-  instruction produced, then the trigger was never the variable and this document
-  is wrong about its central claim.
+**Not emptiness.** An earlier draft of this section said an empty `docs/qna/`
+after four weeks would refute the design. It would not. The write trigger is
+conditioned on a human recognising something, so the absence of recognition
+produces zero entries *correctly* — a true negative, not a failure. Two cases
+make this concrete: work run autonomously, where the human has no context from
+which to recognise anything, and work that genuinely surfaced nothing
+interesting. Neither refutes anything, and the first is already covered by the
+second trigger, which fires on events in the work rather than on a human being
+present. A test that blames the mechanism for a state the mechanism reported
+accurately is not a test.
+
+**Upstream approval approves the topic, not the text.** This is the real cost of
+moving the gate before the writing, and it is the thing most likely to be wrong
+here. A human who says "save that" has vouched for the *subject*; they may never
+read the artifact. Downstream review, whatever else was wrong with it, read the
+words. Falsifier: sample the entries after four weeks and check them. If they are
+wrong, misleading, or leak something, then review was doing work that recognition
+does not do. Partial mitigation already exists and needs no new machinery —
+writing an entry produces a commit, so entries surface in diffs, and the commit
+review is a gate this repository already runs.
+
+**The read instruction may simply not fire.** The bar is not "entries are never
+read"; the fleet skill names the store, so agents will visit it. The measured
+problem is narrower and worse. This repository's `CLAUDE.md` already says "Read
+it before assuming; it is the record", and in the session that produced this
+document an agent twice asserted a claim the repository had already corrected —
+about Arch reproducibility, and about a gitleaks allowlist. The instruction was
+present and did not fire. If corrections keep being missed while sitting in
+`docs/qna/`, the read trigger has failed, and that is the one place in this
+design where a mechanism would beat an instruction.
+
+**A comparison available now, not in four weeks.** Seven drafts were written
+under the session-end instruction; four are still pending and can be read today
+against `autogo-mlx`'s Q&A entries. That comparison is the cheap way to sharpen
+what "better material" means before any claim rests on it. Note what it cannot
+settle: this repository's work *was* the toolchain, so both triggers would draw
+on the same subject matter. Trigger-invariance here would support this document's
+thesis — that content decided — rather than refute it, which is why the earlier
+version of this bullet was circular.
