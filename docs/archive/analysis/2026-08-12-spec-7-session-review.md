@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-12
 **Branch:** `spec-7-capture-and-review`, 9 commits, **not pushed**
-**Read this with:** [the spec](../specs/agents/2026-08-12-spec-7-capture-and-review.md),
+**Read this with:** [the spec](../../design/2026-08-12-spec-7-capture-and-review.md),
 [the plan](../plans/2026-08-12-spec-7-capture-and-review.md)
 
 This is a review aid, not a design document. It records what was decided, what

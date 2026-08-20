@@ -8,9 +8,9 @@
 
 **Tech Stack:** Go 1.26 (no dependencies), bash 3.2 for the shim only, Homebrew on both platforms, fish 4.x.
 
-**Spec:** [docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md](../specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md)
+**Spec:** [docs/superpowers/specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md](../../design/2026-08-07-spec-2-dotfiles-hygiene.md)
 
-> **This plan replaced a shell-based one after one task of implementation.** The evidence is in the spec's [six bash defects](../specs/agents/2026-08-07-spec-2-dotfiles-hygiene.md#the-six-bash-defects-that-decided-1-2026-08-10). Commits `14dab82` and `5ffeba3` are the shell version; `1dbbfe4` removed it. Do not reintroduce shell for anything but the shim.
+> **This plan replaced a shell-based one after one task of implementation.** The evidence is in the spec's [six bash defects](../../design/2026-08-07-spec-2-dotfiles-hygiene.md#the-six-bash-defects-that-decided-1-2026-08-10). Commits `14dab82` and `5ffeba3` are the shell version; `1dbbfe4` removed it. Do not reintroduce shell for anything but the shim.
 
 ## Global Constraints
 

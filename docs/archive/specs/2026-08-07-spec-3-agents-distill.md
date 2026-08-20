@@ -1,12 +1,12 @@
 # Spec 3 — `agents distill`
 
 **Status:** scope only — not designed, not implemented
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the pointer
+**Depends on:** [spec 1](../../design/2026-08-07-agents-repo-context-design.md) for the pointer
 format (§3.1) and the memory `sources:` schema (§3.4). Both were specified in spec 1
 *specifically* so this could be built later without unrepairable data loss.
 
 > **⚠ Premise changed 2026-08-12 by
-> [spec 7](2026-08-12-spec-7-capture-and-review.md). Read that first.**
+> [spec 7](../../design/2026-08-12-spec-7-capture-and-review.md). Read that first.**
 > This document describes distillation as *the* path from machine-bound material
 > to tracked knowledge. It is now the **fallback** path. Spec 7's primary path
 > drafts while the producing session's context is still live — at a blocking
@@ -23,6 +23,13 @@ format (§3.1) and the memory `sources:` schema (§3.4). Both were specified in 
 >
 > Designing against the text below without reading spec 7 will build the wrong
 > primary path.
+
+> **RETIRED 2026-08-20, never implemented.** The premise does not survive
+> [knowledge is documentation](../../design/2026-08-19-knowledge-is-documentation.md):
+> distillation was the fallback path *into* a curated `.agents/memory/` tier, and
+> that tier is retired. Kept because the reasoning is why nobody should rebuild
+> it, and because its "never dedupe by first match" hazard is still true of any
+> transcript mining.
 
 ## Why it exists
 

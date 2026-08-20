@@ -14,7 +14,7 @@ import (
 // copy, so that re-capturing on a version bump and overwriting these files is
 // what fails this suite when the vendor contract moves. An inline copy could
 // not do that: it would silently keep asserting the old shape.
-const ccFixtureDir = "../../../docs/superpowers/specs/agents/fixtures/2026-08-07-claude-code-hook-payloads"
+const ccFixtureDir = "../../../docs/design/fixtures/2026-08-07-claude-code-hook-payloads"
 
 const (
 	ccSessionStartFixture  = "cc-session-start.json"

@@ -1,20 +1,26 @@
 # Agent context
 
-Durable context for this repo lives in `.agents/`. Read it before assuming;
-it is the record, and this file is only the pointer to it.
+Durable context for this repo lives in `docs/`. Read it before assuming; it is
+the record, and this file is only the pointer to it.
 
-- `.agents/memory/INDEX.md` — curated knowledge about this codebase (generated)
-- `.agents/reports/handoff/INDEX.md` — work in flight, by lane (generated)
-- `.agents/reports/` — specs, plans, analysis, and trace pointers
-- `.agents/skills/` — procedures specific to this repo
+- `docs/design/` — the design still in force, and the reasoning behind it
+- `docs/qna/` — answers indexed by the question you would ask again
+- `docs/journal/` — dated record of what happened
+- `docs/archive/` — executed plans and retired specs; never rewritten to stay
+  true, so read them as of their date
 
-A hook cannot install itself and a missing hook fails silently: an empty or
-stale `.agents/` means the setup is broken, not that there is nothing to
-say -- report it rather than working around it.
+`.agents/` holds machine wiring, not knowledge: harness hooks, the trace cache,
+and `.agents/skills/` for procedures specific to this repo. A hook cannot install
+itself and a missing hook fails silently, so an empty or stale `.agents/` means
+the setup is broken rather than that there is nothing to say — report it instead
+of working around it.
 
-Run `agents doctor` early and report any warnings before relying on this context.
+Run `agents doctor` early and report any warnings before relying on any of this.
 
-When a stretch of work concludes — a bug understood, a decision made, an approach abandoned — record it before moving on: at most three bullets, covering what a future agent could not get from the code or the git log. Write it with `agents handoff draft --lane <lane> --session <id>`. Drafts are untracked until you review them, so drafting costs nothing and commits you to nothing.
+Recording is covered by the global instruction and the `recording-what-you-learn`
+skill; it is not repo-specific and is not restated here. What is repo-specific:
+findings go in `docs/qna/`, work records in `docs/journal/`, and both are written
+directly and committed — there is no draft queue and no promotion step.
 
-Review what has been drafted with `agents review`; promoting one writes it
-into `.agents/` and commits it in the same act.
+`.agents/memory/` and `.agents/reports/handoff/` are being retired; see
+`docs/design/2026-08-19-knowledge-is-documentation.md`. Do not add to them.

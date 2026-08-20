@@ -1,6 +1,6 @@
 ---
 name: agents-tool
-description: Use when working in a repository that has a tracked .agents/ directory - deciding when to record a finding, read a past session back, promote a draft into the repository's memory, or repair wiring that has gone stale.
+description: Use when working in a repository that has a tracked .agents/ directory - reading a past session back from a transcript, checking or repairing harness wiring, or bounding the trace cache. For recording what you learn, use recording-what-you-learn instead; this tool no longer owns that.
 ---
 
 # The `agents` tool
@@ -26,47 +26,31 @@ context. A hook cannot install itself and a missing hook fails silently, so an
 empty or stale `.agents/` means the setup is broken rather than that there is
 nothing to say. Report that rather than working around it.
 
-Read `.agents/memory/INDEX.md` and `.agents/reports/handoff/INDEX.md` before
-assuming. `reviewed` was written deliberately; `draft` was written at session
-end and has not been checked by anyone. Weigh them differently.
+Knowledge lives in the repository's documentation, not in `.agents/`. Read
+`docs/qna/` and `docs/design/` before assuming, or whatever the repository's own
+`CLAUDE.md` names. `.agents/` is machine wiring: hooks, the trace cache, and
+`.agents/skills/` for procedures specific to that repository.
 
 If the repository has no `.agents/` at all, `agents init` scaffolds it and
 registers it in the machine's fleet. It exits `1`, not `0` — the trust steps it
 prints are still outstanding, and reporting a working setup that is not yet
 working is the failure this code exists to prevent.
 
-## When a stretch of work concludes
+## Recording is not this tool's job any more
 
-`agents handoff` is the family that moves a note from your head into the
-repository: `draft` queues one, `write` commits a reviewed one, `prune` bounds
-a lane. Which of the three you want is the decision below.
+Use the `recording-what-you-learn` skill. Findings go to `docs/qna/`, work
+records to `docs/journal/`, written directly and committed — no queue, no
+promotion step.
 
-A bug understood, a decision made, an approach abandoned: record it with
-`agents handoff draft` before moving on. At most three bullets, covering what a
-future agent could not get from the code or the git log.
-
-**The test is not "was this hard" but "does the diff carry it".** A fix's
-justification — what was ruled out, why this fix and not another, what was
-deliberately left alone — is invisible in the change itself. That is worth a
-draft even when the fix explains itself. A mechanical edit with no conclusion is
-not.
-
-Drafts are untracked until reviewed, so drafting costs nothing and commits you
-to nothing. That is the point: the cost of a wrong draft is a `--bin`.
-
-`agents handoff write` skips the queue and writes a reviewed note straight into
-the tracked tree. Reach for it only when the note has already been reviewed by
-the human you are working with; the default path is a draft.
-
-When a lane has accumulated more notes than anyone will read, `agents handoff
-prune` bounds it. That discards history, so it is a decision to raise rather
-than take.
-
-## When the material is worth keeping
-
-`agents review` lists what is pending, and promoting one writes it, regenerates
-the affected index, and commits, in a single act. Promotion is where a human
-decides — never promote in bulk, and prefer to show the drafts and ask.
+**Retiring, do not reach for these.** The `agents handoff` family and
+`agents review` were the old path: `agents handoff draft` and
+`agents handoff write` queued and committed notes into `.agents/`;
+promotion wrote them into the tree; `agents handoff prune` bounded them. They still
+exist in the binary and are being removed. The design that retires them, with
+the evidence, is `docs/design/2026-08-19-knowledge-is-documentation.md` in the
+dotfiles repository — the short version is that the queue solved a problem the
+measurements do not support, and the store it fed was starved while a plain
+`docs/` directory in another repository filled up on its own.
 
 ## When a question needs evidence rather than recall
 
@@ -89,7 +73,7 @@ pointer and a record.
 `agents index` regenerates the generated indexes. The pre-commit guard runs it
 too, so a stale index blocks a commit rather than landing.
 
-`agents save` is an escape hatch for a hand-edited memory entry — the normal
+`agents save` is an escape hatch for committing `.agents/` paths alone — the normal
 path is promotion, which commits on its own.
 
 Keep repository content and agent context in separate commits. The guard warns

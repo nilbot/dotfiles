@@ -65,7 +65,7 @@ Each file was read in full before being committed.
 ## These files are test input, not documentation
 
 `agents/internal/harness/claudecode_test.go` **reads these four files directly**
-at `../../../docs/superpowers/specs/agents/fixtures/2026-08-07-claude-code-hook-payloads/`.
+at `../../../docs/design/fixtures/2026-08-07-claude-code-hook-payloads/`.
 They are not a pasted-in copy of something asserted elsewhere: edit a value here
 and the suite fails.
 

@@ -17,7 +17,7 @@ rendered from it.
 **Tech Stack:** Go 1.26.6 (stdlib only), GitHub Actions, Docker containers for
 Linux, gitleaks 8.30.1.
 
-**Spec:** [`docs/superpowers/specs/agents/2026-08-11-spec-5-verification-gate.md`](../specs/agents/2026-08-11-spec-5-verification-gate.md)
+**Spec:** [`docs/superpowers/specs/agents/2026-08-11-spec-5-verification-gate.md`](../../design/2026-08-11-spec-5-verification-gate.md)
 (committed `ddb3f03`). Read it alongside this plan — the plan argues from it, and
 its "Decisions that bind every phase" section is normative here.
 
@@ -2556,7 +2556,7 @@ In `docs/superpowers/specs/agents/README.md`, change spec 5's status from
 `designed` to `implemented`, and add a row to the implementation-plans table:
 
 ```markdown
-| 5 | [the verification gate](../../plans/2026-08-14-spec-5-verification-gate.md) | executed |
+| 5 | [the verification gate](2026-08-14-spec-5-verification-gate.md) | executed |
 ```
 
 ```bash

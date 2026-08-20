@@ -193,7 +193,7 @@ the local case. It does not answer what a distributed binary should resolve.
 - ~~Does the `~/dotfiles` assumption belong to this spec or a spec 1
   amendment?~~ **Neither — it was a defect and was fixed outright** by stamping
   the root at build time, in
-  [checkout path and field defects](../../plans/2026-08-11-checkout-path-and-field-defects.md).
+  [checkout path and field defects](../archive/plans/2026-08-11-checkout-path-and-field-defects.md).
   What remains is the narrower question of what a binary belonging to no checkout
   should stamp.
 - ~~Which Linux distributions does a runner actually verify?~~ **Answered by

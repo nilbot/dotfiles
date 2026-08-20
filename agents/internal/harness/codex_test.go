@@ -14,7 +14,7 @@ import (
 // fixtures. Read from disk for the same reason the Claude Code suite does:
 // re-capturing on a version bump overwrites these files, and that is what has
 // to fail this suite when the vendor contract moves.
-const cxFixtureDir = "../../../docs/superpowers/specs/agents/fixtures/2026-08-07-codex-hook-payloads"
+const cxFixtureDir = "../../../docs/design/fixtures/2026-08-07-codex-hook-payloads"
 
 const (
 	cxSessionStartFixture   = "codex-session-start.json"
