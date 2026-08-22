@@ -4,7 +4,7 @@
 
 **No, and it has not been since `agy` 1.1.1.** A workspace-local
 `<workspace>/.agents/hooks.json` loads once the folder is trusted. Measured on
-1.1.16, 2026-08-20:
+1.1.16, 2026-08-20; hook schema re-verified unchanged on **1.1.18**, 2026-08-22:
 
 ```
 17:39:19  [pid 1]    loaded 0 named hooks from 0 hooks.json file(s)   # startup, untrusted
@@ -22,6 +22,9 @@ hooks.json file(s)` with the workspace trusted. From that one probe the design
 concluded "Antigravity (`agy`) and Gemini CLI support — out of scope."
 
 The binary's own changelog:
+
+`agy` ships about a patch a day — 1.1.0 on 2026-08-07, 1.1.18 on 2026-08-22 —
+so any version in this entry is a stamp, not a floor. The binary's own changelog:
 
 > **1.1.1** — "Fixed workspace-local hooks defined in
 > `<workspace>/.agents/hooks.json` not loading after trusting a folder by
@@ -66,16 +69,31 @@ up for this tool. Rules load from `GEMINI.md`, `AGENTS.md` and
 Hook events are `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`
 and `Stop`. **There is no `SessionStart`, `SubagentStart` or `SubagentStop`.**
 That is the load-bearing gap: the transcript cache exists because Claude Code
-deletes subagent transcripts mid-session, and Antigravity offers no event to
-hang it on. Antigravity natively supports the instruction half of the design and
-structurally cannot support the part kept mechanical. `Stop` hooks are also
+deletes subagent transcripts mid-session, and Antigravity offers no event under
+that name to hang it on.
+
+> **Narrowed 2026-08-22.** The sentence that stood here — that Antigravity
+> "structurally cannot support the part kept mechanical" — claimed more than the
+> event list supports, in two directions. Antigravity has subagents
+> (`invoke_subagent`), so `PostToolUse` matched against that tool is an
+> untested candidate for the same moment under a different spelling. And the
+> prior question is whether Antigravity *needs* it: the cache is a remedy for
+> Claude Code's pruning, and
+> [Codex has never been shown to have that problem either](which-harnesses-actually-lose-transcripts.md).
+> Read the original claim as: no event of that *name* exists. Whether the moment
+> is reachable, and whether it is wanted, are both open —
+> [spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) §9 names them. `Stop` hooks are also
 newer than they look — before 1.1.10 they sat "unreachable behind the built-ins"
 and did not run at all.
 
 One further caveat on scope: a Google engineer states publicly that Antigravity
 2.0 and the CLI "have the same harness", and that the older IDE is "close". That
-is a claim, not a measurement — everything above was measured on the CLI, and
-whether it transfers to the app is untested.
+is a claim, not a measurement — everything above was measured on the CLI.
+
+**Resolved 2026-08-22 for the app**, which is the one the operator uses: its core
+binary carries the same hook proto types, schema and embedded docs. See
+[does the Antigravity app share the CLI harness](does-the-antigravity-app-share-the-cli-harness.md)
+— including the two things it does *not* settle, trust and subagent events.
 
 Related: [how-do-i-confirm-something-is-not-wired](how-do-i-confirm-something-is-not-wired.md)
 and [can-this-check-actually-fail](can-this-check-actually-fail.md) — this is

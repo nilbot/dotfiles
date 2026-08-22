@@ -11,6 +11,16 @@ claude/ide/
 claude/plugins/
 claude/statsig/
 
+# Generated hook wiring. Never tracked: it carries this machine's absolute
+# binary path, and the Antigravity desktop app executes a workspace's
+# .agents/hooks.json on open, with no trust prompt and before any user input
+# (measured 2026-08-22, docs/qna/what-does-opening-a-repo-in-antigravity-run.md).
+# This repository is public, so a tracked one would be an armed trap for anyone
+# who clones and opens it. .claude/ and .codex/ are ignored for the first reason
+# alone; this one has both.
+.agents/hooks.json
+.codex/
+
 # Python bytecode (e.g. from skill helper scripts)
 __pycache__/
 *.py[cod]
