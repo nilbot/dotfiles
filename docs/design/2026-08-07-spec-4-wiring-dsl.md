@@ -25,7 +25,7 @@ or `agy` gaining workspace-local hook support." Both, at once.
 [Antigravity is not out of scope](../qna/is-antigravity-really-out-of-scope.md)
 records the re-test: workspace-local `<workspace>/.agents/hooks.json` has loaded
 since `agy` 1.1.1, and the Antigravity **app** ships the same hook machinery as
-the CLI (measured 2026-08-22 — see
+the CLI (measured 2026-08-22 on 1.1.18 — see
 [the app shares the harness](../qna/does-the-antigravity-app-share-the-cli-harness.md)).
 
 **Trigger 3 — capability requirements need to be declarative.** The original
@@ -100,116 +100,307 @@ This axis is not decoration. It is the difference between a tool that ports its
 author's harness's problems to every other vendor, and one that asks each vendor
 what it actually breaks.
 
-## 4. The vocabulary
+## 4. The finding the vocabulary produced
 
-Three tables. The point of the DSL is that these are **data you can diff**,
-rather than conditionals rederived per adapter.
+§5 is the schema. This section is the one thing that only became visible once
+needs and capabilities were tabulated separately, stated before the tables so it
+is not lost inside them.
 
-### 4a. Semantic moments
-
-Named for what happens, never for a vendor's spelling.
-
-| moment | meaning |
-|---|---|
-| `session.begin` | a top-level conversation starts |
-| `turn.before-model` | the model is about to run, within a turn |
-| `turn.after-model` | the model has run, within a turn |
-| `turn.end` | the agent is about to stop |
-| `subagent.begin` | a child agent starts |
-| `subagent.end` | a child agent finishes |
-| `tool.before` / `tool.after` | around one tool call |
-
-### 4b. Capabilities
-
-What a harness can supply *at* a moment. `Capabilities` in
-`agents/internal/harness` is this table with exactly one entry today
-(`Description`); the DSL is what makes it a vocabulary.
-
-| capability | means |
-|---|---|
-| `payload.child-transcript` | the payload names the child's transcript file |
-| `payload.description` | a human label for a subagent is available |
-| `payload.turn-id` | a per-turn identifier exists |
-| `result.inject-context` | the hook's stdout can add context to the model |
-| `result.block` | the hook can refuse, or force continuation |
-
-### 4c. Harness matrix
-
-Measured, with the unmeasured marked. **A blank is not a zero** — it is a
-measurement nobody has taken, and the DSL must not encode it as a decision.
-
-| moment | Claude Code | Codex | Antigravity |
-|---|---|---|---|
-| `session.begin` | `SessionStart` | `SessionStart` | **absent** |
-| `turn.before-model` | — | — | `PreInvocation` + `result.inject-context` |
-| `turn.after-model` | — | — | `PostInvocation` + `result.block` |
-| `turn.end` | `Stop` | `Stop` | `Stop` (1.1.10+) |
-| `subagent.begin` | `SubagentStart` | `SubagentStart` | *unmeasured* — `PostToolUse` on `invoke_subagent`? |
-| `subagent.end` | `SubagentStop` + `payload.child-transcript` | `SubagentStop` + `payload.child-transcript` | *unmeasured* |
-| `tool.before` / `tool.after` | `PreToolUse`/`PostToolUse` | same | same (+ `result.block` on `PreToolUse`) |
-
-The asymmetry runs both ways, which is the finding. Antigravity has no
-`session.begin` and its subagent events are unmeasured — but it is the only
-harness in the fleet offering `turn.before-model` with `result.inject-context`.
-That is a per-turn injection point with a concrete subject that can stay silent
-on no match: precisely the mechanism the redesign wanted for the read trigger and
+**The asymmetry runs both ways.** Antigravity has no `session.begin`, and its
+subagent events are unmeasured — but it is the only harness in the fleet
+offering `turn.before-model` with `result.inject-context`. That is a per-turn
+injection point with a concrete subject, able to stay silent on no match:
+precisely the mechanism the 2026-08-19 redesign wanted for the read trigger and
 recorded as not having.
 
-## 5. Schema
+The harness we excluded for fifteen releases is the only one that can do the
+thing we said was impossible. That is what a comparison table buys, and it is
+why §5 is the deliverable and the compiler is an afterthought.
 
-TOML — precedent in Codex's own `config.toml`, and Go parses it for free. **Not a
-hand-written grammar.** If it needs its own lexer, the design went wrong.
+## 5. The schema
+
+Five types. The compiler is small; this vocabulary is the artifact, so each type
+is given in full — fields, legal values, and what a value *claims*.
+
+| type | kind | what it is |
+|---|---|---|
+| `moment` | closed enum | a semantic lifecycle point, named for what happens |
+| `capability` | closed enum | something a harness can supply *at* a moment |
+| `intent` | record | one thing this tool wants done, and what it needs to work |
+| `target` | record | one harness's output disposition and dialects |
+| `dialect` | closed enum ×2 | how config is rendered; how payload keys are spelled |
+
+`moment` and `capability` are closed because the compiler must be able to reject
+a typo. Adding a value is a deliberate edit with a measurement behind it.
+
+### 5.1 `moment`
+
+> **Provenance.** Claude Code cells: 2.1.224, spec 1 task 8. Codex cells:
+> CLI 0.147.0. Antigravity cells: hook *loading* on `agy` 1.1.16 (2026-08-20);
+> event and payload *schema* extracted from the binary's embedded docs on
+> **1.1.18** (2026-08-22), re-verified unchanged from 1.1.17.
+>
+> `agy` ships roughly a release a day — 1.1.0 on 2026-08-07, 1.1.18 on
+> 2026-08-22. This spec's Antigravity rows are the perishable part, and the last
+> time a perishable Antigravity measurement went unstamped it stood wrong for
+> fifteen releases. Re-verifying is one command: extract the five
+> `### N. \`Event\` Contract` headings and check the count and the names.
+
+Named for what happens, never for a vendor's spelling. **Measured** means this
+repository observed it firing; **documented** means a vendor states it exists and
+we have not run it; **blank** means nobody has checked, and is not a zero.
+
+| `moment` | Claude Code | Codex | Antigravity |
+|---|---|---|---|
+| `session.begin` | `SessionStart` *(measured)* | `SessionStart` *(measured)* | **absent** |
+| `session.end` | | `SessionEnd` *(documented)* | **absent** |
+| `prompt.submit` | | `UserPromptSubmit` *(documented)* | |
+| `turn.before-model` | | | `PreInvocation` *(documented)* |
+| `turn.after-model` | | | `PostInvocation` *(documented)* |
+| `turn.end` | `Stop` *(measured)* | `Stop` *(measured)* | `Stop` *(documented, 1.1.10+)* |
+| `subagent.begin` | `SubagentStart` *(measured)* | `SubagentStart` *(measured)* | |
+| `subagent.end` | `SubagentStop` *(measured)* | `SubagentStop` *(measured)* | |
+| `tool.before` | `PreToolUse` *(documented)* | `PreToolUse` *(measured)* | `PreToolUse` *(documented)* |
+| `tool.after` | `PostToolUse` *(documented)* | `PostToolUse` *(documented)* | `PostToolUse` *(documented)* |
+| `context.compact` | | `PreCompact`/`PostCompact` *(documented)* | |
+| `permission.request` | | `PermissionRequest` *(documented)* | |
+
+Claude Code's row is sparse because spec 1 measured one session and recorded only
+what fired. Its vendor documents more events; none are cited here, because this
+table's job is to distinguish measured from assumed and a borrowed list would
+defeat it.
+
+**`subagent.end` on Antigravity is the highest-value blank in this document.**
+Antigravity has subagents (`invoke_subagent`), so `tool.after` with a matcher of
+`invoke_subagent` is a candidate for the same moment under a different spelling.
+Whether the moment is reachable that way is untested.
+
+### 5.2 `capability`
+
+What a harness supplies at a moment. This is `harness.Capabilities` promoted from
+one bool to a vocabulary.
+
+| `capability` | means | Claude Code | Codex | Antigravity |
+|---|---|---|---|---|
+| `payload.session-id` | a stable conversation identifier | `session_id` | `session_id` | `conversationId` |
+| `payload.turn-id` | a per-turn identifier | `prompt_id` | `turn_id` | `stepIdx`/`invocationNum` — *ordinals, not ids* |
+| `payload.cwd` | one working directory | `cwd` | `cwd` | `workspacePaths` — **an array** |
+| `payload.own-transcript` | the transcript of the agent that fired | ✔ | ✔ | `transcriptPath` *(documented)* |
+| `payload.child-transcript` | the *child's* transcript at `subagent.end` | `agent_transcript_path` | `agent_transcript_path` | |
+| `payload.agent-id` | pairs `subagent.begin` ↔ `subagent.end` | `agent_id` | `agent_id` | |
+| `payload.description` | a human label for a subagent | via spawn-time sidecar | **no** | |
+| `payload.artifact-dir` | a directory of run artifacts | **no** | **no** | `artifactDirectoryPath` |
+| `result.inject-context` | stdout can add context to the model | at `session.begin` | | `injectSteps` at `turn.before-model`/`turn.after-model` |
+| `result.block` | the hook can deny, or force continuation | | | `decision` at `tool.before`, `terminationBehavior`, `Stop` — **bounded**¹ |
+| `config.matcher` | handlers can be scoped by a pattern | ✔ | ✔ | ✔ — **required** for tool-scoped events |
+| `handler.timeout` | per-handler execution timeout | | | ✔, seconds, default 30 |
+
+¹ A `Stop` hook cannot block indefinitely: `agy` defuses one that always
+continues, "after a configurable number of consecutive continuations, the hook
+can no longer block and the turn ends normally". Any intent depending on
+`result.block` at `turn.end` must be correct when its blocking is ignored.
+
+Three of these rows are load-bearing and none was visible before the vocabulary
+was written down.
+
+**`payload.turn-id` is not portable.** Claude Code and Codex supply opaque ids
+under different names, which `harness.turnID` already reconciles. Antigravity
+supplies `stepIdx`, `invocationNum` and `executionNum` — **ordinals within a
+conversation, not identifiers**. A record field typed as an id cannot hold one
+honestly, and the adapter must declare the gap rather than coerce a number into
+it. This is the `description` problem again, one type deeper.
+
+**`payload.cwd` is not portable either.** `workspacePaths` is plural:
+Antigravity models multi-root workspaces, and `Trace.Cwd` is a single string. The
+DSL cannot fix that — it can only make the compiler refuse to pretend.
+
+**`config.matcher` is universal but not optional.** Antigravity *requires* a
+matcher group for `tool.before`/`tool.after` and matches regex against tool names
+derived by lowercasing the step type and stripping `CORTEX_STEP_TYPE_`. Codex's
+existing `session-start` entry carries `matcher: "startup|resume"`. So a matcher
+is a first-class intent field, not an adapter detail.
+
+### 5.3 `intent`
+
+| field | type | required | meaning |
+|---|---|---|---|
+| `moment` | `moment` | ✔ | when to run |
+| `run` | string | ✔ | the `agents` subcommand; rendered into the target's dialect |
+| `requires` | `[capability]` | ✔ (may be empty) | absent capability ⇒ degrade and report |
+| `needed-by` | `[target]` | ✔ | harnesses where the need is **demonstrated**. Allowlist |
+| `matcher` | string | — | pattern scoping; mandatory where the target requires one |
+| `timeout` | int | — | seconds; emitted only where `handler.timeout` exists |
+| `why` | string | ✔ | the evidence, and for omitted harnesses, why the need is unshown |
+
+`why` is required because §3's whole point is that `needed-by` encodes a
+falsifiable claim. An intent that cannot say why a harness is missing from its
+allowlist is the one-sided model sneaking back in.
+
+**The complete intent set.** Three built, two named and deliberately unbuilt.
+
+| intent | `moment` | `requires` | `needed-by` | status |
+|---|---|---|---|---|
+| `record-session-pointer` | `session.begin` | — | claude-code, codex | live |
+| `record-turn-end` | `turn.end` | — | claude-code, codex | live; antigravity eligible |
+| `cache-subagent-transcript` | `subagent.end` | `payload.child-transcript` | **claude-code only** | live; §3 corrects it |
+| `record-subagent-pointer` | `subagent.begin` | `payload.agent-id` | — | wired today on codex against no demonstrated need |
+| `inject-retrieval-prompt` | `turn.before-model` | `result.inject-context` | — | **not proposed** — §9 |
+
+`inject-retrieval-prompt` is listed to fix its shape, not to authorise it. The
+read trigger is instruction-delivered today; mechanising it is a separate design
+with its own falsifier. What the table records is that the capability now exists
+on exactly one harness, so the question is answerable rather than academic.
+
+### 5.4 `target`
+
+| field | type | meaning |
+|---|---|---|
+| `path` | repo-relative path | where the generated config goes |
+| `config-dialect` | `dialect.config` | how hook entries nest |
+| `payload-dialect` | `dialect.payload` | how payload keys are spelled |
+| `tracked` | bool | whether the generated file is committed |
+| `ownership` | `own` \| `merge` | may we replace the file, or must we merge into it |
+| `hook-cwd` | `unspecified` \| `config-dir` | the working directory the harness gives the hook process |
+| `transcript-root` | `home` \| `workspace` \| `opaque` | where raw material lives, and therefore who may copy it |
+| `scope` | `repository` \| `global` | which config this row describes. **This spec wires `repository` only** |
+| `trust` | free text | the manual gate; never defeated, only reported |
+
+| | Claude Code | Codex | Antigravity |
+|---|---|---|---|
+| `path` | `.claude/settings.json` | `.codex/hooks.json` | `.agents/hooks.json` |
+| `config-dialect` | `nested-hooks` | `nested-hooks` | `flat-named` |
+| `payload-dialect` | `snake` | `snake` | `camel` |
+| `tracked` | false | false | **true** — `.agents/` is tracked context |
+| `ownership` | `merge` — holds unrelated settings | `own` | `merge` — shares the customization root |
+| `hook-cwd` | unspecified | unspecified | `config-dir` |
+| `transcript-root` | `home` | `home` | `opaque` |
+| `scope` | repository | repository | repository |
+| `trust` | project-trust prompt once | hash-based; `/hooks` reviews | folder trust; **app mechanism unknown** |
+
+Three consequences the row-by-row view makes unavoidable.
+
+**`tracked` differs, and it is the first time it has.** `.claude/` and `.codex/`
+are git-ignored generated output. Antigravity's config lives in `.agents/`, which
+this repository *tracks*. A generated file entering the tracked tree is exactly
+what spec 1 §3.2 governs, and the guard's `unsafe-path` rule already watches
+staged `.agents/` blobs. Either `.agents/hooks.json` is tracked — and then it must
+be deterministic, machine-independent, and free of absolute paths — or it is
+ignored, and Antigravity is the one harness whose config is invisible to review.
+**Not decided here.** It is the first genuine per-target policy question the DSL
+surfaces, and it deserves its own decision rather than a default.
+
+**`transcript-root: opaque` is not a shrug.** Antigravity's hook docs give
+`transcriptPath` as `<workspace>/.gemini/antigravity/transcript.jsonl`, but no
+workspace on this machine contains a `.gemini` directory, and the real
+conversation store is `~/.gemini/antigravity/conversations/<uuid>.db` and `.pb` —
+**SQLite and protobuf, not JSONL**. The documented path and the observed store
+disagree, and no Antigravity hook has ever run here to settle it. Until one does,
+the cell is `opaque`, and `cache-subagent-transcript` cannot name Antigravity for
+a second reason beyond §3: `pointer.Resolve` requires a `.jsonl` suffix, and
+copying a live SQLite file is a torn read, not a backup.
+
+**`scope` exists because Antigravity has two config locations, and one of them
+is shared.** `agy` 1.1.x moved the `/hooks` command's output from
+`~/.gemini/antigravity-cli/hooks.json` to `~/.gemini/config/hooks.json`, its own
+changelog explaining the fix as *"ensuring hooks remain synchronized between the
+TUI and the backend"*. `~/.gemini/config/` is shared across all three products —
+`~/.gemini/antigravity/mcp_config.json` is a symlink into it, and it holds the
+project registry that names workspaces by `gitFolder` URI. So a *global* hooks
+path exists that would apply to the app, the CLI and the IDE at once.
+
+This spec does not wire it, and the `scope` field is how it says so out loud
+rather than by omission. Global wiring is a fleet decision with a different blast
+radius: one file, every repository, including repositories that never opted in.
+Spec 1's placement rule exists to keep this tool's writes inside repositories
+that asked for them.
+
+Two facts about that shared directory are worth carrying anyway. It already
+contains `skills -> /Users/nilbot/dotfiles/gemini/skills`, so **this repository
+already places skills for Antigravity globally** — the placement half of §7 is
+not merely portable in principle, it is deployed. And the shared config holds
+`globalPermissionGrants` but **no `trustedWorkspaces`**: that key lives only in
+the CLI's own settings file, which is why the app's trust mechanism is still the
+open question in §9 and not answered by finding the shared directory.
+
+**`hook-cwd: config-dir` breaks a silent assumption.** Antigravity runs the hook
+from the directory containing `hooks.json`. Every relative path in a generated
+command would resolve differently there. `HookCommand` already emits an absolute
+binary path, so nothing is broken today — but the reason it is not broken is an
+accident of an unrelated decision, and the DSL should say so rather than rely on
+it.
+
+### 5.5 `dialect`
+
+Two independent enums. Conflating them is what cost a probe.
+
+`dialect.config` — how hook entries nest in the generated file:
+
+| value | shape | targets |
+|---|---|---|
+| `nested-hooks` | `{"hooks": {"<Vendor>": [{"matcher": …, "hooks": [{"type","command"}]}]}}` | claude-code, codex |
+| `flat-named` | `{"<Vendor>": [{"matcher": …, "hooks": [{"type","command","timeout"}]}]}` | antigravity |
+
+`dialect.payload` — how the harness spells keys on stdin:
+
+| value | spelling | targets |
+|---|---|---|
+| `snake` | `session_id`, `transcript_path`, `agent_transcript_path` | claude-code, codex |
+| `camel` | `conversationId`, `transcriptPath`, `artifactDirectoryPath` (protojson) | antigravity |
+
+`harness.Payload` decodes `snake` only. A `camel` adapter needs its own decode
+path, and the redaction guarantee must hold across both: the guarantee is
+structural — `Payload` has no field able to hold a forbidden value — so a second
+decoder is a second place that guarantee must be proven, not inherited. That is a
+test obligation, and it is the single largest implementation cost in this spec.
+
+### 5.6 What the compiler may not infer
+
+- **A blank cell is not `false`.** Absent capability ⇒ degrade and report;
+  unmeasured ⇒ report differently. Two states, never merged into one.
+- **A moment present under another name is not automatically the same moment.**
+  `tool.after` + `matcher = "invoke_subagent"` may be `subagent.end`. Until
+  measured it is a hypothesis, and the DSL records hypotheses in `why`, not in
+  `needed-by`.
+- **An ordinal is not an id.** `stepIdx` must not populate a `turn_id` field.
+- **Vendor documentation is not a measurement.** §5.1 keeps the two apart on
+  purpose; the last time they were conflated the answer stood wrong for fifteen
+  releases.
+
+### 5.7 Worked example
 
 ```toml
 # .agents/wiring.toml — tracked, hand-edited, the only source of hook truth.
 
 [intent.cache-subagent-transcript]
-moment   = "subagent.end"
-run      = "hook subagent-stop"
-requires = ["payload.child-transcript"]
-# Wire only where the harness is known to destroy transcripts mid-session.
+moment    = "subagent.end"
+run       = "hook subagent-stop"
+requires  = ["payload.child-transcript"]
 needed-by = ["claude-code"]
 why = """
 Claude Code prunes subagent transcripts during the producing session; capture is
-now-or-never. Measured: docs/qna/why-are-subagent-transcripts-gone.md.
-Codex is deliberately absent — 0 subagent records, no pruning observed.
+now-or-never (docs/qna/why-are-subagent-transcripts-gone.md). Codex is absent
+deliberately: 0 subagent records, no pruning observed
+(docs/qna/which-harnesses-actually-lose-transcripts.md). Antigravity is absent
+for two reasons - the need is unshown, and transcript-root is opaque.
 """
 
-[intent.record-session-pointer]
-moment   = "session.begin"
-run      = "hook session-start"
-requires = []
-needed-by = ["claude-code", "codex"]
-why = "A pointer to the session transcript, written before it can be lost."
-
 [intent.record-turn-end]
-moment = "turn.end"
-run    = "hook stop"
-requires = []
-needed-by = ["claude-code", "codex", "antigravity"]
-
-[target.claude-code]
-path     = ".claude/settings.json"
-dialect  = "nested-hooks"      # {"hooks": {"<Vendor>": [...]}}
-tracked  = false
-ownership = "merge"            # holds unrelated settings; never clobber
-
-[target.codex]
-path     = ".codex/hooks.json"
-dialect  = "nested-hooks"
-tracked  = false
-ownership = "own"
+moment    = "turn.end"
+run       = "hook stop"
+requires  = []
+needed-by = ["claude-code", "codex"]
+why = "A pointer to the session transcript. Antigravity is eligible and unwired."
 
 [target.antigravity]
-path     = ".agents/hooks.json"
-dialect  = "flat-named"        # {"<Vendor>": [...]} — no wrapper
-tracked  = true                # .agents/ is tracked context; see §7
-ownership = "merge"
+path            = ".agents/hooks.json"
+config-dialect  = "flat-named"
+payload-dialect = "camel"
+tracked         = true          # OPEN - see 5.4
+ownership       = "merge"
+hook-cwd        = "config-dir"
+transcript-root = "opaque"
+trust           = "folder trust; app mechanism unknown"
 ```
-
-`needed-by` is an allowlist, not a denylist, and it is the axis §3 adds. Omitting
-a harness is a claim that the need has not been demonstrated there — which is
-falsifiable, and which `why` must state.
 
 ## 6. Compilation and degradation
 
@@ -284,6 +475,11 @@ the small, honest mechanism half.
 - **How does the Antigravity app grant workspace trust?** `~/.gemini/antigravity/`
   has no `settings.json` at all, so the CLI's `trustedWorkspaces` mechanism is
   not the app's. Trust is the gate the CLI probe had to clear.
+- **What re-verifies the Antigravity rows, and when?** `agy` released 18 patches
+  in 15 days. §5.1 carries a version stamp and a one-command re-check, but
+  nothing *runs* it. Spec 5's gate is the obvious host; whether a CI job should
+  assert a vendor binary's embedded schema is genuinely arguable — it fails on
+  the vendor's schedule, not ours — and is not decided here.
 - **Should Codex's `subagent-stop` wiring be removed?** §3 says the need is
   undemonstrated. It is also nearly free and already trusted. Left in place
   pending either a Codex pruning observation or a decision to enforce

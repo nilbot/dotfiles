@@ -16,7 +16,7 @@ about another.
 ## Answer
 
 **Yes, for the part that matters.** Measured 2026-08-22 against the app's own
-core binary:
+core binary, with `agy` at 1.1.18 for the CLI side:
 
 ```
 /Applications/Antigravity.app/Contents/Resources/bin/language_server   145 MB
@@ -54,3 +54,10 @@ string extraction from a binary. It proves the code is *present and documented*,
 not that it *runs*. It is strong enough to stop treating parity as an open
 question and to start writing the adapter; it is not strong enough to skip the
 live trust-and-fire probe before claiming the app is wired.
+
+One more thing the app and CLI share: `~/.gemini/config/`. `agy` moved its
+`/hooks` output there "ensuring hooks remain synchronized between the TUI and
+the backend", `~/.gemini/antigravity/mcp_config.json` symlinks into it, and it
+holds the project registry naming workspaces by `gitFolder` URI. It does **not**
+hold `trustedWorkspaces` — that key exists only in the CLI's own settings — so
+finding the shared directory does not answer the trust question above.

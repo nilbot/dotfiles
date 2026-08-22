@@ -4,7 +4,7 @@
 
 **No, and it has not been since `agy` 1.1.1.** A workspace-local
 `<workspace>/.agents/hooks.json` loads once the folder is trusted. Measured on
-1.1.16, 2026-08-20:
+1.1.16, 2026-08-20; hook schema re-verified unchanged on **1.1.18**, 2026-08-22:
 
 ```
 17:39:19  [pid 1]    loaded 0 named hooks from 0 hooks.json file(s)   # startup, untrusted
@@ -22,6 +22,9 @@ hooks.json file(s)` with the workspace trusted. From that one probe the design
 concluded "Antigravity (`agy`) and Gemini CLI support — out of scope."
 
 The binary's own changelog:
+
+`agy` ships about a patch a day — 1.1.0 on 2026-08-07, 1.1.18 on 2026-08-22 —
+so any version in this entry is a stamp, not a floor. The binary's own changelog:
 
 > **1.1.1** — "Fixed workspace-local hooks defined in
 > `<workspace>/.agents/hooks.json` not loading after trusting a folder by
