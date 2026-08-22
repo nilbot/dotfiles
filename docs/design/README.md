@@ -27,7 +27,7 @@ Numbers are stable catalog identifiers, not priority or order.
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged |
 | 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | scope only |
 | 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | §1–2 in force; the capture half is retired |
-| — | [knowledge is documentation](2026-08-19-knowledge-is-documentation.md) | design, approved; execution in progress |
+| — | [knowledge is documentation](2026-08-19-knowledge-is-documentation.md) | **executed 2026-08-20** — the retired code and stores are deleted |
 
 **Spec 1 is the foundation** — terminology, the placement rule, the pointer
 format, the Go module and installation boundaries. What the 2026-08-19 redesign

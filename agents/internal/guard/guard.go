@@ -57,7 +57,8 @@ type indexEntry struct {
 	Path  string
 }
 
-// Staged checks staged .agents/ blobs, generated indexes, and mixed commits.
+// Staged checks staged .agents/ blobs, unsafe paths, and mixed commits, then
+// scans the staged content for secrets.
 // Every repository read goes through Git's index; the working tree is never an
 // input and is never written.
 func Staged(repoRoot string) ([]Finding, error) {
@@ -374,69 +375,6 @@ func sortFindings(findings []Finding) {
 		}
 		return findings[i].Rule < findings[j].Rule
 	})
-}
-
-func hasPathPrefix(paths []string, prefix string) bool {
-	for _, path := range paths {
-		if strings.HasPrefix(path, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func aliasesGeneratedTarget(source, generated string) bool {
-	if strings.EqualFold(source, generated) {
-		return true
-	}
-	return len(source) > len(generated) &&
-		source[len(generated)] == '/' &&
-		strings.EqualFold(source[:len(generated)], generated)
-}
-
-func writeScratchFile(scratch, destination string, blob []byte, created map[string]bool) error {
-	rel, err := filepath.Rel(scratch, destination)
-	if err != nil {
-		return err
-	}
-	parts := strings.Split(rel, string(filepath.Separator))
-	current := scratch
-	for _, part := range parts[:len(parts)-1] {
-		current = filepath.Join(current, part)
-		if created[current] {
-			continue
-		}
-		if _, err := os.Lstat(current); err == nil {
-			return errors.New("filesystem alias")
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-		if err := os.Mkdir(current, 0o700); err != nil {
-			return err
-		}
-		created[current] = true
-	}
-	if created[destination] {
-		return errors.New("duplicate scratch destination")
-	}
-	if _, err := os.Lstat(destination); err == nil {
-		return errors.New("filesystem alias")
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	f, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err := f.Write(blob); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	created[destination] = true
-	return nil
 }
 
 func quoteASCII(value string) string {

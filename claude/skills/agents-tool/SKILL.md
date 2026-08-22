@@ -89,11 +89,16 @@ worktree is often where the interesting work happened.
 
 ## Committing
 
-`agents save` is an escape hatch for committing `.agents/` paths alone — the normal
-path is promotion, which commits on its own.
+`agents save` commits `.agents/` paths and nothing else. It was an escape hatch
+around promotion; promotion is gone, so for the rare commit that touches only
+harness wiring it is now simply the direct way.
 
-Keep repository content and agent context in separate commits. The guard warns
-when one commit touches both.
+Knowledge is not committed this way — it is documentation, so it goes in an
+ordinary commit alongside everything else.
+
+Keep repository content and agent context in separate commits. The guard warns,
+without blocking, when one commit touches both, and names `agents save` in the
+message.
 
 ## Wiring, across this repository and the fleet
 
