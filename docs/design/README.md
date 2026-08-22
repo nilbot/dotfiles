@@ -23,7 +23,7 @@ Numbers are stable catalog identifiers, not priority or order.
 | 1 | [repo-tracked agent context](2026-08-07-agents-repo-context-design.md) | implemented; its memory and `sources:` sections are superseded by the redesign below |
 | 2 | [dotfiles hygiene](2026-08-07-spec-2-dotfiles-hygiene.md) | implemented |
 | 3 | [`agents distill`](../archive/specs/2026-08-07-spec-3-agents-distill.md) | **retired** — archived, never implemented |
-| 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | candidate, gated on triggers |
+| 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | **designed 2026-08-22** — triggers fired; not implemented |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged |
 | 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | scope only |
 | 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | §1–2 in force; the capture half is retired |
