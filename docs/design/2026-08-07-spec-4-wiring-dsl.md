@@ -158,8 +158,8 @@ we have not run it; **blank** means nobody has checked, and is not a zero.
 | `turn.before-model` | | | `PreInvocation` *(documented)* |
 | `turn.after-model` | | | `PostInvocation` *(documented)* |
 | `turn.end` | `Stop` *(measured)* | `Stop` *(measured)* | `Stop` *(documented, 1.1.10+)* |
-| `subagent.begin` | `SubagentStart` *(measured)* | `SubagentStart` *(measured)* | |
-| `subagent.end` | `SubagentStop` *(measured)* | `SubagentStop` *(measured)* | |
+| `subagent.begin` | `SubagentStart` *(measured)* | `SubagentStart` *(measured)* | `PreInvocation` **in the child** *(measured)* — see below |
+| `subagent.end` | `SubagentStop` *(measured)* | `SubagentStop` *(measured)* | `Stop` **in the child** *(measured)* — but see below |
 | `tool.before` | `PreToolUse` *(documented)* | `PreToolUse` *(measured)* | `PreToolUse` *(documented)* |
 | `tool.after` | `PostToolUse` *(documented)* | `PostToolUse` *(documented)* | `PostToolUse` *(documented)* |
 | `context.compact` | | `PreCompact`/`PostCompact` *(documented)* | |
@@ -170,10 +170,39 @@ what fired. Its vendor documents more events; none are cited here, because this
 table's job is to distinguish measured from assumed and a borrowed list would
 defeat it.
 
-**`subagent.end` on Antigravity is the highest-value blank in this document.**
-Antigravity has subagents (`invoke_subagent`), so `tool.after` with a matcher of
-`invoke_subagent` is a candidate for the same moment under a different spelling.
-Whether the moment is reachable that way is untested.
+**Antigravity inverts the subagent model, and that is the most consequential
+thing in this table.** Measured 2026-08-22 on a live `agy` session that
+dispatched one subagent:
+
+Claude Code and Codex notify the **parent**: a named event fires in the parent's
+context and hands it the child's transcript path. Antigravity runs the **child's
+own hooks inside the child**, under the child's own `conversationId` and
+`transcriptPath`, and tells the parent nothing. `tool.after` matched on
+`invoke_subagent` does fire on the parent when the call returns — carrying only
+the parent's ids. The child's identity and transcript are absent from it.
+
+All five events fire inside a child. That is *more* coverage than the named-event
+model gives, not less.
+
+**But the child cannot tell it is a child.** The five payload key sets are
+structurally identical between parent and child; only the `conversationId` value
+differs, and nothing says which is root. `parent_conversation_id` and
+`parentConversationId` exist in the runtime — including a label
+`antigravity.google/parent_conversation_id` — and **appear in no hook payload**.
+So `subagent.end` and `turn.end` are the same event with no field distinguishing
+them, and a hook can separate them only from state it kept itself.
+
+This is a third failure mode, and §5.6 records it: a moment can be unreachable
+not because the event is missing, but because the payload cannot disambiguate it.
+
+One result reaches past this spec. The 2026-08-19 redesign left open *"whether a
+write-time read hook can cover subagents is unmeasured … that single fact decides
+whether the read trigger can be mechanised where instructions demonstrably
+fail"* — measured against Claude Code, where 0 of 31 subagents acted on an
+inherited directive. On Antigravity the answer is **yes**: `turn.before-model`
+and `tool.before` both fire inside children. The harness this repository excluded
+for fifteen releases is the only one where the redesign's unmechanisable trigger
+is mechanisable.
 
 ### 5.2 `capability`
 
@@ -187,7 +216,8 @@ one bool to a vocabulary.
 | `payload.cwd` | one working directory | `cwd` | `cwd` | `workspacePaths` — **an array** |
 | `payload.own-transcript` | the transcript of the agent that fired | ✔ | ✔ | `transcriptPath` — `.jsonl`, `$HOME`-rooted *(store measured)* |
 | `payload.child-transcript` | the *child's* transcript at `subagent.end` | `agent_transcript_path` | `agent_transcript_path` | |
-| `payload.agent-id` | pairs `subagent.begin` ↔ `subagent.end` | `agent_id` | `agent_id` | |
+| `payload.agent-id` | pairs `subagent.begin` ↔ `subagent.end` | `agent_id` | `agent_id` | **no** — child has an id, nothing links it |
+| `payload.parent-id` | says whether this agent is a child, and whose | not needed — events are named | not needed | **no** — exists in the runtime, absent from every payload |
 | `payload.description` | a human label for a subagent | via spawn-time sidecar | **no** | |
 | `payload.artifact-dir` | a directory of run artifacts | **no** | **no** | `artifactDirectoryPath` |
 | `result.inject-context` | stdout can add context to the model | at `session.begin` | | `injectSteps` at `turn.before-model`/`turn.after-model`; three step types² |
@@ -323,6 +353,36 @@ and `trace.Cache` already handle. The need is absent. Under the one-sided model
 this repository used until today, that distinction had nowhere to live and the
 cache would have been ported on capability alone.
 
+**`scope` exists because Antigravity has two config locations, and one of them
+is shared.** `agy` 1.1.x moved the `/hooks` command's output from
+`~/.gemini/antigravity-cli/hooks.json` to `~/.gemini/config/hooks.json`, its own
+changelog explaining the fix as *"ensuring hooks remain synchronized between the
+TUI and the backend"*. `~/.gemini/config/` is shared across all three products —
+`~/.gemini/antigravity/mcp_config.json` is a symlink into it, and it holds the
+project registry that names workspaces by `gitFolder` URI.
+
+**Measured 2026-08-22: global and workspace hooks both run, and neither
+shadows.** With the same hook name defined in `~/.gemini/config/hooks.json` and
+in a workspace `.agents/hooks.json`, the manager logged `loaded 2 named hooks
+from 2 hooks.json file(s)` and ran the workspace handler first, the global one
+28ms later. Same-event handlers merge and execute sequentially regardless of
+origin.
+
+That is convenient, and it is also the argument against using global scope: a
+handler there runs in **every** workspace, including ones that never opted in,
+and nothing in a workspace can suppress it. Spec 1's placement rule exists to
+keep this tool's writes inside repositories that asked for them, so this spec
+wires `repository` only and the `scope` field says so out loud rather than by
+omission.
+
+Two facts about that shared directory are worth carrying anyway. It already
+contains `skills -> /Users/nilbot/dotfiles/gemini/skills`, so **this repository
+already places skills for Antigravity globally** — the placement half of §7 is
+not merely portable in principle, it is deployed. And the shared config holds
+`globalPermissionGrants` but **no `trustedWorkspaces`**: that key lives only in
+the CLI's own settings file, which is why the app's trust mechanism is still the
+open question in §9 and not answered by finding the shared directory.
+
 **`hook-cwd: config-dir` breaks a silent assumption.** Antigravity runs the hook
 from the directory containing `hooks.json`. Every relative path in a generated
 command would resolve differently there. `HookCommand` already emits an absolute
@@ -390,9 +450,16 @@ test obligation, and it is the single largest implementation cost in this spec.
 - **A blank cell is not `false`.** Absent capability ⇒ degrade and report;
   unmeasured ⇒ report differently. Two states, never merged into one.
 - **A moment present under another name is not automatically the same moment.**
-  `tool.after` + `matcher = "invoke_subagent"` may be `subagent.end`. Until
-  measured it is a hypothesis, and the DSL records hypotheses in `why`, not in
-  `needed-by`.
+  Measured: `tool.after` + `matcher = "invoke_subagent"` fires on the *parent*
+  and names no child, so it is **not** `subagent.end`. The hypothesis this
+  document carried was wrong, and it was wrong in an instructive direction — the
+  moment exists, in the child, under a name shared with `turn.end`.
+- **An event that fires is not a moment you can act on.** Antigravity's `Stop`
+  serves `turn.end` and `subagent.end` with byte-identical key sets. Without
+  `payload.parent-id` the compiler cannot emit a hook for one without also
+  emitting it for the other. Record this as a *disambiguation* gap, distinct
+  from a missing capability and from an undemonstrated need: three reasons a
+  cell can be empty, and they call for three different responses.
 - **An ordinal is not an id.** `stepIdx` must not populate a `turn_id` field.
 - **Vendor documentation is not a measurement.** §5.1 keeps the two apart on
   purpose; the last time they were conflated the answer stood wrong for fifteen
@@ -505,21 +572,39 @@ the small, honest mechanism half.
 - **Do Antigravity hooks fire inside its subagents?** Unmeasured, and it decides
   whether `turn.before-model` can carry the read trigger where instructions
   demonstrably fail (0 of 31).
-- **How does the Antigravity app grant workspace trust?** Still open, and the
-  most load-bearing unknown left. `~/.gemini/antigravity/` has no
-  `settings.json`; `~/.gemini/config/config.json` holds `globalPermissionGrants`
-  but no `trustedWorkspaces`, which exists only in the CLI's own settings. The
-  shared `~/.gemini/config/projects/` registry names workspaces by `gitFolder`
-  URI and is the likeliest home, but nothing has been observed granting or
-  refusing. Trust is the gate the CLI probe had to clear, so until this is
-  answered, "Antigravity is wired" is not a claim this repository can make.
+- **How does the Antigravity app grant workspace trust?** Still open, and now the
+  only load-bearing unknown left. `trustedWorkspaces` appears once in `agy` and
+  **zero times** in the app's `language_server`, so the CLI mechanism is
+  definitely not the app's.
 
-- **Do Antigravity hooks fire inside its subagents, and is `tool.after` +
-  `matcher = "invoke_subagent"` really `subagent.end`?** Both plausible, neither
-  observed. The tool exists and matchers work, so the hypothesis is cheap to
-  test and it is the only route to subagent-scoped wiring on this harness. It
-  matters less than it did — §5.4 removes the reason we wanted it — but it is
-  the difference between an adapter with a blank row and one without.
+  A 2026-08-22 probe reported the answer as the project registry at
+  `~/.gemini/config/projects/`. **That is not what it measured.** It
+  hand-authored a registry entry and ran
+  `agy --project … --dangerously-skip-permissions` — the CLI, not the app, with
+  a bypass flag, changing two variables at once and running no control. It shows
+  hooks can load for a workspace absent from `trustedWorkspaces`; it cannot say
+  whether the registry entry or the bypass did it, and it observed the app doing
+  nothing at all. This is the failure spec 1 already records for Codex, whose
+  capture run cleared the gate by inference and whose later re-check without a
+  bypass found the same wiring inert.
+
+  The registry remains the best hypothesis — shared across products, naming
+  workspaces by `gitFolder` URI. It is a hypothesis. The measurement that would
+  settle it: open an untrusted workspace in the app, grant trust through its UI,
+  diff `~/.gemini/` across the grant. No bypass flag, one variable.
+
+  Until then, "Antigravity is wired" is not a claim this repository can make.
+
+- ~~**Do Antigravity hooks fire inside its subagents?**~~ **Closed 2026-08-22:
+  yes, all five.** And `tool.after` + `matcher = "invoke_subagent"` is **not**
+  `subagent.end` — it fires on the parent and names no child. See §5.1.
+
+- **Can `subagent.end` be disambiguated from `turn.end` on Antigravity at all?**
+  The new open question, created by closing the one above. No payload field
+  distinguishes them. A hook could keep its own state — the first
+  `conversationId` seen is the root — but that is inference across invocations
+  in a tool whose guarantees are per-invocation. Nothing depends on it today:
+  §5.4 removed the reason to want subagent-scoped wiring here.
 - **What re-verifies the Antigravity rows, and when?** `agy` released 18 patches
   in 15 days. §5.1 carries a version stamp and a one-command re-check, but
   nothing *runs* it. Spec 5's gate is the obvious host; whether a CI job should
