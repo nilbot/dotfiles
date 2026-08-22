@@ -185,15 +185,20 @@ one bool to a vocabulary.
 | `payload.session-id` | a stable conversation identifier | `session_id` | `session_id` | `conversationId` |
 | `payload.turn-id` | a per-turn identifier | `prompt_id` | `turn_id` | `stepIdx`/`invocationNum` — *ordinals, not ids* |
 | `payload.cwd` | one working directory | `cwd` | `cwd` | `workspacePaths` — **an array** |
-| `payload.own-transcript` | the transcript of the agent that fired | ✔ | ✔ | `transcriptPath` *(documented)* |
+| `payload.own-transcript` | the transcript of the agent that fired | ✔ | ✔ | `transcriptPath` — `.jsonl`, `$HOME`-rooted *(store measured)* |
 | `payload.child-transcript` | the *child's* transcript at `subagent.end` | `agent_transcript_path` | `agent_transcript_path` | |
 | `payload.agent-id` | pairs `subagent.begin` ↔ `subagent.end` | `agent_id` | `agent_id` | |
 | `payload.description` | a human label for a subagent | via spawn-time sidecar | **no** | |
 | `payload.artifact-dir` | a directory of run artifacts | **no** | **no** | `artifactDirectoryPath` |
-| `result.inject-context` | stdout can add context to the model | at `session.begin` | | `injectSteps` at `turn.before-model`/`turn.after-model` |
+| `result.inject-context` | stdout can add context to the model | at `session.begin` | | `injectSteps` at `turn.before-model`/`turn.after-model`; three step types² |
 | `result.block` | the hook can deny, or force continuation | | | `decision` at `tool.before`, `terminationBehavior`, `Stop` — **bounded**¹ |
 | `config.matcher` | handlers can be scoped by a pattern | ✔ | ✔ | ✔ — **required** for tool-scoped events |
 | `handler.timeout` | per-handler execution timeout | | | ✔, seconds, default 30 |
+
+² `injectSteps` accepts `{"ephemeralMessage": …}` (transient system message),
+`{"userMessage": …}` (persists in the conversation) and
+`{"toolCall": {"name","args"}}`. A read trigger wants the first: present for the
+turn, absent from the record.
 
 ¹ A `Stop` hook cannot block indefinitely: `agy` defuses one that always
 continues, "after a configurable number of consecutive continuations, the hook
@@ -259,21 +264,22 @@ on exactly one harness, so the question is answerable rather than academic.
 | `config-dialect` | `dialect.config` | how hook entries nest |
 | `payload-dialect` | `dialect.payload` | how payload keys are spelled |
 | `tracked` | bool | whether the generated file is committed |
-| `ownership` | `own` \| `merge` | may we replace the file, or must we merge into it |
+| `ownership` | `own` \| `merge` \| `own-key` | may we replace the file, merge into it, or own one named key within it |
 | `hook-cwd` | `unspecified` \| `config-dir` | the working directory the harness gives the hook process |
 | `transcript-root` | `home` \| `workspace` \| `opaque` | where raw material lives, and therefore who may copy it |
+| `hook-name` | string | the top-level key we own, where the dialect has one (`named-groups`) |
 | `scope` | `repository` \| `global` | which config this row describes. **This spec wires `repository` only** |
 | `trust` | free text | the manual gate; never defeated, only reported |
 
 | | Claude Code | Codex | Antigravity |
 |---|---|---|---|
 | `path` | `.claude/settings.json` | `.codex/hooks.json` | `.agents/hooks.json` |
-| `config-dialect` | `nested-hooks` | `nested-hooks` | `flat-named` |
+| `config-dialect` | `nested-hooks` | `nested-hooks` | `named-groups` |
 | `payload-dialect` | `snake` | `snake` | `camel` |
 | `tracked` | false | false | **true** — `.agents/` is tracked context |
-| `ownership` | `merge` — holds unrelated settings | `own` | `merge` — shares the customization root |
+| `ownership` | `merge` — holds unrelated settings | `own` | `own-key` — one named hook, merged natively |
 | `hook-cwd` | unspecified | unspecified | `config-dir` |
-| `transcript-root` | `home` | `home` | `opaque` |
+| `transcript-root` | `home` | `home` | `home` — *measured, see below* |
 | `scope` | repository | repository | repository |
 | `trust` | project-trust prompt once | hash-based; `/hooks` reviews | folder trust; **app mechanism unknown** |
 
@@ -289,38 +295,33 @@ ignored, and Antigravity is the one harness whose config is invisible to review.
 **Not decided here.** It is the first genuine per-target policy question the DSL
 surfaces, and it deserves its own decision rather than a default.
 
-**`transcript-root: opaque` is not a shrug.** Antigravity's hook docs give
-`transcriptPath` as `<workspace>/.gemini/antigravity/transcript.jsonl`, but no
-workspace on this machine contains a `.gemini` directory, and the real
-conversation store is `~/.gemini/antigravity/conversations/<uuid>.db` and `.pb` —
-**SQLite and protobuf, not JSONL**. The documented path and the observed store
-disagree, and no Antigravity hook has ever run here to settle it. Until one does,
-the cell is `opaque`, and `cache-subagent-transcript` cannot name Antigravity for
-a second reason beyond §3: `pointer.Resolve` requires a `.jsonl` suffix, and
-copying a live SQLite file is a torn read, not a backup.
+**`transcript-root: home`, and Antigravity does not prune.** This cell read
+`opaque` until 2026-08-22, on the strength of the hook docs giving
+`<workspace>/.gemini/…/transcript.jsonl` while no workspace on this machine had a
+`.gemini` directory. The doc path is illustrative; the real layout is
+`~/.gemini/antigravity/brain/<conversation-id>/.system_generated/logs/transcript.jsonl`
+— **113 of them on this machine, `.jsonl` as documented.**
 
-**`scope` exists because Antigravity has two config locations, and one of them
-is shared.** `agy` 1.1.x moved the `/hooks` command's output from
-`~/.gemini/antigravity-cli/hooks.json` to `~/.gemini/config/hooks.json`, its own
-changelog explaining the fix as *"ensuring hooks remain synchronized between the
-TUI and the backend"*. `~/.gemini/config/` is shared across all three products —
-`~/.gemini/antigravity/mcp_config.json` is a symlink into it, and it holds the
-project registry that names workspaces by `gitFolder` URI. So a *global* hooks
-path exists that would apply to the app, the CLI and the IDE at once.
+Retention, measured the same way §3 measured Claude Code's:
 
-This spec does not wire it, and the `scope` field is how it says so out loud
-rather than by omission. Global wiring is a fleet decision with a different blast
-radius: one file, every repository, including repositories that never opted in.
-Spec 1's placement rule exists to keep this tool's writes inside repositories
-that asked for them.
+```
+brain dirs: 94    with transcript: 85    without: 9
+  with transcript      oldest 2026-05-21   newest 2026-08-22
+  without transcript   oldest 2026-03-03   newest 2026-08-05
+```
 
-Two facts about that shared directory are worth carrying anyway. It already
-contains `skills -> /Users/nilbot/dotfiles/gemini/skills`, so **this repository
-already places skills for Antigravity globally** — the placement half of §7 is
-not merely portable in principle, it is deployed. And the shared config holds
-`globalPermissionGrants` but **no `trustedWorkspaces`**: that key lives only in
-the CLI's own settings file, which is why the app's trust mechanism is still the
-open question in §9 and not answered by finding the shared directory.
+Seven of the nine have no `.system_generated/logs` directory at all and several
+are empty, dating from March and April — before the feature, not pruned by it.
+**Fifteen months of transcripts survive intact**, against Claude Code losing 40%
+of its verified pointers including 25 inside the producing session.
+
+This closes §9's first open question, and it closes it the way §3 predicted:
+`cache-subagent-transcript` stays `needed-by = ["claude-code"]` because
+Antigravity **does not have the problem**, not because it cannot be wired. The
+capability is present — `.jsonl`, `$HOME`-rooted, exactly what `pointer.Resolve`
+and `trace.Cache` already handle. The need is absent. Under the one-sided model
+this repository used until today, that distinction had nowhere to live and the
+cache would have been ported on capability alone.
 
 **`hook-cwd: config-dir` breaks a silent assumption.** Antigravity runs the hook
 from the directory containing `hooks.json`. Every relative path in a generated
@@ -338,7 +339,38 @@ Two independent enums. Conflating them is what cost a probe.
 | value | shape | targets |
 |---|---|---|
 | `nested-hooks` | `{"hooks": {"<Vendor>": [{"matcher": …, "hooks": [{"type","command"}]}]}}` | claude-code, codex |
-| `flat-named` | `{"<Vendor>": [{"matcher": …, "hooks": [{"type","command","timeout"}]}]}` | antigravity |
+| `named-groups` | `{"<hook-name>": {"enabled": bool, "<Vendor>": …}}` | antigravity |
+
+> **Corrected 2026-08-22.** This row previously read
+> `flat-named` / `{"<Vendor>": [...]}`, which omits a whole level. Antigravity's
+> top-level key is an arbitrary **hook name**, and the event lives *inside* it.
+> A config in the shape this document used to specify would load nothing — the
+> same class of error the
+> [Antigravity re-test](../qna/is-antigravity-really-out-of-scope.md) already
+> cost one probe. Caught by a second opinion reading the vendor docs, confirmed
+> against the binary's embedded example on 1.1.18.
+
+`named-groups` carries two shapes in one file, chosen by event class:
+
+```json
+{
+  "agents": {
+    "PostToolUse": [                      // tool-scoped: matcher groups
+      { "matcher": "invoke_subagent",
+        "hooks": [{"type":"command","command":"…","timeout":10}] }
+    ],
+    "Stop": [                             // lifecycle: flat handler list
+      {"type":"command","command":"…"}
+    ]
+  }
+}
+```
+
+`PreToolUse`/`PostToolUse` require a matcher group wrapping a nested `hooks`
+array. `PreInvocation`/`PostInvocation`/`Stop` take handler objects **directly**,
+and a matcher on them is ignored. One renderer cannot emit both from one
+template, so `moment` determines the shape — which is why `moment` is a closed
+enum and not free text.
 
 `dialect.payload` — how the harness spells keys on stdin:
 
@@ -381,7 +413,8 @@ Claude Code prunes subagent transcripts during the producing session; capture is
 now-or-never (docs/qna/why-are-subagent-transcripts-gone.md). Codex is absent
 deliberately: 0 subagent records, no pruning observed
 (docs/qna/which-harnesses-actually-lose-transcripts.md). Antigravity is absent
-for two reasons - the need is unshown, and transcript-root is opaque.
+on measurement, not on capability: 85 of 94 brain dirs retain .jsonl transcripts
+spanning fifteen months, so there is nothing to rescue.
 """
 
 [intent.record-turn-end]
@@ -393,13 +426,14 @@ why = "A pointer to the session transcript. Antigravity is eligible and unwired.
 
 [target.antigravity]
 path            = ".agents/hooks.json"
-config-dialect  = "flat-named"
+hook-name       = "agents"      # the top-level key we own; see 5.5
+config-dialect  = "named-groups"
 payload-dialect = "camel"
 tracked         = true          # OPEN - see 5.4
-ownership       = "merge"
+ownership       = "own-key"
 hook-cwd        = "config-dir"
-transcript-root = "opaque"
-trust           = "folder trust; app mechanism unknown"
+transcript-root = "home"        # ~/.gemini/antigravity/brain/<id>/.../transcript.jsonl
+trust           = "folder trust; app mechanism unknown - OPEN, see 9"
 ```
 
 ## 6. Compilation and degradation
@@ -464,17 +498,28 @@ the small, honest mechanism half.
 
 ## 9. Open, and deliberately not decided
 
-- **Does Antigravity destroy subagent trajectories?** The decisive measurement
-  for whether `cache-subagent-transcript` ever gains `antigravity`. Its tooling
-  says *"logs and artifacts are preserved"* when a subagent tree is killed, while
-  a `Failed to prune trajectory` path also exists. Until measured, the cell stays
-  blank.
+- ~~**Does Antigravity destroy subagent trajectories?**~~ **Closed 2026-08-22:
+  no.** 85 of 94 brain directories retain transcripts spanning fifteen months;
+  the nine without predate the feature. See §5.4. `cache-subagent-transcript`
+  stays Claude-Code-only, now for a measured reason rather than an absent one.
 - **Do Antigravity hooks fire inside its subagents?** Unmeasured, and it decides
   whether `turn.before-model` can carry the read trigger where instructions
   demonstrably fail (0 of 31).
-- **How does the Antigravity app grant workspace trust?** `~/.gemini/antigravity/`
-  has no `settings.json` at all, so the CLI's `trustedWorkspaces` mechanism is
-  not the app's. Trust is the gate the CLI probe had to clear.
+- **How does the Antigravity app grant workspace trust?** Still open, and the
+  most load-bearing unknown left. `~/.gemini/antigravity/` has no
+  `settings.json`; `~/.gemini/config/config.json` holds `globalPermissionGrants`
+  but no `trustedWorkspaces`, which exists only in the CLI's own settings. The
+  shared `~/.gemini/config/projects/` registry names workspaces by `gitFolder`
+  URI and is the likeliest home, but nothing has been observed granting or
+  refusing. Trust is the gate the CLI probe had to clear, so until this is
+  answered, "Antigravity is wired" is not a claim this repository can make.
+
+- **Do Antigravity hooks fire inside its subagents, and is `tool.after` +
+  `matcher = "invoke_subagent"` really `subagent.end`?** Both plausible, neither
+  observed. The tool exists and matchers work, so the hypothesis is cheap to
+  test and it is the only route to subagent-scoped wiring on this harness. It
+  matters less than it did — §5.4 removes the reason we wanted it — but it is
+  the difference between an adapter with a blank row and one without.
 - **What re-verifies the Antigravity rows, and when?** `agy` released 18 patches
   in 15 days. §5.1 carries a version stamp and a one-command re-check, but
   nothing *runs* it. Spec 5's gate is the obvious host; whether a CI job should

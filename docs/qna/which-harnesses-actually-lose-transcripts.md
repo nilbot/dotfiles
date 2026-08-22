@@ -45,8 +45,30 @@ axis: wire where the harness *exhibits the need* **and** *provides the
 capability*. A missing capability is a gap to report; an undemonstrated need is
 not a gap at all.
 
-Two cautions on this measurement. Codex's n is 14 against Claude Code's 304 —
-this is evidence of absence only in the weak sense, and one Codex-heavy week
-could overturn it. And it says nothing about Antigravity, which has never been
-wired: whether it destroys subagent trajectories is the open measurement spec 4
-§9 names first.
+**Antigravity, measured 2026-08-22: it does not lose them either.**
+
+```
+brain dirs: 94    with transcript: 85    without: 9
+  with transcript      oldest 2026-05-21   newest 2026-08-22
+  without transcript   oldest 2026-03-03   newest 2026-08-05
+```
+
+Transcripts live at
+`~/.gemini/antigravity/brain/<conversation-id>/.system_generated/logs/transcript.jsonl`
+— 113 on this machine, `.jsonl`, `$HOME`-rooted. Seven of the nine dirs without
+one have no `.system_generated/logs` at all and several are empty, dating from
+March and April: before the feature, not pruned by it. Fifteen months survive.
+
+So the capability is there — `.jsonl` under `$HOME` is exactly what
+`pointer.Resolve` and `trace.Cache` already handle — and the need is not. Under
+the one-sided model this repository used until today, the cache would have been
+ported to Antigravity on capability alone.
+
+**Claude Code is, so far, the only harness in the fleet that needs the cache.**
+
+Two cautions. Codex's n is 14 against Claude Code's 304 — evidence of absence
+only in the weak sense, and one Codex-heavy week could overturn it. And the
+Antigravity figure counts *conversations*, which include subagents (each gets
+its own `conversationId`), but no Antigravity hook has ever run here, so no
+record distinguishes parent from child. It shows the store is not pruned; it does
+not separately confirm that a *subagent's* transcript outlives its parent's turn.
