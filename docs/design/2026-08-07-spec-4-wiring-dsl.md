@@ -306,24 +306,40 @@ on exactly one harness, so the question is answerable rather than academic.
 | `path` | `.claude/settings.json` | `.codex/hooks.json` | `.agents/hooks.json` |
 | `config-dialect` | `nested-hooks` | `nested-hooks` | `named-groups` |
 | `payload-dialect` | `snake` | `snake` | `camel` |
-| `tracked` | false | false | **true** — `.agents/` is tracked context |
+| `tracked` | false | false | false — *see below; `.agents/` is tracked, this file is not* |
 | `ownership` | `merge` — holds unrelated settings | `own` | `own-key` — one named hook, merged natively |
 | `hook-cwd` | unspecified | unspecified | `config-dir` |
 | `transcript-root` | `home` | `home` | `home` — *measured, see below* |
 | `scope` | repository | repository | repository |
-| `trust` | project-trust prompt once | hash-based; `/hooks` reviews | folder trust; **app mechanism unknown** |
+| `trust` | project-trust prompt once | hash-based; `/hooks` reviews | **none in the app** — opening the folder runs it |
 
 Three consequences the row-by-row view makes unavoidable.
 
-**`tracked` differs, and it is the first time it has.** `.claude/` and `.codex/`
-are git-ignored generated output. Antigravity's config lives in `.agents/`, which
-this repository *tracks*. A generated file entering the tracked tree is exactly
-what spec 1 §3.2 governs, and the guard's `unsafe-path` rule already watches
-staged `.agents/` blobs. Either `.agents/hooks.json` is tracked — and then it must
-be deterministic, machine-independent, and free of absolute paths — or it is
-ignored, and Antigravity is the one harness whose config is invisible to review.
-**Not decided here.** It is the first genuine per-target policy question the DSL
-surfaces, and it deserves its own decision rather than a default.
+**`tracked` looked like the first real policy question. It answered itself.**
+`.claude/` and `.codex/` are git-ignored generated output; Antigravity's config
+lives in `.agents/`, which this repository *tracks*. The question was whether
+`.agents/hooks.json` should be tracked — deterministic and machine-independent —
+or ignored, leaving one harness's config invisible to review.
+
+**Decided 2026-08-22: ignored, and it is not close.** The desktop app executes a
+workspace's `.agents/hooks.json` **on open**, with no trust prompt and before any
+prompt is typed — a full `PreInvocation`/`PostInvocation`/`Stop` cycle fired 44
+seconds after the folder was registered and 2m21s before the first user message
+([measurement](../qna/what-does-opening-a-repo-in-antigravity-run.md)). Hook
+commands run through `sh -c`.
+
+So a tracked hook config is executable content that runs on clone-and-open. This
+repository is **public**. `.claude/` and `.codex/` are ignored because a
+generated config carries this machine's absolute binary path; this one has that
+reason and a second, worse one. The ignore rule is in place before any adapter
+exists, so there was never a window in which one could be committed.
+
+Note what this does *not* say. Antigravity's threat model is not defective — it
+is different, and the difference is exactly the kind of thing the target table
+exists to hold. Claude Code gates on a project-trust prompt, Codex on a hook
+hash it re-flags after any edit, Antigravity on the act of opening. A DSL that
+modelled only *where the file goes* would have emitted a tracked config for the
+one harness where tracking is dangerous.
 
 **`transcript-root: home`, and Antigravity does not prune.** This cell read
 `opaque` until 2026-08-22, on the strength of the hook docs giving
@@ -496,11 +512,11 @@ path            = ".agents/hooks.json"
 hook-name       = "agents"      # the top-level key we own; see 5.5
 config-dialect  = "named-groups"
 payload-dialect = "camel"
-tracked         = true          # OPEN - see 5.4
+tracked         = false         # decided; see 5.4 - the app runs it on open
 ownership       = "own-key"
 hook-cwd        = "config-dir"
 transcript-root = "home"        # ~/.gemini/antigravity/brain/<id>/.../transcript.jsonl
-trust           = "folder trust; app mechanism unknown - OPEN, see 9"
+trust           = "none in the app; opening the folder runs the hooks"
 ```
 
 ## 6. Compilation and degradation
@@ -572,28 +588,18 @@ the small, honest mechanism half.
 - **Do Antigravity hooks fire inside its subagents?** Unmeasured, and it decides
   whether `turn.before-model` can carry the read trigger where instructions
   demonstrably fail (0 of 31).
-- **How does the Antigravity app grant workspace trust?** Still open, and now the
-  only load-bearing unknown left. `trustedWorkspaces` appears once in `agy` and
-  **zero times** in the app's `language_server`, so the CLI mechanism is
-  definitely not the app's.
+- ~~**How does the Antigravity app grant workspace trust?**~~ **Closed
+  2026-08-22: it does not have a trust gate.** Opening the folder registers a
+  project manifest and immediately runs an agent turn, executing the workspace's
+  hooks before any prompt is typed. `trustedWorkspaces` is CLI-only (once in
+  `agy`, zero times in `language_server`), and the manifest's `settings` object
+  is empty — it records that the workspace exists, not that it is trusted. See
+  [what opening a repo runs](../qna/what-does-opening-a-repo-in-antigravity-run.md),
+  and §5.4, which this decides.
 
-  A 2026-08-22 probe reported the answer as the project registry at
-  `~/.gemini/config/projects/`. **That is not what it measured.** It
-  hand-authored a registry entry and ran
-  `agy --project … --dangerously-skip-permissions` — the CLI, not the app, with
-  a bypass flag, changing two variables at once and running no control. It shows
-  hooks can load for a workspace absent from `trustedWorkspaces`; it cannot say
-  whether the registry entry or the bypass did it, and it observed the app doing
-  nothing at all. This is the failure spec 1 already records for Codex, whose
-  capture run cleared the gate by inference and whose later re-check without a
-  bypass found the same wiring inert.
-
-  The registry remains the best hypothesis — shared across products, naming
-  workspaces by `gitFolder` URI. It is a hypothesis. The measurement that would
-  settle it: open an untrusted workspace in the app, grant trust through its UI,
-  diff `~/.gemini/` across the grant. No bypass flag, one variable.
-
-  Until then, "Antigravity is wired" is not a claim this repository can make.
+  The consequence is the opposite of what the open question anticipated. It was
+  filed as the last obstacle to wiring; it turns out there is nothing to clear,
+  and the finding instead constrains what we may put on disk.
 
 - ~~**Do Antigravity hooks fire inside its subagents?**~~ **Closed 2026-08-22:
   yes, all five.** And `tool.after` + `matcher = "invoke_subagent"` is **not**
