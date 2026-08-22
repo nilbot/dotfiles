@@ -218,13 +218,20 @@ one bool to a vocabulary.
 | `payload.own-transcript` | the transcript of the agent that fired | ✔ | ✔ | `transcriptPath` — `.jsonl`, `$HOME`-rooted *(store measured)* |
 | `payload.child-transcript` | the *child's* transcript at `subagent.end` | `agent_transcript_path` | `agent_transcript_path` | |
 | `payload.agent-id` | pairs `subagent.begin` ↔ `subagent.end` | `agent_id` | `agent_id` | **no** — child has an id, nothing links it |
-| `payload.parent-id` | says whether this agent is a child, and whose | `agent_id`+`agent_type` at `tool.before`³ | not needed | **no** — exists in the runtime, absent from every payload |
+| `payload.parent-id` | says whether this agent is a child, and whose | `agent_id`+`agent_type` at `tool.before`³ | not needed | **no** — exists in the runtime, absent from `HookArgsCommon`⁴ |
 | `payload.description` | a human label for a subagent | via spawn-time sidecar | **no** | |
 | `payload.artifact-dir` | a directory of run artifacts | **no** | **no** | `artifactDirectoryPath` |
 | `result.inject-context` | stdout can add context to the model | at `session.begin` | | `injectSteps` at `turn.before-model`/`turn.after-model`; three step types² |
 | `result.block` | the hook can deny, or force continuation | | | `decision` at `tool.before`, `terminationBehavior`, `Stop` — **bounded**¹ |
 | `config.matcher` | handlers can be scoped by a pattern | ✔ | ✔ | ✔ — **required** for tool-scoped events |
 | `handler.timeout` | per-handler execution timeout | | | ✔, seconds, default 30 |
+
+⁴ Strengthened 2026-08-22: confirmed against the `hooks_pb` proto rather than
+against observed payloads. `HookArgsCommon` has eight fields and no parent id;
+`parent_conversation_id` is on five other messages and no `*HookArgs` type. The
+same check found `executionId`, `isBattleMode` and `lastUserInput` in the
+envelope, none of which appeared in any captured payload — protojson omits
+empties, so a measured key set is a lower bound on the schema.
 
 ³ **Corrected 2026-08-22.** This cell read "not needed — events are named",
 which is true at `subagent.begin`/`subagent.end` and false at `tool.before`,

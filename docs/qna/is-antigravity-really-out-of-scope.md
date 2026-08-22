@@ -68,6 +68,10 @@ up for this tool. Rules load from `GEMINI.md`, `AGENTS.md` and
 
 Hook events are `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`
 and `Stop`. **There is no `SessionStart`, `SubagentStart` or `SubagentStop`.**
+(Still true of the *event surface* on 1.1.18 — the binary's own event table lists
+those five. But `SessionStartHookArgs` and `SessionStartHookResult` exist in the
+proto as empty messages, so the list may not stay five;
+[see the subagent entry](how-does-antigravity-expose-subagents.md).)
 That is the load-bearing gap: the transcript cache exists because Claude Code
 deletes subagent transcripts mid-session, and Antigravity offers no event under
 that name to hang it on.

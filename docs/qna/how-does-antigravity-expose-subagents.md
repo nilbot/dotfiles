@@ -45,6 +45,34 @@ including a label `antigravity.google/parent_conversation_id` — and **appear i
 no hook payload**. So `subagent.end` and `turn.end` are the same event with no
 field separating them.
 
+**Confirmed 2026-08-22 from the vendor's own proto, on 1.1.18.** The observation
+above came from watching payloads, which can only show what a run happened to
+populate. The shared envelope is `HookArgsCommon` in
+`google3/third_party/jetski/hooks_pb`, and its complete field set is:
+
+```
+artifactDirectoryPath  conversationId  executionId  isBattleMode
+lastUserInput          modelName       transcriptPath  workspacePaths
+```
+
+Eight fields, no parent. `parent_conversation_id` is a field on five other
+messages in the binary (numbers 2, 4, 5 and 12) and on none of the seven
+`*HookArgs` types. This upgrades the claim from *not seen in these runs* to
+*not in the schema*.
+
+Two things this turned up that the payload watching could not:
+
+- **The measured key sets are a lower bound, not the schema.** `executionId`,
+  `isBattleMode` and `lastUserInput` are in `HookArgsCommon` and appeared in no
+  captured payload, because protojson omits empty fields. Read the key sets
+  above as "what was populated", never as "what exists".
+- **`SessionStartHookArgs` and `SessionStartHookResult` exist.** Both are empty
+  messages, and `SessionStart` is absent from the binary's own documented event
+  table, which lists exactly the five events named here. So it is a type without
+  a surface — plausibly reserved, plausibly forthcoming. It does not change what
+  is wireable today, and it is the first sign the event list might not stay
+  five. Re-check it on the next upgrade.
+
 ## What follows
 
 **A third reason a capability cell can be empty.**
