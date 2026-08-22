@@ -106,12 +106,13 @@ what it actually breaks.
 needs and capabilities were tabulated separately, stated before the tables so it
 is not lost inside them.
 
-**The asymmetry runs both ways.** Antigravity has no `session.begin`, and its
-subagent events are unmeasured — but it is the only harness in the fleet
-offering `turn.before-model` with `result.inject-context`. That is a per-turn
-injection point with a concrete subject, able to stay silent on no match:
-precisely the mechanism the 2026-08-19 redesign wanted for the read trigger and
-recorded as not having.
+**The asymmetry runs both ways.** Antigravity has no `session.begin` and no
+event named for a subagent — but it is the only harness in the fleet offering
+`turn.before-model` with `result.inject-context`, and the only one whose hooks
+fire *inside* a child agent. That is a per-turn injection point with a concrete
+subject, able to stay silent on no match, reachable from exactly the place
+instructions demonstrably fail: precisely the mechanism the 2026-08-19 redesign
+wanted for the read trigger and recorded as not having.
 
 The harness we excluded for fifteen releases is the only one that can do the
 thing we said was impossible. That is what a comparison table buys, and it is
@@ -545,11 +546,17 @@ is read by the compiler and by `doctor`, and by nothing else.
   directory; Antigravity's customization root *is* `.agents/`. That convergence
   is free and needs no DSL.
 - **Must not introduce per-repo knobs.** Trigger 2 has not fired.
-- **Must not encode unmeasured behaviour as a decision.** A blank cell in §4c is
+- **Must not encode unmeasured behaviour as a decision.** A blank cell in §5.1 is
   an open measurement. The compiler must distinguish "this harness lacks the
   moment" from "nobody has checked," and report the second differently.
-- **Must not defeat a trust gate.** Unchanged from spec 1: no harness lets a
-  freshly wired repo's hooks fire unattended, and that is by design.
+- **Must not defeat a trust gate, and must not assume one exists.** Spec 1's
+  rule was written when both known harnesses gated: Claude Code on a
+  project-trust prompt, Codex on a hook hash it re-flags after any edit. Neither
+  is defeated here. But the premise that *no harness lets a freshly wired repo's
+  hooks fire unattended* is false as of 2026-08-22 — the Antigravity desktop app
+  runs a workspace's hooks on open, with no prompt and before any user input.
+  `target.trust` is free text precisely so it can say "none", and §5.4 turns
+  that into the decision not to track the file.
 - **Must not grow a `[repo.*]` section.** If one is ever proposed, re-read
   trigger 2 first.
 
@@ -559,14 +566,24 @@ Preserved from the original, because it still will not show up in any
 cost/benefit table, and because it is now half-earned.
 
 A DSL forces the semantic event to be named separately from each vendor's
-encoding of it. "A subagent finished" is not `SubagentStop`, and it is not
-`PostToolUse` matching `invoke_subagent` — those are two spellings of one idea.
+encoding of it. In the original's words:
+
+> "A subagent finished" is not `SubagentStop`, and it is not `PostToolUse`
+> matching `invoke_subagent` — those are two spellings of one idea.
+
 Writing the abstraction down turns the differences between vendors into **data
 you can compare**, rather than implementation detail rederived each time.
 
+The example is quoted as written, and it is worth noting that **it was wrong**:
+§5.1 measured `PostToolUse` on `invoke_subagent` and found it fires on the
+parent and names no child. The argument survives its own example. What made the
+error visible was writing the table the argument asks for — the abstraction
+caught a mistake in the sentence that motivated it, which is about as direct a
+demonstration as the case could get.
+
 What has changed since 2026-08-07 is that the comparison has started paying. §3
 is a finding about *our own wiring* that only became visible once needs and
-capabilities were tabulated separately. §4c is a finding about the vendors: the
+capabilities were tabulated separately. §5.1 is a finding about the vendors: the
 one harness we excluded for fifteen releases is the only one offering the
 mechanism the redesign said it lacked.
 
@@ -585,9 +602,6 @@ the small, honest mechanism half.
   no.** 85 of 94 brain directories retain transcripts spanning fifteen months;
   the nine without predate the feature. See §5.4. `cache-subagent-transcript`
   stays Claude-Code-only, now for a measured reason rather than an absent one.
-- **Do Antigravity hooks fire inside its subagents?** Unmeasured, and it decides
-  whether `turn.before-model` can carry the read trigger where instructions
-  demonstrably fail (0 of 31).
 - ~~**How does the Antigravity app grant workspace trust?**~~ **Closed
   2026-08-22: it does not have a trust gate.** Opening the folder registers a
   project manifest and immediately runs an agent turn, executing the workspace's
