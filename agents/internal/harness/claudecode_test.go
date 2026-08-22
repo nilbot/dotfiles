@@ -174,9 +174,26 @@ func TestClaudeCodeForbiddenContentCannotReachTrace(t *testing.T) {
 // the fixtures themselves, not on the code that reads them.
 func TestClaudeCodeFixturesStayRedacted(t *testing.T) {
 	const marker = "<REDACTED — see spec 3.2>"
-	for _, name := range []string{
-		ccSessionStartFixture, ccSubagentStartFixture, ccSubagentStopFixture, ccStopFixture,
-	} {
+	// Read the directory rather than a hand-maintained list. The list version of
+	// this test named four files while its comment claimed "every committed
+	// fixture", so the two PreToolUse payloads added on 2026-08-22 landed outside
+	// the guard carrying raw tool_input -- the exact content this asserts against.
+	// A guard that must be edited to keep covering what it claims will eventually
+	// not be.
+	entries, err := os.ReadDir(ccFixtureDir)
+	if err != nil {
+		t.Fatalf("read fixture dir: %v", err)
+	}
+	var names []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			names = append(names, e.Name())
+		}
+	}
+	if len(names) < 6 {
+		t.Fatalf("found %d fixtures, want at least the 6 committed: %v", len(names), names)
+	}
+	for _, name := range names {
 		var raw map[string]any
 		if err := json.Unmarshal(readFixture(t, name), &raw); err != nil {
 			t.Fatalf("%s: %v", name, err)

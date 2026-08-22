@@ -110,6 +110,20 @@ unknown — and that single fact decides whether the read trigger can be
 mechanised where instructions demonstrably fail. Measure it with the same
 throwaway-repo dump script spec 1 used, before building anything.
 
+> **Measured 2026-08-22 on Claude Code 2.1.237: it fires, for every child tool
+> call, and the payload names the child.** `agent_id` and `agent_type` are
+> present on a child's `PreToolUse` and absent on a parent's, so a hook can tell
+> where it is running from one payload with no state kept. Coverage was complete
+> — both of the child's tool calls, matched by `tool_use_id` against its own
+> transcript. See
+> [does `PreToolUse` fire inside a subagent](../qna/does-pretooluse-fire-inside-a-subagent.md).
+>
+> This closes the *reachability* half only. The read trigger must also put text
+> in front of the model, and firing is not injecting: spec 4 §5.2 records
+> context injection for Claude Code at `session.begin` alone. The paragraph's
+> reasoning stands unchanged — it is still one fact that decides the question —
+> but the fact turned out to have two halves, and one is still open.
+
 **One caution on spec 1's own generalisation.** "Recording must be a hook and
 never an instruction" is broader than 0-of-31 on a single directive type
 supports. `autogo-mlx` is a live counter-example of an inherited instruction that

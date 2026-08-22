@@ -1,0 +1,14 @@
+{
+  "cwd": "/private/tmp/claude-501/-Users-nilbot-dotfiles/aad67ee3-126b-49f2-bd82-eac20c1475c6/scratchpad/pretooluse-probe",
+  "effort": {
+    "level": "xhigh"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "prompt_id": "2b1c95f9-394b-46ee-95ef-58a3df941183",
+  "session_id": "5366cd12-12d3-4412-83ac-e418d2263d21",
+  "tool_input": "<REDACTED — see spec 3.2>",
+  "tool_name": "Agent",
+  "tool_use_id": "toolu_01JoW9g1eVz9xyujSChGahZ7",
+  "transcript_path": "/Users/nilbot/.claude/projects/-private-tmp-claude-501--Users-nilbot-dotfiles-aad67ee3-126b-49f2-bd82-eac20c1475c6-scratchpad-pretooluse-probe/5366cd12-12d3-4412-83ac-e418d2263d21.jsonl"
+}
