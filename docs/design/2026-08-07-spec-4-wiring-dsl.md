@@ -218,13 +218,22 @@ one bool to a vocabulary.
 | `payload.own-transcript` | the transcript of the agent that fired | ✔ | ✔ | `transcriptPath` — `.jsonl`, `$HOME`-rooted *(store measured)* |
 | `payload.child-transcript` | the *child's* transcript at `subagent.end` | `agent_transcript_path` | `agent_transcript_path` | |
 | `payload.agent-id` | pairs `subagent.begin` ↔ `subagent.end` | `agent_id` | `agent_id` | **no** — child has an id, nothing links it |
-| `payload.parent-id` | says whether this agent is a child, and whose | not needed — events are named | not needed | **no** — exists in the runtime, absent from every payload |
+| `payload.parent-id` | says whether this agent is a child, and whose | `agent_id`+`agent_type` at `tool.before`³ | not needed | **no** — exists in the runtime, absent from every payload |
 | `payload.description` | a human label for a subagent | via spawn-time sidecar | **no** | |
 | `payload.artifact-dir` | a directory of run artifacts | **no** | **no** | `artifactDirectoryPath` |
 | `result.inject-context` | stdout can add context to the model | at `session.begin` | | `injectSteps` at `turn.before-model`/`turn.after-model`; three step types² |
 | `result.block` | the hook can deny, or force continuation | | | `decision` at `tool.before`, `terminationBehavior`, `Stop` — **bounded**¹ |
 | `config.matcher` | handlers can be scoped by a pattern | ✔ | ✔ | ✔ — **required** for tool-scoped events |
 | `handler.timeout` | per-handler execution timeout | | | ✔, seconds, default 30 |
+
+³ **Corrected 2026-08-22.** This cell read "not needed — events are named",
+which is true at `subagent.begin`/`subagent.end` and false at `tool.before`,
+where nothing but `agent_id` distinguishes a child's invocation from its
+parent's. Measured on 2.1.237: a child's `PreToolUse` carries `agent_id` and
+`agent_type`, a parent's carries neither, and `session_id`/`transcript_path`
+stay the parent's throughout. The capability the table dismissed is the one a
+mechanised read trigger rests on. See
+[does `PreToolUse` fire inside a subagent](../qna/does-pretooluse-fire-inside-a-subagent.md).
 
 ² `injectSteps` accepts `{"ephemeralMessage": …}` (transient system message),
 `{"userMessage": …}` (persists in the conversation) and
@@ -638,3 +647,10 @@ the small, honest mechanism half.
   one. The redesign's read trigger is delivered by instruction today; mechanising
   it is a separate design with its own falsifier, and this document only records
   that the capability now exists.
+
+  **Sharpened 2026-08-22.** `tool.before` fires inside Claude Code subagents and
+  the payload names the child, so the moment instructions cannot reach is now
+  known to be reachable on the harness in daily use. What is *not* known is
+  whether a hook can inject context there — `result.inject-context` is measured
+  for Claude Code at `session.begin` only. That single row now gates the whole
+  intent, and it is one probe away.

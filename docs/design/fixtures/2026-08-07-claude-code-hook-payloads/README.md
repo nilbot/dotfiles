@@ -27,6 +27,16 @@ art; these files replace that reconstruction with a measurement.
 | `cc-subagent-start.json` | `SubagentStart` |
 | `cc-subagent-stop.json` | `SubagentStop` |
 | `cc-stop.json` | `Stop` |
+| `cc-pretooluse-parent.json` | `PreToolUse`, parent — **captured 2026-08-22, 2.1.237** |
+| `cc-pretooluse-subagent.json` | `PreToolUse`, inside a subagent — **captured 2026-08-22, 2.1.237** |
+
+**Two captures live here, on two versions.** The four `Stop`/`Subagent*`/
+`SessionStart` files are the original 2026-08-07 capture on **2.1.224**. The two
+`PreToolUse` files were captured on **2.1.237** on 2026-08-22 to answer a
+question the first capture left open, using the same instrument with that one
+event added. The directory keeps its original date in its name because renaming
+it would break the path the test suite hardcodes; read each file's own stamp
+rather than the directory's.
 
 ## What the capture settled
 
@@ -52,9 +62,17 @@ sidecar read stands.
 ## What was redacted, and why it matters
 
 `last_assistant_message` is replaced with `"<REDACTED — see spec 3.2>"`, per the
-same rule applied to the Codex fixtures. `tool_input` and `tool_response` do not
-appear here because no `PreToolUse` hook was wired in this capture — the rule was
-applied to all three regardless.
+same rule applied to the Codex fixtures. In the 2026-08-07 capture `tool_input`
+and `tool_response` did not appear at all, because no `PreToolUse` hook was
+wired — the rule was applied to all three regardless.
+
+**The 2026-08-22 capture is where that mattered.** `PreToolUse` carries
+`tool_input` for real, and the first draft of these two files was committed with
+it raw: a `wc -l` command, a probe path, and the parent's full dispatch prompt.
+Innocuous here, and exactly the judgment call the rule exists to remove — the
+Codex capture found encrypted blobs inside `tool_input.message`. Both files now
+carry the marker, so the key is present for shape assertions and the value is
+gone.
 
 The Codex capture found **encrypted task blobs** (`gAAAAAB…`) in
 `tool_input.message`. Nothing of that kind appears in these four payloads; every
@@ -64,8 +82,11 @@ Each file was read in full before being committed.
 
 ## These files are test input, not documentation
 
-`agents/internal/harness/claudecode_test.go` **reads these four files directly**
+`agents/internal/harness/claudecode_test.go` **reads these files directly**
 at `../../../docs/design/fixtures/2026-08-07-claude-code-hook-payloads/`.
+The decode tests name the four 2026-08-07 fixtures; `TestClaudeCodeFixturesStayRedacted`
+reads the **whole directory**, so a fixture added later is guarded on arrival
+rather than when someone remembers to extend a list.
 They are not a pasted-in copy of something asserted elsewhere: edit a value here
 and the suite fails.
 
