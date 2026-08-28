@@ -639,9 +639,34 @@ func checkRecording(a harness.Adapter, recs []record.Record, wiringTime time.Tim
 
 var installedHookNames = []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"}
 
+func checkLocalHooks(repoRoot string, git func(dir string, args ...string) GitResult) Check {
+	local := git(repoRoot, "config", "--local", "--get-all", "core.hooksPath")
+	localValues := configValues(local.Output)
+	switch {
+	case local.Code == 1:
+		return Check{Name: "git-hooks:local", Status: OK, Detail: "no repository-local core.hooksPath override"}
+	case local.Code != 0:
+		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath could not be read", Remedy: "inspect repository or linked-worktree Git configuration"}
+	case len(localValues) == 0:
+		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath returned an empty value"}
+	default:
+		return Check{Name: "git-hooks:local", Status: Warn, Detail: fmt.Sprintf("repository-local core.hooksPath override is set (%d value(s))", len(localValues)), Remedy: "the global agents hooks are shadowed here; chain them from the local hook directory if desired"}
+	}
+}
+
 func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
 	if deps.Git == nil {
-		return []Check{{Name: "git-hooks:global", Status: Fail, Detail: "Git diagnostic runner is unavailable"}}
+		name := "git-hooks:global"
+		if deps.Root == "" || deps.HooksDir == "" {
+			name = "git-hooks:local"
+		}
+		return []Check{{Name: name, Status: Fail, Detail: "Git diagnostic runner is unavailable"}}
+	}
+	if deps.Root == "" || deps.HooksDir == "" {
+		return []Check{
+			checkLocalHooks(repoRoot, deps.Git),
+			checkLegacyHooks(repoRoot, deps),
+		}
 	}
 	var checks []Check
 	global := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")
@@ -659,18 +684,7 @@ func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
 		checks = append(checks, Check{Name: "git-hooks:global", Status: OK, Detail: "global core.hooksPath is exact"})
 	}
 
-	local := deps.Git(repoRoot, "config", "--local", "--get-all", "core.hooksPath")
-	localValues := configValues(local.Output)
-	switch {
-	case local.Code == 1:
-		checks = append(checks, Check{Name: "git-hooks:local", Status: OK, Detail: "no repository-local core.hooksPath override"})
-	case local.Code != 0:
-		checks = append(checks, Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath could not be read", Remedy: "inspect repository or linked-worktree Git configuration"})
-	case len(localValues) == 0:
-		checks = append(checks, Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath returned an empty value"})
-	default:
-		checks = append(checks, Check{Name: "git-hooks:local", Status: Warn, Detail: fmt.Sprintf("repository-local core.hooksPath override is set (%d value(s))", len(localValues)), Remedy: "the global agents hooks are shadowed here; chain them from the local hook directory if desired"})
-	}
+	checks = append(checks, checkLocalHooks(repoRoot, deps.Git))
 
 	effective := deps.Git(repoRoot, "config", "--get", "core.hooksPath")
 	effectiveValues := configValues(effective.Output)
@@ -771,6 +785,18 @@ var repoAttributeLines = []string{
 }
 
 func checkGitAttributes(repoRoot string, deps Dependencies) Check {
+	if deps.Root == "" || deps.AttributesSource == "" {
+		repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
+		if err != nil {
+			return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes is unavailable", Remedy: "run `agents init` after reviewing existing attributes"}
+		}
+		for _, line := range repoAttributeLines {
+			if !hasExactLine(repoAttrs, line) {
+				return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes lacks an exact agents rule", Remedy: "run `agents init` after reviewing existing attributes"}
+			}
+		}
+		return Check{Name: "git-attributes", Status: OK, Detail: "repository attributes are exact"}
+	}
 	if deps.Git == nil {
 		return Check{Name: "git-attributes", Status: Fail, Detail: "Git diagnostic runner is unavailable", Remedy: "inspect global Git attributes configuration"}
 	}

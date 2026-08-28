@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -421,6 +422,7 @@ func newGitFiles(t *testing.T) (Dependencies, string, string) {
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       globalConfig,
 		SharedGitConfig:       sharedConfig,
+		Root:                  root,
 	}
 	deps.Git = goodGitFixture(hooksDir, globalConfig, sharedConfig).run
 	return deps, binary, legacyDir
@@ -1284,4 +1286,70 @@ func TestCheckScaffoldInstructionMultiFileSupport(t *testing.T) {
 			t.Fatalf("absent = %+v, want Warn", got)
 		}
 	})
+}
+
+func TestDoctorStandaloneMode(t *testing.T) {
+	repoRoot := t.TempDir()
+	gitInit := exec.Command("git", "init", "-b", "main")
+	gitInit.Dir = repoRoot
+	if out, err := gitInit.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+
+	if err := scaffold.Create(repoRoot, false); err != nil {
+		t.Fatal(err)
+	}
+
+	binary := executableFile(t, repoRoot, "agents")
+	for _, adapter := range harness.All() {
+		if err := adapter.Wire(repoRoot, binary); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	deps := DependenciesFor("")
+	deps.LookPath = func(name string) (string, error) {
+		if name == "agents" {
+			return binary, nil
+		}
+		if name == "gitleaks" {
+			return "/tmp/gitleaks", nil
+		}
+		return "", errors.New("missing")
+	}
+
+	storeDir := filepath.Join(repoRoot, ".git", "agents")
+	agentsDir := filepath.Join(repoRoot, ".agents")
+	checks, err := RunWithDeps(repoRoot, agentsDir, storeDir, "standalone-box", binary, DefaultThresholds(), time.Now(), deps)
+	if err != nil {
+		t.Fatalf("RunWithDeps returned error: %v", err)
+	}
+
+	omittedChecks := map[string]bool{
+		"root:exists":      true,
+		"git-hooks:global": true,
+		"git-hooks:links":  true,
+	}
+
+	foundAttrs := false
+	for _, c := range checks {
+		if omittedChecks[c.Name] {
+			t.Errorf("check %q was unexpectedly present in standalone mode: %+v", c.Name, c)
+		}
+		if c.Status == Fail {
+			t.Errorf("unexpected check failure for %s: %s (remedy: %s)", c.Name, c.Detail, c.Remedy)
+		}
+		if c.Name == "git-attributes" {
+			foundAttrs = true
+			if c.Status != OK {
+				t.Errorf("git-attributes status = %q, want %q", c.Status, OK)
+			}
+			if c.Detail != "repository attributes are exact" {
+				t.Errorf("git-attributes detail = %q, want %q", c.Detail, "repository attributes are exact")
+			}
+		}
+	}
+	if !foundAttrs {
+		t.Error("git-attributes check was not found in checks")
+	}
 }
