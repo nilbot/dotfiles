@@ -1,7 +1,7 @@
 # Design: Antigravity Multi-Harness Onboarding and Dual-Layer Instruction Topology
 
 **Date:** 2026-08-28  
-**Status:** Designed, pending implementation  
+**Status:** Implemented 2026-08-28 (PR #29)  
 **Applies to:** `agents` CLI, `dotfiles` harness subsystem, `autogo-mlx`, and collaborative repositories  
 **Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (harness adapters, exit codes), [Spec 4](2026-08-07-spec-4-wiring-dsl.md) (wiring DSL, `named-groups` dialect, need vs capability), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md)  
 **Reads against:** [`docs/qna/why-didnt-antigravity-apply-my-rules.md`](../qna/why-didnt-antigravity-apply-my-rules.md), [`docs/qna/what-does-opening-a-repo-in-antigravity-run.md`](../qna/what-does-opening-a-repo-in-antigravity-run.md), [`docs/qna/how-does-antigravity-expose-subagents.md`](../qna/how-does-antigravity-expose-subagents.md)
