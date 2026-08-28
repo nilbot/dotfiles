@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -37,9 +38,23 @@ func TestDotfilesRootFallsBackToHomeDotfilesWhenNothingElseAnswers(t *testing.T)
 	t.Setenv("HOME", home)
 
 	want := filepath.Join(home, "dotfiles")
+	if err := os.Mkdir(want, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if got := DotfilesRoot(); got != want {
 		t.Errorf("DotfilesRoot() = %q, want %q; the historical assumption is the "+
 			"last resort so an unstamped binary behaves as it always did", got, want)
+	}
+}
+
+func TestDotfilesRootReturnsEmptyWhenHomeDotfilesMissing(t *testing.T) {
+	stampRoot(t, "")
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("AGENTS_DOTFILES_ROOT", "")
+
+	if got := DotfilesRoot(); got != "" {
+		t.Errorf("DotfilesRoot() = %q, want empty string when ~/dotfiles does not exist", got)
 	}
 }
 

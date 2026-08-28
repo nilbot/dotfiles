@@ -523,6 +523,27 @@ func TestDependenciesForDeriveTheCheckoutPathsFromTheRootItIsGiven(t *testing.T)
 	}
 }
 
+func TestDependenciesForEmptyRootLeavesCheckoutPathsEmpty(t *testing.T) {
+	deps := DependenciesFor("")
+
+	if deps.Root != "" {
+		t.Errorf("DependenciesFor(\"\").Root = %q, want \"\"", deps.Root)
+	}
+	if deps.HooksDir != "" {
+		t.Errorf("DependenciesFor(\"\").HooksDir = %q, want \"\"", deps.HooksDir)
+	}
+	if deps.AttributesSource != "" {
+		t.Errorf("DependenciesFor(\"\").AttributesSource = %q, want \"\"", deps.AttributesSource)
+	}
+	if deps.SharedGitConfig != "" {
+		t.Errorf("DependenciesFor(\"\").SharedGitConfig = %q, want \"\"", deps.SharedGitConfig)
+	}
+	if deps.LookPath == nil || deps.Git == nil || deps.LegacyHooksPath == nil {
+		t.Error("DependenciesFor left a runner nil; doctor then reports its git " +
+			"checks unavailable instead of running them")
+	}
+}
+
 func TestGitDiagnosticsCoverConfigLinksAttributesAndLegacy(t *testing.T) {
 	deps, binary, _ := newGitFiles(t)
 	repoRoot := t.TempDir()

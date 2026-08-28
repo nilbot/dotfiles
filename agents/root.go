@@ -30,5 +30,9 @@ func DotfilesRoot() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, "dotfiles")
+	fallback := filepath.Join(home, "dotfiles")
+	if info, err := os.Stat(fallback); err == nil && info.IsDir() {
+		return fallback
+	}
+	return ""
 }

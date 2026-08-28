@@ -97,21 +97,24 @@ func DefaultThresholds() Thresholds {
 // the checkout lives.
 func DependenciesFor(root string) Dependencies {
 	home, _ := os.UserHomeDir()
-	return Dependencies{
+	deps := Dependencies{
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
 		LegacyHooksPath:       repo.LegacyHooksPath,
 		TraceCacheDir:         repo.TraceCacheDir,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
 		AntigravityConfig:     filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
-		HooksDir:              filepath.Join(root, "git", "hooks.d"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
-		AttributesSource:      filepath.Join(root, "git", "gitattributes"),
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
-		SharedGitConfig:       filepath.Join(root, "git", "gitconfig.shared"),
 		Root:                  root,
 	}
+	if root != "" {
+		deps.HooksDir = filepath.Join(root, "git", "hooks.d")
+		deps.AttributesSource = filepath.Join(root, "git", "gitattributes")
+		deps.SharedGitConfig = filepath.Join(root, "git", "gitconfig.shared")
+	}
+	return deps
 }
 
 func runGit(dir string, args ...string) GitResult {
