@@ -48,6 +48,13 @@ an artifact of the probe. `/help` printed a full list from the same workspace,
 so print-mode slash commands do work — the control proved the mechanism and
 still could not license the conclusion.
 
+> **Extended 2026-08-28 on 1.1.22: print mode loads no workspace *rules*
+> either.** A repository whose `AGENTS.md` ordered a token into every reply got
+> none of it under `agy -p`, and all of it from the same prompt interactively.
+> Rules are the worse case: a hooks probe under print mode returns silence,
+> while a rules probe returns a fluent answer with nothing loaded. See
+> [why didn't Antigravity apply my rules](why-didnt-antigravity-apply-my-rules.md).
+
 **The first config was written in the wrong dialect.** Antigravity keys
 `hooks.json` on a *hook name* at top level; Claude Code's shape is
 `{"hooks": {...}}`. Writing the Claude shape loads nothing. This also re-reads
@@ -63,8 +70,11 @@ adjacent line.
 
 `.agents/` is its **customization root** — rules, skills, hooks and plugins all
 live there, which is why a repository set up for Antigravity looks like one set
-up for this tool. Rules load from `GEMINI.md`, `AGENTS.md` and
-`.agents/rules/*.md`; skills auto-load from `.agents/skills/<name>/SKILL.md`.
+up for this tool. Rules load from `GEMINI.md`, `AGENTS.md`, `.agents/rules/*.md`
+**and `.agents/AGENTS.md`** — the last because `.agents/` is the customization
+root, not by the directory walk that governs the others (measured 2026-08-28 on
+1.1.22; [why didn't Antigravity apply my rules](why-didnt-antigravity-apply-my-rules.md)).
+Skills auto-load from `.agents/skills/<name>/SKILL.md`.
 
 Hook events are `PreToolUse`, `PostToolUse`, `PreInvocation`, `PostInvocation`
 and `Stop`. **There is no `SessionStart`, `SubagentStart` or `SubagentStop`.**
