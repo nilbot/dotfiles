@@ -1,22 +1,29 @@
+# typed: false
+# frozen_string_literal: true
+
 class Agents < Formula
   desc "Development harness and standalone agent tool"
   homepage "https://github.com/nilbot/dotfiles"
-  version "0.1.0"
+  license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/nilbot/dotfiles/releases/download/v#{version}/agents_v#{version}_darwin_arm64.tar.gz"
+      url "https://github.com/nilbot/dotfiles/releases/download/v0.1.0/agents_v0.1.0_darwin_arm64.tar.gz"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+    end
+    on_intel do
+      url "https://github.com/nilbot/dotfiles/releases/download/v0.1.0/agents_v0.1.0_darwin_amd64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/nilbot/dotfiles/releases/download/v#{version}/agents_v#{version}_linux_arm64.tar.gz"
+      url "https://github.com/nilbot/dotfiles/releases/download/v0.1.0/agents_v0.1.0_linux_arm64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/nilbot/dotfiles/releases/download/v#{version}/agents_v#{version}_linux_amd64.tar.gz"
+      url "https://github.com/nilbot/dotfiles/releases/download/v0.1.0/agents_v0.1.0_linux_amd64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
