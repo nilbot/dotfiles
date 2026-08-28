@@ -116,3 +116,7 @@ run unless told otherwise, and the dry run is the point: read what it intends
 to change before letting it change anything. This is the command to reach for
 after the `agents` binary itself has been rebuilt or moved, when the wiring in
 other checkouts still points at where it used to be.
+
+## Checking version and provenance
+
+`agents version` prints the binary version, git commit SHA, and build timestamp. Reach for it when diagnosing environment differences or verifying which build of the tool is active.
