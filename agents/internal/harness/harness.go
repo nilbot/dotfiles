@@ -38,8 +38,9 @@ const (
 // tool_input, tool_response -- cannot reach any writer, whatever a future
 // harness decides to send.
 type Payload struct {
-	HookEventName string `json:"hook_event_name"`
-	SessionID     string `json:"session_id"`
+	HookEventName  string `json:"hook_event_name"`
+	SessionID      string `json:"session_id"`
+	ConversationID string `json:"conversationId"`
 
 	// The per-turn identifier, under both spellings in use. Codex sends
 	// turn_id; Claude Code sends prompt_id and has no turn_id at all (measured
@@ -48,12 +49,14 @@ type Payload struct {
 	TurnID   string `json:"turn_id"`
 	PromptID string `json:"prompt_id"`
 
-	AgentID             string `json:"agent_id"`
-	AgentType           string `json:"agent_type"`
-	Cwd                 string `json:"cwd"`
-	TranscriptPath      string `json:"transcript_path"`
-	AgentTranscriptPath string `json:"agent_transcript_path"`
-	Source              string `json:"source"`
+	AgentID             string   `json:"agent_id"`
+	AgentType           string   `json:"agent_type"`
+	Cwd                 string   `json:"cwd"`
+	WorkspacePaths      []string `json:"workspacePaths"`
+	TranscriptPath      string   `json:"transcript_path"`
+	TranscriptPathCamel string   `json:"transcriptPath"`
+	AgentTranscriptPath string   `json:"agent_transcript_path"`
+	Source              string   `json:"source"`
 }
 
 // Event maps a semantic event to one harness's spelling of it.
@@ -121,7 +124,7 @@ func Get(name string) (Adapter, bool) {
 
 // All returns every adapter in a stable order.
 func All() []Adapter {
-	names := []string{"claude-code", "codex"}
+	names := []string{"claude-code", "codex", "antigravity"}
 	var out []Adapter
 	for _, n := range names {
 		if a, ok := registry[n]; ok {
@@ -153,16 +156,24 @@ func turnID(p Payload) string {
 
 // Build assembles the harness-determined part of a record.
 func Build(a Adapter, semantic string, p Payload) Trace {
+	sessionID := p.SessionID
+	if sessionID == "" {
+		sessionID = p.ConversationID
+	}
+	cwd := p.Cwd
+	if cwd == "" && len(p.WorkspacePaths) > 0 {
+		cwd = p.WorkspacePaths[0]
+	}
 	tr := Trace{
 		Event:     semantic,
-		SessionID: p.SessionID,
+		SessionID: sessionID,
 		TurnID:    turnID(p),
-		Cwd:       p.Cwd,
+		Cwd:       cwd,
 	}
 
 	// The key whose presence in a transcript path verifies the pointer: the
 	// agent for subagent events, the session otherwise.
-	key := p.SessionID
+	key := sessionID
 	if semantic == SubagentStart || semantic == SubagentStop {
 		tr.AgentID = p.AgentID
 		tr.AgentType = p.AgentType
@@ -170,7 +181,7 @@ func Build(a Adapter, semantic string, p Payload) Trace {
 	}
 
 	tr.Transcript, tr.PointerVerified = pointer.Resolve(
-		[]string{p.AgentTranscriptPath, p.TranscriptPath}, key,
+		[]string{p.AgentTranscriptPath, p.TranscriptPath, p.TranscriptPathCamel}, key,
 	)
 	if a.Capabilities().Description {
 		tr.Description = a.Describe(p, tr.Transcript)
@@ -248,7 +259,7 @@ func knownSemantic(semantic string) bool {
 
 func knownHarness(name string) bool {
 	switch name {
-	case "claude-code", "codex":
+	case "claude-code", "codex", "antigravity":
 		return true
 	default:
 		return false

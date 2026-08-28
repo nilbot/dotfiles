@@ -28,10 +28,10 @@ func TestWireRegeneratesConfigsWithoutScaffolding(t *testing.T) {
 			t.Errorf("wire did not write %s's config: %v", a.Name(), err)
 		}
 	}
-	// Unlike init, wire does not scaffold. Creating .agents/ here would hide
+	// Unlike init, wire does not scaffold. Creating .agents/skills here would hide
 	// the very "run agents init first" condition the hook reports.
-	if _, err := os.Stat(filepath.Join(root, ".agents")); err == nil {
-		t.Error("wire must not create .agents/; that is init's job")
+	if _, err := os.Stat(filepath.Join(root, ".agents", "skills")); err == nil {
+		t.Error("wire must not create .agents/skills; that is init's job")
 	}
 	if _, err := os.Stat(filepath.Join(root, "CLAUDE.md")); err == nil {
 		t.Error("wire must not write CLAUDE.md; that is init's job")

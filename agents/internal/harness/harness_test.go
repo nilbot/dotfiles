@@ -97,12 +97,12 @@ func TestDecodeDiscardsForbiddenFields(t *testing.T) {
 
 // fmtPayloadFields is the number of fields fmtPayload renders. Kept beside it
 // so TestFmtPayloadRendersEveryField can catch the two drifting apart.
-const fmtPayloadFields = 10
+const fmtPayloadFields = 13
 
 func fmtPayload(p Payload) string {
 	return strings.Join([]string{
-		p.HookEventName, p.SessionID, p.TurnID, p.PromptID, p.AgentID, p.AgentType,
-		p.Cwd, p.TranscriptPath, p.AgentTranscriptPath, p.Source,
+		p.HookEventName, p.SessionID, p.ConversationID, p.TurnID, p.PromptID, p.AgentID, p.AgentType,
+		p.Cwd, strings.Join(p.WorkspacePaths, ","), p.TranscriptPath, p.TranscriptPathCamel, p.AgentTranscriptPath, p.Source,
 	}, "|")
 }
 
