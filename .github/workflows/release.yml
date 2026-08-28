@@ -52,3 +52,10 @@ jobs:
           files: |
             dist/agents_*_*.tar.gz
             dist/checksums.txt
+
+      - name: sync formula to homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          bash script/sync-homebrew-formula.sh "${{ steps.version.outputs.version }}" dist
