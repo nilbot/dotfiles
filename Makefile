@@ -1,4 +1,4 @@
-.PHONY: agents
+.PHONY: agents release
 
 # Provisioning lives in ./bootstrap, not here:
 #
@@ -39,3 +39,6 @@ agents:
 	mkdir -p "$(HOME)/bin"
 	cd "$(CURDIR)/agents" && go build -trimpath -ldflags "-X main.dotfilesRoot=$(CURDIR)" -o "$(HOME)/bin/agents" .
 	@echo "built $(HOME)/bin/agents"
+
+release:
+	@bash script/package-release.sh
