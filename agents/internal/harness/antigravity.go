@@ -11,9 +11,9 @@ func init() {
 
 type antigravityAdapter struct{}
 
-func (a antigravityAdapter) Name() string { return "antigravity" }
-func (a antigravityAdapter) HarnessDir() string { return ".agents" }
-func (a antigravityAdapter) NeedsSkillsSymlink() bool { return false }
+func (a antigravityAdapter) Name() string               { return "antigravity" }
+func (a antigravityAdapter) HarnessDir() string         { return ".agents" }
+func (a antigravityAdapter) NeedsSkillsSymlink() bool   { return false }
 func (a antigravityAdapter) Capabilities() Capabilities { return Capabilities{Description: false} }
 func (a antigravityAdapter) Events() []Event {
 	return []Event{{Semantic: Stop, Vendor: "Stop"}}

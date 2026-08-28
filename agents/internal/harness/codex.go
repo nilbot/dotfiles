@@ -9,8 +9,8 @@ func init() { register(codex{}) }
 // before its recording half is reconciled against a live payload.
 type codex struct{}
 
-func (codex) Name() string { return "codex" }
-func (codex) HarnessDir() string { return ".codex" }
+func (codex) Name() string             { return "codex" }
+func (codex) HarnessDir() string       { return ".codex" }
 func (codex) NeedsSkillsSymlink() bool { return true }
 
 func (codex) Capabilities() Capabilities {

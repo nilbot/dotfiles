@@ -203,4 +203,3 @@ func TestAdapterInterfaceExtensions(t *testing.T) {
 		}
 	}
 }
-

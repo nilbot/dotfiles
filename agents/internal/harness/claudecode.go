@@ -11,8 +11,8 @@ func init() { register(claudeCode{}) }
 
 type claudeCode struct{}
 
-func (claudeCode) Name() string { return "claude-code" }
-func (claudeCode) HarnessDir() string { return ".claude" }
+func (claudeCode) Name() string             { return "claude-code" }
+func (claudeCode) HarnessDir() string       { return ".claude" }
 func (claudeCode) NeedsSkillsSymlink() bool { return true }
 
 func (claudeCode) Capabilities() Capabilities {
