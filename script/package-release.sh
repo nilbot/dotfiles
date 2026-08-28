@@ -46,9 +46,9 @@ done
 
 echo "Generating checksums..."
 if command -v sha256sum >/dev/null 2>&1; then
-  (cd "${OUT_DIR}" && rm -f checksums.txt && sha256sum agents_*.tar.gz > checksums.txt)
+  (cd "${OUT_DIR}" && rm -f checksums.txt && sha256sum agents_"${VERSION}"_*.tar.gz > checksums.txt)
 elif command -v shasum >/dev/null 2>&1; then
-  (cd "${OUT_DIR}" && rm -f checksums.txt && shasum -a 256 agents_*.tar.gz > checksums.txt)
+  (cd "${OUT_DIR}" && rm -f checksums.txt && shasum -a 256 agents_"${VERSION}"_*.tar.gz > checksums.txt)
 else
   echo "Error: neither sha256sum nor shasum found" >&2
   exit 1
