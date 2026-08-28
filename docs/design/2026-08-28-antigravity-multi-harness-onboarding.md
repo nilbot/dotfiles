@@ -318,20 +318,40 @@ sequenceDiagram
     participant Sandbox1 as autogo-mlx Sandbox
     participant Sandbox2 as cowork Sandbox
     participant Live as Live autogo-mlx
+    participant Fleet as Registered Fleet
 
     Dev->>Unit: Run go test ./agents/...
     Unit-->>Dev: 100% Pass (3x Idempotency, Redaction, Absolute Paths)
-    
+
     Dev->>Sandbox1: git clone --no-hardlinks --recurse-submodules
-    Dev->>Sandbox1: XDG_STATE_HOME=$(mktemp -d) agents init
+    Dev->>Sandbox1: cd sandbox && XDG_STATE_HOME=$(mktemp -d) agents init
     Sandbox1-->>Dev: Verified diff, exclusions, byte-identical AGENTS.md
-    
+
     Dev->>Sandbox2: Init fresh repo & XDG_STATE_HOME=$(mktemp -d) agents init
-    Sandbox2-->>Dev: Verified clean 3-harness scaffolding & doctor OK
-    
+    Sandbox2-->>Dev: Verified 3-harness scaffolding; all three wiring checks OK
+
     Dev->>Live: Assert binary hash & execute live agents init
     Live-->>Dev: All 3 harnesses active; domain rules intact
+
+    Dev->>Fleet: agents init in each registered repo (scaffold + wire)
+    Fleet-->>Dev: Exclusions added, all rewired; wiring:antigravity green fleet-wide
 ```
+
+**Two hazards apply to every phase below, and both have produced a false result
+before.**
+
+*Working directory.* `agents init` takes no path argument: it calls
+`os.Getwd()` and hands the result to `repo.Discover` (`cmd_init.go:24`). A build
+step that leaves the shell in `dotfiles/agents` will onboard **`dotfiles`**,
+while every assertion is read against a sandbox nothing touched. Each phase
+below therefore builds and runs in separate commands, and names the directory it
+runs in.
+
+*What `doctor` returns.* `checkRecording` reports Warn — *"this harness has never
+recorded here"* — for any harness with no trace yet (`doctor.go:408`), and Warn
+maps to `exitcode.Advisory` (`cmd_doctor.go:110`). A freshly wired sandbox
+**cannot** exit `OK`, because no harness has run in it. Assert the named checks;
+never assert `doctor`'s exit code in a sandbox.
 
 ### Phase 1: Unit & Regression Testing
 Run `go test ./agents/... -v` to verify:
@@ -341,21 +361,31 @@ Run `go test ./agents/... -v` to verify:
 4. `TestAntigravityAbsoluteBinaryPath`: hook commands emit POSIX-quoted absolute paths.
 
 ### Phase 2: Synthetic `autogo-mlx` Sandbox Verification
-1. **Clone Sandbox with Isolation**:
+1. **Build the test binary** (this leaves the shell in `dotfiles/agents`; the
+   next step moves out of it before running anything):
+   ```bash
+   go build -o /tmp/agents-test-bin .
+   ```
+2. **Clone Sandbox with Isolation**:
    ```bash
    rm -rf /tmp/sandbox-autogo-mlx
    git clone --no-hardlinks --recurse-submodules /Users/nilbot/playground/autogo-mlx /tmp/sandbox-autogo-mlx
    ```
-2. **Capture Git Baseline**:
+3. **Capture Git Baseline**:
    ```bash
    BASELINE=$(git -C /tmp/sandbox-autogo-mlx status --porcelain)
    ```
-3. **Run Onboarding with Isolated Registry**:
+   A recursed submodule can report dirty or detached state on a clean clone, so
+   this baseline is the comparison point — not the empty string.
+4. **Run Onboarding with Isolated Registry**, from inside the sandbox:
    ```bash
-   cd /Users/nilbot/dotfiles/agents && go build -o /tmp/agents-test-bin .
+   cd /tmp/sandbox-autogo-mlx
    XDG_STATE_HOME=$(mktemp -d) /tmp/agents-test-bin init
    ```
-4. **Assertions**:
+   Confirm before asserting anything: `git -C /Users/nilbot/dotfiles status
+   --porcelain` is unchanged. If `dotfiles` moved, the run went to the wrong
+   repository and the phase must be redone.
+5. **Assertions** (run from `/tmp/sandbox-autogo-mlx`):
    - `git diff --name-only` contains strictly `.gitattributes`.
    - `git diff .gitattributes` contains strictly `+.agents/** linguist-generated=true`.
    - New untracked files relative to `$BASELINE` are strictly a subset of `{AGENTS.md, CLAUDE.md, .agents/skills/.gitkeep}`.
@@ -363,14 +393,83 @@ Run `go test ./agents/... -v` to verify:
    - `git diff --stat` confirms zero other tracked files modified; `.agents/AGENTS.md` is byte-identical.
    - `.agents/skills` is a real directory with original skills intact.
    - `.claude/skills` and `.codex/skills` symlink to `../.agents/skills`.
-   - `XDG_STATE_HOME=$(mktemp -d) /tmp/agents-test-bin doctor` reports `wiring:claude-code`, `wiring:codex`, and `wiring:antigravity` as `OK`.
+   - `XDG_STATE_HOME=$(mktemp -d) /tmp/agents-test-bin doctor` reports `wiring:claude-code`, `wiring:codex`, and `wiring:antigravity` as `OK`. Its exit code is `Advisory`, and that is the correct result here — see the hazard note above.
 
 ### Phase 3: Synthetic `cowork-enterprise` Fresh Repo Verification
-1. Initialize clean git repository at `/tmp/sandbox-cowork-enterprise`.
-2. Run `XDG_STATE_HOME=$(mktemp -d) /tmp/agents-test-bin init`.
-3. Verify root `AGENTS.md`, `CLAUDE.md` symlink, `.agents/skills/` directory, 3-harness wiring, and `doctor` output.
+1. Initialize a clean git repository at `/tmp/sandbox-cowork-enterprise`.
+2. Run the onboarding from inside it:
+   ```bash
+   cd /tmp/sandbox-cowork-enterprise
+   XDG_STATE_HOME=$(mktemp -d) /tmp/agents-test-bin init
+   ```
+3. Verify root `AGENTS.md`, the `CLAUDE.md` symlink, `.agents/skills/`, and
+   three-harness wiring.
+4. `XDG_STATE_HOME=$(mktemp -d) /tmp/agents-test-bin doctor` reports all three
+   `wiring:*` checks `OK` and all three `recording:*` checks `Warn` with
+   *"this harness has never recorded here"*. Both halves are asserted: the Warns
+   are the expected state of a repository no harness has run in, and asserting
+   them keeps a genuinely broken wiring check from hiding inside a blanket
+   "advisory, therefore fine."
 
 ### Phase 4: Live Execution on `autogo-mlx`
-1. Assert that `which agents` resolves to the newly built binary (`go install`).
+1. Assert that `which agents` resolves to the newly installed binary and that
+   its hash matches the one Phases 2 and 3 exercised. `go install` writes to
+   `GOBIN`/`GOPATH/bin`; if that is not what `PATH` resolves, the live phase
+   verifies a different binary than the one under test.
 2. Run `agents init` in `/Users/nilbot/playground/autogo-mlx`.
 3. Verify `git status` and `agents doctor`.
+
+### Phase 5: Fleet Migration
+Registering `antigravity` in `All()` changes every repository already onboarded,
+not only the ones touched above. `checkWiring` returns **Fail** — *"generated
+hook config is unavailable"* (`doctor.go:233`) — for a harness with no config on
+disk, so `wiring:antigravity` goes red in every registered repository the moment
+the new binary is installed, and stays red until each is rewired. This phase is
+not optional cleanup; it is the second half of shipping the change.
+
+**`agents update --all --apply` is not sufficient on its own.** It calls
+`wireAll`, which loops `harness.All()` calling `a.Wire` and nothing else
+(`cmd_init.go:81`); it never runs `scaffold.Create`. The two new exclusion lines
+in §4.1 are written by `scaffold.Create`, so on a repository onboarded before
+this change `update --apply` would write `.agents/hooks.json` into a `.agents/`
+that git tracks, with no matching entry in `.git/info/exclude`. The file §1.3
+requires to be machine-local would then sit untracked and visible, one `git add
+-A` away from being committed and distributed. The migration therefore runs
+`init`, not `update`.
+
+1. **Enumerate the fleet and count what is affected**:
+   ```bash
+   agents ls
+   agents update --all
+   ```
+   `update --all` without `--apply` is a dry run and exits `Advisory` by design;
+   it is used here only for the count and the missing/unknown lines.
+2. **Re-run `init` in each registered repository.** `scaffold.Create` is
+   idempotent — `appendMissingLines` adds only absent lines, and
+   `writeIfAbsent`/`linkIfAbsent` never overwrite an existing instruction file —
+   so this adds the two exclusions and rewires all three harnesses without
+   touching anything already correct:
+   ```bash
+   agents ls   # then, in each listed repository root:
+   agents init
+   ```
+3. **Assert the exclusion landed before trusting the wiring.** In each migrated
+   repository:
+   ```bash
+   git check-ignore -v .agents/hooks.json .agents/.agents-wire.lock
+   git status --porcelain .agents/
+   ```
+   The first must resolve both paths to `.git/info/exclude`; the second must
+   print nothing. A repository where the wiring check is green but
+   `.agents/hooks.json` shows as untracked is the failure this step exists to
+   catch, and it is the one that can reach a remote.
+4. Spot-check `agents doctor` in one repository that was **not** part of
+   Phases 2-4: `wiring:antigravity` `OK`, `recording:antigravity` `Warn`.
+
+**What this distributes.** Migration writes `.agents/hooks.json` into every
+registered repository, and §1.3 establishes that the Antigravity Desktop App
+executes that file on folder open with no trust prompt. Once step 3 passes the
+file is machine-local by §4.1, so nothing reaches a remote and no collaborator
+inherits it — but the blast radius of this phase is every repository in the
+local fleet, and it should be run deliberately rather than as a side effect of
+an upgrade.
