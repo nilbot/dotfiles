@@ -19,7 +19,23 @@ func stampRoot(t *testing.T, value string) {
 	dotfilesRoot = value
 }
 
-func TestDotfilesRootPrefersTheEnvironmentOverTheHomeFallback(t *testing.T) {
+func TestDotfilesRootReturnsEmptyWhenUnstampedAndEnvUnsetEvenIfHomeDotfilesExists(t *testing.T) {
+	stampRoot(t, "")
+	home := t.TempDir()
+	t.Setenv("AGENTS_DOTFILES_ROOT", "")
+	t.Setenv("HOME", home)
+
+	if err := os.Mkdir(filepath.Join(home, "dotfiles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := DotfilesRoot(); got != "" {
+		t.Errorf("DotfilesRoot() = %q, want %q; unstamped binaries without AGENTS_DOTFILES_ROOT "+
+			"must operate in Standalone Mode even if ~/dotfiles exists", got, "")
+	}
+}
+
+func TestDotfilesRootPrefersTheEnvironmentOverEmpty(t *testing.T) {
 	stampRoot(t, "")
 	want := filepath.Join(t.TempDir(), "checkout")
 	t.Setenv("AGENTS_DOTFILES_ROOT", want)
@@ -27,38 +43,11 @@ func TestDotfilesRootPrefersTheEnvironmentOverTheHomeFallback(t *testing.T) {
 
 	if got := DotfilesRoot(); got != want {
 		t.Errorf("DotfilesRoot() = %q, want the AGENTS_DOTFILES_ROOT value %q; "+
-			"an unstamped binary must still be able to name its checkout", got, want)
+			"an unstamped binary must still be able to name its checkout via environment", got, want)
 	}
 }
 
-func TestDotfilesRootFallsBackToHomeDotfilesWhenNothingElseAnswers(t *testing.T) {
-	stampRoot(t, "")
-	home := t.TempDir()
-	t.Setenv("AGENTS_DOTFILES_ROOT", "")
-	t.Setenv("HOME", home)
-
-	want := filepath.Join(home, "dotfiles")
-	if err := os.Mkdir(want, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if got := DotfilesRoot(); got != want {
-		t.Errorf("DotfilesRoot() = %q, want %q; the historical assumption is the "+
-			"last resort so an unstamped binary behaves as it always did", got, want)
-	}
-}
-
-func TestDotfilesRootReturnsEmptyWhenHomeDotfilesMissing(t *testing.T) {
-	stampRoot(t, "")
-	tmpHome := t.TempDir()
-	t.Setenv("HOME", tmpHome)
-	t.Setenv("AGENTS_DOTFILES_ROOT", "")
-
-	if got := DotfilesRoot(); got != "" {
-		t.Errorf("DotfilesRoot() = %q, want empty string when ~/dotfiles does not exist", got)
-	}
-}
-
-func TestDotfilesRootStampWinsOverEnvironmentAndHome(t *testing.T) {
+func TestDotfilesRootStampWinsOverEnvironment(t *testing.T) {
 	want := filepath.Join(t.TempDir(), "stamped")
 	stampRoot(t, want)
 	t.Setenv("AGENTS_DOTFILES_ROOT", filepath.Join(t.TempDir(), "from-env"))

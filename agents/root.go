@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 )
 
 // dotfilesRoot is set at link time by every builder that knows the checkout:
@@ -17,22 +16,15 @@ var dotfilesRoot string
 
 // DotfilesRoot answers which checkout this binary belongs to.
 //
-// The fallback to ~/dotfiles is the historical assumption, kept last so an
-// unstamped binary behaves as it always did rather than failing outright.
+// A binary belongs to a dotfiles checkout if and only if:
+//  1. Stamped at link time: go build -ldflags "-X main.dotfilesRoot=<path>"
+//  2. Or explicitly configured via AGENTS_DOTFILES_ROOT.
+//
+// An unstamped binary without AGENTS_DOTFILES_ROOT operates in Standalone Mode
+// and returns "" regardless of what exists in the user's home directory.
 func DotfilesRoot() string {
 	if dotfilesRoot != "" {
 		return dotfilesRoot
 	}
-	if fromEnv := os.Getenv("AGENTS_DOTFILES_ROOT"); fromEnv != "" {
-		return fromEnv
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	fallback := filepath.Join(home, "dotfiles")
-	if info, err := os.Stat(fallback); err == nil && info.IsDir() {
-		return fallback
-	}
-	return ""
+	return os.Getenv("AGENTS_DOTFILES_ROOT")
 }
