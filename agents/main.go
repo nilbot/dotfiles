@@ -47,9 +47,13 @@ func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.W
 	// directory as "no personal hooks" and carries on, so a binary that looked
 	// for them under a checkout that is not this one would run none of them and
 	// say nothing about it.
+	var extrasDir string
+	if root := DotfilesRoot(); root != "" {
+		extrasDir = filepath.Join(root, "git", "hooks")
+	}
 	chain := githook.Chain{
 		RepoHooksDir:   repoHooksDir,
-		ExtrasDir:      filepath.Join(DotfilesRoot(), "git", "hooks"),
+		ExtrasDir:      extrasDir,
 		DispatcherPath: dispatcherPath,
 	}
 	if code := githook.Run(chain, name, args, stdin, stdout, stderr); code != 0 {

@@ -432,3 +432,26 @@ func TestRunGitHookMapsGuardExitClassesExactly(t *testing.T) {
 		})
 	}
 }
+
+func TestRunGitHookStandaloneModeDoesNotProbeRelativeExtrasDir(t *testing.T) {
+	stampRoot(t, "")
+	t.Setenv("AGENTS_DOTFILES_ROOT", "")
+	t.Setenv("HOME", t.TempDir())
+
+	root := newRepo(t)
+	ran := filepath.Join(t.TempDir(), "relative-hook-ran")
+	t.Setenv("RELATIVE_HOOK_RAN", ran)
+	writeLiveFile(t, root, "git/hooks/a.post-merge",
+		"#!/bin/sh\nprintf 'relative\\n' >> \"$RELATIVE_HOOK_RAN\"\n", 0o755)
+
+	t.Chdir(root)
+	var stdout, stderr bytes.Buffer
+	if code := runGitHook("post-merge", nil, strings.NewReader(""), &stdout, &stderr); code != exitcode.OK {
+		t.Fatalf("runGitHook exit=%d want=%d stdout=%q stderr=%q",
+			code, exitcode.OK, stdout.String(), stderr.String())
+	}
+
+	if _, err := os.Stat(ran); !os.IsNotExist(err) {
+		t.Fatalf("standalone mode probed and executed relative git/hooks; ExtrasDir must be empty when DotfilesRoot() is empty")
+	}
+}
