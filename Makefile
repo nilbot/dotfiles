@@ -15,13 +15,13 @@
 # inner-loop work. `./bootstrap apply workstation` builds the same binary in
 # its devtools phase, so this target is a shortcut, not a separate mechanism.
 #
-# The -X stamp names the checkout this binary was built from. Without it the
-# binary falls back to the historical ~/dotfiles, where doctor reports three
-# failures against a healthy machine and the git hook chain silently runs none
-# of the personal hooks. Whoever builds the binary is the only party that knows
-# the answer, so both builders have to say it -- ./bootstrap's devtools phase
-# carries the same flag, and bootstrap.d's makefile test pins this one so the
-# two cannot drift apart unnoticed.
+# The -X stamp names the checkout this binary was built from, activating Dotfiles
+# Operator Mode. Without it, an unstamped binary operates in Standalone Mode
+# (DotfilesRoot() == ""), where doctor skips machine-level dotfiles checks and the
+# dispatcher skips personal hook chains. Whoever builds the binary is the only party
+# that knows the checkout root, so both builders have to say it -- ./bootstrap's
+# devtools phase carries the same flag, and bootstrap.d's makefile test pins this one
+# so the two cannot drift apart unnoticed.
 #
 # RUN THIS FROM THE MAIN CHECKOUT, not from a linked worktree. The two builders
 # stamp different things by design: this one stamps $(CURDIR), the devtools

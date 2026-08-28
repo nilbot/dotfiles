@@ -19,12 +19,19 @@ This specification defines the build, packaging, release, and distribution pipel
 
 **Resolution (2026-08-28):**
 Released binaries are built without a stamped checkout root (`main.dotfilesRoot == ""`).
-1. `DotfilesRoot()` in `agents/root.go` verifies `$HOME/dotfiles` existence before falling back to it. On a machine without `~/dotfiles`, it returns `""` (empty string).
-2. When `deps.Root == ""`, `agents doctor` operates in **Standalone Repository Mode**:
-   - Skips dotfiles-specific checks (`root:exists`, `git-hooks:global`, `git-hooks:links`).
-   - Validates repository-level `.gitattributes` directly for `.agents/** linguist-generated=true`.
-   - Validates repository-local git hooks (`git-hooks:local`).
-   - Runs full harness wiring, trust, gitleaks, instruction, and documentation checks.
+
+`DotfilesRoot()` in `agents/root.go` resolves via an explicit 2-tier contract without `$HOME/dotfiles` existence heuristics:
+1. **Link-Time Stamp (`main.dotfilesRoot`)**: Set by `make agents` and `./bootstrap apply workstation` to bind the binary to a specific dotfiles checkout root (activating Dotfiles Operator Mode).
+2. **Environment Variable (`AGENTS_DOTFILES_ROOT`)**: Explicit runtime override for operators running unstamped or Homebrew-installed binaries who wish to bind them to their personal dotfiles.
+3. **Standalone Fallback (`""`)**: An unstamped binary with no environment variable returns `""` and operates in **Standalone Mode** regardless of what exists in the user's home directory.
+
+When `DotfilesRoot() == ""` (`deps.Root == ""`):
+- `agents doctor` operates in **Standalone Repository Mode**:
+  - Skips dotfiles-specific checks (`root:exists`, `git-hooks:global`, `git-hooks:links`).
+  - Validates repository-level `.gitattributes` directly for `.agents/** linguist-generated=true`.
+  - Validates repository-local git hooks (`git-hooks:local`).
+  - Runs full harness wiring, trust, gitleaks, instruction, and documentation checks.
+- Git hook multi-call dispatcher executes repository hooks and built-in stages, cleanly skipping personal hook chains (`<root>/git/hooks/*`).
 
 ---
 
