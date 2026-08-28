@@ -12,6 +12,8 @@ func init() { register(claudeCode{}) }
 type claudeCode struct{}
 
 func (claudeCode) Name() string { return "claude-code" }
+func (claudeCode) HarnessDir() string { return ".claude" }
+func (claudeCode) NeedsSkillsSymlink() bool { return true }
 
 func (claudeCode) Capabilities() Capabilities {
 	// Claude Code writes an agent-<id>.meta.json sidecar at spawn time, so a
@@ -53,10 +55,14 @@ func (claudeCode) WireConfigPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".claude", "settings.json")
 }
 
+func (c claudeCode) Render(settings map[string]any, binary string) ([]byte, error) {
+	return renderHooksJSON(settings, c.Name(), c.Events(), binary)
+}
+
 func (c claudeCode) Wire(repoRoot, binary string) error {
 	// Neither harness discovers .agents/skills on its own: Claude Code reads
 	// .claude/skills, Codex reads .codex/skills. One directory, two names.
-	return wireRepository(repoRoot, ".claude", "settings.json", c.Name(), c.Events(), binary)
+	return wireRepository(repoRoot, c, binary)
 }
 
 func (claudeCode) TrustSteps(repoRoot string) []string {

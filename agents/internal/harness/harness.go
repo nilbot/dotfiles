@@ -85,6 +85,8 @@ type Trace struct {
 
 type Adapter interface {
 	Name() string
+	HarnessDir() string
+	NeedsSkillsSymlink() bool
 	Capabilities() Capabilities
 	Events() []Event
 
@@ -98,6 +100,9 @@ type Adapter interface {
 
 	// Wire writes that config, merging into whatever is already there.
 	Wire(repoRoot, binary string) error
+
+	// Render produces the serialized config bytes for this harness.
+	Render(settings map[string]any, binary string) ([]byte, error)
 
 	// TrustSteps are the manual steps left after wiring. No harness lets a
 	// freshly wired repo's hooks fire unattended, and defeating that gate is an
@@ -605,7 +610,10 @@ func validateSkills(dir *os.Root, dirPath string, snapshot skillsSnapshot) error
 
 // wireRepository keeps every mutation below a verified harness directory and
 // validates config and skills ownership before publishing either one.
-func wireRepository(repoRoot, harnessDir, configName, harnessName string, events []Event, binary string) error {
+func wireRepository(repoRoot string, a Adapter, binary string) error {
+	harnessDir := a.HarnessDir()
+	configName := filepath.Base(a.WireConfigPath(repoRoot))
+
 	dir, dirPath, err := openHarnessDir(repoRoot, harnessDir)
 	if err != nil {
 		return err
@@ -617,20 +625,25 @@ func wireRepository(repoRoot, harnessDir, configName, harnessName string, events
 	}
 	defer releaseWireLock(lock)
 
-	skills, err := preflightSkills(dir, dirPath)
-	if err != nil {
-		return err
+	var skills skillsSnapshot
+	if a.NeedsSkillsSymlink() {
+		var err error
+		skills, err = preflightSkills(dir, dirPath)
+		if err != nil {
+			return err
+		}
 	}
+
 	settings, snapshot, err := readHooksJSON(dir, dirPath, configName)
 	if err != nil {
 		return err
 	}
-	out, err := renderHooksJSON(settings, harnessName, events, binary)
+	out, err := a.Render(settings, binary)
 	if err != nil {
 		return err
 	}
 
-	if !skills.exists {
+	if a.NeedsSkillsSymlink() && !skills.exists {
 		if err := dir.Symlink(filepath.Join("..", ".agents", "skills"), "skills"); err != nil {
 			return err
 		}
@@ -639,12 +652,14 @@ func wireRepository(repoRoot, harnessDir, configName, harnessName string, events
 			return err
 		}
 	}
-	if err := atomicWriteHooks(dir, dirPath, configName, out, snapshot, func() error {
-		return validateSkills(dir, dirPath, skills)
-	}); err != nil {
-		return err
+
+	validate := func() error {
+		if a.NeedsSkillsSymlink() {
+			return validateSkills(dir, dirPath, skills)
+		}
+		return nil
 	}
-	return nil
+	return atomicWriteHooks(dir, dirPath, configName, out, snapshot, validate)
 }
 
 // stripOurs removes previously generated entries, at the level of individual

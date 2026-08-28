@@ -182,3 +182,24 @@ func TestAllReturnsOnlyRegisteredAdapters(t *testing.T) {
 		t.Fatalf("All() = %v, want claude-code first", names)
 	}
 }
+
+func TestAdapterInterfaceExtensions(t *testing.T) {
+	for _, a := range All() {
+		if a.HarnessDir() == "" {
+			t.Errorf("%s: HarnessDir() must not be empty", a.Name())
+		}
+		if a.Name() == "claude-code" || a.Name() == "codex" {
+			if !a.NeedsSkillsSymlink() {
+				t.Errorf("%s: NeedsSkillsSymlink() should be true", a.Name())
+			}
+		}
+		out, err := a.Render(map[string]any{}, "/bin/agents")
+		if err != nil {
+			t.Errorf("%s: Render() error = %v", a.Name(), err)
+		}
+		if len(out) == 0 {
+			t.Errorf("%s: Render() returned empty output", a.Name())
+		}
+	}
+}
+
