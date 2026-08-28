@@ -48,6 +48,7 @@ func TestOwnedHookCommandGrammarIsNarrowAndBackwardCompatible(t *testing.T) {
 	for _, command := range []string{
 		"/old/bin/agents hook stop --harness codex",
 		HookCommand("/tmp/agent's tools/agents", "claude-code", SubagentStop),
+		HookCommand("/tmp/agents-test-bin", "antigravity", Stop),
 	} {
 		if !IsOwnedHookCommand(command) {
 			t.Fatalf("agents command not recognized: %q", command)

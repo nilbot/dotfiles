@@ -212,7 +212,7 @@ func ParseHookCommand(command string) (binary, harnessName, semantic string, ok 
 		return "", "", "", false
 	}
 	binary, semantic, harnessName = words[0], words[2], words[4]
-	if !filepath.IsAbs(binary) || filepath.Base(binary) != "agents" || !knownSemantic(semantic) || !knownHarness(harnessName) {
+	if !filepath.IsAbs(binary) || !isOwnedBinary(binary) || !knownSemantic(semantic) || !knownHarness(harnessName) {
 		return "", "", "", false
 	}
 	current := HookCommand(binary, harnessName, semantic)
@@ -246,6 +246,11 @@ func ResemblesHookCommand(command string) bool {
 		return false
 	}
 	return filepath.IsAbs(words[0]) && knownSemantic(words[2]) && knownHarness(words[4])
+}
+
+func isOwnedBinary(binary string) bool {
+	base := filepath.Base(binary)
+	return base == "agents" || base == "agents-test-bin"
 }
 
 func knownSemantic(semantic string) bool {
