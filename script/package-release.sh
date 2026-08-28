@@ -18,6 +18,7 @@ cp "${ROOT_DIR}/README.md" "${WORK_DIR}/README.md"
 
 TARGETS=(
   "darwin/arm64"
+  "darwin/amd64"
   "linux/arm64"
   "linux/amd64"
 )
