@@ -1206,6 +1206,28 @@ func TestCheckScaffoldInstructionMultiFileSupport(t *testing.T) {
 		}
 	})
 
+	t.Run("found legacy instruction in root AGENTS.md", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(scaffold.LegacyDoctorInstruction+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := checkScaffoldInstruction(root)
+		if got.Status != OK || !strings.Contains(got.Detail, "AGENTS.md carries the doctor instruction") {
+			t.Fatalf("legacy AGENTS.md = %+v", got)
+		}
+	})
+
+	t.Run("found current conditional instruction in root AGENTS.md", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := checkScaffoldInstruction(root)
+		if got.Status != OK || !strings.Contains(got.Detail, "AGENTS.md carries the doctor instruction") {
+			t.Fatalf("current AGENTS.md = %+v", got)
+		}
+	})
+
 	t.Run("found in .agents/AGENTS.md", func(t *testing.T) {
 		root := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(root, ".agents"), 0o755); err != nil {

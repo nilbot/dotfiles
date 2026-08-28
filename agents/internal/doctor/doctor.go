@@ -982,9 +982,12 @@ func checkScaffoldInstruction(repoRoot string) Check {
 	}
 	for _, candidate := range candidates {
 		b, err := safeio.ReadRegular(candidate)
-		if err == nil && strings.Contains(string(b), scaffold.DoctorInstruction) {
-			rel, _ := filepath.Rel(repoRoot, candidate)
-			return Check{Name: "scaffold:doctor-instruction", Status: OK, Detail: rel + " carries the doctor instruction"}
+		if err == nil {
+			content := string(b)
+			if strings.Contains(content, scaffold.DoctorInstruction) || strings.Contains(content, scaffold.LegacyDoctorInstruction) || strings.Contains(content, "agents doctor") {
+				rel, _ := filepath.Rel(repoRoot, candidate)
+				return Check{Name: "scaffold:doctor-instruction", Status: OK, Detail: rel + " carries the doctor instruction"}
+			}
 		}
 	}
 	return Check{Name: "scaffold:doctor-instruction", Status: Warn, Detail: "instruction files lack the doctor instruction used by new scaffolds", Remedy: "review and add the current doctor instruction manually; existing user files are never migrated"}
