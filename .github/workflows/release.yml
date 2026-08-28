@@ -45,8 +45,8 @@ jobs:
         run: |
           bash script/package-release.sh "${{ steps.version.outputs.version }}" dist
 
-      - name: publish release
-        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87238600630b72e03c945 # v2.2.1
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           tag_name: ${{ steps.version.outputs.version }}
           files: |
