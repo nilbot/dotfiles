@@ -49,13 +49,10 @@ Top-level flags `--version` and `-v` are intercepted in `agents/main.go` and inv
 
 ## 4. Release Construction & Platforms
 
-### 4.1 Target Architectures
-
-Four tier-1 cross-compilation targets covering macOS and Linux fleets:
+Three tier-1 cross-compilation targets covering macOS (Apple Silicon only) and Linux fleets:
 1. `darwin/arm64` (Apple Silicon macOS)
-2. `darwin/amd64` (Intel macOS)
-3. `linux/arm64` (ARM64 Linux)
-4. `linux/amd64` (x86_64 Linux)
+2. `linux/arm64` (ARM64 Linux)
+3. `linux/amd64` (x86_64 Linux)
 
 ### 4.2 Packaging Format
 

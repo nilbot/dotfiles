@@ -8,10 +8,6 @@ class Agents < Formula
       url "https://github.com/nilbot/dotfiles/releases/download/v#{version}/agents_v#{version}_darwin_arm64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
-    on_intel do
-      url "https://github.com/nilbot/dotfiles/releases/download/v#{version}/agents_v#{version}_darwin_amd64.tar.gz"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
-    end
   end
 
   on_linux do
