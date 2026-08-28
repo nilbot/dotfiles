@@ -1,0 +1,97 @@
+# Authoritative CI Verification Gate Template
+# See template/ci/README.md for customization and adoption instructions.
+#
+# Every `uses:` action reference is pinned to an immutable commit SHA with a
+# trailing version comment. Tags are mutable pointers and must not be used in
+# security-sensitive verification workflows.
+name: verify
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secret Scanning (Gitleaks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: '8.30.1'
+      GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: install gitleaks, checksum-verified
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$url" -o /tmp/gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          resolved="$(command -v gitleaks)"
+          [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
+          installed="$(gitleaks version)"
+          [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
+      - name: scan commit history for secrets
+        run: gitleaks git --redact --exit-code 1
+
+  context:
+    name: Repository Context & Guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: verify agent instruction context
+        run: |
+          set -euo pipefail
+          if [ ! -s AGENTS.md ] && [ ! -s CLAUDE.md ]; then
+            echo "Error: Repository must contain a non-empty AGENTS.md or CLAUDE.md file." >&2
+            exit 1
+          fi
+      - name: verify linguist-generated attributes for .agents/
+        run: |
+          set -euo pipefail
+          if [ -d .agents ]; then
+            if [ ! -f .gitattributes ] || ! grep -q "^\.agents/\*\*.*linguist-generated=true" .gitattributes; then
+              echo "Error: .agents directory is present, but .gitattributes does not configure '.agents/** linguist-generated=true'." >&2
+              exit 1
+            fi
+          fi
+
+  quality:
+    name: Code Quality & Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Customize language toolchain and verification commands for your project.
+      # See template/ci/README.md for Go, Python, and TypeScript / Web configurations.
+      - name: lint and formatting check
+        run: |
+          echo "Customize this step with project linting (e.g. gofmt, ruff, eslint)"
+      - name: automated test suites
+        run: |
+          echo "Customize this step with project tests (e.g. go test, pytest, npm test)"
+
+  gate:
+    name: Verification Gate
+    if: always()
+    needs: [secrets, context, quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: assert all verification jobs passed
+        run: |
+          echo "secrets: ${{ needs.secrets.result }}"
+          echo "context: ${{ needs.context.result }}"
+          echo "quality: ${{ needs.quality.result }}"
+          [ "${{ needs.secrets.result }}" = "success" ] || exit 1
+          [ "${{ needs.context.result }}" = "success" ] || exit 1
+          [ "${{ needs.quality.result }}" = "success" ] || exit 1
