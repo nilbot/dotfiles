@@ -63,6 +63,7 @@ type Dependencies struct {
 	LegacyHooksPath       func(string) (string, error)
 	TraceCacheDir         func(string) (string, error)
 	CodexConfig           string
+	AntigravityConfig     string
 	HooksDir              string
 	AttributesLink        string
 	AttributesSource      string
@@ -102,6 +103,7 @@ func DependenciesFor(root string) Dependencies {
 		LegacyHooksPath:       repo.LegacyHooksPath,
 		TraceCacheDir:         repo.TraceCacheDir,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
+		AntigravityConfig:     filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
 		HooksDir:              filepath.Join(root, "git", "hooks.d"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
 		AttributesSource:      filepath.Join(root, "git", "gitattributes"),
@@ -170,6 +172,7 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 		}
 	}
 	checks = append(checks, checkCodexTrust(deps.CodexConfig, codexTrustKeys))
+	checks = append(checks, checkAntigravityTrust(deps.AntigravityConfig, repoRoot))
 	for _, adapter := range harness.All() {
 		checks = append(checks, checkRecording(adapter, traceResult.Records, wiringTimes[adapter.Name()], th.RecordingFreshness, now))
 	}
@@ -236,6 +239,131 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return Check{Name: name, Status: Fail, Detail: "generated hook config is malformed JSON", Remedy: "fix or remove it, then run `agents wire`"}, info.ModTime(), nil
 	}
+
+	if a.Name() == "antigravity" {
+		return checkWiringNamedGroups(a, path, cfg, info, binary)
+	}
+	return checkWiringNestedHooks(a, path, cfg, info, binary)
+}
+
+func checkWiringNamedGroups(a harness.Adapter, path string, cfg map[string]any, info os.FileInfo, binary string) (Check, time.Time, []string) {
+	name := "wiring:" + a.Name()
+	agentsGroup, ok := cfg["agents"].(map[string]any)
+	if !ok {
+		return Check{Name: name, Status: Fail, Detail: "generated hook config has no agents object", Remedy: "run `agents wire`"}, info.ModTime(), nil
+	}
+
+	var keys []string
+	for _, ev := range a.Events() {
+		rawList, ok := agentsGroup[ev.Vendor].([]any)
+		if !ok {
+			return Check{Name: name, Status: Fail, Detail: "required event " + ev.Vendor + " is missing", Remedy: "run `agents wire`"}, info.ModTime(), nil
+		}
+		wantCommand := harness.HookCommand(binary, a.Name(), ev.Semantic)
+		matches := 0
+		isToolEvent := ev.Vendor == "PreToolUse" || ev.Vendor == "PostToolUse"
+
+		if isToolEvent {
+			for groupIndex, rawGroup := range rawList {
+				group, ok := rawGroup.(map[string]any)
+				if !ok {
+					continue
+				}
+				matcher, matcherPresent := group["matcher"]
+				matcherOK := (!matcherPresent && ev.Matcher == "") || (matcherPresent && ev.Matcher != "" && matcher == ev.Matcher)
+				inner, _ := group["hooks"].([]any)
+				for hookIndex, rawHook := range inner {
+					hook, ok := rawHook.(map[string]any)
+					if !ok {
+						continue
+					}
+					command, _ := hook["command"].(string)
+					typ, _ := hook["type"].(string)
+					if command == wantCommand && typ == "command" && matcherOK {
+						matches++
+						keys = append(keys, path+":"+snakeEvent(ev.Vendor)+fmt.Sprintf(":%d:%d", groupIndex, hookIndex))
+						continue
+					}
+					if command == wantCommand || harness.IsOwnedHookCommand(command) {
+						return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
+					}
+				}
+			}
+		} else {
+			for itemIndex, rawItem := range rawList {
+				item, ok := rawItem.(map[string]any)
+				if !ok {
+					continue
+				}
+				if innerHooks, hasHooks := item["hooks"].([]any); hasHooks {
+					for _, rawHook := range innerHooks {
+						if hook, ok := rawHook.(map[string]any); ok {
+							cmd, _ := hook["command"].(string)
+							if cmd == wantCommand || harness.IsOwnedHookCommand(cmd) {
+								return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
+							}
+						}
+					}
+					continue
+				}
+				command, _ := item["command"].(string)
+				typ, _ := item["type"].(string)
+				_, hasMatcher := item["matcher"]
+				if command == wantCommand && typ == "command" && !hasMatcher {
+					matches++
+					keys = append(keys, path+":"+snakeEvent(ev.Vendor)+fmt.Sprintf(":%d:0", itemIndex))
+					continue
+				}
+				if command == wantCommand || harness.IsOwnedHookCommand(command) {
+					return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
+				}
+			}
+		}
+
+		if matches != 1 {
+			return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("required event %s has %d exact generated hooks", ev.Vendor, matches), Remedy: "run `agents wire`"}, info.ModTime(), nil
+		}
+	}
+
+	generatedCount := 0
+	for _, rawList := range agentsGroup {
+		items, _ := rawList.([]any)
+		for _, rawItem := range items {
+			item, _ := rawItem.(map[string]any)
+			if inner, ok := item["hooks"].([]any); ok {
+				for _, rawHook := range inner {
+					hook, _ := rawHook.(map[string]any)
+					command, _ := hook["command"].(string)
+					if harness.IsOwnedHookCommand(command) {
+						generatedCount++
+					}
+				}
+			} else {
+				command, _ := item["command"].(string)
+				if harness.IsOwnedHookCommand(command) {
+					generatedCount++
+				}
+			}
+		}
+	}
+	if generatedCount != len(a.Events()) {
+		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("hook config contains %d generated commands; want %d exact required hooks", generatedCount, len(a.Events())), Remedy: "run `agents wire`"}, info.ModTime(), nil
+	}
+
+	if stale := resemblingButUnownedNamedGroups(agentsGroup); len(stale) > 0 {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary, e.g. %s", len(stale), stale[0]),
+			Remedy: "these are not `agents wire`'s to remove; delete them from " + path + " by hand",
+		}, info.ModTime(), keys
+	}
+
+	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+}
+
+func checkWiringNestedHooks(a harness.Adapter, path string, cfg map[string]any, info os.FileInfo, binary string) (Check, time.Time, []string) {
+	name := "wiring:" + a.Name()
 	hooks, ok := cfg["hooks"].(map[string]any)
 	if !ok {
 		return Check{Name: name, Status: Fail, Detail: "generated hook config has no hooks object", Remedy: "run `agents wire`"}, info.ModTime(), nil
@@ -310,6 +438,32 @@ func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, 
 		}, info.ModTime(), keys
 	}
 	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+}
+
+func resemblingButUnownedNamedGroups(agentsGroup map[string]any) []string {
+	var found []string
+	for _, rawList := range agentsGroup {
+		items, _ := rawList.([]any)
+		for _, rawItem := range items {
+			item, _ := rawItem.(map[string]any)
+			if inner, ok := item["hooks"].([]any); ok {
+				for _, rawHook := range inner {
+					hook, _ := rawHook.(map[string]any)
+					command, _ := hook["command"].(string)
+					if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
+						found = append(found, command)
+					}
+				}
+			} else {
+				command, _ := item["command"].(string)
+				if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
+					found = append(found, command)
+				}
+			}
+		}
+	}
+	sort.Strings(found)
+	return found
 }
 
 // resemblingButUnowned returns the hook commands that have our shape but that
@@ -392,6 +546,67 @@ func checkCodexTrust(configPath string, currentKeys []string) Check {
 		return Check{Name: "trust:codex", Status: Warn, Detail: fmt.Sprintf("persisted trust entries present but %d/%d current hooks explicitly disabled", disabled, len(currentKeys)), Remedy: remedy}
 	default:
 		return Check{Name: "trust:codex", Status: OK, Detail: "persisted trust entries present; no current hook is explicitly disabled; `/hooks` review state is not disclosed"}
+	}
+}
+
+func checkAntigravityTrust(configPath, repoRoot string) Check {
+	name := "trust:antigravity"
+	remedy := "for CLI: add repository root to trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json"
+
+	if configPath == "" {
+		return Check{
+			Name:   name,
+			Status: OK,
+			Detail: "Desktop App executes on open (no trust gate); CLI config not specified",
+			Remedy: remedy,
+		}
+	}
+
+	b, err := safeio.ReadRegular(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Check{
+				Name:   name,
+				Status: OK,
+				Detail: "Desktop App executes on open (no trust gate); CLI config not found",
+				Remedy: remedy,
+			}
+		}
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: "Desktop App executes on open (no trust gate); CLI config is not a readable regular file",
+			Remedy: remedy,
+		}
+	}
+
+	var cfg struct {
+		TrustedWorkspaces []string `json:"trustedWorkspaces"`
+	}
+	if err := json.Unmarshal(b, &cfg); err != nil {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: "Desktop App executes on open (no trust gate); CLI config is malformed JSON",
+			Remedy: remedy,
+		}
+	}
+
+	for _, ws := range cfg.TrustedWorkspaces {
+		if ws == repoRoot || filepath.Clean(ws) == filepath.Clean(repoRoot) {
+			return Check{
+				Name:   name,
+				Status: OK,
+				Detail: "Desktop App executes on open (no trust gate); CLI trustedWorkspaces entry confirmed",
+			}
+		}
+	}
+
+	return Check{
+		Name:   name,
+		Status: OK,
+		Detail: "Desktop App executes on open (no trust gate); CLI trustedWorkspaces entry not found",
+		Remedy: remedy,
 	}
 }
 
@@ -760,11 +975,19 @@ func checkStoreSize(cacheRoot string, maxBytes int64) Check {
 }
 
 func checkScaffoldInstruction(repoRoot string) Check {
-	b, err := safeio.ReadRegular(filepath.Join(repoRoot, "CLAUDE.md"))
-	if err != nil || !strings.Contains(string(b), scaffold.DoctorInstruction) {
-		return Check{Name: "scaffold:doctor-instruction", Status: Warn, Detail: "CLAUDE.md lacks the doctor instruction used by new scaffolds", Remedy: "review and add the current doctor instruction manually; existing user files are never migrated"}
+	candidates := []string{
+		filepath.Join(repoRoot, "AGENTS.md"),
+		filepath.Join(repoRoot, "CLAUDE.md"),
+		filepath.Join(repoRoot, ".agents", "AGENTS.md"),
 	}
-	return Check{Name: "scaffold:doctor-instruction", Status: OK, Detail: "CLAUDE.md carries the doctor instruction"}
+	for _, candidate := range candidates {
+		b, err := safeio.ReadRegular(candidate)
+		if err == nil && strings.Contains(string(b), scaffold.DoctorInstruction) {
+			rel, _ := filepath.Rel(repoRoot, candidate)
+			return Check{Name: "scaffold:doctor-instruction", Status: OK, Detail: rel + " carries the doctor instruction"}
+		}
+	}
+	return Check{Name: "scaffold:doctor-instruction", Status: Warn, Detail: "instruction files lack the doctor instruction used by new scaffolds", Remedy: "review and add the current doctor instruction manually; existing user files are never migrated"}
 }
 
 func checkGitleaks(lookPath func(string) (string, error)) Check {

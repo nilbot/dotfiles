@@ -48,6 +48,7 @@ func TestOwnedHookCommandGrammarIsNarrowAndBackwardCompatible(t *testing.T) {
 	for _, command := range []string{
 		"/old/bin/agents hook stop --harness codex",
 		HookCommand("/tmp/agent's tools/agents", "claude-code", SubagentStop),
+		HookCommand("/tmp/agents-test-bin", "antigravity", Stop),
 	} {
 		if !IsOwnedHookCommand(command) {
 			t.Fatalf("agents command not recognized: %q", command)
@@ -97,12 +98,12 @@ func TestDecodeDiscardsForbiddenFields(t *testing.T) {
 
 // fmtPayloadFields is the number of fields fmtPayload renders. Kept beside it
 // so TestFmtPayloadRendersEveryField can catch the two drifting apart.
-const fmtPayloadFields = 10
+const fmtPayloadFields = 13
 
 func fmtPayload(p Payload) string {
 	return strings.Join([]string{
-		p.HookEventName, p.SessionID, p.TurnID, p.PromptID, p.AgentID, p.AgentType,
-		p.Cwd, p.TranscriptPath, p.AgentTranscriptPath, p.Source,
+		p.HookEventName, p.SessionID, p.ConversationID, p.TurnID, p.PromptID, p.AgentID, p.AgentType,
+		p.Cwd, strings.Join(p.WorkspacePaths, ","), p.TranscriptPath, p.TranscriptPathCamel, p.AgentTranscriptPath, p.Source,
 	}, "|")
 }
 
@@ -180,5 +181,25 @@ func TestAllReturnsOnlyRegisteredAdapters(t *testing.T) {
 	}
 	if len(names) == 0 || names[0] != "claude-code" {
 		t.Fatalf("All() = %v, want claude-code first", names)
+	}
+}
+
+func TestAdapterInterfaceExtensions(t *testing.T) {
+	for _, a := range All() {
+		if a.HarnessDir() == "" {
+			t.Errorf("%s: HarnessDir() must not be empty", a.Name())
+		}
+		if a.Name() == "claude-code" || a.Name() == "codex" {
+			if !a.NeedsSkillsSymlink() {
+				t.Errorf("%s: NeedsSkillsSymlink() should be true", a.Name())
+			}
+		}
+		out, err := a.Render(map[string]any{}, "/bin/agents")
+		if err != nil {
+			t.Errorf("%s: Render() error = %v", a.Name(), err)
+		}
+		if len(out) == 0 {
+			t.Errorf("%s: Render() returned empty output", a.Name())
+		}
 	}
 }

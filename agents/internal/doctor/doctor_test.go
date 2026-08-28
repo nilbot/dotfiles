@@ -12,6 +12,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/record"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
@@ -502,6 +503,7 @@ func TestDependenciesForDeriveTheCheckoutPathsFromTheRootItIsGiven(t *testing.T)
 	prefix := root + string(filepath.Separator)
 	for _, c := range []struct{ field, got string }{
 		{"CodexConfig", deps.CodexConfig},
+		{"AntigravityConfig", deps.AntigravityConfig},
 		{"AttributesLink", deps.AttributesLink},
 		{"GlobalGitConfig", deps.GlobalGitConfig},
 	} {
@@ -801,7 +803,7 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "trust:codex", "recording:claude-code", "recording:codex", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:doctor-instruction"} {
+	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:doctor-instruction"} {
 		_ = checkByName(t, checks, name)
 	}
 	if got := checkByName(t, checks, "trace-index"); got.Status != Warn || !strings.Contains(got.Detail, "1") {
@@ -1036,4 +1038,207 @@ func findCheck(t *testing.T, checks []Check, name string) Check {
 	}
 	t.Fatalf("no %s check was produced; got %+v", name, checks)
 	return Check{}
+}
+
+func TestCheckWiringAntigravityNamedGroups(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "antigravity")
+	validRoot := t.TempDir()
+	if err := a.Wire(validRoot, binary); err != nil {
+		t.Fatal(err)
+	}
+	check, _, keys := checkWiring(a, validRoot, binary)
+	if check.Status != OK || len(keys) != len(a.Events()) {
+		t.Fatalf("valid wiring = %+v keys=%v", check, keys)
+	}
+	if !strings.HasSuffix(keys[0], ":stop:0:0") {
+		t.Errorf("keys[0] = %q, want suffix :stop:0:0", keys[0])
+	}
+
+	for _, mutation := range []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"missing agents object", func(cfg map[string]any) { delete(cfg, "agents") }},
+		{"missing event", func(cfg map[string]any) { delete(cfg["agents"].(map[string]any), "Stop") }},
+		{"wrong type", func(cfg map[string]any) {
+			cfg["agents"].(map[string]any)["Stop"].([]any)[0].(map[string]any)["type"] = "prompt"
+		}},
+		{"wrong semantic", func(cfg map[string]any) {
+			cfg["agents"].(map[string]any)["Stop"].([]any)[0].(map[string]any)["command"] = binary + " hook session-start --harness antigravity"
+		}},
+		{"wrong harness", func(cfg map[string]any) {
+			cfg["agents"].(map[string]any)["Stop"].([]any)[0].(map[string]any)["command"] = binary + " hook stop --harness claude-code"
+		}},
+		{"wrong executable", func(cfg map[string]any) {
+			cfg["agents"].(map[string]any)["Stop"].([]any)[0].(map[string]any)["command"] = "/old/agents hook stop --harness antigravity"
+		}},
+		{"matcher must be absent for lifecycle event", func(cfg map[string]any) {
+			cfg["agents"].(map[string]any)["Stop"].([]any)[0].(map[string]any)["matcher"] = "*"
+		}},
+		{"nested hooks must be absent for lifecycle event", func(cfg map[string]any) {
+			stop := cfg["agents"].(map[string]any)["Stop"].([]any)[0].(map[string]any)
+			cfg["agents"].(map[string]any)["Stop"] = []any{map[string]any{
+				"hooks": []any{stop},
+			}}
+		}},
+		{"duplicate", func(cfg map[string]any) {
+			stopList := cfg["agents"].(map[string]any)["Stop"].([]any)
+			cfg["agents"].(map[string]any)["Stop"] = append(stopList, stopList[0])
+		}},
+		{"extra generated hook under other event", func(cfg map[string]any) {
+			cfg["agents"].(map[string]any)["OtherEvent"] = []any{map[string]any{
+				"type": "command", "command": binary + " hook stop --harness antigravity",
+			}}
+		}},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := a.Wire(root, binary); err != nil {
+				t.Fatal(err)
+			}
+			path := a.WireConfigPath(root)
+			cfg := readJSONMap(t, path)
+			mutation.edit(cfg)
+			writeJSONMap(t, path, cfg)
+			got, _, _ := checkWiring(a, root, binary)
+			if got.Status != Fail {
+				t.Fatalf("mutation %q survived: %+v", mutation.name, got)
+			}
+		})
+	}
+}
+
+func TestCheckWiringAntigravityAllowsForeignHooks(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "antigravity")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	agentsObj := cfg["agents"].(map[string]any)
+	stopList := agentsObj["Stop"].([]any)
+	agentsObj["Stop"] = append(stopList, map[string]any{
+		"type":    "command",
+		"command": "/foreign/lint-check",
+	})
+	writeJSONMap(t, path, cfg)
+
+	if got, _, _ := checkWiring(a, root, binary); got.Status != OK {
+		t.Fatalf("foreign hook rejected: %+v", got)
+	}
+}
+
+func TestCheckWiringAntigravityReportsHookCommandsThatLookOursButRunAnotherBinary(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "antigravity")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	stale := "/tmp/go-build123/b001/agents.test hook stop --harness antigravity"
+	agentsObj := cfg["agents"].(map[string]any)
+	agentsObj["Stop"] = append(agentsObj["Stop"].([]any), map[string]any{
+		"type":    "command",
+		"command": stale,
+	})
+	writeJSONMap(t, path, cfg)
+
+	got, _, _ := checkWiring(a, root, binary)
+	if got.Status != Warn {
+		t.Fatalf("status = %v, want Warn; %+v", got.Status, got)
+	}
+	if !strings.Contains(got.Detail, "agents.test") {
+		t.Errorf("detail does not name offending command: %q", got.Detail)
+	}
+}
+
+func TestCheckAntigravityTrustAccurateStates(t *testing.T) {
+	repoRoot := filepath.Join(t.TempDir(), "my-repo")
+	cliConfig := filepath.Join(t.TempDir(), "settings.json")
+
+	t.Run("missing cli config", func(t *testing.T) {
+		got := checkAntigravityTrust(filepath.Join(t.TempDir(), "nonexistent.json"), repoRoot)
+		if got.Status != OK || !strings.Contains(got.Detail, "Desktop App executes on open") {
+			t.Fatalf("missing config = %+v, want OK", got)
+		}
+	})
+
+	t.Run("repo in trustedWorkspaces", func(t *testing.T) {
+		cfg := map[string]any{
+			"trustedWorkspaces": []string{repoRoot, "/other/repo"},
+		}
+		writeJSONMap(t, cliConfig, cfg)
+		got := checkAntigravityTrust(cliConfig, repoRoot)
+		if got.Status != OK || !strings.Contains(got.Detail, "confirmed") {
+			t.Fatalf("trusted repo = %+v, want OK with confirmed", got)
+		}
+	})
+
+	t.Run("repo not in trustedWorkspaces", func(t *testing.T) {
+		cfg := map[string]any{
+			"trustedWorkspaces": []string{"/other/repo"},
+		}
+		writeJSONMap(t, cliConfig, cfg)
+		got := checkAntigravityTrust(cliConfig, repoRoot)
+		if got.Status != OK || !strings.Contains(got.Detail, "not found") {
+			t.Fatalf("untrusted repo = %+v, want OK with not found", got)
+		}
+	})
+}
+
+func TestCheckScaffoldInstructionMultiFileSupport(t *testing.T) {
+	t.Run("found in root AGENTS.md", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		got := checkScaffoldInstruction(root)
+		if got.Status != OK || !strings.Contains(got.Detail, "AGENTS.md carries the doctor instruction") {
+			t.Fatalf("root AGENTS.md = %+v", got)
+		}
+	})
+
+	t.Run("found in .agents/AGENTS.md", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, ".agents"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".agents", "AGENTS.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := checkScaffoldInstruction(root)
+		if got.Status != OK || !strings.Contains(got.Detail, ".agents/AGENTS.md carries the doctor instruction") {
+			t.Fatalf(".agents/AGENTS.md = %+v", got)
+		}
+	})
+
+	t.Run("found in CLAUDE.md", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := checkScaffoldInstruction(root)
+		if got.Status != OK || !strings.Contains(got.Detail, "CLAUDE.md carries the doctor instruction") {
+			t.Fatalf("CLAUDE.md = %+v", got)
+		}
+	})
+
+	t.Run("absent from all", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("no doctor instruction here\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := checkScaffoldInstruction(root)
+		if got.Status != Warn {
+			t.Fatalf("absent = %+v, want Warn", got)
+		}
+	})
 }

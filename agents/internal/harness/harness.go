@@ -38,8 +38,9 @@ const (
 // tool_input, tool_response -- cannot reach any writer, whatever a future
 // harness decides to send.
 type Payload struct {
-	HookEventName string `json:"hook_event_name"`
-	SessionID     string `json:"session_id"`
+	HookEventName  string `json:"hook_event_name"`
+	SessionID      string `json:"session_id"`
+	ConversationID string `json:"conversationId"`
 
 	// The per-turn identifier, under both spellings in use. Codex sends
 	// turn_id; Claude Code sends prompt_id and has no turn_id at all (measured
@@ -48,12 +49,14 @@ type Payload struct {
 	TurnID   string `json:"turn_id"`
 	PromptID string `json:"prompt_id"`
 
-	AgentID             string `json:"agent_id"`
-	AgentType           string `json:"agent_type"`
-	Cwd                 string `json:"cwd"`
-	TranscriptPath      string `json:"transcript_path"`
-	AgentTranscriptPath string `json:"agent_transcript_path"`
-	Source              string `json:"source"`
+	AgentID             string   `json:"agent_id"`
+	AgentType           string   `json:"agent_type"`
+	Cwd                 string   `json:"cwd"`
+	WorkspacePaths      []string `json:"workspacePaths"`
+	TranscriptPath      string   `json:"transcript_path"`
+	TranscriptPathCamel string   `json:"transcriptPath"`
+	AgentTranscriptPath string   `json:"agent_transcript_path"`
+	Source              string   `json:"source"`
 }
 
 // Event maps a semantic event to one harness's spelling of it.
@@ -85,6 +88,8 @@ type Trace struct {
 
 type Adapter interface {
 	Name() string
+	HarnessDir() string
+	NeedsSkillsSymlink() bool
 	Capabilities() Capabilities
 	Events() []Event
 
@@ -98,6 +103,9 @@ type Adapter interface {
 
 	// Wire writes that config, merging into whatever is already there.
 	Wire(repoRoot, binary string) error
+
+	// Render produces the serialized config bytes for this harness.
+	Render(settings map[string]any, binary string) ([]byte, error)
 
 	// TrustSteps are the manual steps left after wiring. No harness lets a
 	// freshly wired repo's hooks fire unattended, and defeating that gate is an
@@ -116,7 +124,7 @@ func Get(name string) (Adapter, bool) {
 
 // All returns every adapter in a stable order.
 func All() []Adapter {
-	names := []string{"claude-code", "codex"}
+	names := []string{"claude-code", "codex", "antigravity"}
 	var out []Adapter
 	for _, n := range names {
 		if a, ok := registry[n]; ok {
@@ -148,16 +156,24 @@ func turnID(p Payload) string {
 
 // Build assembles the harness-determined part of a record.
 func Build(a Adapter, semantic string, p Payload) Trace {
+	sessionID := p.SessionID
+	if sessionID == "" {
+		sessionID = p.ConversationID
+	}
+	cwd := p.Cwd
+	if cwd == "" && len(p.WorkspacePaths) > 0 {
+		cwd = p.WorkspacePaths[0]
+	}
 	tr := Trace{
 		Event:     semantic,
-		SessionID: p.SessionID,
+		SessionID: sessionID,
 		TurnID:    turnID(p),
-		Cwd:       p.Cwd,
+		Cwd:       cwd,
 	}
 
 	// The key whose presence in a transcript path verifies the pointer: the
 	// agent for subagent events, the session otherwise.
-	key := p.SessionID
+	key := sessionID
 	if semantic == SubagentStart || semantic == SubagentStop {
 		tr.AgentID = p.AgentID
 		tr.AgentType = p.AgentType
@@ -165,7 +181,7 @@ func Build(a Adapter, semantic string, p Payload) Trace {
 	}
 
 	tr.Transcript, tr.PointerVerified = pointer.Resolve(
-		[]string{p.AgentTranscriptPath, p.TranscriptPath}, key,
+		[]string{p.AgentTranscriptPath, p.TranscriptPath, p.TranscriptPathCamel}, key,
 	)
 	if a.Capabilities().Description {
 		tr.Description = a.Describe(p, tr.Transcript)
@@ -196,7 +212,7 @@ func ParseHookCommand(command string) (binary, harnessName, semantic string, ok 
 		return "", "", "", false
 	}
 	binary, semantic, harnessName = words[0], words[2], words[4]
-	if !filepath.IsAbs(binary) || filepath.Base(binary) != "agents" || !knownSemantic(semantic) || !knownHarness(harnessName) {
+	if !filepath.IsAbs(binary) || !isOwnedBinary(binary) || !knownSemantic(semantic) || !knownHarness(harnessName) {
 		return "", "", "", false
 	}
 	current := HookCommand(binary, harnessName, semantic)
@@ -232,6 +248,11 @@ func ResemblesHookCommand(command string) bool {
 	return filepath.IsAbs(words[0]) && knownSemantic(words[2]) && knownHarness(words[4])
 }
 
+func isOwnedBinary(binary string) bool {
+	base := filepath.Base(binary)
+	return base == "agents" || base == "agents-test-bin"
+}
+
 func knownSemantic(semantic string) bool {
 	switch semantic {
 	case SessionStart, SubagentStart, SubagentStop, Stop:
@@ -243,7 +264,7 @@ func knownSemantic(semantic string) bool {
 
 func knownHarness(name string) bool {
 	switch name {
-	case "claude-code", "codex":
+	case "claude-code", "codex", "antigravity":
 		return true
 	default:
 		return false
@@ -605,7 +626,10 @@ func validateSkills(dir *os.Root, dirPath string, snapshot skillsSnapshot) error
 
 // wireRepository keeps every mutation below a verified harness directory and
 // validates config and skills ownership before publishing either one.
-func wireRepository(repoRoot, harnessDir, configName, harnessName string, events []Event, binary string) error {
+func wireRepository(repoRoot string, a Adapter, binary string) error {
+	harnessDir := a.HarnessDir()
+	configName := filepath.Base(a.WireConfigPath(repoRoot))
+
 	dir, dirPath, err := openHarnessDir(repoRoot, harnessDir)
 	if err != nil {
 		return err
@@ -617,20 +641,25 @@ func wireRepository(repoRoot, harnessDir, configName, harnessName string, events
 	}
 	defer releaseWireLock(lock)
 
-	skills, err := preflightSkills(dir, dirPath)
-	if err != nil {
-		return err
+	var skills skillsSnapshot
+	if a.NeedsSkillsSymlink() {
+		var err error
+		skills, err = preflightSkills(dir, dirPath)
+		if err != nil {
+			return err
+		}
 	}
+
 	settings, snapshot, err := readHooksJSON(dir, dirPath, configName)
 	if err != nil {
 		return err
 	}
-	out, err := renderHooksJSON(settings, harnessName, events, binary)
+	out, err := a.Render(settings, binary)
 	if err != nil {
 		return err
 	}
 
-	if !skills.exists {
+	if a.NeedsSkillsSymlink() && !skills.exists {
 		if err := dir.Symlink(filepath.Join("..", ".agents", "skills"), "skills"); err != nil {
 			return err
 		}
@@ -639,12 +668,14 @@ func wireRepository(repoRoot, harnessDir, configName, harnessName string, events
 			return err
 		}
 	}
-	if err := atomicWriteHooks(dir, dirPath, configName, out, snapshot, func() error {
-		return validateSkills(dir, dirPath, skills)
-	}); err != nil {
-		return err
+
+	validate := func() error {
+		if a.NeedsSkillsSymlink() {
+			return validateSkills(dir, dirPath, skills)
+		}
+		return nil
 	}
-	return nil
+	return atomicWriteHooks(dir, dirPath, configName, out, snapshot, validate)
 }
 
 // stripOurs removes previously generated entries, at the level of individual

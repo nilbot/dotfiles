@@ -67,16 +67,15 @@ func TestCreateBuildsLayout(t *testing.T) {
 	if err := Create(root, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	claude, err := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
+	agentsMD, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(claude), DoctorInstruction) {
-		t.Fatalf("new scaffold omits doctor instruction:\n%s", claude)
+	if !strings.Contains(string(agentsMD), DoctorInstruction) {
+		t.Fatalf("new scaffold omits doctor instruction:\n%s", agentsMD)
 	}
 
 	for _, rel := range []string{
-		".agents/skills",
 		".agents/skills",
 	} {
 		if fi, err := os.Stat(filepath.Join(root, rel)); err != nil || !fi.IsDir() {
@@ -84,18 +83,17 @@ func TestCreateBuildsLayout(t *testing.T) {
 		}
 	}
 
-	// AGENTS.md is a symlink, not a copy: two byte-identical files silently
-	// diverge, which is what the prior art actually did.
-	fi, err := os.Lstat(filepath.Join(root, "AGENTS.md"))
+	// CLAUDE.md is a symlink pointing to AGENTS.md
+	fi, err := os.Lstat(filepath.Join(root, "CLAUDE.md"))
 	if err != nil {
-		t.Fatalf("AGENTS.md: %v", err)
+		t.Fatalf("CLAUDE.md: %v", err)
 	}
 	if fi.Mode()&os.ModeSymlink == 0 {
-		t.Fatal("AGENTS.md must be a symlink to CLAUDE.md")
+		t.Fatal("CLAUDE.md must be a symlink to AGENTS.md")
 	}
-	target, _ := os.Readlink(filepath.Join(root, "AGENTS.md"))
-	if target != "CLAUDE.md" {
-		t.Fatalf("AGENTS.md -> %q, want CLAUDE.md", target)
+	target, _ := os.Readlink(filepath.Join(root, "CLAUDE.md"))
+	if target != "AGENTS.md" {
+		t.Fatalf("CLAUDE.md -> %q, want AGENTS.md", target)
 	}
 
 	attrs, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
@@ -108,11 +106,6 @@ func TestCreateBuildsLayout(t *testing.T) {
 	if !strings.Contains(string(attrs), "linguist-generated=true") {
 		t.Error(".agents/** should collapse in diffs")
 	}
-	// The attribute tokens above say nothing about WHICH paths carry them, and a
-	// pathspec matching nothing is indistinguishable from a missing line: two
-	// merge=union is gone with the tracked index it protected; see
-	// gitattributesLines. The rendering rule is a verbatim constraint and is
-	// asserted whole.
 	for _, want := range []string{
 		".agents/** linguist-generated=true",
 	} {
@@ -122,22 +115,51 @@ func TestCreateBuildsLayout(t *testing.T) {
 	}
 }
 
-func TestCreateDoesNotMigrateExistingClaudeMD(t *testing.T) {
+func TestCreateDoesNotMigrateExistingInstructionFiles(t *testing.T) {
 	root := newRepo(t)
-	path := filepath.Join(root, "CLAUDE.md")
-	want := []byte("user-owned context\n")
-	if err := os.WriteFile(path, want, 0o644); err != nil {
+	claudePath := filepath.Join(root, "CLAUDE.md")
+	wantClaude := []byte("user-owned claude context\n")
+	if err := os.WriteFile(claudePath, wantClaude, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	agentsPath := filepath.Join(root, "AGENTS.md")
+	wantAgents := []byte("user-owned agents context\n")
+	if err := os.WriteFile(agentsPath, wantAgents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dotAgentsPath := filepath.Join(root, ".agents", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(dotAgentsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wantDotAgents := []byte("user-owned .agents/AGENTS.md domain rules\n")
+	if err := os.WriteFile(dotAgentsPath, wantDotAgents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := Create(root, false); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(path)
+
+	gotClaude, err := os.ReadFile(claudePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != string(want) {
-		t.Fatalf("Create migrated existing CLAUDE.md: got %q want %q", got, want)
+	if string(gotClaude) != string(wantClaude) {
+		t.Fatalf("Create migrated existing CLAUDE.md: got %q want %q", gotClaude, wantClaude)
+	}
+	gotAgents, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotAgents) != string(wantAgents) {
+		t.Fatalf("Create migrated existing AGENTS.md: got %q want %q", gotAgents, wantAgents)
+	}
+	gotDotAgents, err := os.ReadFile(dotAgentsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDotAgents) != string(wantDotAgents) {
+		t.Fatalf("Create migrated existing .agents/AGENTS.md: got %q want %q", gotDotAgents, wantDotAgents)
 	}
 }
 
@@ -351,13 +373,36 @@ func TestCreateAlwaysExcludesGeneratedHarnessConfigs(t *testing.T) {
 	for _, want := range []string{
 		"/.claude/settings.json",
 		"/.claude/.agents-wire.lock",
+		"/.claude/skills",
 		"/.codex/hooks.json",
 		"/.codex/.agents-wire.lock",
+		"/.codex/skills",
+		"/.agents/hooks.json",
+		"/.agents/.agents-wire.lock",
 	} {
 		if !strings.Contains(exclude, want) {
 			t.Errorf("exclude missing %q:\n%s", want, exclude)
 		}
 		assertIgnored(t, root, strings.TrimPrefix(want, "/"))
+	}
+}
+
+func TestScaffoldExclusionsIncludeAntigravity(t *testing.T) {
+	root := newRepo(t)
+	if err := Create(root, false); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	excludePath := filepath.Join(root, ".git", "info", "exclude")
+	data, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read exclude error = %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "/.agents/hooks.json") {
+		t.Error("missing /.agents/hooks.json in exclude")
+	}
+	if !strings.Contains(content, "/.agents/.agents-wire.lock") {
+		t.Error("missing /.agents/.agents-wire.lock in exclude")
 	}
 }
 
@@ -382,30 +427,23 @@ func TestCreateNoLongerScaffoldsATrackedTraceDirectory(t *testing.T) {
 	}
 }
 
-// The scaffolded CLAUDE.md must not name a command the binary no longer has.
-//
-// Scaffolding is written into repositories that this session will never see
-// again, so a stale command name here is a dead instruction with a long half
-// life. The capture instruction it used to carry -- "record it before moving
-// on ... write it with `agents handoff draft`" -- went with the apparatus on
-// 2026-08-20; recording is a global instruction now and is deliberately not
-// restated per repository.
-func TestClaudeMDNamesNoRetiredCommand(t *testing.T) {
+// The scaffolded DefaultAgentsMD must not name a command the binary no longer has.
+func TestDefaultAgentsMDNamesNoRetiredCommand(t *testing.T) {
 	for _, dead := range []string{
 		"agents handoff", "agents review", "agents index",
 		".agents/memory", ".agents/reports/handoff",
 	} {
-		if strings.Contains(ClaudeMD, dead) {
-			t.Errorf("the scaffolded CLAUDE.md still names %q, which no longer exists", dead)
+		if strings.Contains(DefaultAgentsMD, dead) {
+			t.Errorf("the scaffolded AGENTS.md still names %q, which no longer exists", dead)
 		}
 	}
 	// It still has to point somewhere, and at the thing that survived.
-	for _, want := range []string{"docs/qna/", "docs/journal/", ".agents/skills/"} {
-		if !strings.Contains(ClaudeMD, want) {
-			t.Errorf("the scaffolded CLAUDE.md does not point at %s", want)
+	for _, want := range []string{"docs/qna/", "docs/journal/", "docs/design/", ".agents/skills/", ".agents/AGENTS.md"} {
+		if !strings.Contains(DefaultAgentsMD, want) {
+			t.Errorf("the scaffolded AGENTS.md does not point at %s", want)
 		}
 	}
-	if !strings.Contains(ClaudeMD, DoctorInstruction) {
-		t.Error("the scaffolded CLAUDE.md dropped the doctor instruction")
+	if !strings.Contains(DefaultAgentsMD, DoctorInstruction) {
+		t.Error("the scaffolded AGENTS.md dropped the doctor instruction")
 	}
 }

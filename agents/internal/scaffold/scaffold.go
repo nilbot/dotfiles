@@ -23,14 +23,11 @@ import (
 var ErrLocalInLinkedWorktree = errors.New("--local is not supported inside a linked worktree: info/exclude is shared with the main checkout, so excluding /.agents/ here would hide every new file under .agents/ from git in every worktree of this repo, including files already written. Run `agents init --local` in the main checkout instead, or drop --local here")
 
 // DoctorInstruction is part of newly generated context only. Create never
-// rewrites an existing CLAUDE.md, so restoring this marker is not a migration.
+// rewrites an existing instruction file, so restoring this marker is not a migration.
 const DoctorInstruction = "Run `agents doctor` early and report any warnings before relying on this context."
 
-// ClaudeMD is the trigger, not the payload.
-//
-// It is the only file every harness loads automatically, so it costs context in
-// every session -- including the ones that never touch .agents/. Keep it short.
-const ClaudeMD = `# Agent context
+// DefaultAgentsMD is the root instruction file for coding agent harnesses.
+const DefaultAgentsMD = `# Agent context
 
 Durable context for this repo lives in ` + "`docs/`" + `. Read it before assuming;
 it is the record, and this file is only the pointer to it.
@@ -39,17 +36,21 @@ it is the record, and this file is only the pointer to it.
 - ` + "`docs/journal/`" + ` — dated record of what happened
 - ` + "`docs/design/`" + ` — the design still in force
 
-` + "`.agents/`" + ` holds machine wiring, not knowledge: harness hooks, the trace
-cache, and ` + "`.agents/skills/`" + ` for procedures specific to this repo. A hook
-cannot install itself and a missing hook fails silently, so an empty or stale
-` + "`.agents/`" + ` means the setup is broken rather than that there is nothing to
-say -- report it rather than working around it.
+## Repository Architecture & Guidelines
+- Domain engineering guidelines, commenting standards, and safety constraints 
+  are defined in ` + "`.agents/AGENTS.md`" + `.
+- Repo-specific procedures and skills are located in ` + "`.agents/skills/`" + `.
+
+## Machine Wiring
+` + "`.agents/`" + ` holds machine wiring and local skills. A hook cannot install itself 
+and a missing hook fails silently, so an empty or stale ` + "`.agents/`" + ` means the setup 
+is broken rather than that there is nothing to say — report it rather than 
+working around it.
 
 ` + DoctorInstruction + `
 
-Recording is covered by the global instruction and the
-` + "`recording-what-you-learn`" + ` skill; it is not repo-specific and is not
-restated here.
+Recording is covered by the global instruction and the ` + "`recording-what-you-learn`" + ` 
+skill; it is not repo-specific and is not restated here.
 `
 
 // gitattributesLines are tracked on purpose: they are a statement about how this
@@ -74,6 +75,8 @@ var excludeLines = []string{
 	"/.codex/hooks.json",
 	"/.codex/.agents-wire.lock",
 	"/.codex/skills",
+	"/.agents/hooks.json",
+	"/.agents/.agents-wire.lock",
 }
 
 // dirs is what .agents/ is for after the 2026-08-19 redesign: machine wiring
@@ -118,10 +121,10 @@ func Create(root string, local bool) error {
 		}
 	}
 
-	if err := writeIfAbsent(filepath.Join(root, "CLAUDE.md"), ClaudeMD); err != nil {
+	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), DefaultAgentsMD); err != nil {
 		return err
 	}
-	if err := linkIfAbsent(filepath.Join(root, "AGENTS.md"), "CLAUDE.md"); err != nil {
+	if err := linkIfAbsent(filepath.Join(root, "CLAUDE.md"), "AGENTS.md"); err != nil {
 		return err
 	}
 

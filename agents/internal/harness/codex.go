@@ -9,7 +9,9 @@ func init() { register(codex{}) }
 // before its recording half is reconciled against a live payload.
 type codex struct{}
 
-func (codex) Name() string { return "codex" }
+func (codex) Name() string             { return "codex" }
+func (codex) HarnessDir() string       { return ".codex" }
+func (codex) NeedsSkillsSymlink() bool { return true }
 
 func (codex) Capabilities() Capabilities {
 	// Codex writes no spawn-time sidecar, so there is nowhere to read a human
@@ -36,8 +38,12 @@ func (codex) WireConfigPath(repoRoot string) string {
 	return filepath.Join(repoRoot, ".codex", "hooks.json")
 }
 
+func (c codex) Render(settings map[string]any, binary string) ([]byte, error) {
+	return renderHooksJSON(settings, c.Name(), c.Events(), binary)
+}
+
 func (c codex) Wire(repoRoot, binary string) error {
-	return wireRepository(repoRoot, ".codex", "hooks.json", c.Name(), c.Events(), binary)
+	return wireRepository(repoRoot, c, binary)
 }
 
 // TrustSteps names both of Codex's gates, because they are separate and
