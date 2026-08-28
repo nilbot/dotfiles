@@ -45,7 +45,7 @@ graph TD
 
 ---
 
-### Task 1: Add `version` Command and Flags to `agents` CLI
+### Task 1: Add `version` Command, Flags, and Documentation to `agents` CLI
 
 **Files:**
 - Create: [`agents/cmd_version.go`](file:///Users/nilbot/dotfiles/agents/cmd_version.go)
@@ -53,6 +53,8 @@ graph TD
 - Modify: [`agents/commands.go`](file:///Users/nilbot/dotfiles/agents/commands.go)
 - Modify: [`agents/main.go`](file:///Users/nilbot/dotfiles/agents/main.go)
 - Modify: [`agents/main_test.go`](file:///Users/nilbot/dotfiles/agents/main_test.go)
+- Modify: [`README.md`](file:///Users/nilbot/dotfiles/README.md) (regenerate command table via `agents help --render=markdown`)
+- Modify: [`claude/skills/agents-tool/SKILL.md`](file:///Users/nilbot/dotfiles/claude/skills/agents-tool/SKILL.md) (document `agents version` command)
 
 **Interfaces:**
 - `var version = "dev"`, `var commit = "none"`, `var date = "unknown"` in `main.go`.
@@ -71,18 +73,20 @@ Add tests asserting:
 Run: `go test -v ./agents -run TestVersion`  
 Expected: FAIL
 
-- [ ] **Step 3: Implement `cmd_version.go`, `commands.go`, `main.go`**
+- [ ] **Step 3: Implement `cmd_version.go`, `commands.go`, `main.go`, and update documentation**
+
+Update `agents/cmd_version.go`, `agents/commands.go`, and `agents/main.go`. Regenerate `README.md` command block (`agents help --render=markdown`) and update `claude/skills/agents-tool/SKILL.md` to document `agents version`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `go test -v ./agents/...`  
+Run: `go test -v ./agents/...` (including `docs_test.go` checks)  
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add agents/cmd_version.go agents/cmd_version_test.go agents/commands.go agents/main.go agents/main_test.go
-git commit -m "feat(cli): add version command and build provenance flags"
+git add agents/cmd_version.go agents/cmd_version_test.go agents/commands.go agents/main.go agents/main_test.go README.md claude/skills/agents-tool/SKILL.md
+git commit -m "feat(cli): add version command, build provenance flags, and documentation"
 ```
 
 ---
