@@ -244,7 +244,7 @@ func TestDoctorOutputEscapesHostileFields(t *testing.T) {
 	}
 }
 
-func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
+func TestIsolatedDoctorUnderUnstampedChildBinary(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home")
 	state := filepath.Join(base, "state")
@@ -297,12 +297,10 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
 
-	// AGENTS_DOTFILES_ROOT is dropped and never re-added: the child binary is
-	// built unstamped, so it must fall through to HOME to find the checkout this
-	// fixture laid out. A developer or CI runner with that variable exported
-	// would otherwise point the "fully isolated" child at the real checkout, and
-	// this test's name would be stating something untrue.
-	var environment []string
+	// AGENTS_DOTFILES_ROOT is stripped from the base environment: an unstamped
+	// binary defaults to Standalone Mode unless AGENTS_DOTFILES_ROOT is explicitly
+	// supplied.
+	var baseEnvironment []string
 	for _, item := range os.Environ() {
 		key, _, _ := strings.Cut(item, "=")
 		if key == "HOME" || key == "XDG_STATE_HOME" || key == "GIT_CONFIG_GLOBAL" ||
@@ -313,9 +311,9 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 			strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
 			continue
 		}
-		environment = append(environment, item)
+		baseEnvironment = append(baseEnvironment, item)
 	}
-	environment = append(environment,
+	baseEnvironment = append(baseEnvironment,
 		"HOME="+home,
 		"XDG_STATE_HOME="+state,
 		"GIT_CONFIG_GLOBAL="+globalConfig,
@@ -323,11 +321,11 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 		"GIT_TERMINAL_PROMPT=0",
 		"PATH="+binDir+":"+os.Getenv("PATH"),
 	)
-	run := func(args ...string) (int, string) {
+	run := func(env []string, args ...string) (int, string) {
 		t.Helper()
 		cmd := exec.Command(binary, args...)
 		cmd.Dir = repoRoot
-		cmd.Env = environment
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		if err == nil {
 			return 0, string(out)
@@ -338,27 +336,37 @@ func TestDoctorRunsInFullyIsolatedTempRepository(t *testing.T) {
 		t.Fatalf("run agents %v: %v\n%s", args, err, out)
 		return -1, ""
 	}
-	if code, out := run("init"); code != exitcode.Advisory {
+	if code, out := run(baseEnvironment, "init"); code != exitcode.Advisory {
 		t.Fatalf("isolated init exit=%d want=1\n%s", code, out)
 	}
-	code, out := run("doctor")
-	if code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
-		t.Fatalf("isolated doctor exit=%d want=1\n%s", code, out)
-	}
-	// This fixture provisions the checkout under its own HOME correctly, so the
-	// checks derived from the checkout root must come back ok -- they are exactly
-	// the ones the reported bug turned red on a healthy machine.
-	//
-	// The exit code cannot see them: doctor returns Advisory whenever any check
-	// is non-ok, and this fixture always carries warnings (nothing has recorded
-	// here yet). Without these assertions the environment sanitizing above is
-	// unfalsifiable -- an ambient AGENTS_DOTFILES_ROOT could point the child at
-	// the real checkout and every assertion here would still pass.
-	for _, name := range []string{"git-hooks:global", "git-hooks:effective", "git-hooks:links"} {
-		if status := doctorCheckStatus(out, name); status != "ok" {
-			t.Errorf("isolated doctor reported %q for %s, want ok; this fixture is "+
-				"provisioned correctly, so any other status means the child resolved "+
-				"a checkout other than the one under its own HOME\n%s", status, name, out)
+
+	t.Run("standalone mode skips dotfiles checks", func(t *testing.T) {
+		code, out := run(baseEnvironment, "doctor")
+		if code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
+			t.Fatalf("standalone doctor exit=%d want=1\n%s", code, out)
 		}
-	}
+		for _, name := range []string{"git-hooks:global", "git-hooks:links", "root:exists"} {
+			if status := doctorCheckStatus(out, name); status != "<missing>" {
+				t.Errorf("standalone doctor reported %q for %s, want skipped (<missing>)\n%s", status, name, out)
+			}
+		}
+		if status := doctorCheckStatus(out, "git-hooks:local"); status != "ok" {
+			t.Errorf("standalone doctor reported %q for git-hooks:local, want ok\n%s", status, out)
+		}
+	})
+
+	t.Run("operator mode verifies dotfiles checkout and hooks", func(t *testing.T) {
+		operatorEnv := append(append([]string(nil), baseEnvironment...), "AGENTS_DOTFILES_ROOT="+dotfiles)
+		code, out := run(operatorEnv, "doctor")
+		if code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
+			t.Fatalf("operator doctor exit=%d want=1\n%s", code, out)
+		}
+		for _, name := range []string{"git-hooks:global", "git-hooks:effective", "git-hooks:links", "root:exists"} {
+			if status := doctorCheckStatus(out, name); status != "ok" {
+				t.Errorf("operator doctor reported %q for %s, want ok; this fixture is "+
+					"provisioned correctly, so any other status means the child resolved "+
+					"a checkout other than the one under AGENTS_DOTFILES_ROOT\n%s", status, name, out)
+			}
+		}
+	})
 }

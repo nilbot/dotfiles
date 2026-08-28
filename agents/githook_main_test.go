@@ -126,12 +126,11 @@ func newLiveHookRepo(t *testing.T, binary string) liveHookRepo {
 	if out, err := gitAttempt(root, "config", "core.hooksPath", hooksPath); err != nil {
 		t.Fatalf("configure local core.hooksPath: %v\n%s", err, out)
 	}
-	// The personal hooks this fixture lays out are found through DotfilesRoot,
-	// which consults AGENTS_DOTFILES_ROOT before falling back to HOME. Exported
-	// in the shell running the tests, it would send the dispatcher to the real
-	// checkout instead -- these cases would fail for a reason that has nothing to
-	// do with them, after running whatever personal hooks that checkout holds.
-	t.Setenv("AGENTS_DOTFILES_ROOT", "")
+	// The personal hooks this fixture lays out are found through DotfilesRoot.
+	// Since unstamped test binaries operate in Standalone Mode by default,
+	// AGENTS_DOTFILES_ROOT is explicitly configured to point to the fixture's
+	// dotfiles root so personal hooks under git/hooks are executed.
+	t.Setenv("AGENTS_DOTFILES_ROOT", filepath.Join(home, "dotfiles"))
 	extras := filepath.Join(home, "dotfiles", "git", "hooks")
 	if err := os.MkdirAll(extras, 0o755); err != nil {
 		t.Fatal(err)
