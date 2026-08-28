@@ -10,9 +10,18 @@ repository — stays there, because a session does act on it.
 
 ## Installing
 
+### Option 1: Via Bootstrap (Build from Source)
 Run `./bootstrap apply workstation` from the dotfiles checkout. Its devtools
 phase runs the installer's preflight, builds `~/bin/agents`, then runs the
 installer.
+
+### Option 2: Pointing to an Existing Binary (e.g. Homebrew)
+If `agents` is installed via Homebrew (`brew install nilbot/tap/agents`), resolve
+its canonical binary path using `realpath` and run the installer directly:
+
+```bash
+bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles $HOME $(realpath $(which agents))
+```
 
 The installer checks for existing Git-hook and global-attributes ownership
 before it builds or changes anything. It refuses a foreign global

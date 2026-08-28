@@ -14,7 +14,7 @@ mkdir -p "${OUT_DIR}"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "${WORK_DIR}"' EXIT
 
-cp "${ROOT_DIR}/README.md" "${WORK_DIR}/README.md"
+cp "${ROOT_DIR}/agents/README.md" "${WORK_DIR}/README.md"
 
 TARGETS=(
   "darwin/arm64"
