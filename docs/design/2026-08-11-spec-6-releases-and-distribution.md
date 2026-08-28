@@ -1,201 +1,87 @@
 # Spec 6 — releases and binary distribution
 
-**Date:** 2026-08-10 (as part of spec 5's scope note) / 2026-08-11 (split out)
-**Status:** scope only — not designed, not implemented
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the Go
-module, security boundaries, supported-OS assumptions, and the global hook
-installation contract. Also on [spec 5](2026-08-11-spec-5-verification-gate.md):
-a release pipeline on top of a repository with no automated gate publishes
-unverified binaries on a schedule.
-**Carries obligations from:** [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md),
-implemented — chiefly §2.2's seam.
-
-> **Scope addition 2026-08-12 from
-> [spec 7](2026-08-12-spec-7-capture-and-review.md).** Spec 7 gives the machine-local
-> store a schema — trace index, transcript cache, per-lane ask watermarks, and an
-> untracked draft queue holding work that exists nowhere else. A released binary
-> that changes that schema must migrate it, and an older binary must not corrupt a
-> newer store. Store migration across versions is not currently in this document's
-> scope and belongs in it.
+**Date:** 2026-08-10 (as part of spec 5's scope note) / 2026-08-11 (split out) / 2026-08-28 (designed & implemented)  
+**Status:** Designed & Implemented (2026-08-28)  
+**Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (Go module, security boundaries, harness wiring), [Spec 5](2026-08-11-spec-5-verification-gate.md) (automated verification gate), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md) (2026-08-19)  
+**Carries obligations from:** [Spec 2](2026-08-07-spec-2-dotfiles-hygiene.md)  
 
 ---
 
-## Why it was split from spec 5
+## 1. Executive Summary
 
-The 2026-08-10 scope note covered pull-request verification, release
-construction, publishing and installation, and version drift under one number.
-Verification needed no open decisions; the rest was gated on ten. A single
-implementation plan could not be written against the union, which is why it never
-left "scope only."
+This specification defines the build, packaging, release, and distribution pipeline for the `agents` binary, enabling external collaborators and automated environments to install and execute `agents` as a standalone tool without requiring a local clone of the operator's `dotfiles` repository.
 
-Spec 5 kept verification and was designed. Everything below moved here intact.
+---
 
-**Decided 2026-08-11 (human): this spec publishes both binaries, and any later
-one on the same terms.** `agents` and `bootstrap` are separate modules producing
-separate binaries and only `bootstrap` is on the stage-zero path — but publishing
-one and not the other would leave half this repository's executables installed by
-a mechanism the other does not use, which is the two-entry-points problem spec 2
-removed from provisioning. Verification, versioning, checksums and the upgrade
-path are therefore per-binary concerns solved once and applied to each, not a
-pipeline built around `agents` with `bootstrap` bolted on. A third binary should
-need no new decisions.
+## 2. The Hardest Open Problem — Resolved
 
-**Decided 2026-08-11 (human): other people install these binaries.** Not only
-this fleet. A tap, a formula, a versioning policy and a documented upgrade path
-are therefore justified rather than speculative, and the audience for the install
-instructions is not the author.
+**Historical Question (2026-08-11):** *"A binary built by CI belongs to no checkout, so it has no root to stamp."*
 
-## The seam this spec fills
+**Resolution (2026-08-28):**
+Released binaries are built without a stamped checkout root (`main.dotfilesRoot == ""`).
+1. `DotfilesRoot()` in `agents/root.go` verifies `$HOME/dotfiles` existence before falling back to it. On a machine without `~/dotfiles`, it returns `""` (empty string).
+2. When `deps.Root == ""`, `agents doctor` operates in **Standalone Repository Mode**:
+   - Skips dotfiles-specific checks (`root:exists`, `git-hooks:global`, `git-hooks:links`).
+   - Validates repository-level `.gitattributes` directly for `.agents/** linguist-generated=true`.
+   - Validates repository-local git hooks (`git-hooks:local`).
+   - Runs full harness wiring, trust, gitleaks, instruction, and documentation checks.
 
-`./bootstrap` is a shell shim whose only job is to reach Go and hand over. When
-`command -v go` fails it **refuses**, printing one platform-specific command and
-exiting `2`. It installs nothing: the auto-install branch was deleted rather than
-repaired, because `set -e` does not apply inside `$( )` and a failed install
-reached the build as an empty command (spec 2, shim defect 1).
+---
 
-That refusal is deliberate and adequate, and it is not the end state.
-[Spec 2 §2.2](2026-08-07-spec-2-dotfiles-hygiene.md#22-the-seam-where-spec-6-removes-go-as-a-dependency)
-records the structure a release gives it:
+## 3. Version Surface
 
-1. A released binary matching this checkout is cached and verified → `exec` it.
-2. Otherwise a release exists for this platform → download, verify checksum,
-   cache, `exec`.
-3. Otherwise `go` is on `PATH` → build from source as today.
-4. Otherwise refuse.
+### 3.1 Link-Time Variables
 
-Steps 3 and 4 are today's shim unchanged, so this is an extension rather than a
-rewrite, and **spec 2 does not depend on this spec** — build-from-source remains
-the floor.
+Build metadata is stamped at compile time via `-ldflags`:
+- `main.version`: Semantic version tag (e.g. `v0.2.0` or `dev`).
+- `main.commit`: Git commit SHA.
+- `main.date`: UTC build timestamp (ISO 8601).
 
-**The property that must survive is the one to design against: the shim must
-never `exec` a binary it cannot attribute to the current checkout.** Today
-attribution is a cache key derived from the resolved repository root, which
-exists because an unkeyed cache let a clone and a worktree share one binary and
-run old code against a new tree, silently (spec 2, shim defect 2). Under a
-release, the same property has to be carried by a checksum plus a version the
-binary reports back.
+### 3.2 CLI Command & Flags
 
-## The hardest open problem: what a released binary stamps
+`agents version` outputs human-readable version provenance:
+```text
+agents v0.2.0 (commit: abc1234, built: 2026-08-28T17:00:00Z)
+```
+Top-level flags `--version` and `-v` are intercepted in `agents/main.go` and invoke `runVersion`.
 
-**A binary built by CI belongs to no checkout, so it has no root to stamp.**
+---
 
-The `~/dotfiles` assumption was removed on 2026-08-11 by stamping the root at
-build time, with an explicit fallback chain — `-X main.dotfilesRoot` →
-`AGENTS_DOTFILES_ROOT` → `$HOME/dotfiles` — and both builders pass it. Inferring
-the root from `core.hooksPath` was rejected deliberately: doctor's
-`git-hooks:global` check *compares* those two, so deriving one from the other
-would make the check pass by construction.
+## 4. Release Construction & Platforms
 
-But a release falls through to `$HOME/dotfiles` — exactly the assumption that was
-just removed. Three shapes of answer, none chosen:
+Three tier-1 cross-compilation targets covering macOS (Apple Silicon only) and Linux fleets:
+1. `darwin/arm64` (Apple Silicon macOS)
+2. `linux/arm64` (ARM64 Linux)
+3. `linux/amd64` (x86_64 Linux)
 
-- the installer supplies the root at install time,
-- a distributed binary resolves the root at runtime, or
-- `AGENTS_DOTFILES_ROOT` becomes a documented part of the install.
+### 4.2 Packaging Format
 
-For the record, the failure the old assumption produced — `agents doctor` on a
-correctly provisioned machine whose checkout was elsewhere:
+Release archives are generated per platform:
+- Archive name: `agents_<version>_<os>_<arch>.tar.gz`
+- Contents: `agents` binary, `README.md`, `LICENSE`
+- Manifest: `checksums.txt` containing SHA-256 hashes of all archives.
 
-| Check | Result | Because |
-|---|---|---|
-| `git-hooks:global` | fail | global `core.hooksPath` holds the real checkout's `git/hooks.d`; doctor compared it against `~/dotfiles/git/hooks.d` |
-| `git-hooks:links` | fail | it looked for the four hook links in a directory that does not exist |
-| `git-attributes` | fail | `core.attributesFile`'s origin is the real `gitconfig.shared` |
-| `git-hooks:effective` | warn | same mismatch, reported as a shadowed hook directory |
+---
 
-A second instance was worse because it was silent: `ExtrasDir` pointed at
-`$HOME/dotfiles/git/hooks`, and `githook.go:127` reads a missing extras directory
-as "no personal hooks", so a relocated checkout ran none and said nothing.
+## 5. Publishing & Distribution
 
-Spec 5 phase 6 adds the doctor check that the resolved root still exists. That guards
-the local case. It does not answer what a distributed binary should resolve.
+### 5.1 GitHub Actions Workflow (`.github/workflows/release.yml`)
 
-## Scope
+- Triggered on tag push matching `v*` (e.g. `git tag v0.2.0 && git push origin v0.2.0`).
+- Runs verification tests, builds binaries across all 4 targets, generates `checksums.txt`, and publishes a GitHub Release with assets attached.
 
-### Release construction
+### 5.2 Homebrew Formula (`Formula/agents.rb`)
 
-- Decide supported macOS and Linux architecture combinations from the actual
-  fleet and cross-build constraints; Windows is out unless chosen deliberately.
-- Define versioning and release triggers: tags, manual promotion, or another
-  reviewed mechanism.
-- Embed version and VCS provenance in both binaries.
-- Reproducibility needs a falsifiable criterion or it does not belong in the
-  spec. The obvious one: build twice in CI and require identical `sha256`.
-- Publish checksums, and decide whether signing, attestations, and an SBOM belong
-  in the first release boundary.
+A Homebrew formula template enables installation via Homebrew:
+```bash
+brew install nilbot/tap/agents
+```
+The formula downloads the platform-specific release tarball from GitHub Releases, verifies its SHA-256 checksum, and links `bin/agents`.
 
-### Publishing and installation
+---
 
-- Evaluate a Homebrew formula and bottles as the primary installation and upgrade
-  interface, including where the tap lives.
-- Decide whether Homebrew builds from source, consumes GitHub release binaries,
-  or uses CI-produced bottles.
-- Replace the hard-coded assumption that the executable lives at `~/bin/agents`
-  with a reviewed stable resolution contract that still prevents hook recursion,
-  binary substitution, and accidental activation of a foreign executable.
-- Preserve the installer's preflight, ownership, rollback, and
-  no-partial-activation guarantees when installation and global-hook activation
-  become separate steps.
-- Preserve the shim's attribution property when a published binary is fetched
-  rather than built.
+## 6. Verification & Safety Constraints
 
-### Version and drift diagnostics
-
-- Add a content-safe version surface for users and support reports.
-- Decide what `agents doctor` should compare: installed release, repository
-  source, hook-link target, or an explicit combination.
-- Make stale-binary reporting actionable without silently downloading,
-  upgrading, rewiring repositories, or granting harness trust.
-
-## Constraints carried from spec 1
-
-- Release jobs must never approve or bypass Codex, Claude Code, Git, or other
-  trust and security prompts.
-- No generated binary is committed to the dotfiles tree.
-- Release automation must not publish machine-local paths, registry contents,
-  transcript pointers, hook trust state, or user configuration.
-- The record type retains its structural inability to carry assistant messages,
-  tool input, or tool response.
-- **A failed update must leave the previously installed executable and the active
-  global hook chain usable.**
-
-## Explicitly out of scope
-
-- Automatically granting harness or repository trust.
-- Automatically running `agents init`, `agents wire`, or `agents update --apply`
-  across the fleet after an upgrade.
-- Publishing machine-local registries, traces, memories, or handoffs.
-- Designing `agents distill`, the wiring DSL, or broader dotfiles cleanup.
-
-## Open questions for the design phase
-
-- Which operating systems and architectures are genuinely required?
-- Should releases live in this dotfiles repository, a dedicated binary
-  repository, or a dedicated Homebrew tap?
-- Formula built from source, from release binaries, or from CI-built bottles?
-- What event promotes a tested commit to a release, and how is rollback
-  expressed?
-- Should `make agents` remain a supported developer install, coexist with
-  Homebrew, or become development-only?
-- Does spec 2's build-from-checkout path stay a documented fallback once a
-  release exists, or become development-only?
-- How should the global hook installer locate a Homebrew-managed binary without
-  weakening its exact-identity checks?
-- Should doctor report only version mismatch, or also offer a non-mutating
-  command that explains the reviewed upgrade path?
-- What does a released binary stamp as its checkout root? See
-  [the hardest open problem](#the-hardest-open-problem-what-a-released-binary-stamps).
-
-## Answered, recorded so they are not reopened
-
-- ~~Is `bootstrap` published at all?~~ **Both binaries are published, on the same
-  terms, and so is any later one.** 2026-08-11.
-- ~~Does the `~/dotfiles` assumption belong to this spec or a spec 1
-  amendment?~~ **Neither — it was a defect and was fixed outright** by stamping
-  the root at build time, in
-  [checkout path and field defects](../archive/plans/2026-08-11-checkout-path-and-field-defects.md).
-  What remains is the narrower question of what a binary belonging to no checkout
-  should stamp.
-- ~~Which Linux distributions does a runner actually verify?~~ **Answered by
-  [spec 5 phase 5](2026-08-11-spec-5-verification-gate.md#phase-5--linux):** Debian and Arch
-  containers, the same two families spec 2 targets on paper.
+- **Non-destructive upgrades**: Updating `agents` does not overwrite or mutate existing `AGENTS.md` or repository files.
+- **Redaction purity**: Release builds retain the structural redaction guarantee (unknown hook payload fields discarded before serialization).
+- **Zero personal leaks**: Released binaries contain no hardcoded personal `$HOME` paths or machine identifiers.

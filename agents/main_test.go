@@ -57,3 +57,59 @@ func TestMain(m *testing.M) {
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
+
+func TestVersionCommandAndFlags(t *testing.T) {
+	origVersion, origCommit, origDate := version, commit, date
+	t.Cleanup(func() {
+		version, commit, date = origVersion, origCommit, origDate
+	})
+
+	version = "v0.3.0"
+	commit = "1234567"
+	date = "2026-08-28T15:04:05Z"
+
+	wantOutput := fmt.Sprintf("agents %s (commit: %s, built: %s)\n", version, commit, date)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"command", []string{"version"}},
+		{"long flag", []string{"--version"}},
+		{"short flag", []string{"-v"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(t.TempDir())
+			var code int
+			stdout, stderr := captureStdoutAndStderr(t, func() {
+				code = run(tc.args)
+			})
+			if code != 0 {
+				t.Errorf("run(%v) exit = %d, want 0", tc.args, code)
+			}
+			if stdout != wantOutput {
+				t.Errorf("run(%v) stdout = %q, want %q", tc.args, stdout, wantOutput)
+			}
+			if stderr != "" {
+				t.Errorf("run(%v) stderr = %q, want empty", tc.args, stderr)
+			}
+		})
+	}
+
+	t.Run("extra args with --version is malformed", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		var code int
+		stdout, stderr := captureStdoutAndStderr(t, func() {
+			code = run([]string{"--version", "extra"})
+		})
+		if code == 0 {
+			t.Errorf("run([--version extra]) exit = %d, want non-zero", code)
+		}
+		if stdout != "" {
+			t.Errorf("run([--version extra]) stdout = %q, want empty", stdout)
+		}
+		if stderr == "" {
+			t.Errorf("run([--version extra]) stderr is empty, want error message")
+		}
+	})
+}

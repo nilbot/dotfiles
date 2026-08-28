@@ -106,6 +106,13 @@ func rootCommand() *Command {
 			Run:      func(a []string, io IO) int { return runFleetUpdate(a, io.Out) },
 		},
 		{
+			Name: "version", Summary: "print binary version and build provenance",
+			Usage:    "agents version",
+			Detail:   "Prints binary version, git commit, and build timestamp.",
+			Audience: []Audience{Human, Agent},
+			Run:      func(a []string, io IO) int { return runVersion(a, io.Out) },
+		},
+		{
 			Name: "guard", Summary: "pre-commit checks (the only command that blocks)",
 			Usage:    "agents guard --staged",
 			Detail:   "Scans staged .agents/ content for secrets, regenerates the generated indexes and compares them byte-for-byte, and warns on a commit mixing agent context with code. Invoked automatically on every pre-commit; main.go maps its advisory result to success so a warning does not abort the commit.",

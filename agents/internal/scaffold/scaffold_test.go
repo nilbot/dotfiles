@@ -447,3 +447,15 @@ func TestDefaultAgentsMDNamesNoRetiredCommand(t *testing.T) {
 		t.Error("the scaffolded AGENTS.md dropped the doctor instruction")
 	}
 }
+
+func TestDefaultAgentsMDContributorFriendly(t *testing.T) {
+	if strings.Contains(DefaultAgentsMD, "an empty or stale `.agents/` means the setup is broken") {
+		t.Error("DefaultAgentsMD still contains the strict broken-setup alarm phrase")
+	}
+	if !strings.Contains(DefaultAgentsMD, DoctorInstruction) {
+		t.Error("DefaultAgentsMD does not contain the updated DoctorInstruction")
+	}
+	if !strings.Contains(DoctorInstruction, "If the `agents` CLI is installed") {
+		t.Error("DoctorInstruction is not conditional on CLI presence")
+	}
+}

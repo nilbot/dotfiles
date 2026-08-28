@@ -43,7 +43,7 @@ func TestTheKnownCommandSetIsPresent(t *testing.T) {
 	for _, want := range []string{
 		"init", "wire", "doctor", "save",
 		"trace ls", "trace show", "trace cache", "trace cache prune", "trace migrate",
-		"ls", "update", "guard", "hook",
+		"ls", "update", "version", "guard", "hook",
 	} {
 		if !present[want] {
 			t.Errorf("command %q disappeared in the move to the tree", want)

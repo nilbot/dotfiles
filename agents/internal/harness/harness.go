@@ -250,7 +250,7 @@ func ResemblesHookCommand(command string) bool {
 
 func isOwnedBinary(binary string) bool {
 	base := filepath.Base(binary)
-	return base == "agents" || base == "agents-test-bin"
+	return base == "agents" || base == "agents-test-bin" || base == "agents-standalone"
 }
 
 func knownSemantic(semantic string) bool {

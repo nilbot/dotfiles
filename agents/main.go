@@ -14,6 +14,12 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	if name := filepath.Base(os.Args[0]); githook.IsHookName(name) {
 		os.Exit(runGitHook(name, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -66,6 +72,9 @@ func run(args []string) int {
 		// explicit `agents help` is not. Same text, different disposition.
 		RenderUsage(root, os.Stderr, false)
 		return exitcode.Malformed
+	}
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
+		return runVersion(nil, os.Stdout)
 	}
 	// --help and -h ask for help about the command path in front of them, at any
 	// depth. Intercepting only args[0] made the flag a top-level idiom: `agents

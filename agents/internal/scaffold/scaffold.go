@@ -22,9 +22,12 @@ import (
 // that, so this is an error.
 var ErrLocalInLinkedWorktree = errors.New("--local is not supported inside a linked worktree: info/exclude is shared with the main checkout, so excluding /.agents/ here would hide every new file under .agents/ from git in every worktree of this repo, including files already written. Run `agents init --local` in the main checkout instead, or drop --local here")
 
+// LegacyDoctorInstruction is preserved for backwards compatibility with repositories scaffolded under earlier versions.
+const LegacyDoctorInstruction = "Run `agents doctor` early and report any warnings before relying on this context."
+
 // DoctorInstruction is part of newly generated context only. Create never
 // rewrites an existing instruction file, so restoring this marker is not a migration.
-const DoctorInstruction = "Run `agents doctor` early and report any warnings before relying on this context."
+const DoctorInstruction = "If the `agents` CLI is installed, run `agents doctor` early and report any warnings before relying on this context. If `agents` is not installed on this machine, skip machine wiring checks and adhere directly to the repository instructions above."
 
 // DefaultAgentsMD is the root instruction file for coding agent harnesses.
 const DefaultAgentsMD = `# Agent context
@@ -43,11 +46,8 @@ it is the record, and this file is only the pointer to it.
 
 ## Machine Wiring
 ` + "`.agents/`" + ` holds machine wiring and local skills. A hook cannot install itself 
-and a missing hook fails silently, so an empty or stale ` + "`.agents/`" + ` means the setup 
-is broken rather than that there is nothing to say — report it rather than 
-working around it.
-
-` + DoctorInstruction + `
+and a missing hook fails silently.
+- ` + DoctorInstruction + `
 
 Recording is covered by the global instruction and the ` + "`recording-what-you-learn`" + ` 
 skill; it is not repo-specific and is not restated here.

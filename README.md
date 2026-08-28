@@ -97,6 +97,7 @@ agents help --render=markdown
 | `agents trace migrate` | move a tracked index into the machine-local store |
 | `agents ls` | list the fleet on this machine |
 | `agents update` | rewire every registered repo (dry run by default) |
+| `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
 | `agents hook` | harness hook entrypoint |
 <!-- END GENERATED -->
