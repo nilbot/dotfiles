@@ -70,7 +70,7 @@ than by a command. See
 
 `agents help <command>` explains any command in full; **when** to reach for one
 is in the skill under `claude/skills/agents-tool/`, and when to write something
-down is in `claude/skills/recording-what-you-learn/`.
+down is in `.agents/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is
 judgment. Only the table between the markers is derived, and it comes from the
@@ -102,14 +102,21 @@ agents help --render=markdown
 | `agents hook` | harness hook entrypoint |
 <!-- END GENERATED -->
 
+## Development & Contributing
+
+- **Branch Protection & Pull Requests**: Direct pushes to `master` are prohibited by GitHub Rulesets. All contributions, features, and documentation fixes must be developed on dedicated branches and merged via Pull Requests.
+- **Verification Gate**: Pull Requests must pass the required CI verification workflow (`gate` job) before merging.
+- **Documentation Invariant**: Whenever an `agents` CLI command, subcommand, or flag is added, changed, or retired, `agents/README.md`, `README.md`, help texts (`agents help`), and `docs/` must be updated in the same change set.
+
 ## Layout
 
 | Path | What |
 |---|---|
 | `bootstrap`, `bootstrap.d/` | the provisioner: shim, phases, `links.manifest`, `Brewfile` |
 | `agents/` | the `agents` binary — repo-tracked agent context (spec 1) |
+| `.agents/` | repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and harness hooks |
 | `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
-| `docs/` | `design/` the reasoning still in force, `qna/` answers by question, `journal/` by date, `archive/` never rewritten |
+| `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question, `archive/` immutable pre-2026-08-20 history |
 
 Start with [the spec index](docs/design/README.md).
