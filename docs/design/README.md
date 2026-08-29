@@ -6,9 +6,10 @@ it holds rather than for the skill set used to write it.
 | directory | holds |
 |---|---|
 | `docs/design/` | the design still in force — read these to understand the system |
-| `docs/archive/` | executed plans, retired specs, past measurements — how it got here |
+| `docs/plans/` | step-by-step implementation plans |
+| `docs/journal/` | dated record of what happened and retrospective execution notes |
 | `docs/qna/` | answers indexed by the question you would ask on hitting it again |
-| `docs/journal/` | dated record of what happened |
+| `docs/archive/` | executed plans, retired specs, past measurements pre-2026-08-20 — how it got here |
 
 Nothing in `docs/archive/` is rewritten to stay true. A record edited to match
 today is not a record, and the reasoning behind a retired decision is why nobody
@@ -25,10 +26,12 @@ Numbers are stable catalog identifiers, not priority or order.
 | 3 | [`agents distill`](../archive/specs/2026-08-07-spec-3-agents-distill.md) | **retired** — archived, never implemented |
 | 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | **designed 2026-08-22** — triggers fired; not implemented |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged |
-| 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | scope only |
+| 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | implemented |
 | 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | §1–2 in force; the capture half is retired |
 | — | [knowledge is documentation](2026-08-19-knowledge-is-documentation.md) | **executed 2026-08-20** — the retired code and stores are deleted |
 | — | [antigravity multi-harness onboarding](2026-08-28-antigravity-multi-harness-onboarding.md) | **implemented 2026-08-28** — adapter, dialect, dual-layer instruction topology |
+| — | [contributor guardrails and scaffold decoupling](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) | **implemented 2026-08-28** — conditional doctor, standalone support |
+| — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **designed 2026-08-29** — two-tier context, 4-store layout, bundled skills, LLM migration |
 
 
 **Spec 1 is the foundation** — terminology, the placement rule, the pointer
@@ -54,5 +57,5 @@ catalogued here because of one ordering constraint (spec 1 §8).
 - [the capture experiment](../archive/analysis/2026-08-12-capture-instruction-experiment.md)
   — the two-arm protocol behind spec 7 §3a. Its result, that an instruction alone
   causes drafting, is load-bearing for the redesign.
-- Implementation plans are in [`../archive/plans/`](../archive/plans/), all
-  executed.
+- Implementation plans are in [`../plans/`](../plans/).
+- Pre-2026-08-20 historical plans are in [`../archive/plans/`](../archive/plans/).
