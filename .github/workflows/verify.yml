@@ -297,8 +297,10 @@ jobs:
       matrix:
         include:
           - image: debian:stable-slim
+            pkg_cache: /var/cache/apt/archives
             prereqs: apt-get update -qq && apt-get install -y -qq sudo golang-go git ca-certificates curl
           - image: archlinux:base
+            pkg_cache: /var/cache/pacman/pkg
             # DisableSandbox under [options], and it must be under [options]:
             # appended at the end of pacman.conf it lands inside a repo section,
             # which clears the Landlock error and leaves the sandbox-user
@@ -313,6 +315,13 @@ jobs:
       image: ${{ matrix.image }}
       options: --user root
     steps:
+      - name: cache package archives
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ matrix.pkg_cache }}
+          key: stage-zero-${{ matrix.image }}-${{ github.run_id }}
+          restore-keys: |
+            stage-zero-${{ matrix.image }}-
       - name: prerequisites and passwordless sudo
         run: |
           set -eux
