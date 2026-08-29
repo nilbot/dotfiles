@@ -69,7 +69,7 @@ than by a command. See
 [knowledge is documentation](docs/design/2026-08-19-knowledge-is-documentation.md).
 
 `agents help <command>` explains any command in full; **when** to reach for one
-is in the skill under `.agents/skills/agents-tool/`, and when to write something
+is in the skill under `claude/skills/agents-tool/`, and when to write something
 down is in `.agents/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is
