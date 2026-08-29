@@ -298,7 +298,7 @@ jobs:
         include:
           - image: debian:stable-slim
             pkg_cache: /var/cache/apt/archives
-            prereqs: apt-get update -qq && apt-get install -y -qq sudo golang-go git ca-certificates curl
+            prereqs: rm -f /etc/apt/apt.conf.d/docker-clean && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache && apt-get update -qq && apt-get install -y -qq sudo golang-go git ca-certificates curl
           - image: archlinux:base
             pkg_cache: /var/cache/pacman/pkg
             # DisableSandbox under [options], and it must be under [options]:
