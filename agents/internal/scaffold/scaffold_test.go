@@ -438,7 +438,7 @@ func TestDefaultAgentsMDNamesNoRetiredCommand(t *testing.T) {
 		}
 	}
 	// It still has to point somewhere, and at the thing that survived.
-	for _, want := range []string{"docs/qna/", "docs/journal/", "docs/design/", ".agents/skills/", ".agents/AGENTS.md"} {
+	for _, want := range []string{"docs/qna/", "docs/plans/", "docs/journal/", "docs/design/", ".agents/skills/", ".agents/AGENTS.md"} {
 		if !strings.Contains(DefaultAgentsMD, want) {
 			t.Errorf("the scaffolded AGENTS.md does not point at %s", want)
 		}
