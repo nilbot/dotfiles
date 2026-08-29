@@ -66,6 +66,16 @@ func repoRoot(t *testing.T) string {
 	return root
 }
 
+func bootstrapCacheKey(t *testing.T, root string) string {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "printf '%s' \"$1\" | cksum | tr -cd '0-9'", "_", root)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("bootstrapCacheKey %q: %v", root, err)
+	}
+	return string(out)
+}
+
 // runShim invokes the real ./bootstrap from an unrelated working directory, so
 // a regression to pwd-based root resolution fails immediately.
 func runShim(t *testing.T, home string, args ...string) (string, string, int) {
@@ -98,19 +108,29 @@ func runShimColdEnv(t *testing.T, shim, home string, extraEnv []string, args ...
 // cannot reproduce the failure at all.
 func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, cold bool, args ...string) (string, string, int) {
 	t.Helper()
-	if !cold && sharedTestBinary != "" && shim == filepath.Join(repoRoot(t), "bootstrap") {
-		destDir := filepath.Join(home, "cache", "dotfiles-bootstrap", sharedTestKey)
-		destBin := filepath.Join(destDir, "bootstrap")
-		if _, err := os.Stat(destBin); os.IsNotExist(err) {
-			if err := os.MkdirAll(destDir, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			data, err := os.ReadFile(sharedTestBinary)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(destBin, data, 0o755); err != nil {
-				t.Fatal(err)
+	if !cold && sharedTestBinary != "" {
+		shimDir := filepath.Dir(shim)
+		if !filepath.IsAbs(shimDir) {
+			shimDir = filepath.Join(dir, shimDir)
+		}
+		absRoot, err := filepath.Abs(shimDir)
+		if err == nil {
+			key := bootstrapCacheKey(t, absRoot)
+			destDir := filepath.Join(home, "cache", "dotfiles-bootstrap", key)
+			destBin := filepath.Join(destDir, "bootstrap")
+			if _, err := os.Stat(destBin); os.IsNotExist(err) {
+				if err := os.MkdirAll(destDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				data, err := os.ReadFile(sharedTestBinary)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(destBin, data, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				now := time.Now()
+				_ = os.Chtimes(destBin, now, now)
 			}
 		}
 	}
@@ -1080,7 +1100,7 @@ func TestCacheIsKeyedOnTheCheckout(t *testing.T) {
 	}
 	backdate(t, filepath.Join(alt, "bootstrap.d"))
 
-	stdout, stderr, code := runShimEnv(t, filepath.Join(alt, "bootstrap"), home, nil, "--help")
+	stdout, stderr, code := runShimColdEnv(t, filepath.Join(alt, "bootstrap"), home, nil, "--help")
 	if code != 0 {
 		t.Fatalf("second checkout exit %d: %s", code, stderr)
 	}
