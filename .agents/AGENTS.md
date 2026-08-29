@@ -20,6 +20,7 @@ Durable knowledge lives in `docs/` using the 4-store layout:
 
 ## 3. Agent Harness & Workflow Guidelines
 
+- **Branch Protection & Pull Request Policy**: Direct pushes to `master` are strictly prohibited by GitHub branch protection rulesets. All changes, features, bug fixes, and documentation updates MUST be authored on dedicated feature branches (e.g. `feat/`, `fix/`, `docs/`) and integrated via Pull Requests after passing CI gate verification (`gate`).
 - **Planning Workflows**: Do NOT invoke Antigravity's native `<planning_mode>` or create brain artifacts with `RequestFeedback: true`. Follow `/brainstorming` and `writing-plans` skill workflows, writing specs to `docs/design/` and plans to `docs/plans/`.
 - **Evidence Before Assertions**: Always run test suites and verification commands (`agents doctor`, `go test ./...`) before claiming work is complete.
 - **Recording Findings**: Follow `.agents/skills/recording-what-you-learn/`. Main agents record findings from subagent reports.
