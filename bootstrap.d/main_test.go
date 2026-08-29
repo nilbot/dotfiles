@@ -25,11 +25,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(sharedDir)
 
 	root, err := filepath.Abs("..")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		_ = os.RemoveAll(sharedDir)
 		os.Exit(1)
 	}
 
@@ -38,6 +38,7 @@ func TestMain(m *testing.M) {
 	cmd.Env = append(os.Environ(), "HOME="+sharedDir, "XDG_CACHE_HOME="+sharedDir+"/cache")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "TestMain build failed: %v: %s\n", err, out)
+		_ = os.RemoveAll(sharedDir)
 		os.Exit(1)
 	}
 
@@ -45,12 +46,14 @@ func TestMain(m *testing.M) {
 	entries, err := os.ReadDir(cacheRoot)
 	if err != nil || len(entries) == 0 {
 		fmt.Fprintf(os.Stderr, "TestMain: could not find warmed cache in %s: %v\n", cacheRoot, err)
+		_ = os.RemoveAll(sharedDir)
 		os.Exit(1)
 	}
 	sharedTestKey = entries[0].Name()
 	sharedTestBinary = filepath.Join(cacheRoot, sharedTestKey, "bootstrap")
 
 	code := m.Run()
+	_ = os.RemoveAll(sharedDir)
 	os.Exit(code)
 }
 
