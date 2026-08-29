@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -12,6 +13,46 @@ import (
 	"testing"
 	"time"
 )
+
+var (
+	sharedTestKey    string
+	sharedTestBinary string
+)
+
+func TestMain(m *testing.M) {
+	sharedDir, err := os.MkdirTemp("", "bootstrap-test-shared-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+	defer os.RemoveAll(sharedDir)
+
+	root, err := filepath.Abs("..")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Warm the cache by running the real shim once into the shared test cache
+	cmd := exec.Command(filepath.Join(root, "bootstrap"), "--help")
+	cmd.Env = append(os.Environ(), "HOME="+sharedDir, "XDG_CACHE_HOME="+sharedDir+"/cache")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain build failed: %v: %s\n", err, out)
+		os.Exit(1)
+	}
+
+	cacheRoot := filepath.Join(sharedDir, "cache", "dotfiles-bootstrap")
+	entries, err := os.ReadDir(cacheRoot)
+	if err != nil || len(entries) == 0 {
+		fmt.Fprintf(os.Stderr, "TestMain: could not find warmed cache in %s: %v\n", cacheRoot, err)
+		os.Exit(1)
+	}
+	sharedTestKey = entries[0].Name()
+	sharedTestBinary = filepath.Join(cacheRoot, sharedTestKey, "bootstrap")
+
+	code := m.Run()
+	os.Exit(code)
+}
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -29,20 +70,47 @@ func runShim(t *testing.T, home string, args ...string) (string, string, int) {
 	return runShimEnv(t, filepath.Join(repoRoot(t), "bootstrap"), home, nil, args...)
 }
 
+// runShimCold is runShim without test cache seeding, forcing ./bootstrap to build.
+func runShimCold(t *testing.T, home string, args ...string) (string, string, int) {
+	t.Helper()
+	return runShimColdEnv(t, filepath.Join(repoRoot(t), "bootstrap"), home, nil, args...)
+}
+
 // runShimEnv is runShim over an arbitrary checkout, with extra environment
 // appended last so it wins. Cases that need a second checkout or a doctored
 // PATH go through this; everything else uses runShim.
 func runShimEnv(t *testing.T, shim, home string, extraEnv []string, args ...string) (string, string, int) {
 	t.Helper()
-	return runShimIn(t, t.TempDir(), shim, home, extraEnv, args...)
+	return runShimIn(t, t.TempDir(), shim, home, extraEnv, false, args...)
+}
+
+func runShimColdEnv(t *testing.T, shim, home string, extraEnv []string, args ...string) (string, string, int) {
+	t.Helper()
+	return runShimIn(t, t.TempDir(), shim, home, extraEnv, true, args...)
 }
 
 // runShimIn is runShimEnv with an explicit working directory, so shim may be
 // RELATIVE to it. Only the CDPATH case needs that: `cd` consults CDPATH for a
 // relative operand and never for one starting with / or . -- an absolute $0
 // cannot reproduce the failure at all.
-func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, args ...string) (string, string, int) {
+func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, cold bool, args ...string) (string, string, int) {
 	t.Helper()
+	if !cold && sharedTestBinary != "" && shim == filepath.Join(repoRoot(t), "bootstrap") {
+		destDir := filepath.Join(home, "cache", "dotfiles-bootstrap", sharedTestKey)
+		destBin := filepath.Join(destDir, "bootstrap")
+		if _, err := os.Stat(destBin); os.IsNotExist(err) {
+			if err := os.MkdirAll(destDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			data, err := os.ReadFile(sharedTestBinary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(destBin, data, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	cmd := exec.Command(shim, args...)
 	cmd.Dir = dir
 	// XDG_CACHE_HOME must be redirected too, or an inherited value sends every
@@ -963,7 +1031,7 @@ func TestUnknownMigrationIsMalformedInput(t *testing.T) {
 // without the positive one the case passes when the cache is never exercised.
 func TestShimCachesTheBuild(t *testing.T) {
 	home := tempHome(t)
-	_, first, code := runShim(t, home, "--help")
+	_, first, code := runShimCold(t, home, "--help")
 	if code != 0 {
 		t.Fatalf("first run exit %d: %s", code, first)
 	}
@@ -1080,7 +1148,7 @@ func TestShimBuildFailureIsBlock(t *testing.T) {
 	if err := os.WriteFile(broken, []byte("package main\n\nthis is not Go\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, stderr, code := runShimEnv(t, filepath.Join(alt, "bootstrap"), tempHome(t), nil, "--help")
+	_, stderr, code := runShimColdEnv(t, filepath.Join(alt, "bootstrap"), tempHome(t), nil, "--help")
 	if code != 2 {
 		t.Fatalf("exit %d, want 2 (block): %s", code, stderr)
 	}
@@ -1166,7 +1234,7 @@ func TestShimIgnoresAPoisonedCDPATH(t *testing.T) {
 	}
 
 	stdout, stderr, code := runShimIn(t, work, filepath.Join(name, "bootstrap"), tempHome(t),
-		[]string{"CDPATH=" + decoyParent}, "plan", "dotfiles")
+		[]string{"CDPATH=" + decoyParent}, false, "plan", "dotfiles")
 	if code != 0 {
 		t.Fatalf("exit %d under a poisoned CDPATH:\n%s%s", code, stdout, stderr)
 	}
