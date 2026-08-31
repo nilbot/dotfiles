@@ -257,6 +257,27 @@ func TestCmdDriftDefaultCurrentDir(t *testing.T) {
 	}
 }
 
+func TestCmdDriftMissingDocsStore(t *testing.T) {
+	dir := newTestRepo(t)
+	if err := scaffold.Create(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	// Remove docs/plans directory to induce drift
+	plansDir := filepath.Join(dir, "docs", "plans")
+	if err := os.RemoveAll(plansDir); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	code := runDrift([]string{"--repo", dir}, &out)
+	if code != exitcode.Advisory {
+		t.Fatalf("runDrift exit=%d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
+	}
+	if !strings.Contains(out.String(), "plans:     missing") {
+		t.Errorf("expected missing plans store in output:\n%s", out.String())
+	}
+}
+
 func TestMainRegistersDriftCommand(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	dir := newTestRepo(t)

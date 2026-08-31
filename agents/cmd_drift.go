@@ -143,6 +143,11 @@ func isDriftClean(report drift.DriftReport) bool {
 			return false
 		}
 	}
+	for _, ok := range report.DocsStores {
+		if !ok {
+			return false
+		}
+	}
 	if len(report.MisplacedDocs) > 0 {
 		return false
 	}
