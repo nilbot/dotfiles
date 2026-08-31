@@ -459,3 +459,86 @@ func TestDefaultAgentsMDContributorFriendly(t *testing.T) {
 		t.Error("DoctorInstruction is not conditional on CLI presence")
 	}
 }
+
+func TestCreateScaffoldsFullTwoTierAndDocsHierarchy(t *testing.T) {
+	dir := newRepo(t)
+	if err := Create(dir, false); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	wantFiles := []string{
+		"AGENTS.md",
+		"CLAUDE.md",
+		".gitattributes",
+		".agents/AGENTS.md",
+		".agents/skills/recording-what-you-learn/SKILL.md",
+		".agents/skills/migrating-fleet-context/SKILL.md",
+		"docs/design/README.md",
+		"docs/plans/README.md",
+		"docs/journal/README.md",
+		"docs/qna/README.md",
+	}
+	for _, rel := range wantFiles {
+		p := filepath.Join(dir, rel)
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("expected file/symlink %s to exist: %v", rel, err)
+		}
+	}
+
+	// Verify idempotency on second run
+	if err := Create(dir, false); err != nil {
+		t.Fatalf("subsequent Create failed: %v", err)
+	}
+}
+
+func TestCreatePreservesExistingCustomAssets(t *testing.T) {
+	dir := newRepo(t)
+
+	// Pre-create custom .agents/AGENTS.md and a custom skill
+	dotAgentsPath := filepath.Join(dir, ".agents", "AGENTS.md")
+	if err := os.MkdirAll(filepath.Dir(dotAgentsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	customDotAgents := "custom domain guidelines\n"
+	if err := os.WriteFile(dotAgentsPath, []byte(customDotAgents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	customSkillPath := filepath.Join(dir, ".agents", "skills", "recording-what-you-learn", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(customSkillPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	customSkill := "custom skill content\n"
+	if err := os.WriteFile(customSkillPath, []byte(customSkill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	customDocPath := filepath.Join(dir, "docs", "design", "README.md")
+	if err := os.MkdirAll(filepath.Dir(customDocPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	customDoc := "custom design readme\n"
+	if err := os.WriteFile(customDocPath, []byte(customDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Create(dir, false); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Verify custom contents were not overwritten
+	gotDotAgents, err := os.ReadFile(dotAgentsPath)
+	if err != nil || string(gotDotAgents) != customDotAgents {
+		t.Errorf("got %q, want %q", string(gotDotAgents), customDotAgents)
+	}
+
+	gotSkill, err := os.ReadFile(customSkillPath)
+	if err != nil || string(gotSkill) != customSkill {
+		t.Errorf("got %q, want %q", string(gotSkill), customSkill)
+	}
+
+	gotDoc, err := os.ReadFile(customDocPath)
+	if err != nil || string(gotDoc) != customDoc {
+		t.Errorf("got %q, want %q", string(gotDoc), customDoc)
+	}
+}
