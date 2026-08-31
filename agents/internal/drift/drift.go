@@ -79,7 +79,7 @@ func InspectRepo(root string) (DriftReport, error) {
 
 	// 3. Domain context (.agents/AGENTS.md)
 	domainPath := filepath.Join(root, ".agents", "AGENTS.md")
-	if _, err := os.Stat(domainPath); err == nil {
+	if info, err := os.Stat(domainPath); err == nil && !info.IsDir() {
 		report.DomainState = "ok"
 	} else {
 		report.DomainState = "missing"

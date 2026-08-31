@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
@@ -281,21 +282,28 @@ func CanonicalRouterDigest() string {
 	return DigestString(scaffold.DefaultAgentsMD)
 }
 
+var (
+	legacyRouterDigestsOnce   sync.Once
+	cachedLegacyRouterDigests []string
+)
+
 // LegacyRouterDigests returns the known legacy router SHA256 digests.
 func LegacyRouterDigests() []string {
-	templates := []string{
-		LegacySingleBulletRouter,
-		LegacySingleBulletRouterTrimmed,
-		LegacyPrePlansRouter,
-		LegacyPrePlansRouterTrimmed,
-		LegacyCaptureRouter,
-		LegacyInitialClaudeMDRouter,
-	}
-	digests := make([]string, 0, len(templates))
-	for _, t := range templates {
-		digests = append(digests, DigestString(t))
-	}
-	return digests
+	legacyRouterDigestsOnce.Do(func() {
+		templates := []string{
+			LegacySingleBulletRouter,
+			LegacySingleBulletRouterTrimmed,
+			LegacyPrePlansRouter,
+			LegacyPrePlansRouterTrimmed,
+			LegacyCaptureRouter,
+			LegacyInitialClaudeMDRouter,
+		}
+		cachedLegacyRouterDigests = make([]string, 0, len(templates))
+		for _, t := range templates {
+			cachedLegacyRouterDigests = append(cachedLegacyRouterDigests, DigestString(t))
+		}
+	})
+	return cachedLegacyRouterDigests
 }
 
 // IsLegacyRouterDigest returns true if digest matches any known legacy router template.
