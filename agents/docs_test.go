@@ -70,7 +70,7 @@ var commandSpan = regexp.MustCompile("`agents ([a-z][a-z -]*)`")
 // longer exists, and a record silently rewritten to stay true is not a record.
 func livingDocuments(t *testing.T, root string) []string {
 	t.Helper()
-	targets := []string{"README.md", "CLAUDE.md", filepath.Join("claude", "CLAUDE.md")}
+	targets := []string{"README.md", filepath.Join("agents", "README.md"), "CLAUDE.md", filepath.Join("claude", "CLAUDE.md")}
 	for _, dir := range []string{filepath.Join("claude", "skills"), filepath.Join(".agents", "skills")} {
 		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {

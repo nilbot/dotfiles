@@ -95,8 +95,8 @@ agents trace ls
 # View the full transcript of a specific turn or subagent
 agents trace show <session-id>
 
-# View session statistics across lanes
-agents trace stats
+# List recent recorded sessions and subagent runs with limit
+agents trace ls --limit 10
 ```
 
 ---
