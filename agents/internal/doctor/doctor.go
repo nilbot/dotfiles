@@ -1004,6 +1004,8 @@ func checkStoreSize(cacheRoot string, maxBytes int64) Check {
 }
 
 func checkScaffold(repoRoot string) []Check {
+	// InspectRepo returns safe zero-value report structures on I/O error
+	// which naturally fall through to Fail/Warn checks below.
 	report, _ := drift.InspectRepo(repoRoot)
 	var checks []Check
 

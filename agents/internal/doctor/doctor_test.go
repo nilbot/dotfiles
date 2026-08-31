@@ -1361,6 +1361,40 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 	})
 
 	t.Run("skill migrating states", func(t *testing.T) {
+		// Present canonical
+		rootOK := t.TempDir()
+		gitInit := exec.Command("git", "init", "-b", "main")
+		gitInit.Dir = rootOK
+		if out, err := gitInit.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+		if err := scaffold.Create(rootOK, false); err != nil {
+			t.Fatal(err)
+		}
+		cOK := checkByName(t, checkScaffold(rootOK), "scaffold:skill-migrating")
+		if cOK.Status != OK || cOK.Detail != ".agents/skills/migrating-fleet-context/ is present" {
+			t.Errorf("ok migrating = %+v", cOK)
+		}
+
+		// Customized
+		rootCustom := t.TempDir()
+		gitInitCustom := exec.Command("git", "init", "-b", "main")
+		gitInitCustom.Dir = rootCustom
+		if out, err := gitInitCustom.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+		if err := scaffold.Create(rootCustom, false); err != nil {
+			t.Fatal(err)
+		}
+		skillPath := filepath.Join(rootCustom, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+		if err := os.WriteFile(skillPath, []byte("# customized migration skill\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-migrating")
+		if cCustom.Status != OK || cCustom.Detail != ".agents/skills/migrating-fleet-context/ carries repository customizations" {
+			t.Errorf("customized migrating = %+v", cCustom)
+		}
+
 		// Missing
 		rootMissing := t.TempDir()
 		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-migrating")
