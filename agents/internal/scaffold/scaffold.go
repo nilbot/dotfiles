@@ -200,12 +200,18 @@ func writeIfAbsent(path, content string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return nil
 	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
 func linkIfAbsent(path, target string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
 	return os.Symlink(target, path)
 }
