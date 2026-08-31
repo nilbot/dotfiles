@@ -258,3 +258,19 @@ func appendMissingLines(path string, want []string) error {
 	_, err = f.WriteString(b.String())
 	return err
 }
+
+// RefreshInfrastructuralSkills refreshes the 100% agents-owned infrastructural skills
+// (migrating-fleet-context) to match AssetsFS, creating the directory if needed.
+// It never overwrites recording-what-you-learn or any user-defined custom skills.
+func RefreshInfrastructuralSkills(repoRoot string) error {
+	const assetPath = "assets/skills/migrating-fleet-context/SKILL.md"
+	content, err := AssetsFS.ReadFile(assetPath)
+	if err != nil {
+		return err
+	}
+	targetDir := filepath.Join(repoRoot, ".agents", "skills", "migrating-fleet-context")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(targetDir, "SKILL.md"), content, 0o644)
+}

@@ -542,3 +542,86 @@ func TestCreatePreservesExistingCustomAssets(t *testing.T) {
 		t.Errorf("got %q, want %q", string(gotDoc), customDoc)
 	}
 }
+
+func TestRefreshInfrastructuralSkills(t *testing.T) {
+	dir := newRepo(t)
+	if err := Create(dir, false); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	recordingPath := filepath.Join(dir, ".agents", "skills", "recording-what-you-learn", "SKILL.md")
+	customPath := filepath.Join(dir, ".agents", "skills", "custom-skill", "SKILL.md")
+
+	if err := os.MkdirAll(filepath.Dir(customPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	staleMigrating := "stale migrating skill content\n"
+	customRecording := "custom recording skill content\n"
+	customSkill := "custom user skill content\n"
+
+	if err := os.WriteFile(migratingPath, []byte(staleMigrating), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordingPath, []byte(customRecording), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(customPath, []byte(customSkill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RefreshInfrastructuralSkills(dir); err != nil {
+		t.Fatalf("RefreshInfrastructuralSkills failed: %v", err)
+	}
+
+	// migrating-fleet-context should be overwritten with canonical embedded asset
+	expectedMigrating, err := AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotMigrating, err := os.ReadFile(migratingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotMigrating) != string(expectedMigrating) {
+		t.Fatalf("migrating-fleet-context was not refreshed to canonical content")
+	}
+
+	// recording-what-you-learn should remain untouched
+	gotRecording, err := os.ReadFile(recordingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotRecording) != customRecording {
+		t.Fatalf("recording-what-you-learn was overwritten: got %q, want %q", string(gotRecording), customRecording)
+	}
+
+	// custom skill should remain untouched
+	gotCustom, err := os.ReadFile(customPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotCustom) != customSkill {
+		t.Fatalf("custom skill was overwritten: got %q, want %q", string(gotCustom), customSkill)
+	}
+}
+
+func TestRefreshInfrastructuralSkillsCreatesMissingDirectory(t *testing.T) {
+	dir := newRepo(t)
+	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	if err := RefreshInfrastructuralSkills(dir); err != nil {
+		t.Fatalf("RefreshInfrastructuralSkills failed on missing directory: %v", err)
+	}
+	expectedMigrating, err := AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotMigrating, err := os.ReadFile(migratingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotMigrating) != string(expectedMigrating) {
+		t.Fatalf("migrating-fleet-context was not written correctly")
+	}
+}

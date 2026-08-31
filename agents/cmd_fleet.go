@@ -8,8 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
 func runFleetLS(args []string, stdout io.Writer) int {
@@ -133,6 +135,7 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 		fmt.Fprintf(stdout, "skip (unknown): %s -- could not inspect .agents/; left unchanged\n", fleetPath(e.Path))
 	}
 	failed := 0
+	drifted := 0
 	for _, e := range present {
 		var detail bytes.Buffer
 		if code := wire(e.Path, &detail); code != exitcode.OK {
@@ -144,7 +147,17 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 			fmt.Fprintln(stdout)
 			continue
 		}
+		if err := scaffold.RefreshInfrastructuralSkills(e.Path); err != nil {
+			failed++
+			fmt.Fprintf(stdout, "failed to refresh skills in %s: %v\n", fleetPath(e.Path), err)
+			continue
+		}
 		fmt.Fprintf(stdout, "rewired %s\n", fleetPath(e.Path))
+		rep, err := drift.InspectRepo(e.Path)
+		if err != nil || !isDriftClean(rep) {
+			drifted++
+			fmt.Fprintf(stdout, "notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate\n", fleetPath(e.Path))
+		}
 	}
 
 	if failed > 0 || len(missing) > 0 || len(unknown) > 0 {
@@ -152,6 +165,9 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 		return exitcode.Advisory
 	}
 	fmt.Fprintf(stdout, "rewired %d registered repo(s)\n", len(present))
+	if drifted > 0 {
+		return exitcode.Advisory
+	}
 	return exitcode.OK
 }
 
