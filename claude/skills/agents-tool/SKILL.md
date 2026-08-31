@@ -120,3 +120,7 @@ other checkouts still points at where it used to be.
 ## Checking version and provenance
 
 `agents version` prints the binary version, git commit SHA, and build timestamp. Reach for it when diagnosing environment differences or verifying which build of the tool is active.
+
+## Inspecting context and drift
+
+`agents drift` inspects the repository or fleet for context layout drift, canonical router diffs, domain context, skills, and misplaced documentation. It is non-mutating.
