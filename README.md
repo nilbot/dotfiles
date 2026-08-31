@@ -88,6 +88,7 @@ agents help --render=markdown
 | `agents init` | create .agents/, triggers, wiring, fleet entry |
 | `agents wire` | regenerate harness configs (merges, never overwrites) |
 | `agents doctor` | report wiring, trust evidence, reachability, and lane health |
+| `agents drift` | inspect context layout and router drift |
 | `agents save` | commit .agents/ paths and nothing else (escape hatch) |
 | `agents trace` | query records; read one back; copy reachable ones |
 | `agents trace ls` | query records |

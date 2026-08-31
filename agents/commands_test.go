@@ -41,7 +41,7 @@ func TestTheKnownCommandSetIsPresent(t *testing.T) {
 	present := map[string]bool{}
 	rootCommand().Walk(func(path []string, _ *Command) { present[strings.Join(path, " ")] = true })
 	for _, want := range []string{
-		"init", "wire", "doctor", "save",
+		"init", "wire", "doctor", "drift", "save",
 		"trace ls", "trace show", "trace cache", "trace cache prune", "trace migrate",
 		"ls", "update", "version", "guard", "hook",
 	} {
