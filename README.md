@@ -68,6 +68,10 @@ repository knows now lives in its own `docs/`, written by instruction rather
 than by a command. See
 [knowledge is documentation](docs/design/2026-08-19-knowledge-is-documentation.md).
 
+Repositories follow a **Two-Tier Agent Context** structure:
+- **Tier 1 (Root Router)**: Standardized, lightweight `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) serving as the entrypoint bootstrap router pointing to durable docs and domain rules.
+- **Tier 2 (Domain Context & Durable Knowledge)**: Repository-specific domain guidelines in `.agents/AGENTS.md`, executable skills in `.agents/skills/`, and durable project knowledge organized in a **4-store layout** under `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
+
 `agents help <command>` explains any command in full; **when** to reach for one
 is in the skill under `claude/skills/agents-tool/`, and when to write something
 down is in `.agents/skills/recording-what-you-learn/`.
@@ -114,8 +118,9 @@ agents help --render=markdown
 | Path | What |
 |---|---|
 | `bootstrap`, `bootstrap.d/` | the provisioner: shim, phases, `links.manifest`, `Brewfile` |
-| `agents/` | the `agents` binary — repo-tracked agent context (spec 1) |
-| `.agents/` | repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and harness hooks |
+| `agents/` | the `agents` binary — repo-tracked agent context, harness wiring, drift detection, and trace cache |
+| `AGENTS.md`, `CLAUDE.md` | Tier 1 canonical root router and harness compatibility symlink |
+| `.agents/` | Tier 2 repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and harness hooks |
 | `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
 | `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question, `archive/` immutable pre-2026-08-20 history |
