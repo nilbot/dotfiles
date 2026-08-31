@@ -353,6 +353,11 @@ func TestIsolatedDoctorUnderUnstampedChildBinary(t *testing.T) {
 		if status := doctorCheckStatus(out, "git-hooks:local"); status != "ok" {
 			t.Errorf("standalone doctor reported %q for git-hooks:local, want ok\n%s", status, out)
 		}
+		for _, name := range []string{"scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating"} {
+			if status := doctorCheckStatus(out, name); status != "ok" {
+				t.Errorf("standalone doctor reported %q for %s, want ok\n%s", status, name, out)
+			}
+		}
 	})
 
 	t.Run("operator mode verifies dotfiles checkout and hooks", func(t *testing.T) {
@@ -369,4 +374,64 @@ func TestIsolatedDoctorUnderUnstampedChildBinary(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestDoctorRendersGranularScaffoldChecksAndRemedies(t *testing.T) {
+	checks := []doctor.Check{
+		{
+			Name:   "scaffold:router",
+			Status: doctor.Warn,
+			Detail: "root AGENTS.md uses a legacy canonical template",
+			Remedy: "run the 'migrating-fleet-context' agent skill to update",
+		},
+		{
+			Name:   "scaffold:symlink",
+			Status: doctor.Fail,
+			Detail: "CLAUDE.md symlink is invalid (missing)",
+			Remedy: "run 'agents init' or recreate relative symlink: ln -s AGENTS.md CLAUDE.md",
+		},
+		{
+			Name:   "scaffold:domain",
+			Status: doctor.Warn,
+			Detail: ".agents/AGENTS.md is missing",
+			Remedy: "run 'agents init' to populate starter template",
+		},
+		{
+			Name:   "scaffold:skill-recording",
+			Status: doctor.OK,
+			Detail: ".agents/skills/recording-what-you-learn/ is present",
+		},
+		{
+			Name:   "scaffold:skill-migrating",
+			Status: doctor.Warn,
+			Detail: ".agents/skills/migrating-fleet-context/ is missing",
+			Remedy: "run 'agents update' or 'agents init' to refresh infrastructure skills",
+		},
+	}
+
+	var out bytes.Buffer
+	code := runDoctorWithDependencies(nil, &out, commandDepsForDoctor(t, checks, nil))
+	if code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory", code)
+	}
+
+	output := out.String()
+	for _, tc := range []struct {
+		name   string
+		status string
+		remedy string
+	}{
+		{"scaffold:router", "warn", "run the 'migrating-fleet-context' agent skill to update"},
+		{"scaffold:symlink", "FAIL", "run 'agents init' or recreate relative symlink: ln -s AGENTS.md CLAUDE.md"},
+		{"scaffold:domain", "warn", "run 'agents init' to populate starter template"},
+		{"scaffold:skill-recording", "ok", ""},
+		{"scaffold:skill-migrating", "warn", "run 'agents update' or 'agents init' to refresh infrastructure skills"},
+	} {
+		if gotStatus := doctorCheckStatus(output, tc.name); gotStatus != tc.status {
+			t.Errorf("check %s status = %q, want %q", tc.name, gotStatus, tc.status)
+		}
+		if tc.remedy != "" && !strings.Contains(output, "-> "+tc.remedy) {
+			t.Errorf("output missing remedy for %s: %q\n%s", tc.name, tc.remedy, output)
+		}
+	}
 }

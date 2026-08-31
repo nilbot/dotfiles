@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -12,7 +14,29 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
+
+func cleanFleetRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "T"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+		}
+	}
+	if err := scaffold.Create(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
 
 func fleetRepo(t *testing.T, withAgents bool) string {
 	t.Helper()
@@ -224,7 +248,7 @@ func TestFleetUpdateApplyContinuesAfterFailureAndSkipsMissing(t *testing.T) {
 }
 
 func TestFleetUpdateApplySuccess(t *testing.T) {
-	present := fleetRepo(t, true)
+	present := cleanFleetRepo(t)
 	saveFleetRegistry(t, registry.Entry{Path: present, Added: time.Unix(1, 0).UTC()})
 	var called []string
 	var out bytes.Buffer
@@ -234,6 +258,65 @@ func TestFleetUpdateApplySuccess(t *testing.T) {
 	})
 	if code != exitcode.OK || len(called) != 1 || called[0] != present {
 		t.Fatalf("exit=%d calls=%q output=%q", code, called, out.String())
+	}
+	if strings.Contains(out.String(), "notice:") || strings.Contains(out.String(), "context drift") {
+		t.Fatalf("clean repo should not emit drift notice: %q", out.String())
+	}
+}
+
+func TestFleetUpdateApplyDriftAdvisoryOnDriftedRepo(t *testing.T) {
+	drifted := cleanFleetRepo(t)
+	if err := os.WriteFile(filepath.Join(drifted, "AGENTS.md"), []byte("# Drifted Agent Context\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saveFleetRegistry(t, registry.Entry{Path: drifted, Added: time.Unix(1, 0).UTC()})
+
+	var called []string
+	var out bytes.Buffer
+	code := runFleetUpdateWithWire([]string{"--all", "--apply"}, &out, func(path string, _ io.Writer) int {
+		called = append(called, path)
+		return exitcode.OK
+	})
+	if code != exitcode.Advisory {
+		t.Fatalf("exit=%d want Advisory; output=%q", code, out.String())
+	}
+	if len(called) != 1 || called[0] != drifted {
+		t.Fatalf("calls=%q want [%s]", called, drifted)
+	}
+	wantNotice := fmt.Sprintf("notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate", strconv.QuoteToASCII(drifted))
+	if !strings.Contains(out.String(), wantNotice) {
+		t.Fatalf("output missing drift notice %q; got: %q", wantNotice, out.String())
+	}
+	if !strings.Contains(out.String(), "rewired 1 registered repo(s)") {
+		t.Fatalf("output missing rewired count; got: %q", out.String())
+	}
+}
+
+func TestFleetUpdateApplyRefreshesInfrastructuralSkills(t *testing.T) {
+	repo := cleanFleetRepo(t)
+	migratingPath := filepath.Join(repo, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	if err := os.WriteFile(migratingPath, []byte("stale migrating skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saveFleetRegistry(t, registry.Entry{Path: repo, Added: time.Unix(1, 0).UTC()})
+
+	var out bytes.Buffer
+	code := runFleetUpdateWithWire([]string{"--all", "--apply"}, &out, func(string, io.Writer) int {
+		return exitcode.OK
+	})
+	if code != exitcode.OK {
+		t.Fatalf("exit=%d want OK; output=%q", code, out.String())
+	}
+	expectedContent, err := scaffold.AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotContent, err := os.ReadFile(migratingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotContent) != string(expectedContent) {
+		t.Fatalf("migrating-fleet-context was not refreshed")
 	}
 }
 

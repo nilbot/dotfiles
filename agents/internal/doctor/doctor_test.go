@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
@@ -826,7 +827,7 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:doctor-instruction"} {
+	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating"} {
 		_ = checkByName(t, checks, name)
 	}
 	if got := checkByName(t, checks, "trace-index"); got.Status != Warn || !strings.Contains(got.Detail, "1") {
@@ -1214,76 +1215,191 @@ func TestCheckAntigravityTrustAccurateStates(t *testing.T) {
 	})
 }
 
-func TestCheckScaffoldInstructionMultiFileSupport(t *testing.T) {
-	t.Run("found in root AGENTS.md", func(t *testing.T) {
+func TestCheckScaffoldGranularChecks(t *testing.T) {
+	t.Run("canonical scaffold all ok", func(t *testing.T) {
 		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+		gitInit := exec.Command("git", "init", "-b", "main")
+		gitInit.Dir = root
+		if out, err := gitInit.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+		if err := scaffold.Create(root, false); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
-			t.Fatal(err)
+		checks := checkScaffold(root)
+		if len(checks) != 5 {
+			t.Fatalf("got %d checks, want 5", len(checks))
 		}
-		got := checkScaffoldInstruction(root)
-		if got.Status != OK || !strings.Contains(got.Detail, "AGENTS.md carries the doctor instruction") {
-			t.Fatalf("root AGENTS.md = %+v", got)
+
+		cRouter := checkByName(t, checks, "scaffold:router")
+		if cRouter.Status != OK || cRouter.Detail != "root AGENTS.md matches canonical template" {
+			t.Errorf("scaffold:router = %+v, want OK canonical", cRouter)
+		}
+
+		cSymlink := checkByName(t, checks, "scaffold:symlink")
+		if cSymlink.Status != OK || cSymlink.Detail != "CLAUDE.md is a relative symlink to AGENTS.md" {
+			t.Errorf("scaffold:symlink = %+v, want OK symlink", cSymlink)
+		}
+
+		cDomain := checkByName(t, checks, "scaffold:domain")
+		if cDomain.Status != OK || cDomain.Detail != ".agents/AGENTS.md domain context is present" {
+			t.Errorf("scaffold:domain = %+v, want OK domain", cDomain)
+		}
+
+		cRec := checkByName(t, checks, "scaffold:skill-recording")
+		if cRec.Status != OK || cRec.Detail != ".agents/skills/recording-what-you-learn/ is present" {
+			t.Errorf("scaffold:skill-recording = %+v, want OK recording", cRec)
+		}
+
+		cMig := checkByName(t, checks, "scaffold:skill-migrating")
+		if cMig.Status != OK || cMig.Detail != ".agents/skills/migrating-fleet-context/ is present" {
+			t.Errorf("scaffold:skill-migrating = %+v, want OK migrating", cMig)
 		}
 	})
 
-	t.Run("found legacy instruction in root AGENTS.md", func(t *testing.T) {
-		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(scaffold.LegacyDoctorInstruction+"\n"), 0o644); err != nil {
+	t.Run("router legacy and drifted and missing", func(t *testing.T) {
+		// Clean legacy
+		rootLegacy := t.TempDir()
+		if err := os.WriteFile(filepath.Join(rootLegacy, "AGENTS.md"), []byte(drift.LegacySingleBulletRouter), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got := checkScaffoldInstruction(root)
-		if got.Status != OK || !strings.Contains(got.Detail, "AGENTS.md carries the doctor instruction") {
-			t.Fatalf("legacy AGENTS.md = %+v", got)
+		cLegacy := checkByName(t, checkScaffold(rootLegacy), "scaffold:router")
+		if cLegacy.Status != Warn || cLegacy.Detail != "root AGENTS.md uses a legacy canonical template" || cLegacy.Remedy != "run the 'migrating-fleet-context' agent skill to update" {
+			t.Errorf("clean legacy router = %+v", cLegacy)
+		}
+
+		// Drifted
+		rootDrifted := t.TempDir()
+		if err := os.WriteFile(filepath.Join(rootDrifted, "AGENTS.md"), []byte("# Custom rules\nDo not edit\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cDrifted := checkByName(t, checkScaffold(rootDrifted), "scaffold:router")
+		if cDrifted.Status != Warn || cDrifted.Detail != "root AGENTS.md contains unpartitioned domain rules or custom drift" || cDrifted.Remedy != "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md" {
+			t.Errorf("drifted router = %+v", cDrifted)
+		}
+
+		// Missing
+		rootMissing := t.TempDir()
+		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:router")
+		if cMissing.Status != Fail || cMissing.Detail != "root AGENTS.md is missing" || cMissing.Remedy != "run 'agents init' to scaffold" {
+			t.Errorf("missing router = %+v", cMissing)
 		}
 	})
 
-	t.Run("found current conditional instruction in root AGENTS.md", func(t *testing.T) {
-		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+	t.Run("symlink invalid states", func(t *testing.T) {
+		// Missing
+		rootMissing := t.TempDir()
+		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:symlink")
+		if cMissing.Status != Fail || cMissing.Detail != "CLAUDE.md symlink is invalid (missing)" || !strings.Contains(cMissing.Remedy, "ln -s AGENTS.md CLAUDE.md") {
+			t.Errorf("missing symlink = %+v", cMissing)
+		}
+
+		// Not symlink (regular file)
+		rootRegular := t.TempDir()
+		if err := os.WriteFile(filepath.Join(rootRegular, "CLAUDE.md"), []byte("regular file"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		got := checkScaffoldInstruction(root)
-		if got.Status != OK || !strings.Contains(got.Detail, "AGENTS.md carries the doctor instruction") {
-			t.Fatalf("current AGENTS.md = %+v", got)
+		cRegular := checkByName(t, checkScaffold(rootRegular), "scaffold:symlink")
+		if cRegular.Status != Fail || cRegular.Detail != "CLAUDE.md symlink is invalid (not_symlink)" {
+			t.Errorf("not symlink = %+v", cRegular)
+		}
+
+		// Broken symlink
+		rootBroken := t.TempDir()
+		if err := os.Symlink("NONEXISTENT.md", filepath.Join(rootBroken, "CLAUDE.md")); err != nil {
+			t.Fatal(err)
+		}
+		cBroken := checkByName(t, checkScaffold(rootBroken), "scaffold:symlink")
+		if cBroken.Status != Fail || cBroken.Detail != "CLAUDE.md symlink is invalid (broken)" {
+			t.Errorf("broken symlink = %+v", cBroken)
 		}
 	})
 
-	t.Run("found in .agents/AGENTS.md", func(t *testing.T) {
+	t.Run("domain context missing", func(t *testing.T) {
 		root := t.TempDir()
-		if err := os.MkdirAll(filepath.Join(root, ".agents"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, ".agents", "AGENTS.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		got := checkScaffoldInstruction(root)
-		if got.Status != OK || !strings.Contains(got.Detail, ".agents/AGENTS.md carries the doctor instruction") {
-			t.Fatalf(".agents/AGENTS.md = %+v", got)
+		c := checkByName(t, checkScaffold(root), "scaffold:domain")
+		if c.Status != Warn || c.Detail != ".agents/AGENTS.md is missing" || c.Remedy != "run 'agents init' to populate starter template" {
+			t.Errorf("missing domain = %+v", c)
 		}
 	})
 
-	t.Run("found in CLAUDE.md", func(t *testing.T) {
-		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "CLAUDE.md"), []byte(scaffold.DoctorInstruction+"\n"), 0o644); err != nil {
+	t.Run("skill recording states", func(t *testing.T) {
+		// Clean legacy
+		rootLegacy := t.TempDir()
+		recDir := filepath.Join(rootLegacy, ".agents", "skills", "recording-what-you-learn")
+		if err := os.MkdirAll(recDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		got := checkScaffoldInstruction(root)
-		if got.Status != OK || !strings.Contains(got.Detail, "CLAUDE.md carries the doctor instruction") {
-			t.Fatalf("CLAUDE.md = %+v", got)
+		if err := os.WriteFile(filepath.Join(recDir, "SKILL.md"), []byte(drift.LegacyRecordingSkill), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cLegacy := checkByName(t, checkScaffold(rootLegacy), "scaffold:skill-recording")
+		if cLegacy.Status != OK || cLegacy.Detail != ".agents/skills/recording-what-you-learn/ matches legacy template" {
+			t.Errorf("clean legacy recording = %+v", cLegacy)
+		}
+
+		// Customized
+		rootCustom := t.TempDir()
+		customRecDir := filepath.Join(rootCustom, ".agents", "skills", "recording-what-you-learn")
+		if err := os.MkdirAll(customRecDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(customRecDir, "SKILL.md"), []byte("---\nname: recording-what-you-learn\n---\nCustom skill content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-recording")
+		if cCustom.Status != OK || cCustom.Detail != ".agents/skills/recording-what-you-learn/ carries repository customizations" {
+			t.Errorf("customized recording = %+v", cCustom)
+		}
+
+		// Missing
+		rootMissing := t.TempDir()
+		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-recording")
+		if cMissing.Status != Warn || cMissing.Detail != ".agents/skills/recording-what-you-learn/ is missing" || cMissing.Remedy != "run 'agents init' to populate bundled skill" {
+			t.Errorf("missing recording = %+v", cMissing)
 		}
 	})
 
-	t.Run("absent from all", func(t *testing.T) {
-		root := t.TempDir()
-		if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("no doctor instruction here\n"), 0o644); err != nil {
+	t.Run("skill migrating states", func(t *testing.T) {
+		// Present canonical
+		rootOK := t.TempDir()
+		gitInit := exec.Command("git", "init", "-b", "main")
+		gitInit.Dir = rootOK
+		if out, err := gitInit.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+		if err := scaffold.Create(rootOK, false); err != nil {
 			t.Fatal(err)
 		}
-		got := checkScaffoldInstruction(root)
-		if got.Status != Warn {
-			t.Fatalf("absent = %+v, want Warn", got)
+		cOK := checkByName(t, checkScaffold(rootOK), "scaffold:skill-migrating")
+		if cOK.Status != OK || cOK.Detail != ".agents/skills/migrating-fleet-context/ is present" {
+			t.Errorf("ok migrating = %+v", cOK)
+		}
+
+		// Customized
+		rootCustom := t.TempDir()
+		gitInitCustom := exec.Command("git", "init", "-b", "main")
+		gitInitCustom.Dir = rootCustom
+		if out, err := gitInitCustom.CombinedOutput(); err != nil {
+			t.Fatalf("git init: %v\n%s", err, out)
+		}
+		if err := scaffold.Create(rootCustom, false); err != nil {
+			t.Fatal(err)
+		}
+		skillPath := filepath.Join(rootCustom, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+		if err := os.WriteFile(skillPath, []byte("# customized migration skill\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-migrating")
+		if cCustom.Status != OK || cCustom.Detail != ".agents/skills/migrating-fleet-context/ carries repository customizations" {
+			t.Errorf("customized migrating = %+v", cCustom)
+		}
+
+		// Missing
+		rootMissing := t.TempDir()
+		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-migrating")
+		if cMissing.Status != Warn || cMissing.Detail != ".agents/skills/migrating-fleet-context/ is missing" || cMissing.Remedy != "run 'agents update' or 'agents init' to refresh infrastructure skills" {
+			t.Errorf("missing migrating = %+v", cMissing)
 		}
 	})
 }

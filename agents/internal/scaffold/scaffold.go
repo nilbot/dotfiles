@@ -3,6 +3,7 @@
 package scaffold
 
 import (
+	"embed"
 	"errors"
 	"os"
 	"path/filepath"
@@ -91,6 +92,26 @@ var dirs = []string{
 	"skills",
 }
 
+var docsDirs = []string{
+	"design",
+	"plans",
+	"journal",
+	"qna",
+}
+
+var embeddedAssets = []struct {
+	relPath   string
+	assetPath string
+}{
+	{".agents/AGENTS.md", "assets/dotagents/AGENTS.md"},
+	{".agents/skills/recording-what-you-learn/SKILL.md", "assets/skills/recording-what-you-learn/SKILL.md"},
+	{".agents/skills/migrating-fleet-context/SKILL.md", "assets/skills/migrating-fleet-context/SKILL.md"},
+	{"docs/design/README.md", "assets/docs/design/README.md"},
+	{"docs/plans/README.md", "assets/docs/plans/README.md"},
+	{"docs/journal/README.md", "assets/docs/journal/README.md"},
+	{"docs/qna/README.md", "assets/docs/qna/README.md"},
+}
+
 // Create is idempotent. Running it on an initialized repo must change nothing.
 func Create(root string, local bool) error {
 	// First, before anything is written: a refusal that leaves a half-scaffolded
@@ -122,6 +143,19 @@ func Create(root string, local bool) error {
 		}
 	}
 
+	docsRoot := filepath.Join(root, "docs")
+	for _, d := range docsDirs {
+		if err := os.MkdirAll(filepath.Join(docsRoot, d), 0o755); err != nil {
+			return err
+		}
+	}
+
+	for _, a := range embeddedAssets {
+		if err := writeIfAbsentFromFS(filepath.Join(root, a.relPath), AssetsFS, a.assetPath); err != nil {
+			return err
+		}
+	}
+
 	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), DefaultAgentsMD); err != nil {
 		return err
 	}
@@ -148,9 +182,26 @@ func Create(root string, local bool) error {
 	return appendMissingLines(exclude, lines)
 }
 
+func writeIfAbsentFromFS(path string, fs embed.FS, assetPath string) error {
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	}
+	content, err := fs.ReadFile(assetPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0o644)
+}
+
 func writeIfAbsent(path, content string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
 	return os.WriteFile(path, []byte(content), 0o644)
 }
@@ -158,6 +209,9 @@ func writeIfAbsent(path, content string) error {
 func linkIfAbsent(path, target string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
 	}
 	return os.Symlink(target, path)
 }
@@ -203,4 +257,20 @@ func appendMissingLines(path string, want []string) error {
 	}
 	_, err = f.WriteString(b.String())
 	return err
+}
+
+// RefreshInfrastructuralSkills refreshes the 100% agents-owned infrastructural skills
+// (migrating-fleet-context) to match AssetsFS, creating the directory if needed.
+// It never overwrites recording-what-you-learn or any user-defined custom skills.
+func RefreshInfrastructuralSkills(repoRoot string) error {
+	const assetPath = "assets/skills/migrating-fleet-context/SKILL.md"
+	content, err := AssetsFS.ReadFile(assetPath)
+	if err != nil {
+		return err
+	}
+	targetDir := filepath.Join(repoRoot, ".agents", "skills", "migrating-fleet-context")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(targetDir, "SKILL.md"), content, 0o644)
 }

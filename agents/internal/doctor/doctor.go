@@ -16,12 +16,12 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safeio"
-	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
@@ -197,7 +197,7 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 		cacheRoot, _ = deps.TraceCacheDir(repoRoot)
 	}
 	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
-	checks = append(checks, checkScaffoldInstruction(repoRoot))
+	checks = append(checks, checkScaffold(repoRoot)...)
 	checks = append(checks, checkDocsFreshness(repoRoot, now))
 	checks = append(checks, checkStoreSize(cacheRoot, th.CacheMaxBytes))
 	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
@@ -1003,23 +1003,136 @@ func checkStoreSize(cacheRoot string, maxBytes int64) Check {
 	return Check{Name: "store:size", Status: OK, Detail: fmt.Sprintf("the transcript cache holds %.0f MB", mb)}
 }
 
-func checkScaffoldInstruction(repoRoot string) Check {
-	candidates := []string{
-		filepath.Join(repoRoot, "AGENTS.md"),
-		filepath.Join(repoRoot, "CLAUDE.md"),
-		filepath.Join(repoRoot, ".agents", "AGENTS.md"),
+func checkScaffold(repoRoot string) []Check {
+	// InspectRepo returns safe zero-value report structures on I/O error
+	// which naturally fall through to Fail/Warn checks below.
+	report, _ := drift.InspectRepo(repoRoot)
+	var checks []Check
+
+	// 1. scaffold:router
+	switch report.RouterState {
+	case drift.RouterCleanCurrent:
+		checks = append(checks, Check{
+			Name:   "scaffold:router",
+			Status: OK,
+			Detail: "root AGENTS.md matches canonical template",
+		})
+	case drift.RouterCleanLegacy:
+		checks = append(checks, Check{
+			Name:   "scaffold:router",
+			Status: Warn,
+			Detail: "root AGENTS.md uses a legacy canonical template",
+			Remedy: "run the 'migrating-fleet-context' agent skill to update",
+		})
+	case drift.RouterDrifted:
+		checks = append(checks, Check{
+			Name:   "scaffold:router",
+			Status: Warn,
+			Detail: "root AGENTS.md contains unpartitioned domain rules or custom drift",
+			Remedy: "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md",
+		})
+	case drift.RouterMissing:
+		fallthrough
+	default:
+		checks = append(checks, Check{
+			Name:   "scaffold:router",
+			Status: Fail,
+			Detail: "root AGENTS.md is missing",
+			Remedy: "run 'agents init' to scaffold",
+		})
 	}
-	for _, candidate := range candidates {
-		b, err := safeio.ReadRegular(candidate)
-		if err == nil {
-			content := string(b)
-			if strings.Contains(content, scaffold.DoctorInstruction) || strings.Contains(content, scaffold.LegacyDoctorInstruction) || strings.Contains(content, "agents doctor") {
-				rel, _ := filepath.Rel(repoRoot, candidate)
-				return Check{Name: "scaffold:doctor-instruction", Status: OK, Detail: rel + " carries the doctor instruction"}
-			}
-		}
+
+	// 2. scaffold:symlink
+	if report.SymlinkState == "ok" {
+		checks = append(checks, Check{
+			Name:   "scaffold:symlink",
+			Status: OK,
+			Detail: "CLAUDE.md is a relative symlink to AGENTS.md",
+		})
+	} else {
+		checks = append(checks, Check{
+			Name:   "scaffold:symlink",
+			Status: Fail,
+			Detail: "CLAUDE.md symlink is invalid (" + report.SymlinkState + ")",
+			Remedy: "run 'agents init' or recreate relative symlink: ln -s AGENTS.md CLAUDE.md",
+		})
 	}
-	return Check{Name: "scaffold:doctor-instruction", Status: Warn, Detail: "instruction files lack the doctor instruction used by new scaffolds", Remedy: "review and add the current doctor instruction manually; existing user files are never migrated"}
+
+	// 3. scaffold:domain
+	if report.DomainState == "ok" {
+		checks = append(checks, Check{
+			Name:   "scaffold:domain",
+			Status: OK,
+			Detail: ".agents/AGENTS.md domain context is present",
+		})
+	} else {
+		checks = append(checks, Check{
+			Name:   "scaffold:domain",
+			Status: Warn,
+			Detail: ".agents/AGENTS.md is missing",
+			Remedy: "run 'agents init' to populate starter template",
+		})
+	}
+
+	// 4. scaffold:skill-recording
+	switch report.Skills["recording-what-you-learn"] {
+	case string(drift.ComponentOK):
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-recording",
+			Status: OK,
+			Detail: ".agents/skills/recording-what-you-learn/ is present",
+		})
+	case string(drift.ComponentCleanLegacy):
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-recording",
+			Status: OK,
+			Detail: ".agents/skills/recording-what-you-learn/ matches legacy template",
+		})
+	case string(drift.ComponentCustomized):
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-recording",
+			Status: OK,
+			Detail: ".agents/skills/recording-what-you-learn/ carries repository customizations",
+		})
+	default:
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-recording",
+			Status: Warn,
+			Detail: ".agents/skills/recording-what-you-learn/ is missing",
+			Remedy: "run 'agents init' to populate bundled skill",
+		})
+	}
+
+	// 5. scaffold:skill-migrating
+	switch report.Skills["migrating-fleet-context"] {
+	case string(drift.ComponentOK):
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-migrating",
+			Status: OK,
+			Detail: ".agents/skills/migrating-fleet-context/ is present",
+		})
+	case string(drift.ComponentCleanLegacy):
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-migrating",
+			Status: OK,
+			Detail: ".agents/skills/migrating-fleet-context/ matches legacy template",
+		})
+	case string(drift.ComponentCustomized):
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-migrating",
+			Status: OK,
+			Detail: ".agents/skills/migrating-fleet-context/ carries repository customizations",
+		})
+	default:
+		checks = append(checks, Check{
+			Name:   "scaffold:skill-migrating",
+			Status: Warn,
+			Detail: ".agents/skills/migrating-fleet-context/ is missing",
+			Remedy: "run 'agents update' or 'agents init' to refresh infrastructure skills",
+		})
+	}
+
+	return checks
 }
 
 func checkGitleaks(lookPath func(string) (string, error)) Check {

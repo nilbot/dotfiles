@@ -40,6 +40,13 @@ func rootCommand() *Command {
 			Run:      func(a []string, io IO) int { return runDoctor(a, io.Out) },
 		},
 		{
+			Name: "drift", Summary: "inspect context layout and router drift",
+			Usage:    "agents drift [--json] [--repo <path>] [--all]",
+			Detail:   "Inspects the repository or fleet for context layout drift, canonical router diffs, domain context, skills, and misplaced documentation. Non-mutating.",
+			Audience: []Audience{Human, Agent},
+			Run:      func(a []string, io IO) int { return runDrift(a, io.Out) },
+		},
+		{
 			Name: "save", Summary: "commit .agents/ paths and nothing else (escape hatch)",
 			Usage:    "agents save [-m msg]",
 			Detail:   "Commits .agents/ paths and nothing else, so machine wiring never rides along in a code commit. Knowledge is documentation and lives in docs/, committed normally.",
