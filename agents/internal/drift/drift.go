@@ -17,7 +17,8 @@ type DriftReport struct {
 	RouterState   RouterState       `json:"router_state"`
 	SymlinkState  string            `json:"symlink_state"`  // "ok" | "broken" | "not_symlink" | "missing"
 	DomainState   string            `json:"domain_state"`   // "ok" | "missing"
-	Skills        map[string]string `json:"skills"`         // skill_name -> ComponentState
+	Skills        map[string]string `json:"skills"`         // embedded skill_name -> ComponentState
+	LocalSkills   []string          `json:"local_skills"`   // repo-specific skills: listed, never judged
 	DocsStores    map[string]bool   `json:"docs_stores"`    // design, plans, journal, qna
 	MisplacedDocs []string          `json:"misplaced_docs"` // e.g. plans living in docs/journal/
 	Diff          string            `json:"diff,omitempty"` // Unified diff against canonical router
@@ -28,6 +29,7 @@ func InspectRepo(root string) (DriftReport, error) {
 	report := DriftReport{
 		RepoPath:      root,
 		Skills:        make(map[string]string),
+		LocalSkills:   []string{},
 		DocsStores:    map[string]bool{"design": false, "plans": false, "journal": false, "qna": false},
 		MisplacedDocs: []string{},
 	}
@@ -109,6 +111,11 @@ func InspectRepo(root string) (DriftReport, error) {
 		}
 	}
 
+	// Repository-specific skills are listed, never classified. `.agents/skills/`
+	// is where design section 2 says they belong, so `agents` owning the whole
+	// directory made a repository dirty for using the feature as intended --
+	// and no migration could clear it, because there is nothing to fix. The
+	// tool judges only what it embeds.
 	skillsDir := filepath.Join(root, ".agents", "skills")
 	if entries, err := os.ReadDir(skillsDir); err == nil {
 		for _, e := range entries {
@@ -116,15 +123,16 @@ func InspectRepo(root string) (DriftReport, error) {
 				continue
 			}
 			name := e.Name()
-			if _, already := report.Skills[name]; already {
+			if _, tracked := report.Skills[name]; tracked {
 				continue
 			}
 			skillFile := filepath.Join(skillsDir, name, "SKILL.md")
 			if _, err := os.Stat(skillFile); err == nil {
-				report.Skills[name] = string(ComponentCustomized)
+				report.LocalSkills = append(report.LocalSkills, name)
 			}
 		}
 	}
+	sort.Strings(report.LocalSkills)
 
 	// 5. Docs stores inspection
 	for store := range report.DocsStores {
@@ -147,6 +155,14 @@ func InspectRepo(root string) (DriftReport, error) {
 			}
 			relSlash := filepath.ToSlash(rel)
 			name := d.Name()
+
+			// docs/archive/ is immutable by repository rule, so nothing in it
+			// can be "misplaced": a report here is an instruction to move a
+			// file that must not move. Excluding it keeps this classifier and
+			// the migrating-fleet-context skill agreeing on one definition.
+			if strings.HasPrefix(relSlash, "docs/archive/") {
+				return nil
+			}
 
 			if strings.HasSuffix(name, "-plan.md") && !strings.HasPrefix(relSlash, "docs/plans/") {
 				report.MisplacedDocs = append(report.MisplacedDocs, relSlash)
