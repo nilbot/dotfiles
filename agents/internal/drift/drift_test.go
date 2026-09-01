@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -258,7 +259,10 @@ func TestInspectMisplacedDocs(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "docs", "archive", "plans"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "docs", "archive", "plans", "2026-08-30-old-plan.md"), []byte("# Misplaced Plan in Archive"), 0o644); err != nil {
+	// Archived, and therefore NOT misplaced: docs/archive/ is immutable, so
+	// this file is deliberately kept out of wantMisplaced below. See
+	// Amendment 1 of the 2026-08-29 two-tier design.
+	if err := os.WriteFile(filepath.Join(dir, "docs", "archive", "plans", "2026-08-30-old-plan.md"), []byte("# Archived Plan"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "docs", "journal", "2026-08-30-test-design.md"), []byte("# Misplaced Design in Journal"), 0o644); err != nil {
@@ -271,7 +275,6 @@ func TestInspectMisplacedDocs(t *testing.T) {
 	}
 
 	wantMisplaced := []string{
-		"docs/archive/plans/2026-08-30-old-plan.md",
 		"docs/journal/2026-08-30-test-design.md",
 		"docs/journal/2026-08-30-test-plan.md",
 	}
@@ -364,8 +367,13 @@ func TestInspectSkillStates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.Skills["my-custom-skill"] != string(ComponentCustomized) {
-			t.Errorf("got my-custom-skill state %q, want customized", report.Skills["my-custom-skill"])
+		// A repository-specific skill is listed, not classified: the tool owns
+		// only the skills it embeds. See TestRepoSpecificSkillsAreListedNotJudged.
+		if _, judged := report.Skills["my-custom-skill"]; judged {
+			t.Errorf("my-custom-skill was classified as %q; it should only be listed", report.Skills["my-custom-skill"])
+		}
+		if !slices.Contains(report.LocalSkills, "my-custom-skill") {
+			t.Errorf("local_skills = %v, want my-custom-skill listed", report.LocalSkills)
 		}
 	})
 }
@@ -424,5 +432,90 @@ func TestInspectEmptyRepo(t *testing.T) {
 		if report.DocsStores[store] {
 			t.Errorf("expected store %s to be false in empty repo", store)
 		}
+	}
+}
+
+// docs/archive/ is strictly immutable: `.agents/AGENTS.md` says so, and
+// docs/design/README.md says nothing in it is rewritten to stay true. A file
+// reported as misplaced is a file the migration skill is told to `git mv`, so
+// reporting an archived plan is an instruction to violate that rule.
+func TestMisplacedDocsExcludesArchive(t *testing.T) {
+	dir := newRepo(t)
+	if err := scaffold.Create(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Archived: immutable, must never be reported.
+	mustWrite("docs/archive/plans/2026-08-01-old-plan.md", "# old\n")
+	mustWrite("docs/archive/specs/2026-08-01-old-design.md", "# old\n")
+	// Live stores: genuinely misplaced, must still be reported.
+	mustWrite("docs/journal/2026-08-30-stray-plan.md", "# stray\n")
+
+	report, err := InspectRepo(dir)
+	if err != nil {
+		t.Fatalf("InspectRepo failed: %v", err)
+	}
+	for _, m := range report.MisplacedDocs {
+		if strings.HasPrefix(m, "docs/archive/") {
+			t.Errorf("archive file reported as misplaced: %s", m)
+		}
+	}
+	// The positive control: without this the check passes on a classifier that
+	// reports nothing at all.
+	if !slices.Contains(report.MisplacedDocs, "docs/journal/2026-08-30-stray-plan.md") {
+		t.Errorf("live-store misplaced plan was not reported; got %v", report.MisplacedDocs)
+	}
+}
+
+// `.agents/skills/` is where repository-specific skills are supposed to live
+// (design section 2). The tool owns only the skills it embeds; classifying every
+// other directory as `customized` made isDriftClean report a repository as
+// dirty for using the feature exactly as designed, and no migration could ever
+// clear it. playground/autogo-mlx carries two such skills and could not report
+// clean on 2026-09-01.
+func TestRepoSpecificSkillsAreListedNotJudged(t *testing.T) {
+	dir := newRepo(t)
+	if err := scaffold.Create(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"human-ranked-sft", "llm-in-the-loop-rl-discovery"} {
+		p := filepath.Join(dir, ".agents", "skills", name)
+		if err := os.MkdirAll(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "SKILL.md"), []byte("# "+name+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := InspectRepo(dir)
+	if err != nil {
+		t.Fatalf("InspectRepo failed: %v", err)
+	}
+
+	// Not judged: absent from the state map the cleanliness check reads.
+	for _, name := range []string{"human-ranked-sft", "llm-in-the-loop-rl-discovery"} {
+		if state, ok := report.Skills[name]; ok {
+			t.Errorf("repo-specific skill %s classified as %q; the tool owns only the skills it embeds", name, state)
+		}
+	}
+	// Still tracked: the embedded skills are judged as before. Without this the
+	// test would pass on an inspector that classified nothing at all.
+	if report.Skills["recording-what-you-learn"] != string(ComponentOK) {
+		t.Errorf("embedded skill state = %q, want ok", report.Skills["recording-what-you-learn"])
+	}
+	// Listed: a migrating agent needs to know they exist so it leaves them alone.
+	if !slices.Contains(report.LocalSkills, "human-ranked-sft") ||
+		!slices.Contains(report.LocalSkills, "llm-in-the-loop-rl-discovery") {
+		t.Errorf("local_skills = %v, want both repo-specific skills listed", report.LocalSkills)
 	}
 }

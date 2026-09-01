@@ -168,6 +168,12 @@ func printDriftReport(w io.Writer, rep drift.DriftReport) {
 	for _, name := range skillNames {
 		fmt.Fprintf(w, "    %-26s %s\n", name+":", rep.Skills[name])
 	}
+	if len(rep.LocalSkills) > 0 {
+		fmt.Fprintln(w, "  Local skills (not managed by agents):")
+		for _, name := range rep.LocalSkills {
+			fmt.Fprintf(w, "    %s\n", name)
+		}
+	}
 	fmt.Fprintln(w, "  Docs stores:")
 	var storeNames []string
 	for name := range rep.DocsStores {

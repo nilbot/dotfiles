@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
 const (
@@ -164,5 +166,148 @@ func TestHarnessSkillCoversAgentCommands(t *testing.T) {
 	}
 	if len(missing) > 0 {
 		t.Errorf("agent-facing commands absent from the skill:\n  %s", strings.Join(missing, "\n  "))
+	}
+}
+
+// The migrating-fleet-context skill is the one deliverable of the two-tier work
+// that is prose rather than code, and it shipped contradicting the tooling it
+// drives: no fleet mode, one procedure for four router states, an unconditional
+// `rm -f CLAUDE.md`, and a commit with no approval gate.
+//
+// TestLivingDocumentsNameOnlyRealCommands already scans this file, but only in
+// one direction -- it catches a command that does not exist, never a required
+// command that is absent. That asymmetry is exactly why the omissions survived
+// review. This is the other direction, the way TestHarnessSkillCoversAgentCommands
+// is the other direction for claude/skills/agents-tool.
+//
+// See docs/journal/2026-09-01-why-the-migration-skill-shipped-hollow.md and
+// Amendment 1 of docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md.
+func TestMigrationSkillCoversItsSpecifiedProtocol(t *testing.T) {
+	root := task18RepoRoot(t)
+	rel := filepath.Join(".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("the migration skill is missing: %v", err)
+	}
+	text := string(data)
+
+	// Required by the amended design section 7. Each entry names the section
+	// that requires it, so a future edit that drops one can find out why.
+	required := []struct{ substr, why string }{
+		{"agents ls", "7.1.2 target discovery over the registered fleet"},
+		{"agents drift --json", "7.1.2 single-repository inspection"},
+		{"agents drift --all --json", "7.6 fleet inspection, which returns an array"},
+		{"agents update --apply", "7.1.1 self-currency check before trusting itself"},
+		{"agents doctor", "7.1.7 verification gate"},
+		{"clean_current", "7.3 router state table"},
+		{"clean_legacy", "7.3 router state table"},
+		{"drifted", "7.3 router state table"},
+		{"missing", "7.3 router state table"},
+		{"upstream", "7.3 named merge sources"},
+		{"base", "7.3 named merge sources"},
+		{"local", "7.3 named merge sources"},
+		{"stop and ask", "7.5 unclassifiable blocks are not a judgement call"},
+		{"traceability", "7.5 evidence for zero rule dropping"},
+		{"gh pr create", "7.1.9 the migration ends in a pull request"},
+	}
+	lower := strings.ToLower(text)
+	for _, r := range required {
+		if !strings.Contains(lower, strings.ToLower(r.substr)) {
+			t.Errorf("%s does not mention %q, required by %s", rel, r.substr, r.why)
+		}
+	}
+
+	// Forbidden: the unconditional symlink replacement. On the pre-2026-08-19
+	// topology (AGENTS.md -> CLAUDE.md, content in CLAUDE.md) this deletes the
+	// only real file and leaves AGENTS.md -> CLAUDE.md -> AGENTS.md, a symlink
+	// loop with every line of repository context gone. playground/desktop_pet
+	// was in exactly that state on 2026-09-01.
+	if strings.Contains(text, "rm -f CLAUDE.md") {
+		t.Errorf("%s still carries the unconditional `rm -f CLAUDE.md`; design 7.4 requires "+
+			"stat-ing both root paths and preserving content before the symlink", rel)
+	}
+
+	// Forbidden: a command that relocates out of the immutable archive. Prose
+	// forbidding the move is fine and expected; a `git mv` with an archive
+	// source is not.
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "git mv") && strings.Contains(line, "docs/archive/") {
+			t.Errorf("%s relocates out of docs/archive/, which is immutable: %q", rel, strings.TrimSpace(line))
+		}
+	}
+}
+
+// The skill exists twice: the repository's own copy and the embedded asset the
+// binary scaffolds into every other repository. Nothing bound them together,
+// so they could diverge silently and the fleet would be migrated by whichever
+// copy the reader happened to open.
+func TestMigrationSkillMatchesEmbeddedAsset(t *testing.T) {
+	root := task18RepoRoot(t)
+	repoCopy, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("repository copy: %v", err)
+	}
+	asset, err := os.ReadFile(filepath.Join(root, "agents", "internal", "scaffold",
+		"assets", "skills", "migrating-fleet-context", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("embedded asset: %v", err)
+	}
+	if !bytes.Equal(repoCopy, asset) {
+		t.Errorf(".agents/skills/migrating-fleet-context/SKILL.md and its embedded asset differ; "+
+			"they are scaffolded into every other repository from the asset, so they must be identical "+
+			"(repo copy %d bytes, asset %d bytes)", len(repoCopy), len(asset))
+	}
+}
+
+// The skill pastes the canonical router so a migrating agent can restore it
+// without a second tool. That is a second copy of DefaultAgentsMD, and the two
+// ship in the same binary -- so nothing except this test stops a change to one
+// from silently leaving the other behind, telling every migrated repository to
+// adopt a router the tool then reports as drifted.
+func TestMigrationSkillPastesTheCanonicalRouter(t *testing.T) {
+	root := task18RepoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, ".agents", "skills",
+		"migrating-fleet-context", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("the migration skill is missing: %v", err)
+	}
+
+	const fence = "```markdown\n# Agent context\n"
+	i := strings.Index(string(data), fence)
+	if i < 0 {
+		t.Fatal("the skill no longer pastes a canonical router block; if that is deliberate, " +
+			"delete this test, and if it is not, restore the block")
+	}
+	body := string(data)[i+len("```markdown\n"):]
+	j := strings.Index(body, "\n```")
+	if j < 0 {
+		t.Fatal("unterminated router code fence in the skill")
+	}
+	pasted := body[:j+1]
+
+	if pasted != scaffold.DefaultAgentsMD {
+		t.Errorf("the router pasted into the skill does not match scaffold.DefaultAgentsMD\n"+
+			"pasted %d bytes, canonical %d bytes", len(pasted), len(scaffold.DefaultAgentsMD))
+	}
+}
+
+// The skill is scaffolded into other people's repositories, which do not have
+// this repository's documents. A "where this comes from" list of dated design
+// and Q&A paths reads as a working reference and resolves to nothing there --
+// worse than no pointer, because an agent will try to follow it.
+//
+// Bare dates describing an era ("the pre-2026-08-19 topology") are fine; a dated
+// *filename* is a path into this repository and is not.
+func TestMigrationSkillNamesNoRepoLocalDocuments(t *testing.T) {
+	root := task18RepoRoot(t)
+	rel := filepath.Join(".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("the migration skill is missing: %v", err)
+	}
+	datedDoc := regexp.MustCompile(`[0-9]{4}-[0-9]{2}-[0-9]{2}-[A-Za-z0-9-]+\.md`)
+	for _, m := range datedDoc.FindAllString(string(data), -1) {
+		t.Errorf("%s names %q, a document that exists only in this repository; "+
+			"the skill ships into repositories that have no copy of it", rel, m)
 	}
 }

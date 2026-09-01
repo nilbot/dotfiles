@@ -1390,9 +1390,16 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(skillPath, []byte("# customized migration skill\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		// migrating-fleet-context is 100% agents-owned (design 5.1), so a copy
+		// that does not match the embedded asset is stale, not customized --
+		// and a stale migration skill reported `ok` is a skill that passes its
+		// own health check while carrying obsolete instructions.
 		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-migrating")
-		if cCustom.Status != OK || cCustom.Detail != ".agents/skills/migrating-fleet-context/ carries repository customizations" {
-			t.Errorf("customized migrating = %+v", cCustom)
+		if cCustom.Status != Warn || cCustom.Detail != ".agents/skills/migrating-fleet-context/ does not match the installed binary" {
+			t.Errorf("stale migrating = %+v", cCustom)
+		}
+		if cCustom.Remedy != "run 'agents update --apply' to refresh infrastructure skills" {
+			t.Errorf("stale migrating remedy = %q", cCustom.Remedy)
 		}
 
 		// Missing

@@ -1118,10 +1118,15 @@ func checkScaffold(repoRoot string) []Check {
 			Detail: ".agents/skills/migrating-fleet-context/ matches legacy template",
 		})
 	case string(drift.ComponentCustomized):
+		// Unlike recording-what-you-learn, this skill is authoritative and
+		// agents-owned (design 5.1): a local divergence is staleness, not a
+		// customization to respect. Reporting it ok let a skill carrying
+		// obsolete migration instructions pass its own health check.
 		checks = append(checks, Check{
 			Name:   "scaffold:skill-migrating",
-			Status: OK,
-			Detail: ".agents/skills/migrating-fleet-context/ carries repository customizations",
+			Status: Warn,
+			Detail: ".agents/skills/migrating-fleet-context/ does not match the installed binary",
+			Remedy: "run 'agents update --apply' to refresh infrastructure skills",
 		})
 	default:
 		checks = append(checks, Check{

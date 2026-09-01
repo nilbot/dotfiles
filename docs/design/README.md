@@ -31,7 +31,7 @@ Numbers are stable catalog identifiers, not priority or order.
 | — | [knowledge is documentation](2026-08-19-knowledge-is-documentation.md) | **executed 2026-08-20** — the retired code and stores are deleted |
 | — | [antigravity multi-harness onboarding](2026-08-28-antigravity-multi-harness-onboarding.md) | **implemented 2026-08-28** — adapter, dialect, dual-layer instruction topology |
 | — | [contributor guardrails and scaffold decoupling](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) | **implemented 2026-08-28** — conditional doctor, standalone support |
-| — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **designed 2026-08-29** — two-tier context, 4-store layout, bundled skills, LLM migration |
+| — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **implemented 2026-08-31; §7 amended 2026-09-01** — two-tier context, 4-store layout, bundled skills, LLM migration. Read Amendment 1 before touching the migration skill: the original §7 contradicted §7.2 on archive immutability and left "3-way merge" undefined. |
 
 
 **Spec 1 is the foundation** — terminology, the placement rule, the pointer

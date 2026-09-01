@@ -1,10 +1,35 @@
 # Design: Two-Tier Agent Context and LLM-in-the-Loop Migration Architecture
 
-**Date:** 2026-08-29 (Updated 2026-08-31)  
-**Status:** Approved in Brainstorming (Ready for Implementation Planning)  
+**Date:** 2026-08-29 (Updated 2026-08-31; **amended 2026-09-01**, see Amendment 1)  
+**Status:** Implemented 2026-08-31; §7 amended 2026-09-01 after the skill it specifies shipped contradicting it  
 **Applies to:** `agents` CLI (`scaffold`, `drift`, `doctor`, `fleet`), `AGENTS.md` / `CLAUDE.md`, `.agents/AGENTS.md`, `.agents/skills/`, `.agents/skills/migrating-fleet-context/`  
 **Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (harness adapters, exit codes), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md) (2026-08-19), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), [Binary Identity & Standalone Resolution](2026-08-28-binary-identity-and-standalone-resolution.md) (2026-08-28)  
 **Reads against:** [`docs/qna/why-does-agents-init-never-update-existing-instructions.md`](../qna/why-does-agents-init-never-update-existing-instructions.md), [`docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md`](../qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md)
+
+---
+
+## Amendment 1 — 2026-09-01
+
+The `migrating-fleet-context` skill authored against §7 of this document shipped
+contradicting the tooling it drives. The review is in
+[`docs/journal/2026-09-01-why-the-migration-skill-shipped-hollow.md`](../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md);
+four of the defects traced to this spec rather than to the plan or the skill.
+The corrections are applied in the body below. This section is the record of
+what they replaced, because the spec is the design still in force and the
+journal alone would not be read by the next author of the skill.
+
+| § | Was | Now | Why |
+|---|---|---|---|
+| 7.1.4 | "Moves plan files (`*-plan.md` in `docs/journal/` **or `docs/archive/plans/`**) into `docs/plans/`" | archive is excluded from relocation, in the skill and in `internal/drift` alike | `.agents/AGENTS.md` declares `docs/archive/` strictly immutable and this store's own README says nothing in it is rewritten to stay true. §7.1 and §7.2 contradicted each other; §7.2 wins. |
+| 7.1.4 | "Semantic 3-Way Un-Nesting" / "3-way merge", sources never named | §7.3 names the sources for each operation, and the root operation is renamed **semantic reconcile** | Three-way merge requires upstream, base and local. The root router operation has only two inputs, so it was never a 3-way merge; the skill merge has three and never said where they came from. An instruction an LLM can only guess at is not a specification. |
+| 7.1 | Symlink handling assumed `CLAUDE.md` carries nothing | §7.4 requires reading and preserving `CLAUDE.md` before it is replaced | A legacy repository may hold its only copy of a domain rule in `CLAUDE.md`. The skill's `rm -f CLAUDE.md` deleted it with no extraction step. |
+| 7.2 | "Zero Rule Dropping" asserted with no mechanism | §7.5 requires a traceability table, and makes an unclassifiable block a stop-and-ask | An invariant with no verification is a hope. This is the failure the spec says deterministic tools cannot handle, so the LLM path needs stronger proof than they get, not weaker. |
+| 4.2 | every directory under `.agents/skills/` classified, unrecognised ones as `customized` | only embedded skills are classified; repository-specific skills are listed in a new `local_skills` field and never judged | §2 says `.agents/skills/` is where repository-specific skills belong, so classifying them made a repository dirty for using the feature as designed — and no migration could clear it, because there was nothing to fix. `playground/autogo-mlx` carries two and could not report clean. The tool owns what it embeds. |
+| 6 | `scaffold:skill-migrating` — `warn` (missing or outdated) | unchanged as written; `doctor.go` implemented `customized` as `ok` and is corrected to `warn` | The skill is 100% `agents`-owned per §5.1. For an authoritative asset, "customized" *is* "outdated" — reporting it `ok` means a stale migration skill passes its own health check. |
+
+Two further gaps were absent from this spec entirely and are added, not corrected:
+**§7.6** (fleet mode and the `--all` output shape) and **§7.7** (legacy store
+triage). Neither was in the plan either; see the journal for where each entered.
 
 ---
 
@@ -30,7 +55,7 @@ This specification establishes a robust **Two-Tier Agent Context Architecture** 
    - `agents update`: Deterministic machine wiring and authoritative refresh of `agents`-owned infrastructural skills.
 3. **Model A LLM-in-the-Loop Migration Engine (`migrating-fleet-context`)**:
    - An authoritative, 100% `agents`-owned agent skill embedded in the Go binary.
-   - Executes inside AI agent harnesses (Antigravity, Claude Code, Codex) on a dedicated feature branch with git dirty checks, semantic 3-way un-nesting of domain rules, 3-way skill merges, document relocation, and an interactive human approval gate.
+   - Executes inside AI agent harnesses (Antigravity, Claude Code, Codex) on a dedicated feature branch with git dirty checks, semantic reconcile of domain rules, three-way skill merges, document relocation, and an interactive human approval gate that blocks the commit.
 
 ---
 
@@ -150,7 +175,8 @@ type DriftReport struct {
     RouterState    RouterState       `json:"router_state"`
     SymlinkState   string            `json:"symlink_state"`   // "ok" | "broken" | "not_symlink" | "missing"
     DomainState    string            `json:"domain_state"`    // "ok" | "missing"
-    Skills         map[string]string `json:"skills"`          // skill_name -> ComponentState
+    Skills         map[string]string `json:"skills"`          // embedded skill_name -> ComponentState
+    LocalSkills    []string          `json:"local_skills"`    // repo-specific skills: listed, never judged
     DocsStores     map[string]bool   `json:"docs_stores"`     // design, plans, journal, qna
     MisplacedDocs  []string          `json:"misplaced_docs"`  // e.g. plans living in docs/journal/
     Diff           string            `json:"diff,omitempty"`  // Unified diff against canonical router
@@ -209,32 +235,135 @@ digraph model_a_migration {
     node [shape=box, style=rounded, fontname="Helvetica"];
     
     A [label="1. Drift Detected\n(agents doctor or agents drift)"];
+    A0 [label="0. Self-Currency Check\n- skill matches installed binary"];
     B [label="2. AI Agent Harness Invokes\n'migrating-fleet-context' Skill"];
     C [label="3. Git Safety & Branch Isolation\n- Assert working tree is clean\n- Create 'feat/two-tier-context-migration'"];
-    D [label="4. Semantic 3-Way Un-Nesting\n- Extract domain rules -> .agents/AGENTS.md\n- Reconcile root -> Canonical AGENTS.md\n- 3-way merge customized skills\n- Relocate misplaced docs -> docs/plans/"];
+    D [label="4. Reconcile by Router State\n- One action per state (7.3)\n- Preserve CLAUDE.md first (7.4)\n- 3-way merge skills: upstream/base/local\n- Relocate docs, excluding docs/archive/"];
     E [label="5. Verification\n- Run 'agents doctor'\n- Run repo test suite (go test, etc.)"];
-    F [label="6. Interactive Human Approval Gate\n- Present structured diff & summary"];
+    F [label="6. Interactive Human Approval Gate\n- Present traceability table (7.5)\n- Nothing is staged before approval"];
     G [label="7. Commit & Open Pull Request"];
 
-    A -> B -> C -> D -> E -> F -> G;
+    A -> B -> A0 -> C -> D -> E -> F -> G;
 }
 ```
 
 ### 7.1 Skill Operational Protocol
-1. **Target Discovery**: Runs `agents ls` and `agents drift --json`.
-2. **Git Safety Check**: Asserts the working tree is clean (`git status --porcelain`). Refuses to proceed if uncommitted changes exist.
-3. **Branch Isolation**: Creates dedicated feature branch: `feat/two-tier-context-migration`.
-4. **Semantic 3-Way Un-Nesting**:
-   - **Root `AGENTS.md`**: Identifies custom engineering rules, tech stack constraints, and safety guidelines -> appends them to `.agents/AGENTS.md` without duplicating existing entries. Restores root `AGENTS.md` to `scaffold.DefaultAgentsMD`.
-   - **User Skills (`recording-what-you-learn`)**: Performs 3-way merge between upstream embedded skill and local customized changes.
-   - **Document Relocation**: Moves plan files (`*-plan.md` in `docs/journal/` or `docs/archive/plans/`) into `docs/plans/` and updates internal relative markdown links.
-5. **Verification Gate**: Executes `agents doctor` and repository test suites (`go test ./...`).
-6. **Interactive Human Approval Gate**: Presents a structured diff summary in chat. On explicit approval, commits changes and prepares PR.
+1. **Self-Currency Check**: The skill is an `agents`-owned asset (§5.1) and can be read stale. Before acting, confirm the running copy matches the installed binary — `agents doctor` reporting `scaffold:skill-migrating` as `ok`. If it does not, run `agents update --apply` and re-read.
+2. **Target Discovery**: `agents ls` for the registered fleet, then `agents drift --json` for one repository or `agents drift --all --json` for the fleet. See §7.6 for the two output shapes.
+3. **Git Safety Check**: Asserts the working tree is clean (`git status --porcelain`). Refuses to proceed if uncommitted changes exist.
+4. **Branch Isolation**: Creates dedicated feature branch: `feat/two-tier-context-migration`.
+5. **Root Context Reconcile**: One action per router state (§7.3), preserving `CLAUDE.md` content first (§7.4).
+6. **Skill Merge & Docs Realignment**: Three-way merge of user-owned skills (§7.3), relocation of misplaced documents excluding `docs/archive/` (§7.1 amendment), triage of retired stores (§7.7).
+7. **Verification Gate**: Executes `agents drift`, `agents doctor` and repository test suites (`go test ./...`).
+8. **Interactive Human Approval Gate**: Presents the traceability table (§7.5) and a scoped `git diff --stat`. **The skill stops here and waits.** It does not stage or commit before an explicit human approval.
+9. **Commit & Open Pull Request**: On approval, stages the exact changed paths, commits, pushes, and opens a PR via `gh`.
 
 ### 7.2 Invariant Guarantees
-- **Zero Rule Dropping**: All domain constraints, test rules, and guidelines present in the original file are preserved in `.agents/AGENTS.md`.
-- **Archive Immutability**: Active work and modern plans are never written to `docs/archive/`.
+- **Zero Rule Dropping**: All domain constraints, test rules, and guidelines present in the original file are preserved in `.agents/AGENTS.md`, and the traceability table of §7.5 is what shows it.
+- **Archive Immutability**: `docs/archive/` is neither written to nor moved out of. Relocation applies to the live stores only.
 - **Branch Protection Compliance**: All migrations are authored on dedicated feature branches and merged via Pull Requests after passing CI gates.
+- **No Unapproved Commit**: Steps 1-7 mutate the working tree; only step 9 touches the index, and only after step 8 returns approval.
+
+### 7.3 Router State Table and Merge Sources
+
+Migration is not one procedure. `internal/drift` classifies four router states
+and each has a different correct action; treating them alike is what makes a
+`clean_legacy` router get partitioned as though it held domain rules.
+
+| `router_state` | Meaning | Action |
+|---|---|---|
+| `clean_current` | matches the running binary's `scaffold.DefaultAgentsMD` | no-op |
+| `clean_legacy` | matches a known older canonical template, carries no custom content | replace wholesale; there is nothing to extract |
+| `drifted` | canonical text plus, or reworded into, repository content | semantic reconcile (below), then restore the canonical router |
+| `missing` | no root `AGENTS.md` | do not invent one; inspect `CLAUDE.md` (§7.4), and if it too is absent, stop and ask |
+
+Two distinct operations were both called "3-way merge". They are not the same
+shape and only one of them is a merge:
+
+- **Semantic reconcile (root router)** — two inputs: the current root file, and
+  the canonical router from the running binary. Output: domain rules moved to
+  `.agents/AGENTS.md`, canonical router restored. Two inputs is not a three-way
+  merge and calling it one invited an operation nobody had defined.
+- **Three-way merge (user-owned skills, e.g. `recording-what-you-learn`)** —
+  three inputs, named explicitly: **upstream** is the embedded asset in the
+  running binary; **base** is the canonical or legacy template the local file
+  last matched, identified by the digest catalog of §4.1; **local** is the
+  working file. Where the digest catalog cannot identify a base, there is no
+  three-way merge available — stop and ask rather than guessing one.
+
+### 7.4 Root File Preservation
+
+`CLAUDE.md` becomes a symlink, which destroys whatever it held. Before
+`ln -s AGENTS.md CLAUDE.md`:
+
+1. `stat` both paths before reading either. Three topologies exist in the
+   fleet today and they are not interchangeable:
+
+   | Topology | Meaning | Handling |
+   |---|---|---|
+   | `AGENTS.md` regular, `CLAUDE.md -> AGENTS.md` | current | nothing to preserve |
+   | `AGENTS.md` regular, `CLAUDE.md` regular | both carry content | reconcile both (step 2) |
+   | **`AGENTS.md -> CLAUDE.md`, `CLAUDE.md` regular** | **inverted**, the pre-2026-08-19 Spec 1 topology | see below |
+
+2. If both exist as regular files and differ, treat **both** as sources of
+   domain rules. A legacy repository may hold its only copy of a rule in
+   `CLAUDE.md`.
+
+3. **The inverted case is destructive if handled blind.** Where `AGENTS.md` is
+   a symlink *to* `CLAUDE.md`, the sequence `rm -f CLAUDE.md && ln -s AGENTS.md
+   CLAUDE.md` deletes the only real file and leaves `AGENTS.md -> CLAUDE.md ->
+   AGENTS.md`: a symlink loop, and every line of repository context gone.
+   Invert deliberately instead — read `CLAUDE.md`, remove the `AGENTS.md`
+   symlink, write the reconciled content to `AGENTS.md` as a regular file, then
+   replace `CLAUDE.md` with the symlink.
+
+   `playground/desktop_pet` is in exactly this state as of 2026-09-01:
+   `AGENTS.md -> CLAUDE.md`, 18 lines of real content in `CLAUDE.md`,
+   `symlink_state: not_symlink`, `domain_state: missing`.
+
+4. Extract to `.agents/AGENTS.md` first. Replace with the symlink only once the
+   content has a destination.
+
+### 7.5 Traceability Requirement
+
+Zero Rule Dropping is not verifiable by inspection of the result. Before the
+approval gate the skill produces a table over every non-boilerplate block in the
+source files:
+
+```
+source quote (verbatim) -> classification -> destination
+```
+
+Every block reaches exactly one destination: `.agents/AGENTS.md`, the canonical
+router (as boilerplate being replaced), or a named `docs/` store. A block that
+cannot be confidently classified, or that has two plausible destinations, is a
+**stop-and-ask** — not a judgement call the skill makes alone. The table goes to
+the human in step 8; it is the evidence for the invariant, and without it the
+invariant is an assertion.
+
+### 7.6 Fleet Mode and Output Shapes
+
+`agents drift --json` and `agents drift --all --json` do not return the same
+JSON type, and a consumer written against one breaks on the other:
+
+| Invocation | Returns |
+|---|---|
+| `agents drift --json` | a single `DriftReport` **object** |
+| `agents drift --all --json` | an **array** of `DriftReport` |
+
+Fleet mode iterates the array with per-repository branch isolation. Registry
+entries reported `missing` or `unknown`, and repositories with a dirty working
+tree, are skipped and named in the final report rather than migrated.
+
+### 7.7 Retired Store Triage
+
+Repositories predating the 2026-08-19 redesign may carry `.agents/memory/` and
+`.agents/reports/`. These are **not** relocated wholesale: much of their content
+is machine-generated and belongs nowhere. Durable findings move to the store
+that matches their retrieval axis — `docs/qna/` for a topic-indexed finding,
+`docs/design/` for a design still in force, `docs/plans/` for an unexecuted
+plan. Everything else is dropped, and what was dropped is named in the report to
+the human.
 
 ---
 
