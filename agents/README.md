@@ -7,7 +7,7 @@ A developer harness manager, repository context framework, and transcript record
 ## Features
 
 - **Multi-Harness Wiring**: Automatically configures and keeps in sync hook configurations for Claude Code (`.claude/settings.json`), Codex (`.codex/hooks.json`), and Antigravity (`.agents/hooks.json`).
-- **Two-Tier Context & Drift Detection**: Enforces clean separation between canonical machine routing (`AGENTS.md`, `CLAUDE.md`) and repository domain guidelines (`.agents/AGENTS.md`). `agents drift` inspects context layout, canonical diffs, domain context, skills, and misplaced documentation across repositories.
+- **Two-Tier Context & Drift Detection**: Enforces clean separation between canonical machine routing (`AGENTS.md`, `CLAUDE.md`) and repository domain guidelines (`.agents/AGENTS.md`). `agents drift` inspects context layout, canonical diffs, domain context, bundled skills, and misplaced documentation across repositories. Repository-specific skills under `.agents/skills/` are listed as `local_skills` and never classified as drift.
 - **Fleet Maintenance & Skill Refresh**: `agents update` rewires machine hooks across registered repositories, refreshes the authoritative `migrating-fleet-context` skill, and emits advisory notices if any repository exhibits context drift.
 - **Durable Transcript Caching**: Captures and preserves subagent conversation transcripts before harnesses delete them, storing them in `.agents/transcripts/` with retention and size bounding.
 - **Repository Guardrails & Pre-Commit Secret Scanning**: Integrates `gitleaks` into `agents guard --staged` to catch secret leaks before commit.
@@ -112,8 +112,8 @@ When installed via Homebrew or downloaded from releases, `agents` operates as a 
   - `scaffold:router`: Validates that root `AGENTS.md` matches the canonical router template without unpartitioned domain drift.
   - `scaffold:symlink`: Verifies that `CLAUDE.md` is a valid relative symlink to `AGENTS.md`.
   - `scaffold:domain`: Confirms presence of `.agents/AGENTS.md` for repository-specific domain rules.
-  - `scaffold:skill-recording`: Checks status and customization state of `.agents/skills/recording-what-you-learn/`.
-  - `scaffold:skill-migrating`: Checks status and customization state of `.agents/skills/migrating-fleet-context/`.
+  - `scaffold:skill-recording`: Checks status and customization state of `.agents/skills/recording-what-you-learn/`. This skill is repository-customizable, so local edits are reported without warning.
+  - `scaffold:skill-migrating`: Checks that `.agents/skills/migrating-fleet-context/` matches the installed binary. This skill is `agents`-owned, so any divergence is staleness and warns; run `agents update --apply` to refresh it.
 - Git hook dispatching executes repository-level hooks and built-in guards.
 
 ### 2. Dotfiles Operator Mode
