@@ -1,240 +1,338 @@
 ---
 name: migrating-fleet-context
-description: Safely migrates repository agent context from legacy or drifted structures to the Two-Tier Agent Context architecture (Tier 1 router + Tier 2 domain guidelines + 4-store docs layout) using LLM semantic merge on a dedicated feature branch.
+description: Use when `agents doctor` reports a `scaffold:*` warning, `agents drift` exits non-zero, or a repository keeps domain rules in a root `AGENTS.md`/`CLAUDE.md`, lacks `.agents/AGENTS.md`, is missing `docs/` stores, carries plans or designs in the wrong store, or has a bundled skill that no longer matches the installed binary.
 ---
 
 # Migrating Fleet Context
 
-Migrates repository agent context from legacy single-file or drifted structures to the **Two-Tier Agent Context Architecture** with **4-store documentation layout**.
+Moves a repository onto the Two-Tier Agent Context architecture: a canonical
+root router at `AGENTS.md`, domain rules in `.agents/AGENTS.md`, durable
+knowledge in the four `docs/` stores.
 
-## Why this skill exists
+**The deterministic tools know the states; only you can read the prose.**
+`agents drift` tells you exactly what is wrong and never guesses at meaning.
+Your job is the part it cannot do — deciding which sentence is a repository's
+own rule and which is scaffold boilerplate — and proving you moved every one.
 
-Earlier iterations of repository scaffolding treated `AGENTS.md` (or `CLAUDE.md`) as a single monolithic context file. Over time, repositories accumulated human-authored domain rules, test protocols, and language conventions mixed directly with machine wiring and router instructions.
-
-Deterministic tools (`agents init`, `agents update`) cannot safely disentangle reordered, edited, or appended domain rules from router boilerplate without risking silent deletion of repository guidelines. Conversely, leaving legacy files unmaintained freezes repositories on obsolete scaffold conventions.
-
-This skill provides an authoritative, LLM-in-the-loop migration protocol to safely partition context into two isolated tiers:
-1. **Tier 1 (Root Router)**: Standardized root `AGENTS.md` (and relative symlink `CLAUDE.md -> AGENTS.md`) acting solely as a durable docs and machine wiring pointer.
-2. **Tier 2 (Domain Context)**: Dedicated repository-specific engineering guidelines, test mandates, architectural invariants, and safety constraints in `.agents/AGENTS.md`.
-3. **4-Store Documentation**: Durable repository knowledge in `docs/` partitioned across `design/`, `plans/`, `journal/`, and `qna/`.
+**Nothing is staged or committed until a human approves the diff.**
 
 ---
 
-## When to Run
+## Step 0: Refresh yourself first
 
-Run this skill when:
-- `agents doctor` reports warnings or info for any `scaffold:*` check (`scaffold:router`, `scaffold:symlink`, `scaffold:domain`, `scaffold:skill-recording`, `scaffold:skill-migrating`).
-- `agents drift` or `agents drift --json` detects `router_state: clean_legacy`, `router_state: drifted`, `domain_state: missing`, or `misplaced_docs`.
-- Migrating a repository from legacy monolithic `AGENTS.md` or `CLAUDE.md` to Two-Tier context.
-- Realigning misplaced plan or design documents across `docs/`.
+This skill is an `agents`-owned asset embedded in the binary. The copy you are
+reading can be older than the tool you are about to run.
 
----
-
-## Invariants & Safety Constraints
-
-1. **Zero Rule Dropping**: Every domain guideline, architectural rule, test mandate, commenting standard, and safety constraint in the existing files MUST be preserved in `.agents/AGENTS.md`. Never discard domain context during migration.
-2. **Feature Branch Isolation**: Never perform migrations directly on `master`, `main`, or protected branches. Always execute on a dedicated feature branch (`feat/migrate-agent-context` or `feat/two-tier-context-migration`).
-3. **Deterministic Preflight Cleanliness**: Require a clean working tree (`git status --porcelain`) before modifying any files.
-4. **Canonical Router Exactness**: Root `AGENTS.md` must match the canonical Tier 1 router template verbatim.
-5. **Relative Symlink**: `CLAUDE.md` must be a relative symlink pointing to `AGENTS.md` (`CLAUDE.md -> AGENTS.md`).
-6. **Archive Immutability**: Active work and modern plans belong in `docs/plans/`. Never write new plans or active context to `docs/archive/`.
-
----
-
-## Phased Migration Workflow
-
-Follow all five phases sequentially. Do not skip phases or verification gates.
-
-```
-Phase 1: Deterministic Preflight & Assessment
-  │  (agents drift --json, git status --porcelain)
-  ▼
-Phase 2: Feature Branch Isolation
-  │  (git checkout -b feat/migrate-agent-context)
-  ▼
-Phase 3: Semantic Un-Nesting & Partitioning
-  │  (extract domain rules -> .agents/AGENTS.md,
-  │   restore root AGENTS.md router, relink CLAUDE.md)
-  ▼
-Phase 4: Docs Store Realignment & Skill Refresh
-  │  (relocate misplaced plans -> docs/plans/,
-  │   ensure 4 docs stores & bundled skills)
-  ▼
-Phase 5: Automated Verification & Diagnostic Gate
-     (agents drift, agents doctor, repo test suite, commit)
+```bash
+agents doctor
 ```
 
----
+If `scaffold:skill-migrating` is anything but `ok`, your instructions are stale:
 
-### Phase 1: Deterministic Preflight & Assessment
+```bash
+agents update --apply
+```
 
-1. **Verify working tree cleanliness**:
-   ```bash
-   git status --porcelain
-   ```
-   If untracked or uncommitted changes exist, stop immediately and report to the user or commit/stash before proceeding.
-
-2. **Inspect repository drift state**:
-   ```bash
-   agents drift --json
-   ```
-   Evaluate the JSON output fields:
-   - `router_state`: `clean_current`, `clean_legacy`, `drifted`, or `missing`.
-   - `symlink_state`: `ok`, `not_symlink`, `broken`, or `missing`.
-   - `domain_state`: `ok` or `missing`.
-   - `skills`: status of bundled skills (`recording-what-you-learn`, `migrating-fleet-context`).
-   - `docs_stores`: presence of `design`, `plans`, `journal`, `qna`.
-   - `misplaced_docs`: list of files needing relocation (e.g. `*-plan.md` in `docs/journal/`).
-   - `diff`: unified diff highlighting custom additions in root `AGENTS.md`.
+Then re-read this file before continuing. Do not migrate from a stale copy.
 
 ---
 
-### Phase 2: Feature Branch Isolation
+## Step 1: Pick the mode and read the right JSON shape
 
-1. Check current branch:
-   ```bash
-   git branch --show-current
-   ```
-2. If on `master`, `main`, or any protected branch, create and switch to a dedicated migration branch:
-   ```bash
-   git checkout -b feat/migrate-agent-context
-   ```
+The two invocations do not return the same type. A parser written for one
+breaks on the other.
 
----
+| Mode | Command | Returns |
+|---|---|---|
+| Single repository | `agents drift --json` | one **object** |
+| Fleet | `agents ls`, then `agents drift --all --json` | an **array** of objects |
 
-### Phase 3: Semantic Un-Nesting & Partitioning
+Fleet mode migrates one repository at a time, each on its own branch. Skip and
+name in the final report, rather than migrating:
 
-1. **Inspect and Read Root Context**:
-   Read root `AGENTS.md` (and `CLAUDE.md` if it is a regular file rather than a symlink).
+- registry entries reported `missing` or `unknown`
+- any repository whose working tree is dirty
+- any repository already `clean_current` with every other field `ok`
 
-2. **Disentangle Domain Knowledge from Router Boilerplate**:
-   Identify and separate:
-   - **Router Boilerplate (to be replaced by canonical router)**:
-     - Old pointer tables to `docs/` or `.agents/memory/`.
-     - Outdated `agents doctor` single-line instructions.
-     - Retired commands (such as legacy handoff, review, index, or memory tools).
-   - **Repository Domain Rules (to be preserved in `.agents/AGENTS.md`)**:
-     - Tech stack conventions (Go idioms, Python `uv`, Node/TypeScript rules, Fish scripts, etc.).
-     - Safety constraints and testing mandates (TDD rules, pre-commit checks, required flags).
-     - Architecture invariants and subsystem documentation.
-     - Platform workflow guidelines (shadowing platform native planning, PR policies).
+Fields to read from each report:
 
-3. **Author or Merge `.agents/AGENTS.md`**:
-   - If `.agents/AGENTS.md` does not exist: create it with the extracted domain rules organized under standard sections:
-     ```markdown
-     # Repository Guidelines & Domain Context
-
-     ## 1. Tech Stack & Standards
-     - ...
-
-     ## 2. Safety & Verification Mandates
-     - ...
-
-     ## 3. Workflow & Harness Guidelines
-     - ...
-
-     ## 4. Architecture & Engineering Standards
-     - ...
-     ```
-   - If `.agents/AGENTS.md` already exists: perform a semantic 3-way merge. Retain existing content and append any new extracted guidelines into appropriate sections without duplication.
-
-4. **Replace Root `AGENTS.md` with Canonical Tier 1 Router**:
-   Overwrite root `AGENTS.md` with the exact canonical template:
-
-   ```markdown
-   # Agent context
-
-   Durable context for this repo lives in `docs/`. Read it before assuming;
-   it is the record, and this file is only the pointer to it.
-
-   - `docs/qna/` — answers indexed by the question you would ask again
-   - `docs/plans/` — implementation plans
-   - `docs/journal/` — dated record of what happened
-   - `docs/design/` — the design still in force
-
-   ## Repository Architecture & Guidelines
-   - Domain engineering guidelines, commenting standards, and safety constraints
-     are defined in `.agents/AGENTS.md`.
-   - Repo-specific procedures and skills are located in `.agents/skills/`.
-
-   ## Machine Wiring
-   `.agents/` holds machine wiring and local skills. A hook cannot install itself
-   and a missing hook fails silently.
-   - If the `agents` CLI is installed, run `agents doctor` early and report any warnings before relying on this context.
-   - If `agents` is not installed on this machine, skip machine wiring checks and adhere directly to the repository instructions above.
-
-   Recording is covered by the global instruction and the `recording-what-you-learn`
-   skill; it is not repo-specific and is not restated here.
-   ```
-
-5. **Ensure Relative `CLAUDE.md` Symlink**:
-   Ensure `CLAUDE.md` is a relative symlink pointing to `AGENTS.md`:
-   ```bash
-   rm -f CLAUDE.md
-   ln -s AGENTS.md CLAUDE.md
-   ```
+| field | use |
+|---|---|
+| `router_state` | picks your procedure — see Step 4 |
+| `symlink_state` | `ok` \| `not_symlink` \| `broken` \| `missing` — see Step 5 |
+| `domain_state` | `ok` \| `missing` — whether `.agents/AGENTS.md` exists |
+| `skills` | embedded skills only: `ok` \| `clean_legacy` \| `customized` \| `missing` |
+| `local_skills` | the repository's own skills. **Never touch these.** |
+| `docs_stores` | which of `design`/`plans`/`journal`/`qna` exist |
+| `misplaced_docs` | plans and designs in the wrong live store |
+| `diff` | unified diff of the root router against canonical |
 
 ---
 
-### Phase 4: Docs Store Realignment & Skill Refresh
+## Step 2: Preflight
 
-1. **Relocate Misplaced Documentation**:
-   Review `misplaced_docs` flagged during Phase 1:
-   - Move misplaced plan files (`*-plan.md` in `docs/journal/` or legacy archive paths) into `docs/plans/`:
-     ```bash
-     git mv docs/journal/<file>-plan.md docs/plans/
-     ```
-   - Move design specifications out of `docs/journal/` into `docs/design/`.
-   - Fix any broken internal relative markdown links within relocated files.
+```bash
+git status --porcelain
+```
 
-2. **Ensure 4 Documentation Stores Exist**:
-   Ensure directories and starter `README.md` files exist for all 4 stores:
-   - `docs/design/README.md`
-   - `docs/plans/README.md`
-   - `docs/journal/README.md`
-   - `docs/qna/README.md`
-   If any are missing, run `agents init` or scaffold them non-destructively.
+Any output at all: stop. Report it and let the human commit or stash. A dirty
+tree makes the approval diff in Step 10 unreadable, which is the one artifact
+this whole procedure exists to produce.
 
-3. **Verify Bundled Skills**:
-   - Ensure `.agents/skills/recording-what-you-learn/SKILL.md` is present. If customized, perform 3-way merge; if missing, populate from canonical template.
-   - Ensure `.agents/skills/migrating-fleet-context/SKILL.md` is present and matches the binary's embedded asset.
+## Step 3: Branch isolation
+
+```bash
+git branch --show-current
+git checkout -b feat/two-tier-context-migration
+```
+
+Never migrate on `master`, `main`, or any protected branch.
 
 ---
 
-### Phase 5: Automated Verification & Diagnostic Gate
+## Step 4: Reconcile the root, one procedure per state
 
-1. **Verify Context Cleanliness with `agents drift`**:
-   ```bash
-   agents drift
-   ```
-   Must return exit code `0` (`Router: clean_current`, `Symlink: ok`, `Domain: ok`).
+Four states, four different correct actions. Treating them alike is the single
+most damaging thing you can do here — it partitions a file that has nothing to
+partition, or invents content for a file that has none.
 
-2. **Verify Granular Diagnostics with `agents doctor`**:
-   ```bash
-   agents doctor
-   ```
-   Verify that all 5 `scaffold:*` checks pass with status `ok`:
-   - `scaffold:router` (OK)
-   - `scaffold:symlink` (OK)
-   - `scaffold:domain` (OK)
-   - `scaffold:skill-recording` (OK)
-   - `scaffold:skill-migrating` (OK)
+| `router_state` | What it means | What to do |
+|---|---|---|
+| `clean_current` | matches the installed binary's canonical router | nothing. Do not "improve" it. |
+| `clean_legacy` | a known older canonical template, **no repository content** | replace wholesale with the canonical router. There is nothing to extract — the digest already proved that. |
+| `drifted` | canonical text plus, or reworded into, repository content | semantic reconcile, below |
+| `missing` | no root `AGENTS.md` at all | do not invent one. Go to Step 5 and read `CLAUDE.md`. If that is absent too, **stop and ask** what this repository's rules are. |
 
-3. **Run Repository Test Suite**:
-   Run the repository's native test commands if applicable (e.g. `go test ./...`, `npm test`, `pytest`). Ensure full completion with exit code 0.
+### Semantic reconcile (`drifted` only)
 
-4. **Commit Changes**:
-   Stage and commit all migration changes:
-   ```bash
-   git add AGENTS.md CLAUDE.md .agents/ docs/
-   git commit -m "refactor(context): migrate to two-tier agent context and 4-store layout"
-   ```
+Two inputs — the current root file and the canonical router — and one output
+per block. This is not a three-way merge; there is no base. Read the `diff`
+field to see what the repository added.
+
+Classify **every** block:
+
+- **Boilerplate**, to be replaced by the canonical router: pointer tables to
+  `docs/` or `.agents/memory/`, old single-line `agents doctor` instructions,
+  references to retired commands (handoff writing, `save`, `index`, and the
+  memory tooling — none of which the CLI defines any more).
+- **Domain rules**, to be preserved in `.agents/AGENTS.md`: tech stack
+  conventions, test mandates, safety constraints, architecture invariants, PR
+  and workflow policy, commenting standards.
+
+Write the domain rules to `.agents/AGENTS.md`. If it already exists, append
+into the matching section without duplicating what is there. Then overwrite the
+root `AGENTS.md` with the canonical router verbatim:
+
+```markdown
+# Agent context
+
+Durable context for this repo lives in `docs/`. Read it before assuming;
+it is the record, and this file is only the pointer to it.
+
+- `docs/qna/` — answers indexed by the question you would ask again
+- `docs/plans/` — implementation plans
+- `docs/journal/` — dated record of what happened
+- `docs/design/` — the design still in force
+
+## Repository Architecture & Guidelines
+- Domain engineering guidelines, commenting standards, and safety constraints
+  are defined in `.agents/AGENTS.md`.
+- Repo-specific procedures and skills are located in `.agents/skills/`.
+
+## Machine Wiring
+`.agents/` holds machine wiring and local skills. A hook cannot install itself
+and a missing hook fails silently.
+- If the `agents` CLI is installed, run `agents doctor` early and report any warnings before relying on this context.
+- If `agents` is not installed on this machine, skip machine wiring checks and adhere directly to the repository instructions above.
+
+Recording is covered by the global instruction and the `recording-what-you-learn`
+skill; it is not repo-specific and is not restated here.
+```
 
 ---
+
+## Step 5: The two root files, before any symlink
+
+`CLAUDE.md` is about to become a symlink, which destroys whatever it holds.
+`stat` both paths before you read or write either one.
+
+```bash
+ls -la AGENTS.md CLAUDE.md
+```
+
+| Topology | Meaning | Action |
+|---|---|---|
+| `AGENTS.md` regular, `CLAUDE.md -> AGENTS.md` | current | nothing to preserve |
+| `AGENTS.md` regular, `CLAUDE.md` regular | both may carry rules | reconcile **both** as Step 4 sources; a legacy repository may hold its only copy of a rule in `CLAUDE.md` |
+| `AGENTS.md -> CLAUDE.md`, `CLAUDE.md` regular | **inverted** — the pre-2026-08-19 topology | see below |
+
+**The inverted case destroys the repository if handled blind.** Running
+`rm -f` on `CLAUDE.md` and then `ln -s AGENTS.md CLAUDE.md` deletes the only real file
+and leaves `AGENTS.md -> CLAUDE.md -> AGENTS.md`: a symlink loop, and every line
+of context gone. Invert deliberately instead:
+
+```bash
+cat CLAUDE.md                 # read the real content FIRST
+rm AGENTS.md                  # remove the symlink, not the file
+# write reconciled content to AGENTS.md as a regular file
+rm CLAUDE.md
+ln -s AGENTS.md CLAUDE.md
+```
+
+Only create the symlink once the content has a destination.
+
+---
+
+## Step 6: Skills
+
+**Embedded skills** (`skills` in the report) are the only ones you touch.
+
+| state | action |
+|---|---|
+| `ok` | nothing |
+| `missing` | populate from the binary: `agents init`, or `agents update --apply` for `migrating-fleet-context` |
+| `clean_legacy` | replace with the current version; the digest proved there are no local edits |
+| `customized` | three-way merge, below — except `migrating-fleet-context`, which is `agents`-owned: refresh it with `agents update --apply` and keep no local edits |
+
+### Three-way merge (`recording-what-you-learn`)
+
+Name the three inputs before you start; an unnamed merge is a guess:
+
+- **upstream** — the version embedded in the running binary
+- **base** — the canonical or legacy template the local file last matched,
+  identified by the digest catalog that produced the `clean_legacy` state
+- **local** — the working file on disk
+
+Apply upstream's changes to local, keeping local's additions. If the digest
+catalog cannot identify a **base**, there is no three-way merge to perform —
+**stop and ask** rather than inventing one.
+
+**`local_skills` are not yours.** They are the repository's own procedures,
+which is exactly what `.agents/skills/` is for. Do not merge, rewrite, move or
+delete them.
+
+---
+
+## Step 7: Docs stores and retired stores
+
+Create any store missing from `docs_stores`, with its `README.md`. `agents init`
+scaffolds them non-destructively.
+
+Relocate each entry in `misplaced_docs`:
+
+```bash
+git mv docs/journal/2026-08-30-something-plan.md docs/plans/
+```
+
+Then fix relative markdown links inside the moved files.
+
+**`docs/archive/` is immutable and is never a source or a destination.** It
+holds executed plans and retired specs, and a record edited to stay true is not
+a record. `agents drift` does not report anything under it, and neither should
+you relocate out of it.
+
+### Retired stores
+
+A repository predating 2026-08-19 may carry `.agents/memory/` and
+`.agents/reports/`. Do not relocate them wholesale — much of it is
+machine-generated and belongs nowhere. Triage each file:
+
+| content | destination |
+|---|---|
+| a topic-indexed finding | `docs/qna/` |
+| a design still in force | `docs/design/` |
+| an unexecuted plan | `docs/plans/` |
+| generated indexes, handoff scaffolding, trace pointers, stale summaries | drop |
+
+Name everything you dropped in the Step 10 report.
+
+---
+
+## Step 8: Build the traceability table
+
+Zero rule dropping is not verifiable by looking at the result. Before you ask
+for approval, produce a row for every non-boilerplate block in every source file
+you read:
+
+```
+source quote (verbatim)                          | classification | destination
+-------------------------------------------------|----------------|---------------------
+"All tests must pass before commit; use uv, not pip" | domain rule | .agents/AGENTS.md §2
+"Run `agents doctor` early and surface what it says" | boilerplate | replaced by router
+"docs/sessions/... halt and resumption plan"         | misplaced doc | docs/plans/
+```
+
+Every block gets exactly one destination. Then state the count: *N blocks in, N
+blocks placed, 0 unaccounted*. That sentence is the evidence for the invariant.
+Without the table the invariant is an assertion, and this is precisely the
+failure deterministic tools cannot catch for you.
+
+---
+
+## Step 9: Verify
+
+```bash
+agents drift          # expect exit 0
+agents doctor         # expect all five scaffold:* checks ok
+```
+
+Then the repository's own suite — `go test ./...`, `pytest`, `npm test`,
+whatever it uses. A migration that breaks the build is not done.
+
+---
+
+## Step 10: Stop for the human
+
+**Do not stage anything yet.** Present:
+
+1. The traceability table from Step 8, with the *N in, N placed, 0 unaccounted* line.
+2. `git status --porcelain` and `git diff --stat`.
+3. Anything you dropped in Step 7, named.
+4. Every stop-and-ask you resolved and how.
+
+Then wait for an explicit approval. Silence is not approval, and neither is a
+clean verification in Step 9.
+
+## Step 11: Commit and open the pull request
+
+Only after approval, and staging the exact paths you changed — never `git add .`
+and never a broad directory that sweeps up unrelated work:
+
+```bash
+git add AGENTS.md CLAUDE.md .agents/AGENTS.md docs/
+git diff --cached --stat
+git commit -m "refactor(context): migrate to two-tier agent context and 4-store layout"
+git push -u origin feat/two-tier-context-migration
+gh pr create --fill
+```
+
+In fleet mode, repeat from Step 2 for the next repository.
+
+---
+
+## Stop and ask when
+
+- A block cannot be confidently classified as domain rule or boilerplate.
+- Two destinations are both plausible for the same block.
+- `router_state` is `missing` and there is no `CLAUDE.md` to read either.
+- A `customized` skill has no identifiable **base**.
+- The working tree is dirty, or the repository is mid-rebase or mid-merge.
+- `misplaced_docs` names a file whose correct store is genuinely unclear.
+
+Asking costs one message. Guessing costs a rule nobody notices is gone.
+
+## Red flags
+
+- About to remove `CLAUDE.md` without having `stat`-ed `AGENTS.md` first.
+- About to apply the `drifted` procedure to a `clean_legacy` router.
+- About to commit before presenting the traceability table.
+- About to touch a skill listed in `local_skills`.
+- About to relocate something out of `docs/archive/`.
+- Parsing `agents drift --all --json` as an object.
 
 ## Where this comes from
 
-- `docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md` (Architecture specification)
-- `docs/plans/2026-08-31-two-tier-context-and-llm-migration-plan.md` (Implementation plan)
-- `docs/qna/why-does-agents-init-never-update-existing-instructions.md` (Scaffold immutability rationale)
-- `docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md` (Two-Tier isolation rationale)
+- `docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md` §7 — read Amendment 1 first
+- `docs/journal/2026-09-01-why-the-migration-skill-shipped-hollow.md` — why the previous version of this skill was wrong
+- `docs/qna/why-does-agents-init-never-update-existing-instructions.md`
+- `docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md`
