@@ -221,7 +221,7 @@ scaffolds them non-destructively.
 Relocate each entry in `misplaced_docs`:
 
 ```bash
-git mv docs/journal/2026-08-30-something-plan.md docs/plans/
+git mv docs/journal/<file>-plan.md docs/plans/
 ```
 
 Then fix relative markdown links inside the moved files.
@@ -332,7 +332,18 @@ Asking costs one message. Guessing costs a rule nobody notices is gone.
 
 ## Where this comes from
 
-- `docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md` §7 — read Amendment 1 first
-- `docs/journal/2026-09-01-why-the-migration-skill-shipped-hollow.md` — why the previous version of this skill was wrong
-- `docs/qna/why-does-agents-init-never-update-existing-instructions.md`
-- `docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md`
+This skill is owned and maintained by the `agents` CLI, not by the repository it
+is sitting in. `agents update --apply` overwrites it from the installed binary,
+so local edits here do not survive — if this repository needs different
+behaviour, that belongs in `.agents/AGENTS.md`.
+
+**The tool is the authority on state, not this document.** `agents drift` and
+`agents doctor` report what a repository actually is; where they and this skill
+disagree, they are right and this copy is stale. Step 0 is how you find out.
+
+The architecture rationale — why the router is a fixed template, why domain
+rules live one level down, what each digest state proves — lives with the
+`agents` project's own design documents, upstream. It is deliberately not
+restated or linked here: this file is scaffolded into repositories that have no
+copy of those documents, and a pointer to a path that does not exist is worse
+than no pointer at all.

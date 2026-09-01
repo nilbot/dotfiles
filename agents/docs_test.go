@@ -290,3 +290,24 @@ func TestMigrationSkillPastesTheCanonicalRouter(t *testing.T) {
 			"pasted %d bytes, canonical %d bytes", len(pasted), len(scaffold.DefaultAgentsMD))
 	}
 }
+
+// The skill is scaffolded into other people's repositories, which do not have
+// this repository's documents. A "where this comes from" list of dated design
+// and Q&A paths reads as a working reference and resolves to nothing there --
+// worse than no pointer, because an agent will try to follow it.
+//
+// Bare dates describing an era ("the pre-2026-08-19 topology") are fine; a dated
+// *filename* is a path into this repository and is not.
+func TestMigrationSkillNamesNoRepoLocalDocuments(t *testing.T) {
+	root := task18RepoRoot(t)
+	rel := filepath.Join(".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	data, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatalf("the migration skill is missing: %v", err)
+	}
+	datedDoc := regexp.MustCompile(`[0-9]{4}-[0-9]{2}-[0-9]{2}-[A-Za-z0-9-]+\.md`)
+	for _, m := range datedDoc.FindAllString(string(data), -1) {
+		t.Errorf("%s names %q, a document that exists only in this repository; "+
+			"the skill ships into repositories that have no copy of it", rel, m)
+	}
+}
