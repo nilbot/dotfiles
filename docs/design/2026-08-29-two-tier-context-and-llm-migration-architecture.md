@@ -27,6 +27,15 @@ journal alone would not be read by the next author of the skill.
 | 4.2 | every directory under `.agents/skills/` classified, unrecognised ones as `customized` | only embedded skills are classified; repository-specific skills are listed in a new `local_skills` field and never judged | §2 says `.agents/skills/` is where repository-specific skills belong, so classifying them made a repository dirty for using the feature as designed — and no migration could clear it, because there was nothing to fix. `playground/autogo-mlx` carries two and could not report clean. The tool owns what it embeds. |
 | 6 | `scaffold:skill-migrating` — `warn` (missing or outdated) | unchanged as written; `doctor.go` implemented `customized` as `ok` and is corrected to `warn` | The skill is 100% `agents`-owned per §5.1. For an authoritative asset, "customized" *is* "outdated" — reporting it `ok` means a stale migration skill passes its own health check. |
 
+**Amendment 1a (2026-09-01, same day).** Executing the rewritten skill against
+`cowork` immediately surfaced two more defects, both of which this spec had:
+§7.1.1 ordered the self-refresh *before* the clean-tree preflight, which
+deadlocks — the refresh dirties the tree the preflight then rejects; and the
+remedy in §6 named `agents update --apply`, an invocation the CLI rejects with
+`--all is required`. Both are corrected above. Neither would have been found by
+reading: the first needs the steps run in order, the second needs the command
+actually run.
+
 Two further gaps were absent from this spec entirely and are added, not corrected:
 **§7.6** (fleet mode and the `--all` output shape) and **§7.7** (legacy store
 triage). Neither was in the plan either; see the journal for where each entered.
@@ -222,7 +231,7 @@ Replaces the legacy generic `scaffold:doctor-instruction` with 5 granular checks
 | `scaffold:symlink` | `CLAUDE.md` is relative symlink to `AGENTS.md` | `fail` (missing or regular file) | Run `agents init` or recreate symlink |
 | `scaffold:domain` | `.agents/AGENTS.md` exists | `info` (missing) | Run `agents init` or create `.agents/AGENTS.md` |
 | `scaffold:skill-recording` | `.agents/skills/recording-what-you-learn/` exists | `warn` (missing) | Run `agents init` to populate bundled skill |
-| `scaffold:skill-migrating` | `.agents/skills/migrating-fleet-context/` exists | `warn` (missing or outdated) | Run `agents update --apply` to refresh infrastructure skill |
+| `scaffold:skill-migrating` | `.agents/skills/migrating-fleet-context/` exists | `warn` (missing or outdated) | Run `agents update --all --apply` to refresh infrastructure skill |
 
 ---
 
@@ -248,10 +257,11 @@ digraph model_a_migration {
 ```
 
 ### 7.1 Skill Operational Protocol
-1. **Self-Currency Check**: The skill is an `agents`-owned asset (§5.1) and can be read stale. Before acting, confirm the running copy matches the installed binary — `agents doctor` reporting `scaffold:skill-migrating` as `ok`. If it does not, run `agents update --apply` and re-read.
+1. **Self-Currency Check**: The skill is an `agents`-owned asset (§5.1) and can be read stale. Before acting, confirm the running copy matches the installed binary — `agents doctor` reporting `scaffold:skill-migrating` as `ok`. This check is read-only; the *fix* writes to the working tree and therefore happens after branch isolation (§7.1.4a), not here.
 2. **Target Discovery**: `agents ls` for the registered fleet, then `agents drift --json` for one repository or `agents drift --all --json` for the fleet. See §7.6 for the two output shapes.
 3. **Git Safety Check**: Asserts the working tree is clean (`git status --porcelain`). Refuses to proceed if uncommitted changes exist.
 4. **Branch Isolation**: Creates dedicated feature branch: `feat/two-tier-context-migration`.
+4a. **Self-Refresh**: If §7.1.1 found the skill stale, `agents update --all --apply` now, then re-read the skill and restart from §7.1.2. `--all` is mandatory — the CLI rejects `agents update` without it, and `agents wire` does not refresh skills, so there is no single-repository form. The refresh therefore writes to every registered repository; the copy in this one belongs in the migration commit, and the others are reported and left alone.
 5. **Root Context Reconcile**: One action per router state (§7.3), preserving `CLAUDE.md` content first (§7.4).
 6. **Skill Merge & Docs Realignment**: Three-way merge of user-owned skills (§7.3), relocation of misplaced documents excluding `docs/archive/` (§7.1 amendment), triage of retired stores (§7.7).
 7. **Verification Gate**: Executes `agents drift`, `agents doctor` and repository test suites (`go test ./...`).

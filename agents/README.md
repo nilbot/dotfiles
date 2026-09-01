@@ -113,7 +113,7 @@ When installed via Homebrew or downloaded from releases, `agents` operates as a 
   - `scaffold:symlink`: Verifies that `CLAUDE.md` is a valid relative symlink to `AGENTS.md`.
   - `scaffold:domain`: Confirms presence of `.agents/AGENTS.md` for repository-specific domain rules.
   - `scaffold:skill-recording`: Checks status and customization state of `.agents/skills/recording-what-you-learn/`. This skill is repository-customizable, so local edits are reported without warning.
-  - `scaffold:skill-migrating`: Checks that `.agents/skills/migrating-fleet-context/` matches the installed binary. This skill is `agents`-owned, so any divergence is staleness and warns; run `agents update --apply` to refresh it.
+  - `scaffold:skill-migrating`: Checks that `.agents/skills/migrating-fleet-context/` matches the installed binary. This skill is `agents`-owned, so any divergence is staleness and warns; run `agents update --all --apply` to refresh it.
 - Git hook dispatching executes repository-level hooks and built-in guards.
 
 ### 2. Dotfiles Operator Mode

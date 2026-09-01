@@ -1398,7 +1398,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if cCustom.Status != Warn || cCustom.Detail != ".agents/skills/migrating-fleet-context/ does not match the installed binary" {
 			t.Errorf("stale migrating = %+v", cCustom)
 		}
-		if cCustom.Remedy != "run 'agents update --apply' to refresh infrastructure skills" {
+		if cCustom.Remedy != "run 'agents update --all --apply' to refresh infrastructure skills" {
 			t.Errorf("stale migrating remedy = %q", cCustom.Remedy)
 		}
 

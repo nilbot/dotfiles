@@ -219,3 +219,50 @@ package. `-count=1` showed both tests failing as they should. `verify.yml:101`
 already carries the comment that `-count=1` is load-bearing for exactly this,
 so CI was never exposed — only the local check was, and a control that silently
 does not run is the failure this repository has recorded twice before.
+
+## What running it found that reading it did not
+
+The rewritten skill was executed against `cowork` on v0.5.0 within minutes of
+release. Two defects surfaced immediately, and neither was reachable by review.
+
+**The self-refresh deadlocked.** Step 0 said to refresh a stale skill with
+`agents update`, and Step 2 said to stop if `git status --porcelain` produced
+any output. The refresh writes a tracked file, so following the steps in order
+produced a dirty tree that the next step rejected. Reading the skill does not
+surface this; only running the steps in sequence does. Fixed by splitting
+detection (read-only, Step 0) from the fix (Step 3.5, after branch isolation).
+
+**The invocation did not exist.** Both the skill and the doctor remedy said
+`agents update --apply`. The CLI answers:
+
+```
+agents update: --all is required; use `agents wire` for one repository
+```
+
+`RefreshInfrastructuralSkills` is called from exactly one place,
+`cmd_fleet.go:150`, on the `--all` path. `agents wire` does not refresh skills,
+so there is no single-repository form at all — the refresh necessarily rewrites
+the skill in every registered repository. The design carried the same broken
+invocation in its §6 remedy table from the start, so this one predates the
+rewrite.
+
+Three things about the gates are worth keeping.
+
+*The bug was in the gate too.* `TestMigrationSkillCoversItsSpecifiedProtocol`
+asserted the skill contains `agents update --apply` — it required the invalid
+command. A test written from the same spec as the artifact inherits the spec's
+errors, and a green suite proved only that the two agreed.
+
+*Neither existing check could see it.* `TestLivingDocumentsNameOnlyRealCommands`
+validates that a named command exists; `update` does, and `--apply` is a
+registered flag. What was wrong is an absent **required** flag, which no
+existence check detects. `TestLivingDocumentsSpellUpdateWithAll` now covers it:
+a bare `agents update` is prose naming the command and passes, a flag-bearing
+span without `--all` fails.
+
+*The first version of that gate could not fail.* Its control passed with the
+invalid command reintroduced, because the regex scanned inline backtick spans
+only and the real command lives in a ```bash fence — the one place a reader
+actually copies from. Both a fenced and an inline sabotage now fail it. This is
+the third time in this entry that a check needed a control before it could be
+believed, and the second time the control itself was the thing that was broken.
