@@ -18,7 +18,7 @@ own rule and which is scaffold boilerplate — and proving you moved every one.
 
 ---
 
-## Step 0: Refresh yourself first
+## Step 0: Check whether you are stale
 
 This skill is an `agents`-owned asset embedded in the binary. The copy you are
 reading can be older than the tool you are about to run.
@@ -27,13 +27,10 @@ reading can be older than the tool you are about to run.
 agents doctor
 ```
 
-If `scaffold:skill-migrating` is anything but `ok`, your instructions are stale:
-
-```bash
-agents update --apply
-```
-
-Then re-read this file before continuing. Do not migrate from a stale copy.
+If `scaffold:skill-migrating` reports anything but `ok`, your instructions are
+out of date. **Do not fix it yet** — the fix writes to the working tree, and
+Step 2 needs a clean one. Note it and carry on to Step 2; Step 3.5 does the
+refresh once you are safely on a branch.
 
 ---
 
@@ -87,6 +84,26 @@ git checkout -b feat/two-tier-context-migration
 ```
 
 Never migrate on `master`, `main`, or any protected branch.
+
+## Step 3.5: Refresh yourself, if Step 0 said you are stale
+
+```bash
+agents update --all --apply
+```
+
+`--all` is not optional: `agents update` refuses to run without it, and
+`agents wire` does not refresh skills. There is no single-repository form, so
+this rewrites the skill in **every registered repository**, not just this one.
+Two consequences, both yours to handle:
+
+- In this repository the refreshed skill is an uncommitted change on your
+  branch. That is fine — it belongs in this migration's commit.
+- In the others it leaves an uncommitted change nobody asked for. Say so in
+  your Step 10 report, and leave them alone; each repository's own migration
+  will carry its copy.
+
+Then **re-read this file** and restart from Step 1. The instructions you have
+been following up to this point are the stale ones.
 
 ---
 
@@ -190,9 +207,9 @@ Only create the symlink once the content has a destination.
 | state | action |
 |---|---|
 | `ok` | nothing |
-| `missing` | populate from the binary: `agents init`, or `agents update --apply` for `migrating-fleet-context` |
+| `missing` | populate from the binary: `agents init`, or `agents update --all --apply` for `migrating-fleet-context` |
 | `clean_legacy` | replace with the current version; the digest proved there are no local edits |
-| `customized` | three-way merge, below — except `migrating-fleet-context`, which is `agents`-owned: refresh it with `agents update --apply` and keep no local edits |
+| `customized` | three-way merge, below — except `migrating-fleet-context`, which is `agents`-owned: refresh it with `agents update --all --apply` and keep no local edits |
 
 ### Three-way merge (`recording-what-you-learn`)
 
@@ -324,6 +341,7 @@ Asking costs one message. Guessing costs a rule nobody notices is gone.
 ## Red flags
 
 - About to remove `CLAUDE.md` without having `stat`-ed `AGENTS.md` first.
+- About to run `agents update` without `--all`; the CLI rejects it.
 - About to apply the `drifted` procedure to a `clean_legacy` router.
 - About to commit before presenting the traceability table.
 - About to touch a skill listed in `local_skills`.
@@ -333,7 +351,7 @@ Asking costs one message. Guessing costs a rule nobody notices is gone.
 ## Where this comes from
 
 This skill is owned and maintained by the `agents` CLI, not by the repository it
-is sitting in. `agents update --apply` overwrites it from the installed binary,
+is sitting in. `agents update --all --apply` overwrites it from the installed binary,
 so local edits here do not survive — if this repository needs different
 behaviour, that belongs in `.agents/AGENTS.md`.
 

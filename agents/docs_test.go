@@ -197,7 +197,7 @@ func TestMigrationSkillCoversItsSpecifiedProtocol(t *testing.T) {
 		{"agents ls", "7.1.2 target discovery over the registered fleet"},
 		{"agents drift --json", "7.1.2 single-repository inspection"},
 		{"agents drift --all --json", "7.6 fleet inspection, which returns an array"},
-		{"agents update --apply", "7.1.1 self-currency check before trusting itself"},
+		{"agents update --all --apply", "7.1.1 self-currency check; --all is required or the CLI rejects it"},
 		{"agents doctor", "7.1.7 verification gate"},
 		{"clean_current", "7.3 router state table"},
 		{"clean_legacy", "7.3 router state table"},
@@ -309,5 +309,46 @@ func TestMigrationSkillNamesNoRepoLocalDocuments(t *testing.T) {
 	for _, m := range datedDoc.FindAllString(string(data), -1) {
 		t.Errorf("%s names %q, a document that exists only in this repository; "+
 			"the skill ships into repositories that have no copy of it", rel, m)
+	}
+}
+
+// `agents update` rejects any invocation without --all: "--all is required; use
+// `agents wire` for one repository". A living document that says
+// `agents update --apply` is telling its reader -- usually an agent -- to run a
+// command that cannot work, and both the skill and the doctor remedy said
+// exactly that until it was run against a real repository.
+//
+// TestLivingDocumentsNameOnlyRealCommands does not catch this: the command
+// exists and --apply is a registered flag. What is wrong is the absent required
+// flag, which no existence check can see.
+func TestLivingDocumentsSpellUpdateWithAll(t *testing.T) {
+	root := task18RepoRoot(t)
+	// Every mention of `agents update`, to the end of the line or the closing
+	// backtick -- whichever comes first. Scanning only inline code spans would
+	// miss fenced ```bash blocks, which is precisely where a reader copies the
+	// command from: the first version of this check passed while the runnable
+	// command in the skill's own fence was wrong.
+	updateSpan := regexp.MustCompile("agents update([^\n`]*)")
+	checked := 0
+	for _, rel := range livingDocuments(t, root) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			continue
+		}
+		for _, m := range updateSpan.FindAllStringSubmatch(string(data), -1) {
+			// A bare `agents update` names the command; that is prose, and the
+			// skills use it that way. A span carrying flags is an invocation,
+			// and an invocation without --all does not run.
+			if !strings.Contains(m[1], "--") {
+				continue
+			}
+			checked++
+			if !strings.Contains(m[1], "--all") {
+				t.Errorf("%s names `agents update%s`, which the CLI rejects; --all is required", rel, m[1])
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no flag-bearing `agents update` spans found in any living document; the scan is broken")
 	}
 }

@@ -225,7 +225,8 @@ jobs:
           TestMigrationSkillCoversItsSpecifiedProtocol
           TestMigrationSkillMatchesEmbeddedAsset
           TestMigrationSkillPastesTheCanonicalRouter
-          TestMigrationSkillNamesNoRepoLocalDocuments"
+          TestMigrationSkillNamesNoRepoLocalDocuments
+          TestLivingDocumentsSpellUpdateWithAll"
           filter="$(echo $tests | tr ' ' '|')"
           go test -count=1 -v -run "^(${filter})$" ./... | tee /tmp/docs.log
           # `go test -run` exits 0 when the filter matches NOTHING -- it prints

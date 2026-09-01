@@ -1126,7 +1126,7 @@ func checkScaffold(repoRoot string) []Check {
 			Name:   "scaffold:skill-migrating",
 			Status: Warn,
 			Detail: ".agents/skills/migrating-fleet-context/ does not match the installed binary",
-			Remedy: "run 'agents update --apply' to refresh infrastructure skills",
+			Remedy: "run 'agents update --all --apply' to refresh infrastructure skills",
 		})
 	default:
 		checks = append(checks, Check{
