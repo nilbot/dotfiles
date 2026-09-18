@@ -133,7 +133,6 @@ type Manifest struct {
 	Profile      string            `json:"profile,omitempty"`
 	LayoutStatus string            `json:"layout_status"`
 	StoreRoot    string            `json:"store_root,omitempty"`
-	ContentRoot  string            `json:"content_root,omitempty"`
 	Archive      string            `json:"archive,omitempty"`
 	Stores       map[string]string `json:"stores"`
 	Migration    *Migration        `json:"migration,omitempty"`
@@ -162,7 +161,6 @@ type MigrateOptions struct {
 	Profile     string
 	StoreRoot   string
 	Stores      map[string]string
-	ContentRoot string
 	Archive     string
 	Running     string
 	RouterState string // drift.RouterState as a string; "clean_current" or "clean_legacy"
@@ -298,7 +296,6 @@ func TestResolveV2MapIsCanonical(t *testing.T) {
   "min_mut_ver_floor": "0.6.0",
   "profile": "content-vault",
   "layout_status": "active",
-  "content_root": ".",
   "store_root": ".context",
   "stores": {
     "design": ".context/design",
@@ -435,7 +432,6 @@ const (
 	ProblemMigration       = "migration_missing"
 	ProblemMinMutVerFloor       = "min_mut_ver_floor_invalid"
 	ProblemLocalAgents     = "local_agents"
-	ProblemContentRoot     = "content_root_invalid"
 )
 
 var roleNames = []string{RoleDesign, RolePlans, RoleJournal, RoleQNA}
@@ -467,7 +463,6 @@ func v1Layout(root string) Layout {
 		Manifest: Manifest{
 			Schema:       SchemaV1,
 			LayoutStatus: StatusActive,
-			ContentRoot:  ".",
 			Archive:      archive,
 			Stores:       stores,
 		},
@@ -484,7 +479,6 @@ type rawManifest struct {
 	Profile      string          `json:"profile"`
 	LayoutStatus string          `json:"layout_status"`
 	StoreRoot    string          `json:"store_root"`
-	ContentRoot  string          `json:"content_root"`
 	Archive      string          `json:"archive"`
 	Stores       json.RawMessage `json:"stores"`
 	Migration    *Migration      `json:"migration"`
@@ -516,7 +510,6 @@ func Resolve(root string) Layout {
 			Profile:      raw.Profile,
 			LayoutStatus: raw.LayoutStatus,
 			StoreRoot:    raw.StoreRoot,
-			ContentRoot:  raw.ContentRoot,
 			Archive:      raw.Archive,
 			Migration:    raw.Migration,
 			Stores:       map[string]string{},
@@ -624,7 +617,7 @@ git commit -m "feat(layout): resolve implicit v1 and manifest v2 layouts"
 **Interfaces:**
 - Consumes: `Resolve`, `Layout`, `Problem`.
 - Produces: `Validate(root, l) []Problem`, `Support(running, l) (bool, string)`,
-  and the V1–V19 validation rules from design §5.2.
+  and the V1–V18 validation rules from design §5.2.
 
 - [ ] **Step 1: Write the failing validation and version tests**
 
@@ -662,7 +655,7 @@ func TestValidateRejectsUnsafePaths(t *testing.T) {
 func mk(stores map[string]string) Layout {
 	return Layout{Manifest: Manifest{
 		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: ProfileCustom,
-		LayoutStatus: StatusActive, ContentRoot: ".", Stores: stores,
+		LayoutStatus: StatusActive, Stores: stores,
 	}}
 }
 
@@ -758,13 +751,6 @@ func Validate(root string, l Layout) []Problem {
 	} else if _, err := parseVersion(l.MinMutVerFloor); err != nil {
 		ps = append(ps, Problem{Code: ProblemMinMutVerFloor, Detail: l.MinMutVerFloor})
 	}
-	if l.ContentRoot == "" {
-		l.ContentRoot = "."
-	}
-	if p := validateRel(root, l.ContentRoot); p != nil {
-		p.Code = ProblemContentRoot
-		ps = append(ps, *p)
-	}
 	seen := map[string]string{}
 	for role, path := range l.Stores {
 		if p := validateRel(root, path); p != nil {
@@ -859,9 +845,8 @@ func pathPrefix(parent, child string) bool {
 
 `agentsExcluded` reads `<git-dir>/info/exclude` through
 `repo.InfoExcludePath(root)` and reports whether an exact `/.agents/` line is
-present. `ProblemContentRoot` and `ProblemPathInvalid` share `validateRel`;
-the caller maps the code to the right problem so a bad `content_root` never
-reports `path_invalid`.
+present. `validateRel` returns the specific path code; there is no content-root
+special case.
 
 - [ ] **Step 4: Implement version comparison in `version.go`**
 
@@ -2013,7 +1998,7 @@ Usage:
 
 ```
 agents init [--local] [--profile <p>] [--store-root <path>]
-            [--content-root <path>] [--stores <role=path>] [--archive <path>]
+            [--stores <role=path>] [--archive <path>]
 ```
 
 Resolution order:
@@ -2069,7 +2054,7 @@ func TestPlanMigrationBuildsDirectoryMovesAndRecordsArchive(t *testing.T) {
 	writeFile(t, filepath.Join(root, "docs/archive/plans/old-plan.md"), "old")
 	p, err := PlanMigration(root, MigrateOptions{
 		Profile: ProfileContentVault, StoreRoot: ".context",
-		ContentRoot: ".", Running: "v0.6.0", RouterState: "clean_current",
+		Running: "v0.6.0", RouterState: "clean_current",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2195,10 +2180,6 @@ func targetLayout(from Layout, opts MigrateOptions) Layout {
 			stores[role] = path
 		}
 	}
-	contentRoot := opts.ContentRoot
-	if contentRoot == "" {
-		contentRoot = "."
-	}
 	archive := opts.Archive
 	if archive == "" {
 		archive = from.Archive
@@ -2206,7 +2187,7 @@ func targetLayout(from Layout, opts MigrateOptions) Layout {
 	return Layout{Manifest: Manifest{
 		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: opts.Profile,
 		LayoutStatus: StatusActive, StoreRoot: opts.StoreRoot,
-		ContentRoot: contentRoot, Archive: archive, Stores: stores,
+		Archive: archive, Stores: stores,
 	}}
 }
 
@@ -2580,7 +2561,9 @@ ask before creating anything.
 ````
 
 The two retrieval axes stay as prose: the Q&A role is indexed by topic, the
-journal role by time. Remove every literal `docs/` path.
+journal role by time. The skill resolves paths only; it does not encode which
+store humans edit or which agents mostly write — that collaboration policy is
+prose in `.agents/AGENTS.md`. Remove every literal `docs/` path.
 
 - [ ] **Step 4: Rewrite the migration skill for manifest-first operation**
 
@@ -2600,6 +2583,9 @@ state table, traceability, approval gate, commit/PR) and add:
 
 Name `agents layout show`, `--dry-run`, `--apply`, `--resume`, and `agents
 layout path`; state that the archive is never a move source or destination.
+When reconciling `.agents/AGENTS.md`, preserve per-role collaboration policy
+(which stores humans edit, which agents mostly write, which are read-only for
+one side); if it is missing and cannot be inferred, stop and ask.
 Keep the existing pasted v1 router block for the v1 path; it remains bound to
 `scaffold.DefaultAgentsMD` by `TestMigrationSkillPastesTheCanonicalRouter`. The
 v2 path restores the router from `agents layout show --router` instead of

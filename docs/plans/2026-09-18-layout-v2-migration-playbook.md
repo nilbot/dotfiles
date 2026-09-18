@@ -114,14 +114,12 @@ cd /Users/nilbot/gist/paperbubble
 agents layout migrate \
   --profile content-vault \
   --store-root .context \
-  --content-root . \
   --dry-run \
   --json > /tmp/paperbubble-migrate-plan.json
 
 agents layout migrate \
   --profile content-vault \
   --store-root .context \
-  --content-root . \
   --dry-run
 ```
 
@@ -152,7 +150,6 @@ Review every line of the JSON plan:
 |---|---|---|
 | `blockers` | empty | any blocker stops the migration |
 | `to.stores` | `.context/{design,plans,journal,qna}` | the requested layout |
-| `to.content_root` | `.` | the vault is the content |
 | `archive` | `""` | no archive exists; nothing may be moved or recorded |
 | `router` | `clean_current -> canonical v2` | the router is proven boilerplate, so the swap is deterministic |
 | `moves` | four directory moves | no file-level copy list |
@@ -183,7 +180,6 @@ cd /Users/nilbot/gist/paperbubble
 agents layout migrate \
   --profile content-vault \
   --store-root .context \
-  --content-root . \
   --apply \
   --backup-tag pre-layout-v2-20260918
 echo "exit=$?"
@@ -213,7 +209,6 @@ Expected manifest:
   "min_mut_ver_floor": "0.6.0",
   "profile": "content-vault",
   "layout_status": "active",
-  "content_root": ".",
   "store_root": ".context",
   "stores": {
     "design": ".context/design",
