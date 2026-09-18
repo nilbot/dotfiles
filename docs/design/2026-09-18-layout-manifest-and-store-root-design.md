@@ -223,6 +223,31 @@ enum. These details are the source of the "English feels off" reaction:
 5. `min_mut_ver_floor` is not the profile compatibility axis; the schema
    version and the migration are.
 
+#### How the constraints are enforced
+
+JSON stores values; it cannot enforce cross-version identity rules. Protobuf
+does not get this from the serialized data either: `protoc` enforces
+`reserved`, and the runtime handles unknown values. The equivalent layers
+here are:
+
+1. `schema` in the manifest selects a versioned profile registry
+   (`profilesV2`, `profilesV3`, ...). The registry is code or embedded data,
+   not per-repository manifest data.
+2. Each registry entry is `active`, `deprecated`, or `reserved`; reserved
+   names are a cross-version list.
+3. `Validate` returns blocking `Problems` separately from non-blocking
+   `Warnings`. An empty profile is a problem; an unknown, deprecated, or
+   reserved profile is a warning; an unknown profile behaves as `custom` for
+   defaults.
+4. `MarshalManifest` preserves the profile string. No generic writer rewrites
+   it; only the profile migration writes a new value, and that path refuses to
+   emit a reserved name.
+5. `agents layout migrate` (a schema upgrade) takes an explicit profile
+   choice; if the old profile is reserved and no choice is given, it stops.
+6. Tests hold the invariants: no reserved name is reused; every active
+   profile has a definition; a v3 reader reads a v2 manifest through the v2
+   registry; an unknown profile round-trips unchanged.
+
 Rules:
 
 - The schema version is the compatibility unit. A reader keeps the profile
