@@ -137,7 +137,6 @@ type Manifest struct {
 	MinMutVerFloor    string            `json:"min_mut_ver_floor,omitempty"`
 	Profile      string            `json:"profile,omitempty"`
 	LayoutStatus string            `json:"layout_status"`
-	StoreRoot    string            `json:"store_root,omitempty"`
 	Archive      string            `json:"archive,omitempty"`
 	Stores       map[string]string `json:"stores"`
 	Migration    *Migration        `json:"migration,omitempty"`
@@ -164,7 +163,6 @@ func WriteManifest(root string, m Manifest) error
 // agents/internal/layout/migrate.go (v0.6.0)
 type MigrateOptions struct {
 	Profile     string
-	StoreRoot   string
 	Stores      map[string]string
 	Archive     string
 	Running     string
@@ -301,7 +299,6 @@ func TestResolveV2MapIsCanonical(t *testing.T) {
   "min_mut_ver_floor": "0.6.0",
   "profile": "content-vault",
   "layout_status": "active",
-  "store_root": ".context",
   "stores": {
     "design": ".context/design",
     "plans": ".context/plans",
@@ -321,19 +318,18 @@ func TestResolveV2MapIsCanonical(t *testing.T) {
 	}
 }
 
-func TestResolveV2ShorthandExpands(t *testing.T) {
+func TestResolveRejectsArrayStores(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
   "min_mut_ver_floor": "0.6.0",
   "profile": "code-repo",
   "layout_status": "active",
-  "store_root": ".context",
   "stores": ["design", "plans", "journal", "qna"]
 }`)
 	l := Resolve(root)
-	if l.Stores[RoleJournal] != ".context/journal" {
-		t.Fatalf("stores = %v", l.Stores)
+	if !hasProblem(l.Problems, ProblemManifestJSON) {
+		t.Fatalf("problems = %v, want %s", l.Problems, ProblemManifestJSON)
 	}
 }
 
@@ -430,7 +426,6 @@ const (
 	ProblemPathInAgents    = "path_in_agents"
 	ProblemPathOverlap     = "path_overlap"
 	ProblemPathCase        = "path_case_collision"
-	ProblemStoreRoot       = "store_root_mismatch"
 	ProblemArchiveOverlap  = "archive_overlap"
 	ProblemProfileUnknown  = "profile_unknown"
 	ProblemStatusUnknown   = "status_unknown"
@@ -483,7 +478,6 @@ type rawManifest struct {
 	MinMutVerFloor    string          `json:"min_mut_ver_floor"`
 	Profile      string          `json:"profile"`
 	LayoutStatus string          `json:"layout_status"`
-	StoreRoot    string          `json:"store_root"`
 	Archive      string          `json:"archive"`
 	Stores       json.RawMessage `json:"stores"`
 	Migration    *Migration      `json:"migration"`
@@ -514,7 +508,6 @@ func Resolve(root string) Layout {
 			MinMutVerFloor:    raw.MinMutVerFloor,
 			Profile:      raw.Profile,
 			LayoutStatus: raw.LayoutStatus,
-			StoreRoot:    raw.StoreRoot,
 			Archive:      raw.Archive,
 			Migration:    raw.Migration,
 			Stores:       map[string]string{},
@@ -539,25 +532,8 @@ func Resolve(root string) Layout {
 		for role, path := range m {
 			l.Stores[role] = path
 		}
-	case stores[0] == '[':
-		if raw.StoreRoot == "" {
-			l.Problems = append(l.Problems, Problem{Code: ProblemStoreRoot, Path: ManifestRel, Detail: "required with the array form"})
-			break
-		}
-		var names []string
-		if err := json.Unmarshal(raw.Stores, &names); err != nil {
-			l.Problems = append(l.Problems, Problem{Code: ProblemManifestJSON, Path: ManifestRel, Detail: err.Error()})
-			break
-		}
-		for _, role := range names {
-			if _, seen := l.Stores[role]; seen {
-				l.Problems = append(l.Problems, Problem{Code: ProblemRoleDuplicate, Path: ManifestRel, Detail: role})
-				continue
-			}
-			l.Stores[role] = filepath.ToSlash(filepath.Join(raw.StoreRoot, role))
-		}
 	default:
-		l.Problems = append(l.Problems, Problem{Code: ProblemManifestJSON, Path: ManifestRel, Detail: "stores must be an object or an array"})
+		l.Problems = append(l.Problems, Problem{Code: ProblemManifestJSON, Path: ManifestRel, Detail: "stores must be a JSON object"})
 	}
 	l.Problems = append(l.Problems, Validate(root, l)...)
 	return l
@@ -622,7 +598,7 @@ git commit -m "feat(layout): resolve implicit v1 and manifest v2 layouts"
 **Interfaces:**
 - Consumes: `Resolve`, `Layout`, `Problem`.
 - Produces: `Validate(root, l) []Problem`, `Support(running, l) (bool, string)`,
-  and the V1–V18 validation rules from design §5.2.
+  and the V1–V17 validation rules from design §5.2.
 
 - [ ] **Step 1: Write the failing validation and version tests**
 
@@ -778,18 +754,6 @@ func Validate(root string, l Layout) []Problem {
 			}
 		}
 		seen[role] = path
-	}
-	if l.StoreRoot != "" {
-		if p := validateRel(root, l.StoreRoot); p != nil {
-			p.Code = ProblemStoreRoot
-			ps = append(ps, *p)
-		} else {
-			for role, path := range l.Stores {
-				if !pathPrefix(l.StoreRoot, path) {
-					ps = append(ps, Problem{Code: ProblemStoreRoot, Path: l.StoreRoot, Detail: role})
-				}
-			}
-		}
 	}
 	if l.Archive != "" {
 		if p := validateRel(root, l.Archive); p != nil {
@@ -1251,7 +1215,7 @@ Router comparison uses `CanonicalRouterDigestFor(l)`. Store presence iterates
 and `Stores`. Misplacement dispatches:
 
 - v1 or unknown schema: keep today's `docs/` walker byte-for-byte;
-- v2: walk `store_root` when present, otherwise each declared store; skip the
+- v2: walk each declared store; skip the
   archive subtree; classify `-plan.md` outside the `plans` store and
   `-design.md` outside the `design` store.
 
@@ -1375,7 +1339,7 @@ func layoutManifestCheck(l layout.Layout, running string) Check {
 			Remedy: "upgrade the agents binary before mutating this repository"}
 	}
 	return Check{Name: "layout:manifest", Status: OK,
-		Detail: fmt.Sprintf("agents.layout/v2 profile=%s store_root=%s", l.Profile, l.StoreRoot)}
+		Detail: fmt.Sprintf("agents.layout/v2 profile=%s stores=%d", l.Profile, len(l.Stores))}
 }
 
 func layoutStoresCheck(root string, l layout.Layout) Check {
@@ -2011,7 +1975,7 @@ so the manifest stays visible in PR review.
 Usage:
 
 ```
-agents init [--local] [--profile <p>] [--store-root <path>]
+agents init [--local] [--profile <p>]
             [--stores <role=path>] [--archive <path>]
 ```
 
@@ -2032,7 +1996,7 @@ Creation is a mutation: it requires `layout.Support(running, target)` to be
 true. An unstamped `make agents` dev build therefore refuses v2 creation; the
 operator uses the released v0.6.0 binary, and tests inject `v0.6.0`.
 
-`--local` with a v2 layout, or with `--profile`/`--store-root`, is refused with
+`--local` with a v2 layout, or with `--profile`/`--stores`, is refused with
 the design's Decision 6 reason.
 
 - [ ] **Step 6: Run the scaffold, init, and doc gates**
@@ -2067,7 +2031,7 @@ func TestPlanMigrationBuildsDirectoryMovesAndRecordsArchive(t *testing.T) {
 	mkdirAll(t, root, "docs/archive/plans")
 	writeFile(t, filepath.Join(root, "docs/archive/plans/old-plan.md"), "old")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault, StoreRoot: ".context",
+		Profile: ProfileContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil {
@@ -2093,7 +2057,7 @@ func TestPlanMigrationBlocksDriftedRouterAndExistingTarget(t *testing.T) {
 	root := newGitV1Repo(t)
 	mkdirAll(t, root, ".context/design")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileCodeRepo, StoreRoot: ".context",
+		Profile: ProfileContentVault,
 		Running: "v0.6.0", RouterState: "diverged",
 	})
 	if err != nil {
@@ -2110,7 +2074,7 @@ func TestPlanMigrationReportsLinkCandidatesWithoutRewriting(t *testing.T) {
 		"See [the plan](../plans/a-plan.md).\n")
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileCodeRepo, StoreRoot: ".context",
+		Profile: ProfileContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil {
@@ -2184,15 +2148,9 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 }
 
 func targetLayout(from Layout, opts MigrateOptions) Layout {
-	stores := map[string]string{}
-	if opts.StoreRoot != "" {
-		for _, role := range Roles() {
-			stores[role] = filepath.ToSlash(filepath.Join(opts.StoreRoot, role))
-		}
-	} else {
-		for role, path := range opts.Stores {
-			stores[role] = path
-		}
+	stores := opts.Stores
+	if len(stores) == 0 {
+		stores = profileDefaults(opts.Profile)
 	}
 	archive := opts.Archive
 	if archive == "" {
@@ -2200,8 +2158,7 @@ func targetLayout(from Layout, opts MigrateOptions) Layout {
 	}
 	return Layout{Manifest: Manifest{
 		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: opts.Profile,
-		LayoutStatus: StatusActive, StoreRoot: opts.StoreRoot,
-		Archive: archive, Stores: stores,
+		LayoutStatus: StatusActive, Archive: archive, Stores: stores,
 	}}
 }
 
@@ -2213,6 +2170,10 @@ func blockersFromProblems(ps []Problem) []Blocker {
 	return out
 }
 ```
+
+`profileDefaults` is the versioned registry lookup from design §0.4; `custom`
+has no defaults, so `agents layout migrate --profile custom` requires
+`--stores`, and an empty map becomes the existing `role_missing` blockers.
 
 `scanLinkCandidates` walks each source store, skips fenced code blocks, finds
 markdown `](target)` links, resolves each target against the file's directory,
@@ -2250,7 +2211,7 @@ func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
 	root := newGitV1RepoWithContent(t) // docs/design/a-design.md, docs/plans/a-plan.md
 	before := trackedBlobs(t, root, "docs")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault, StoreRoot: ".context",
+		Profile: ProfileContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil || len(p.Blockers) > 0 {
@@ -2281,7 +2242,7 @@ func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
 func TestResumeCompletesAJournaledCrash(t *testing.T) {
 	root := newGitV1RepoWithContent(t)
 	p, _ := PlanMigration(root, MigrateOptions{
-		Profile: ProfileCodeRepo, StoreRoot: ".context",
+		Profile: ProfileContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	// Simulate a crash after the manifest was written and the first move ran.
@@ -2413,7 +2374,7 @@ func TestLayoutMigrateDryRunIsDefaultAndPrintsThePlan(t *testing.T) {
 	t.Chdir(root)
 	var out bytes.Buffer
 	code := runLayoutMigrateWithVersion([]string{
-		"--profile", "content-vault", "--store-root", ".context", "--dry-run",
+		"--profile", "content-vault", "--dry-run",
 	}, &out, "v0.6.0")
 	if code != exitcode.Advisory {
 		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
@@ -2432,7 +2393,7 @@ func TestLayoutMigrateApplyRequiresBackupTag(t *testing.T) {
 	t.Chdir(newGitV1RepoWithContent(t))
 	var out bytes.Buffer
 	code := runLayoutMigrateWithVersion([]string{
-		"--profile", "code-repo", "--store-root", ".context", "--apply",
+		"--profile", "code-repo", "--apply",
 	}, &out, "v0.6.0")
 	if code != exitcode.Malformed || !strings.Contains(out.String(), "--backup-tag") {
 		t.Fatalf("exit = %d, output = %s", code, out.String())
@@ -2742,7 +2703,7 @@ func TestMigrationFixtureLinksAndArchiveSurvive(t *testing.T) {
 	linksBefore := countMarkdownLinks(t, root, "docs")
 
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault, StoreRoot: ".context",
+		Profile: ProfileContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil || len(p.Blockers) > 0 {

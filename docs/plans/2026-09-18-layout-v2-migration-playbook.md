@@ -113,13 +113,11 @@ exists, choose a new name and use it consistently below.
 cd /Users/nilbot/gist/paperbubble
 agents layout migrate \
   --profile content-vault \
-  --store-root .context \
   --dry-run \
   --json > /tmp/paperbubble-migrate-plan.json
 
 agents layout migrate \
   --profile content-vault \
-  --store-root .context \
   --dry-run
 ```
 
@@ -128,7 +126,7 @@ Expected plan, based on the measured baseline:
 ```
 layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   from    agents.layout/v1  docs/{design,plans,journal,qna}
-  to      agents.layout/v2  profile=content-vault  store_root=.context
+  to      agents.layout/v2  profile=content-vault  stores=.context/{design,plans,journal,qna}
   router  current -> canonical v2 (deterministic swap)
   archive none
   git     branch feat/layout-v2-migration, tree clean
@@ -179,7 +177,6 @@ Only after explicit approval:
 cd /Users/nilbot/gist/paperbubble
 agents layout migrate \
   --profile content-vault \
-  --store-root .context \
   --apply \
   --backup-tag pre-layout-v2-20260918
 echo "exit=$?"
@@ -209,7 +206,6 @@ Expected manifest:
   "min_mut_ver_floor": "0.6.0",
   "profile": "content-vault",
   "layout_status": "active",
-  "store_root": ".context",
   "stores": {
     "design": ".context/design",
     "plans": ".context/plans",
