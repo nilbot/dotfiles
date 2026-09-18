@@ -32,7 +32,7 @@ resolved layout instead of joining `docs/`.
 - Schema string is exactly `agents.layout/v2`; the synthesized legacy schema is
   `agents.layout/v1`.
 - Manifest path is exactly `.agents/layout.json`.
-- `min_reader` written by v0.6.0 is exactly `0.6.0`.
+- `min_mut_ver_floor` written by v0.6.0 is exactly `0.6.0`.
 - Profiles are exactly `code-repo`, `content-vault`, `custom`.
 - Roles are exactly `design`, `plans`, `journal`, `qna`; all four are required
   in v2.
@@ -81,7 +81,7 @@ const (
 	RoleJournal = "journal"
 	RoleQNA     = "qna"
 
-	MinReaderV2 = "0.6.0"
+	MinMutVerFloorV2 = "0.6.0"
 )
 
 type Problem struct {
@@ -105,7 +105,7 @@ type Migration struct {
 
 type Manifest struct {
 	Schema       string            `json:"schema"`
-	MinReader    string            `json:"min_reader,omitempty"`
+	MinMutVerFloor    string            `json:"min_mut_ver_floor,omitempty"`
 	Profile      string            `json:"profile,omitempty"`
 	LayoutStatus string            `json:"layout_status"`
 	StoreRoot    string            `json:"store_root,omitempty"`
@@ -271,7 +271,7 @@ func TestResolveV2MapIsCanonical(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
-  "min_reader": "0.6.0",
+  "min_mut_ver_floor": "0.6.0",
   "profile": "content-vault",
   "layout_status": "active",
   "content_root": ".",
@@ -299,7 +299,7 @@ func TestResolveV2ShorthandExpands(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
-  "min_reader": "0.6.0",
+  "min_mut_ver_floor": "0.6.0",
   "profile": "code-repo",
   "layout_status": "active",
   "store_root": ".context",
@@ -315,7 +315,7 @@ func TestResolveRejectsDuplicateStoreKeys(t *testing.T) {
 	root := t.TempDir()
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
-  "min_reader": "0.6.0",
+  "min_mut_ver_floor": "0.6.0",
   "profile": "custom",
   "layout_status": "active",
   "stores": {
@@ -385,7 +385,7 @@ const (
 	RoleJournal = "journal"
 	RoleQNA     = "qna"
 
-	MinReaderV2 = "0.6.0"
+	MinMutVerFloorV2 = "0.6.0"
 )
 
 const (
@@ -409,7 +409,7 @@ const (
 	ProblemProfileUnknown  = "profile_unknown"
 	ProblemStatusUnknown   = "status_unknown"
 	ProblemMigration       = "migration_missing"
-	ProblemMinReader       = "min_reader_invalid"
+	ProblemMinMutVerFloor       = "min_mut_ver_floor_invalid"
 	ProblemLocalAgents     = "local_agents"
 	ProblemContentRoot     = "content_root_invalid"
 )
@@ -456,7 +456,7 @@ func V1ForRoot(root string) Layout { return v1Layout(root) }
 
 type rawManifest struct {
 	Schema       string          `json:"schema"`
-	MinReader    string          `json:"min_reader"`
+	MinMutVerFloor    string          `json:"min_mut_ver_floor"`
 	Profile      string          `json:"profile"`
 	LayoutStatus string          `json:"layout_status"`
 	StoreRoot    string          `json:"store_root"`
@@ -488,7 +488,7 @@ func Resolve(root string) Layout {
 	l := Layout{
 		Manifest: Manifest{
 			Schema:       raw.Schema,
-			MinReader:    raw.MinReader,
+			MinMutVerFloor:    raw.MinMutVerFloor,
 			Profile:      raw.Profile,
 			LayoutStatus: raw.LayoutStatus,
 			StoreRoot:    raw.StoreRoot,
@@ -637,7 +637,7 @@ func TestValidateRejectsUnsafePaths(t *testing.T) {
 
 func mk(stores map[string]string) Layout {
 	return Layout{Manifest: Manifest{
-		Schema: SchemaV2, MinReader: MinReaderV2, Profile: ProfileCustom,
+		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: ProfileCustom,
 		LayoutStatus: StatusActive, ContentRoot: ".", Stores: stores,
 	}}
 }
@@ -660,7 +660,7 @@ func caseCollisionStores() map[string]string {
 
 func TestSupportRefusesBelowFloorAndAllowsV1Control(t *testing.T) {
 	v2 := mk(storesWith(RoleDesign, "context/design"))
-	if ok, reason := Support("v0.5.99", v2); ok || reason != "min_reader" {
+	if ok, reason := Support("v0.5.99", v2); ok || reason != "below_floor" {
 		t.Fatalf("v0.5.99 on v2 = (%v, %q), want refused below the floor", ok, reason)
 	}
 	if ok, reason := Support("v0.6.0", v2); !ok {
@@ -729,10 +729,10 @@ func Validate(root string, l Layout) []Problem {
 	if l.LayoutStatus == StatusMigrating && (l.Migration == nil || l.Migration.From == "" || len(l.Migration.Moves) == 0) {
 		ps = append(ps, Problem{Code: ProblemMigration, Path: ManifestRel})
 	}
-	if l.MinReader == "" {
-		ps = append(ps, Problem{Code: ProblemMinReader, Detail: "required"})
-	} else if _, err := parseVersion(l.MinReader); err != nil {
-		ps = append(ps, Problem{Code: ProblemMinReader, Detail: l.MinReader})
+	if l.MinMutVerFloor == "" {
+		ps = append(ps, Problem{Code: ProblemMinMutVerFloor, Detail: "required"})
+	} else if _, err := parseVersion(l.MinMutVerFloor); err != nil {
+		ps = append(ps, Problem{Code: ProblemMinMutVerFloor, Detail: l.MinMutVerFloor})
 	}
 	if l.ContentRoot == "" {
 		l.ContentRoot = "."
@@ -922,19 +922,19 @@ func Support(running string, l Layout) (bool, string) {
 	if l.LayoutStatus == StatusMigrating {
 		return false, "migrating"
 	}
-	if l.MinReader == "" {
+	if l.MinMutVerFloor == "" {
 		return true, ""
 	}
 	got, err := parseVersion(running)
 	if err != nil {
 		return false, "unreleased" // fail closed: a source build cannot prove its release
 	}
-	want, err := parseVersion(l.MinReader)
+	want, err := parseVersion(l.MinMutVerFloor)
 	if err != nil {
 		return false, "invalid"
 	}
 	if compareValues(got, want) < 0 {
-		return false, "min_reader"
+		return false, "below_floor"
 	}
 	return true, ""
 }
@@ -974,7 +974,7 @@ Expected: PASS. Also run `gofmt -l agents/internal/layout` and expect no output.
 
 ```bash
 git add agents/internal/layout
-git commit -m "feat(layout): validate store paths and gate mutations by min_reader"
+git commit -m "feat(layout): validate store paths and gate mutations by min_mut_ver_floor"
 ```
 
 ---
@@ -1007,7 +1007,7 @@ func TestV2RouterNamesTheManifestNotAStorePath(t *testing.T) {
 func TestV1RouterIsLegacyForV2(t *testing.T) {
 	v1 := layout.Resolve(t.TempDir())
 	v2 := layout.Layout{Manifest: layout.Manifest{
-		Schema: layout.SchemaV2, MinReader: layout.MinReaderV2,
+		Schema: layout.SchemaV2, MinMutVerFloor: layout.MinMutVerFloorV2,
 		Profile: layout.ProfileContentVault, LayoutStatus: layout.StatusActive,
 		Stores: map[string]string{
 			layout.RoleDesign:  ".context/design",
@@ -1113,7 +1113,7 @@ git commit -m "feat(drift): add the v2 router and keep the v1 router as legacy"
 **Interfaces:**
 - Consumes: `layout.Resolve`, `layout.Support`, `CanonicalRouterDigestFor`.
 - Produces: `InspectRepo(root, runningVersion) (DriftReport, error)` with
-  `layout_version`, `profile`, `min_reader`, `layout_status`, `stores`,
+  `layout_version`, `profile`, `min_mut_ver_floor`, `layout_status`, `stores`,
   `unsupported`, and `unsupported_detail`.
 
 - [ ] **Step 1: Write the failing drift tests**
@@ -1149,8 +1149,8 @@ func TestInspectV2ReportResolvesStoresAndRefusesBelowFloor(t *testing.T) {
 	if rep.LayoutVersion != "v2" || rep.Stores["qna"] != ".context/qna" {
 		t.Fatalf("layout fields = %+v", rep)
 	}
-	if rep.Unsupported != "min_reader" {
-		t.Fatalf("unsupported = %q, want min_reader", rep.Unsupported)
+	if rep.Unsupported != "below_floor" {
+		t.Fatalf("unsupported = %q, want below_floor", rep.Unsupported)
 	}
 	if isDriftClean(rep) {
 		t.Fatal("an unsupported layout must not report clean")
@@ -1193,7 +1193,7 @@ type DriftReport struct {
 
 	LayoutVersion     string            `json:"layout_version"`
 	Profile           string            `json:"profile,omitempty"`
-	MinReader         string            `json:"min_reader,omitempty"`
+	MinMutVerFloor         string            `json:"min_mut_ver_floor,omitempty"`
 	LayoutStatus      string            `json:"layout_status,omitempty"`
 	Stores            map[string]string `json:"stores"`
 	Unsupported       string            `json:"unsupported,omitempty"`
@@ -1212,7 +1212,7 @@ if l.Schema == layout.SchemaV2 {
 	report.LayoutVersion = "unknown"
 }
 report.Profile = l.Profile
-report.MinReader = l.MinReader
+report.MinMutVerFloor = l.MinMutVerFloor
 report.LayoutStatus = l.LayoutStatus
 report.Stores = l.Stores
 if len(l.Problems) > 0 {
@@ -1227,7 +1227,7 @@ if len(l.Problems) > 0 {
 		report.LayoutStatus = layout.StatusMigrating
 	} else {
 		report.Unsupported = reason
-		report.UnsupportedDetail = fmt.Sprintf("requires agents >= %s", l.MinReader)
+		report.UnsupportedDetail = fmt.Sprintf("requires agents >= %s", l.MinMutVerFloor)
 	}
 }
 ```
@@ -1348,7 +1348,7 @@ func layoutManifestCheck(l layout.Layout, running string) Check {
 				Remedy: "run `agents layout migrate --resume --apply`"}
 		}
 		return Check{Name: "layout:manifest", Status: Warn,
-			Detail: fmt.Sprintf("manifest requires agents >= %s; running %s", l.MinReader, running),
+			Detail: fmt.Sprintf("manifest requires agents >= %s; running %s", l.MinMutVerFloor, running),
 			Remedy: "upgrade the agents binary before mutating this repository"}
 	}
 	return Check{Name: "layout:manifest", Status: OK,
@@ -1602,7 +1602,7 @@ func TestFleetUpdateSkipsUnsupportedAndDoesNotRefreshSkill(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("an unsupported repository's migration skill was downgraded")
 	}
-	if !strings.Contains(out.String(), "skip (layout min_reader)") {
+	if !strings.Contains(out.String(), "skip (layout below_floor)") {
 		t.Fatalf("skip reason missing: %s", out.String())
 	}
 }
@@ -1723,7 +1723,7 @@ go build -o /tmp/agents-new -ldflags "-X main.version=v0.6.0" .
 - [ ] **Step 3: Build a disposable v2 fixture**
 
 Use the fixture from the 2026-09-18 probe: a temp git repo with
-`.agents/layout.json` (`min_reader: 0.6.0`), the four `.context/<role>/README.md`
+`.agents/layout.json` (`min_mut_ver_floor: 0.6.0`), the four `.context/<role>/README.md`
 files, the v2 router, and a `.agents/skills/migrating-fleet-context/SKILL.md`
 containing a unique marker. Redirect `XDG_STATE_HOME` to a temp directory and
 commit the fixture before any command runs.
@@ -2174,7 +2174,7 @@ func targetLayout(from Layout, opts MigrateOptions) Layout {
 		archive = from.Archive
 	}
 	return Layout{Manifest: Manifest{
-		Schema: SchemaV2, MinReader: MinReaderV2, Profile: opts.Profile,
+		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: opts.Profile,
 		LayoutStatus: StatusActive, StoreRoot: opts.StoreRoot,
 		ContentRoot: contentRoot, Archive: archive, Stores: stores,
 	}}
@@ -2517,7 +2517,7 @@ Extend `TestMigrationSkillCoversItsSpecifiedProtocol`'s `required` table with:
 {"--dry-run", "plan first, apply only after approval"},
 {"--apply", "the only mutation path"},
 {"--resume", "resumable migration"},
-{"min_reader", "below-floor refusal"},
+{"min_mut_ver_floor", "below-floor refusal"},
 {"layout_status", "migrating vs active"},
 {"unsupported", "stop instead of guessing"},
 {"archive", "immutable archive handling"},
@@ -2563,7 +2563,7 @@ state table, traceability, approval gate, commit/PR) and add:
 | absent | v1; use `agents layout migrate --dry-run` to plan |
 | active v2, supported | no layout move; reconcile prose and links only |
 | `layout_status: migrating` | stop; run `agents layout migrate --resume --apply` |
-| unsupported or unknown schema | stop; the binary is older than `min_reader` |
+| unsupported or unknown schema | stop; the binary is older than `min_mut_ver_floor` |
 ```
 
 Name `agents layout show`, `--dry-run`, `--apply`, `--resume`, and `agents

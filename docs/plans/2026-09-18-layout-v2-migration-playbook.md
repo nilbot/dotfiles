@@ -64,7 +64,7 @@ Run these read-only checks and stop on any mismatch:
 
 ```bash
 cd /Users/nilbot/gist/paperbubble
-agents version    # expect v0.6.0 at pilot time; anything below min_reader 0.6.0 stops here
+agents version    # expect v0.6.0; anything below the manifest's min_mut_ver_floor (0.6.0) stops here
 git status --porcelain          # must be empty
 git branch --show-current       # must be agents-editorial or a new branch made below
 test -d .agents && test ! -d .context || { echo "unexpected layout; stop"; exit 1; }
@@ -160,7 +160,7 @@ Review every line of the JSON plan:
 
 Dry run is the default; `--dry-run` is written explicitly here so the command
 in the record says what it did. Do not proceed if `--dry-run` reports a
-blocker, a target that already exists, or a `min_reader` refusal.
+blocker, a target that already exists, or a below-floor refusal.
 
 ## 6. Step 4 — Human approval gate
 
@@ -210,7 +210,7 @@ Expected manifest:
 ```json
 {
   "schema": "agents.layout/v2",
-  "min_reader": "0.6.0",
+  "min_mut_ver_floor": "0.6.0",
   "profile": "content-vault",
   "layout_status": "active",
   "content_root": ".",
@@ -402,7 +402,7 @@ After paperbubble is merged:
 
 ## 13. Stop and ask when
 
-- `agents version` is below the manifest's `min_reader` on any machine that can
+- `agents version` is below the manifest's `min_mut_ver_floor` on any machine that can
   touch the repository;
 - the dry run reports any blocker, any link candidate, or any path other than
   the four expected stores;
