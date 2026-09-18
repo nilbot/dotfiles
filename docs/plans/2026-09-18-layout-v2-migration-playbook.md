@@ -64,7 +64,7 @@ Run these read-only checks and stop on any mismatch:
 
 ```bash
 cd /Users/nilbot/gist/paperbubble
-agents version    # expect v0.6.0; anything below the manifest's min_mut_ver_floor (0.6.0) stops here
+agents version    # expect v0.6.0; anything below v0.6.0 (the value this migration writes as min_mut_ver_floor) stops here
 git status --porcelain          # must be empty
 git branch --show-current       # must be agents-editorial or a new branch made below
 test -d .agents && test ! -d .context || { echo "unexpected layout; stop"; exit 1; }
@@ -239,9 +239,9 @@ ones. This step deliberately avoids `agents update --all --apply`.
 SRC=/Users/nilbot/dotfiles
 PAPER=/Users/nilbot/gist/paperbubble
 
-git -C "$SRC" show fc4903f:agents/internal/scaffold/assets/skills/recording-what-you-learn/SKILL.md \
+git -C "$SRC" show v0.5.1:agents/internal/scaffold/assets/skills/recording-what-you-learn/SKILL.md \
   > /tmp/recording-v051.md
-git -C "$SRC" show fc4903f:agents/internal/scaffold/assets/skills/migrating-fleet-context/SKILL.md \
+git -C "$SRC" show v0.5.1:agents/internal/scaffold/assets/skills/migrating-fleet-context/SKILL.md \
   > /tmp/migrating-v051.md
 
 cmp "$PAPER/.agents/skills/recording-what-you-learn/SKILL.md" /tmp/recording-v051.md \
@@ -258,15 +258,18 @@ still needs to be read before it is discarded.
 ### 8.2 Replace with the v0.6.0 assets
 
 ```bash
-cp "$SRC/agents/internal/scaffold/assets/skills/recording-what-you-learn/SKILL.md" \
-   "$PAPER/.agents/skills/recording-what-you-learn/SKILL.md"
-cp "$SRC/agents/internal/scaffold/assets/skills/migrating-fleet-context/SKILL.md" \
-   "$PAPER/.agents/skills/migrating-fleet-context/SKILL.md"
+git -C "$SRC" rev-parse --verify v0.6.0^{commit}
 
-cmp "$SRC/agents/internal/scaffold/assets/skills/recording-what-you-learn/SKILL.md" \
-    "$PAPER/.agents/skills/recording-what-you-learn/SKILL.md"
-cmp "$SRC/agents/internal/scaffold/assets/skills/migrating-fleet-context/SKILL.md" \
-    "$PAPER/.agents/skills/migrating-fleet-context/SKILL.md"
+git -C "$SRC" show v0.6.0:agents/internal/scaffold/assets/skills/recording-what-you-learn/SKILL.md \
+  > /tmp/recording-v060.md
+git -C "$SRC" show v0.6.0:agents/internal/scaffold/assets/skills/migrating-fleet-context/SKILL.md \
+  > /tmp/migrating-v060.md
+
+cp /tmp/recording-v060.md "$PAPER/.agents/skills/recording-what-you-learn/SKILL.md"
+cp /tmp/migrating-v060.md "$PAPER/.agents/skills/migrating-fleet-context/SKILL.md"
+
+cmp /tmp/recording-v060.md "$PAPER/.agents/skills/recording-what-you-learn/SKILL.md"
+cmp /tmp/migrating-v060.md "$PAPER/.agents/skills/migrating-fleet-context/SKILL.md"
 ```
 
 ### 8.3 Reconcile user-owned prose and links

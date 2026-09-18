@@ -58,6 +58,30 @@ resolved layout instead of joining `docs/`.
   v0.6.0 is installed and verified on every machine. No task in this plan runs
   against it.
 
+## Documentation Checklist (every CLI change)
+
+For every command, subcommand, flag, or output field added or changed, the
+same change set updates:
+
+1. `agents/README.md` — features, quickstart, and CLI reference.
+2. root `README.md` — the generated block
+   (`agents help --render=markdown`) and any prose that describes the command
+   set.
+3. `agents/commands.go` — built-in help usage and detail for every new flag.
+4. `claude/skills/agents-tool/SKILL.md` — every command with
+   `Audience: Agent`.
+5. `docs/design/README.md` — the design catalog status.
+6. affected `docs/qna/` entries. At minimum re-read
+   `how-does-two-tier-agent-context-prevent-scaffold-drift.md` and
+   `why-does-agents-init-never-update-existing-instructions.md`, and correct
+   anything the layout manifest changes.
+7. `docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md`
+   — a pointer amendment saying that the four `docs/` paths are the v1
+   default and `.agents/layout.json` is the v2 authority.
+8. Re-read every changed prose file after editing for context, logic, and tone
+   consistency. The named docs tests in `.github/workflows/verify.yml` are the
+   mechanical backstop, not the whole review.
+
 ## Locked Interfaces
 
 ```go
@@ -1540,6 +1564,8 @@ Add `agents layout`, `agents layout show`, `agents layout validate`, and
 
 - [ ] **Step 6: Run the doc and help gates**
 
+Run the Documentation Checklist above for this change set.
+
 Run: `go test -count=1 -run 'TestReadme|TestHarnessSkillCovers|TestEveryRegisteredFlag|TestNoUsageLine' ./...`
 Expected: PASS.
 
@@ -1684,7 +1710,7 @@ git commit -m "fix(layout): guard init and fleet update against unsupported mani
 
 ---
 
-### Task 8: Prove the version floor with version-stamped test binaries
+### Task 8: Prove the version floor with version-stamped probes (intermediate build)
 
 **Files:**
 - No production file changes. The fixture lives in a `mktemp -d` directory.
@@ -1770,6 +1796,10 @@ The durable automated gates remain the unit tests in Tasks 2 and 7
 (`Support("v0.5.99", v2)` refuses, `Support("v0.6.0", v2)` allows, v1 allows).
 The binary-level run is the end-to-end confirmation that the version stamp
 reaches the guard.
+
+This task runs against the intermediate Part A build. Task 16 Step 1 re-runs
+the same matrix against the final v0.6.0 build; the probes here only prove the
+guard logic before the writer and migration land.
 
 ---
 
@@ -2437,6 +2467,8 @@ Human output implements the design §9.2 shape; `--json` marshals the `Plan`.
 
 - [ ] **Step 4: Regenerate the docs and run the gates**
 
+Run the Documentation Checklist above for this change set.
+
 ```bash
 cd agents
 go run . help --render=markdown > /tmp/layout-block.md
@@ -2760,6 +2792,9 @@ agents drift --all
 Expected: the Go gates pass; doctor and drift show only the pre-existing
 warnings and drift. No v1 repository changes behavior.
 
+Run the Documentation Checklist above before this step is complete; every item
+must be checked or explicitly marked N/A with the reason.
+
 - [ ] **Step 7: Commit**
 
 ```bash
@@ -2794,7 +2829,8 @@ agents drift --all
 ```
 
 Expected: all pass; doctor and drift match the baseline apart from the new
-layout checks.
+layout checks. Re-run the Task 8 version-stamped matrix against the final
+v0.6.0 build before tagging.
 
 - [ ] **Step 2: Release `v0.6.0` (human-gated)**
 
@@ -2826,9 +2862,9 @@ machine passes. No v2 repository exists yet.
 
 - [ ] **Step 4: Hand off to the playbook**
 
-Open `docs/plans/2026-09-18-layout-v2-migration-playbook.md`, execute Steps 0–4
-(read-only preflight and dry run) against paperbubble, and stop at the approval
-gate. Do not run `--apply` without the human's explicit approval.
+Open `docs/plans/2026-09-18-layout-v2-migration-playbook.md`, execute its
+preconditions through the approval gate (§2–§6) against paperbubble, and stop
+there. Do not run `--apply` without the human's explicit approval.
 
 ---
 

@@ -31,7 +31,7 @@ the design, plan, and playbook all change before implementation starts.
 | 4 | Migration command and dry-run format | `agents layout migrate`, dry run by default and `--dry-run` accepted explicitly, `--apply` to execute, `--resume` to continue, `--json` for machines. Human output is a line-oriented plan (`move`, `keep`, `blocker`, `links`) ending in `N move, M keep, K blocked, L link(s)`. | Matches `agents update --all [--apply]`'s "dry run unless applied" convention, while keeping the invocation the plan already writes (`--dry-run`). The line-oriented form is reviewable in a terminal and diffable in a PR. |
 | 5 | Archive handling during migration | **The archive is never moved and never rewritten.** The manifest records its existing path (`archive`), defaulting to `docs/archive` when that directory exists in a v1 repo. A `docs/` left holding only the archive is not a shell. | `.agents/AGENTS.md` declares `docs/archive/` strictly immutable, and the 2026-09-01 journal records what happens when a migration is ordered to move files out of it. Keeping the archive in place is the only policy that needs no exception. Moving the archive wholesale is a separate future operation, not part of v2. |
 | 6 | `agents init --local` repositories | **v2 requires a tracked `.agents/`.** `--local` plus a v2 profile is refused; the manifest would otherwise be machine-local and a clone would silently fall back to v1. | `.agents/layout.json` is repository state shared by every clone. A manifest inside a git-excluded directory cannot be that. |
-| 7 | The other five repositories' `recording-what-you-learn` copies in v0.6.0 | **Do not refresh or replace their copies in round 1.** Add the old asset text to the legacy digest catalog so they report `clean_legacy`, never `customized`. `agents drift --all` still exits 1 until each repository migrates; that is accepted and named in the release notes. | The old skill is still correct for a v1 repository; the only cost is an advisory. Without the legacy digest, the same state would be indistinguishable from a local customization — the 2026-09-01 accident. This row defers those repositories; it does not exclude them permanently. |
+| 7 | The other five repositories' `recording-what-you-learn` copies in v0.6.0 | **Do not refresh or replace their copies in round 1.** Add the old asset text to the legacy digest catalog so an unmodified old copy reports `clean_legacy`, never `customized`. `agents drift --all` still exits 1 until each repository migrates; that is accepted and named in the release notes. | The old skill is still correct for a v1 repository; the only cost is an advisory. Without the legacy digest, an unmodified old copy would be indistinguishable from a local customization — the 2026-09-01 accident. This row defers those repositories; it does not exclude them permanently. |
 
 The other five repositories are **deferred, not permanently excluded**. A code
 repository can adopt v2 with the same `docs/` paths (`store_root: docs`, or the
@@ -57,6 +57,7 @@ dropped, §0 is provisional.
 | Q6 | §0 row 6, §7.5 | For `--local` repositories: where are docs stored and tracked? How does `agents` determine trackedness? If docs are tracked while `.agents/` is not, how are skill writes to tracked docs governed? Is `.gitignore` a projection of `layout.json`, or is the manifest a projection of ignore state? | open |
 | Q7 | §0 row 7 | The other five repositories are deferred, not permanently excluded; a code repository's v2 migration can keep `docs/` and change only the manifest, router, and skills. Is the remaining advisory — `drift` exits 1 until each of them migrates — acceptable, or should the `recording-what-you-learn` asset change be deferred too? | open — row 7 reframed after review; confirm the advisory |
 | Q8 | §7.3, §8.3, `cmd_drift.go:isDriftClean` | Should `drift` accept `clean_legacy` for a user-owned skill? Current behavior: `isDriftClean` requires `ok` for every embedded skill, so a legacy `recording-what-you-learn` reports drift and exits 1, while `doctor` already treats `clean_legacy` for both skills as ok. | open — strict is preferred; working model in §0.2; confirm names and doctor behavior |
+| Q9 | §8.1, §8.4 | Should the router states use the same currency vocabulary as the skill states (`current`, `known_legacy`, `drifted`, `missing`)? `clean_legacy` currently means the same kind of thing in both state machines, so the word "clean" carries the same ambiguity. | open — surfaced by the Q8 self-review |
 
 ### 0.2 Q8 working model (proposed, pending confirmation)
 
@@ -97,14 +98,20 @@ Rules:
   user-owned `known_legacy` on v1 → leave; on v2 → replace; `diverged` →
   three-way merge if a base is identifiable, otherwise stop and ask;
   `missing` → populate current.
-- Consequence for v0.6.0: the five deferred v1 repositories report
-  `recording-what-you-learn: known_legacy`. `drift --all` exits 1 (currency)
-  while `doctor` reports ok (health) until those repositories migrate. That is
-  the strict option, expected and named in the release notes, not a defect.
+- Consequence for v0.6.0: the five deferred v1 repositories whose copy is
+  unmodified report `recording-what-you-learn: known_legacy`; a repository with
+  local edits reports `diverged`. `drift --all` exits 1 (currency) while
+  `doctor` reports ok (health) until those repositories migrate. That is the
+  strict option, expected and named in the release notes, not a defect.
 
 The state names are JSON-visible in `drift.skills`. The design is not
 implemented yet, so renaming them now is free; keeping the old names would be
-the same kind of debt as `min_reader`.
+the same kind of debt as a schema field whose name no longer says what it
+means.
+
+These names apply to the embedded-asset states in `drift.skills`. The router
+state machine in §8.1 (`clean_current`, `clean_legacy`, `drifted`, `missing`)
+is separate; Q9 tracks whether it should adopt the same vocabulary.
 
 ---
 
@@ -597,6 +604,10 @@ A report is clean only when `unsupported` is empty, `layout_status` is
 the canonical router for that layout, and there are no misplaced live
 documents.
 
+The word "clean" here means currency: every embedded asset matches the running
+binary's current asset. Q8 proposes renaming the underlying states so that
+this is explicit rather than implied.
+
 ### 7.4 Doctor changes
 
 | Check | Statuses |
@@ -606,6 +617,10 @@ documents.
 | `layout:qna` | the freshness indicator, resolved through the `qna` role instead of hardcoded `docs/qna` |
 
 `docs:qna` is removed; the rename is named in the v0.6.0 release notes.
+
+The existing `scaffold:skill-recording` and `scaffold:skill-migrating` checks
+remain. Q8 decides whether their state names change; their owner-based health
+semantics do not.
 
 ### 7.5 Init and update
 
@@ -669,10 +684,10 @@ enter the legacy digest catalog:
   the v0.5.1 text as a second legacy entry;
 - `migrating-fleet-context`: add the v0.5.1 text as its first legacy entry.
 
-Without those entries, every repository reports `customized` and drift exits 1
-on a state that is actually `clean_legacy`. The journal records that exact
-accident. The plan gates this with a test that the old asset bytes digest to a
-legacy value.
+Without those entries, an unmodified old copy reports `customized` and drift
+exits 1 on a state that is actually `clean_legacy`. The journal records that
+exact accident. The plan gates this with a test that the old asset bytes
+digest to a legacy value.
 
 ### 8.3 `recording-what-you-learn`
 
@@ -873,7 +888,7 @@ pass, and a probe that never ran looks green.
 | Risk | Mitigation |
 |---|---|
 | An old binary touches a v2 repo | Deploy-before-flip gate (§6.3); v0.6.0's mutation guard; §6.4 repair path; paperbubble is the only v2 repository in round 1 |
-| A changed asset makes the fleet report `customized` | v0.6.0 adds legacy digests for both changed skills in the same release, gated by tests |
+| A changed asset makes an unmodified old copy report `customized` | v0.6.0 adds legacy digests for both changed skills in the same release, gated by tests |
 | `agents update --all --apply` refreshes a skill in an unsupported repo | The manifest gate runs before wiring and before `RefreshInfrastructuralSkills`; negative test asserts byte-identical skill |
 | `--local` repo silently loses its manifest on clone | V18 rejects v2 in a repo whose `.agents/` is excluded; `init --local --profile` refuses |
 | Archive gets moved by a well-meaning migration | The archive is recorded, excluded from move lists and walks, and a fixture asserts its blobs are unchanged |
@@ -887,7 +902,8 @@ pass, and a probe that never ran looks green.
 No implementation starts until:
 
 1. this design, its implementation plan, and its migration playbook are
-   reviewed and the seven decisions in §0 are confirmed or changed;
+   reviewed; the seven decisions in §0 and the review queue Q1–Q9 are resolved
+   or explicitly deferred;
 2. the plan is approved for execution;
 3. v0.6.0 is released, and every fleet machine is confirmed to resolve that
    binary on `PATH`;
