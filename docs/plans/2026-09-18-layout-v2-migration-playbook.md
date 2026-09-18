@@ -388,7 +388,9 @@ After paperbubble is merged:
 
 - paperbubble is the only v2 repository; `agents drift --json` reports it
   supported and clean;
-- the other five repositories remain v1 and are not touched;
+- the other five repositories remain v1 in round 1; they are deferred, not
+  excluded. A later code-repo migration can keep `docs/` and change only the
+  manifest, router, and skills;
 - after v0.6.0, the other repositories' `recording-what-you-learn` copies report
   `clean_legacy`, so `agents drift --all` exits 1 until each repository is
   migrated. That is the accepted advisory from design Decision 7, not a
