@@ -56,7 +56,55 @@ dropped, §0 is provisional.
 | Q5 | §0 row 5, §9.5 | Does archive immutability depend on whether the archive holds meta or more explicit knowledge? What is the rule when the archive mixes both? | open |
 | Q6 | §0 row 6, §7.5 | For `--local` repositories: where are docs stored and tracked? How does `agents` determine trackedness? If docs are tracked while `.agents/` is not, how are skill writes to tracked docs governed? Is `.gitignore` a projection of `layout.json`, or is the manifest a projection of ignore state? | open |
 | Q7 | §0 row 7 | The other five repositories are deferred, not permanently excluded; a code repository's v2 migration can keep `docs/` and change only the manifest, router, and skills. Is the remaining advisory — `drift` exits 1 until each of them migrates — acceptable, or should the `recording-what-you-learn` asset change be deferred too? | open — row 7 reframed after review; confirm the advisory |
-| Q8 | §7.3, §8.3, `cmd_drift.go:isDriftClean` | Should `drift` accept `clean_legacy` for a user-owned skill? Current behavior: `isDriftClean` requires `ok` for every embedded skill, so a legacy `recording-what-you-learn` reports drift and exits 1, while `doctor` already treats `clean_legacy` for both skills as ok. Options: (a) accept `clean_legacy` for `recording-what-you-learn` only on a v1 layout and require current on v2; (b) accept it for all user-owned skills regardless of layout; (c) keep strict and accept the advisory. | open |
+| Q8 | §7.3, §8.3, `cmd_drift.go:isDriftClean` | Should `drift` accept `clean_legacy` for a user-owned skill? Current behavior: `isDriftClean` requires `ok` for every embedded skill, so a legacy `recording-what-you-learn` reports drift and exits 1, while `doctor` already treats `clean_legacy` for both skills as ok. | open — strict is preferred; working model in §0.2; confirm names and doctor behavior |
+
+### 0.2 Q8 working model (proposed, pending confirmation)
+
+Q8 is not really "should `drift` accept `clean_legacy`". It exposes that two
+different questions share one word:
+
+- **Currency**: does each embedded asset match the running binary's current
+  asset? That is `drift`'s question.
+- **Health**: is the repository safe and acceptable to operate? That is
+  `doctor`'s question.
+
+`clean_legacy` says "clean" while `drift` treats it as not current; that is the
+contradiction. The proposal is to name the states for currency and let each
+consumer interpret them, instead of teaching the currency predicate about
+ownership or layout.
+
+Proposed `drift.skills` states:
+
+| now | proposed | meaning |
+|---|---|---|
+| `ok` | `current` | matches the running binary's embedded asset |
+| `clean_legacy` | `known_legacy` | matches a version in the legacy digest catalog |
+| `customized` | `diverged` | matches neither; local edits or an unknown version |
+| `missing` | `missing` | file absent |
+
+Rules:
+
+- `drift` is strict currency: exit 1 unless every embedded asset is `current`.
+  The private `isDriftClean` predicate is renamed `isCurrent`. It does not
+  consider ownership, layout, or health.
+- `doctor` is health, and its current semantics stay: an agents-owned
+  `known_legacy` is ok because the next `agents update` refreshes it;
+  agents-owned `diverged` and `missing` warn. A user-owned `known_legacy` and
+  `diverged` are ok because the repository owns that choice; user-owned
+  `missing` warns. Any layout-specific note belongs in `doctor`, not in
+  `drift`.
+- The migration skill owns actions: agents-owned non-current → refresh;
+  user-owned `known_legacy` on v1 → leave; on v2 → replace; `diverged` →
+  three-way merge if a base is identifiable, otherwise stop and ask;
+  `missing` → populate current.
+- Consequence for v0.6.0: the five deferred v1 repositories report
+  `recording-what-you-learn: known_legacy`. `drift --all` exits 1 (currency)
+  while `doctor` reports ok (health) until those repositories migrate. That is
+  the strict option, expected and named in the release notes, not a defect.
+
+The state names are JSON-visible in `drift.skills`. The design is not
+implemented yet, so renaming them now is free; keeping the old names would be
+the same kind of debt as `min_reader`.
 
 ---
 
