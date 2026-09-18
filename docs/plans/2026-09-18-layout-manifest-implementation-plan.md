@@ -11,12 +11,12 @@ behavior, and without leaving a `docs/` shell in a content vault.
 
 **Architecture:** A new read-only `agents/internal/layout` package resolves,
 normalizes, validates, and version-checks a layout. One release, **v0.6.0**,
-ships the reader, the mutation guard, read-only `agents layout
+ships manifest parsing, the mutation guard, read-only `agents layout
 show|validate|path`, atomic manifest writes, layout-aware
 `scaffold.CreateWithLayout`, `agents init` layout flags, `agents layout migrate`
 (plan/apply/resume), role-based skills, and legacy digests for both changed
-skill assets. The read-only/write separation is a capability boundary tested
-with version-stamped fixtures, not two releases. Drift and doctor consume the
+skill assets. The non-mutating/mutating split is a code boundary tested with
+version-stamped fixtures, not two releases. Drift and doctor consume the
 resolved layout instead of joining `docs/`.
 
 **Tech Stack:** Go 1.26+ standard library (`encoding/json`, `os`, `path/filepath`,
@@ -37,8 +37,8 @@ resolved layout instead of joining `docs/`.
 - Roles are exactly `design`, `plans`, `journal`, `qna`; all four are required
   in v2.
 - `layout_status` is exactly `active` or `migrating`.
-- The single release is `v0.6.0`. No `v0.5.2` release exists; `v0.5.2` may
-  appear only as an injected older version in tests.
+- The single release is `v0.6.0`. There is no intermediate release; a
+  simulated older version in tests is `v0.5.99`.
 - Exit codes: `OK=0`, `Advisory=1`, `Block=2`, `Malformed=3`, `Skip=4`,
   `NoRecord=5` (`agents/internal/exitcode`).
 - No v1 filesystem or mutation behavior changes when `.agents/layout.json` is
@@ -220,7 +220,7 @@ the tests below. They are test scaffolding, never production code.
 
 ---
 
-## Part A — layout reader, guard, and read-only commands (ships in v0.6.0)
+## Part A — layout inspection, guard, and read-only commands (ships in v0.6.0)
 
 ### Task 1: Resolve the implicit v1 and manifest v2 layouts
 
@@ -658,17 +658,17 @@ func caseCollisionStores() map[string]string {
 	}
 }
 
-func TestSupportRefusesOldReaderAndAllowsV1Control(t *testing.T) {
+func TestSupportRefusesBelowFloorAndAllowsV1Control(t *testing.T) {
 	v2 := mk(storesWith(RoleDesign, "context/design"))
-	if ok, reason := Support("v0.5.2", v2); ok || reason != "min_reader" {
-		t.Fatalf("v0.5.2 on v2 = (%v, %q), want refused for min_reader", ok, reason)
+	if ok, reason := Support("v0.5.99", v2); ok || reason != "min_reader" {
+		t.Fatalf("v0.5.99 on v2 = (%v, %q), want refused below the floor", ok, reason)
 	}
 	if ok, reason := Support("v0.6.0", v2); !ok {
 		t.Fatalf("v0.6.0 on v2 refused: %q", reason)
 	}
 	v1 := v1Layout(t.TempDir())
-	if ok, reason := Support("v0.5.2", v1); !ok {
-		t.Fatalf("v0.5.2 on v1 refused: %q", reason)
+	if ok, reason := Support("v0.5.99", v1); !ok {
+		t.Fatalf("v0.5.99 on v1 refused: %q", reason)
 	}
 	if ok, reason := Support("dev", v2); ok || reason != "unreleased" {
 		t.Fatalf("an unstamped build on v2 = (%v, %q), want refused as unreleased", ok, reason)
@@ -680,8 +680,8 @@ func TestSupportRefusesOldReaderAndAllowsV1Control(t *testing.T) {
 
 func TestCompareVersions(t *testing.T) {
 	cases := []struct{ a, b string; want int }{
-		{"v0.5.2", "0.5.2", 0},
-		{"0.5.2", "0.6.0", -1},
+		{"v0.6.0", "0.6.0", 0},
+		{"0.5.99", "0.6.0", -1},
 		{"v0.6.0", "0.6.0-rc.1", 1},
 		{"v0.10.0", "v0.9.9", 1},
 	}
@@ -927,7 +927,7 @@ func Support(running string, l Layout) (bool, string) {
 	}
 	got, err := parseVersion(running)
 	if err != nil {
-		return false, "unreleased" // fail closed: a source build cannot prove its capabilities
+		return false, "unreleased" // fail closed: a source build cannot prove its release
 	}
 	want, err := parseVersion(l.MinReader)
 	if err != nil {
@@ -1124,7 +1124,7 @@ func TestInspectV1ReportKeepsLegacyFieldsAndAddsLayoutFields(t *testing.T) {
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
 	}
-	rep, err := InspectRepo(dir, "v0.5.2")
+	rep, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1139,10 +1139,10 @@ func TestInspectV1ReportKeepsLegacyFieldsAndAddsLayoutFields(t *testing.T) {
 	}
 }
 
-func TestInspectV2ReportResolvesStoresAndRefusesOldReader(t *testing.T) {
+func TestInspectV2ReportResolvesStoresAndRefusesBelowFloor(t *testing.T) {
 	dir := t.TempDir()
 	writeV2Layout(t, dir, ".context")
-	rep, err := InspectRepo(dir, "v0.5.2")
+	rep, err := InspectRepo(dir, "v0.5.99")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1310,7 +1310,7 @@ func TestDoctorLayoutChecksResolveV1AndV2(t *testing.T) {
 
 func TestDoctorWarnsOnUnsupportedAndMigratingLayouts(t *testing.T) {
 	root := newV2Repo(t, ".context")
-	if got := findCheck(checkScaffold(root, "v0.5.2"), "layout:manifest"); got.Status != Warn {
+	if got := findCheck(checkScaffold(root, "v0.5.99"), "layout:manifest"); got.Status != Warn {
 		t.Fatalf("unsupported status = %+v", got)
 	}
 	setLayoutStatus(t, root, layout.StatusMigrating)
@@ -1434,7 +1434,7 @@ func TestLayoutShowResolvesV1AndV2(t *testing.T) {
 func TestLayoutPathRefusesUnsupported(t *testing.T) {
 	t.Chdir(newV2RepoForCmd(t, ".context"))
 	var out bytes.Buffer
-	if code := runLayoutPathWithVersion([]string{"qna"}, &out, "v0.5.2"); code != exitcode.Skip {
+	if code := runLayoutPathWithVersion([]string{"qna"}, &out, "v0.5.99"); code != exitcode.Skip {
 		t.Fatalf("exit = %d, want Skip; output=%s", code, out.String())
 	}
 	if strings.TrimSpace(out.String()) != "" {
@@ -1573,7 +1573,7 @@ func TestInitRefusesUnsupportedV2WithoutWriting(t *testing.T) {
 	t.Chdir(root)
 	before := snapshotTree(t, root)
 	var out bytes.Buffer
-	if code := runInitWithVersion(nil, &out, "v0.5.2"); code != exitcode.Advisory {
+	if code := runInitWithVersion(nil, &out, "v0.5.99"); code != exitcode.Advisory {
 		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
 	}
 	if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
@@ -1591,7 +1591,7 @@ func TestFleetUpdateSkipsUnsupportedAndDoesNotRefreshSkill(t *testing.T) {
 	wireCalled := false
 	var out bytes.Buffer
 	code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
-		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.2")
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.99")
 	if code != exitcode.Advisory {
 		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
 	}
@@ -1613,7 +1613,7 @@ func TestFleetUpdateStillWiresV1PositiveControl(t *testing.T) {
 	wireCalled := false
 	var out bytes.Buffer
 	code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
-		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.2")
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.99")
 	if code != exitcode.OK || !wireCalled {
 		t.Fatalf("v1 control = (%d, wired=%v): %s", code, wireCalled, out.String())
 	}
@@ -1684,7 +1684,7 @@ git commit -m "fix(layout): guard init and fleet update against unsupported mani
 
 ---
 
-### Task 8: Prove the reader/writer guard with version-stamped test binaries
+### Task 8: Prove the version floor with version-stamped test binaries
 
 **Files:**
 - No production file changes. The fixture lives in a `mktemp -d` directory.
@@ -2517,7 +2517,7 @@ Extend `TestMigrationSkillCoversItsSpecifiedProtocol`'s `required` table with:
 {"--dry-run", "plan first, apply only after approval"},
 {"--apply", "the only mutation path"},
 {"--resume", "resumable migration"},
-{"min_reader", "unsupported reader refusal"},
+{"min_reader", "below-floor refusal"},
 {"layout_status", "migrating vs active"},
 {"unsupported", "stop instead of guessing"},
 {"archive", "immutable archive handling"},

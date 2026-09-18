@@ -25,13 +25,30 @@ the design, plan, and playbook all change before implementation starts.
 
 | # | Question | Recommendation | Why |
 |---|---|---|---|
-| 1 | Canonical `stores` form | **Role→path map is canonical.** `store_root` + a names array is an accepted input shorthand; writers always expand it. When both are present, the map wins and `store_root` must be a common prefix of every store. | One shape for readers. A shorthand that survives on disk means two parsers and an ambiguity rule; an input shorthand has neither. `store_root` is still persisted when known, because it is the human-readable summary and the natural scan boundary for misplaced-document detection. |
+| 1 | Canonical `stores` form | **Role→path map is canonical.** `store_root` + a names array is an accepted input shorthand; the CLI always expands it. When both are present, the map wins and `store_root` must be a common prefix of every store. | One shape to parse. A shorthand that survives on disk means two parsers and an ambiguity rule; an input shorthand has neither. `store_root` is still persisted when known, because it is the human-readable summary and the natural scan boundary for misplaced-document detection. |
 | 2 | `content_root` for `content-vault` | **Yes, with default `.`.** Emitted explicitly by `content-vault`; optional for the other profiles. It is semantic (what is content, what is meta), not a directory the tool creates. | It gives the recording and migration skills a machine-readable statement that the vault is the content and the stores are meta. Without it, "content-vault" is a label with no referent. |
-| 3 | Profile names and release number | Profiles `code-repo`, `content-vault`, `custom`; schema `agents.layout/v2`; **one release, v0.6.0, containing the reader, the guard, write support, and migration.** | The guard and `min_reader` negotiation are code that ships once. The old-reader refusal is tested by injecting an older version into the new binary, not by releasing one. A single release plus a deploy-before-flip gate is sufficient for a fleet upgraded together, and it avoids maintaining two release paths for one feature. |
+| 3 | Profile names and release number | Profiles `code-repo`, `content-vault`, `custom`; schema `agents.layout/v2`; **one release, v0.6.0, containing manifest parsing, the guard, write support, and migration.** | The guard and the `min_reader` version floor are code that ships once. The below-floor refusal is tested by injecting an older version into the new binary, not by releasing one. A single release plus a deploy-before-flip gate is sufficient for a fleet upgraded together, and it avoids maintaining two release paths for one feature. |
 | 4 | Migration command and dry-run format | `agents layout migrate`, dry run by default and `--dry-run` accepted explicitly, `--apply` to execute, `--resume` to continue, `--json` for machines. Human output is a line-oriented plan (`move`, `keep`, `blocker`, `links`) ending in `N move, M keep, K blocked, L link(s)`. | Matches `agents update --all [--apply]`'s "dry run unless applied" convention, while keeping the invocation the plan already writes (`--dry-run`). The line-oriented form is reviewable in a terminal and diffable in a PR. |
 | 5 | Archive handling during migration | **The archive is never moved and never rewritten.** The manifest records its existing path (`archive`), defaulting to `docs/archive` when that directory exists in a v1 repo. A `docs/` left holding only the archive is not a shell. | `.agents/AGENTS.md` declares `docs/archive/` strictly immutable, and the 2026-09-01 journal records what happens when a migration is ordered to move files out of it. Keeping the archive in place is the only policy that needs no exception. Moving the archive wholesale is a separate future operation, not part of v2. |
 | 6 | `agents init --local` repositories | **v2 requires a tracked `.agents/`.** `--local` plus a v2 profile is refused; the manifest would otherwise be machine-local and a clone would silently fall back to v1. | `.agents/layout.json` is repository state shared by every clone. A manifest inside a git-excluded directory cannot be that. |
 | 7 | Fleet-wide `recording-what-you-learn` staleness after v0.6.0 | **Accept the advisory.** The old asset text is added to the legacy digest catalog, so repositories report `clean_legacy`, never `customized`. `agents drift --all` already exits 1 today; no repository changes until its own migration. | This is the difference between a loud, explainable staleness report and the 2026-09-01 accident where a changed asset made every repository report `customized`. It does not migrate any repository in the first round. |
+
+### 0.1 Review queue (open)
+
+These questions came from the first read of this document on 2026-09-18. They
+are recorded here rather than resolved one by one, because several of them can
+invalidate the recommendations above. Until they are answered or explicitly
+dropped, §0 is provisional.
+
+| # | Anchored to | Question | Status |
+|---|---|---|---|
+| Q1 | §0 row 1, §4 | Is one `store_root` and one meta root the right model, or can roles have different roots and different collaboration policies? Concrete example: `docs/{qna,journal}` for human collaboration and `docs/agents/{design,plans}` for almost-exclusively agent writes. | open |
+| Q2 | §0 row 2 | Is `content_root` needed at all? `content-vault` may already carry the semantic meaning, and `.context` is inside any content root by construction. | open |
+| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | open |
+| Q4 | §9.4 | Is `--resume` really a linear list progression? The full state machine is not written down: partial directory moves, failure between `git mv` and the manifest update, and non-linear recovery all need explicit states and transitions. | open |
+| Q5 | §0 row 5, §9.5 | Does archive immutability depend on whether the archive holds meta or more explicit knowledge? What is the rule when the archive mixes both? | open |
+| Q6 | §0 row 6, §7.5 | For `--local` repositories: where are docs stored and tracked? How does `agents` determine trackedness? If docs are tracked while `.agents/` is not, how are skill writes to tracked docs governed? Is `.gitignore` a projection of `layout.json`, or is the manifest a projection of ignore state? | open |
+| Q7 | §0 framing | After two reads, §0 is still not understood. The section needs reframing: what is already fixed, what is a recommendation, and what is an open question. | open |
 
 ---
 
@@ -123,7 +140,8 @@ older running version into the new binary; it is not a release matrix.
 - No manifest means v1, and v1 filesystem and mutation behavior is unchanged.
   The only v1 output changes are the additive drift fields in §7.3 and the
   doctor check rename in §7.4.
-- Reader-first compatibility with an explicit mixed-fleet release gate.
+- Deploy-before-flip compatibility: one release, verified on every machine
+  before any repository flips.
 - Validation strict enough that a malformed manifest cannot redirect a write
   outside the repository, into `.agents/`, or onto another store.
 - Migration that uses `git mv`, is resumable, never copies, never writes into
@@ -154,11 +172,11 @@ older running version into the new binary; it is not a release matrix.
 | **store** | The physical directory a role resolves to, repository-relative. |
 | **store_root** | Optional common parent of the four stores, used as an input shorthand and persisted as a summary. |
 | **content_root** | The repository-relative root of the repository's own content. Defaults to `.`. Semantic, not created. |
-| **manifest** | `.agents/layout.json`. Declares schema, minimum reader, profile, status, and role→path mapping. |
+| **manifest** | `.agents/layout.json`. Declares schema, the `min_reader` version floor, profile, status, and role→path mapping. |
 | **v1** | The legacy layout: no manifest, stores at `docs/{design,plans,journal,qna}`. |
 | **v2** | The manifest layout defined here. |
-| **reader capability** | Parse the manifest and report a layout without writing it. |
-| **writer capability** | Create, mutate, and migrate a v2 layout. Both capabilities ship in v0.6.0. |
+| **inspection** | Parse, validate, and report the layout without writing it. |
+| **mutation** | Create, change, or migrate the layout. Both are code paths in v0.6.0, not separate releases. |
 | **archive** | An immutable history directory, conventionally `docs/archive/`. Recorded in the manifest; never moved or rewritten by migration. |
 
 ## 4. The manifest
@@ -184,9 +202,13 @@ used `agents init --local`, which v2 refuses (Decision 6).
 | `archive` | string | optional | Repository-relative immutable history directory. Defaults to `docs/archive` when that directory exists in a v1 repository. Never a move source or destination. |
 | `migration` | object | required while `layout_status` is `migrating` | The resumable journal: `from`, `started_at` (RFC 3339), and `moves` (`from`, `to`, `role`, `state`). Removed when the layout becomes `active`. |
 
-Unknown top-level fields are ignored by readers and preserved only in the raw
+Unknown top-level fields are ignored by the parser and preserved only in the raw
 file; the CLI never rewrites a manifest it did not create. Unknown fields are
 not an extension mechanism for v2 — a new meaning requires a new schema.
+
+`min_reader` is the schema's fixed field name. Read it as "minimum mutating
+version floor"; it does not name a release, a binary kind, or a read-only
+artifact.
 
 ### 4.3 Canonical example
 
@@ -225,7 +247,7 @@ The input shorthand that produces the same map:
 }
 ```
 
-Writers always emit the map form. A hand-written shorthand is accepted; a
+The CLI always emits the map form. A hand-written shorthand is accepted; a
 hand-written map with a contradicting `store_root` is rejected.
 
 The scattered form is for a repository whose stores do not share a parent:
@@ -295,7 +317,7 @@ only for repositories that opt into v2.
    `docs/{design,plans,journal,qna}`, `content_root="."`, and
    `archive="docs/archive"` when that directory exists.
 2. If it exists, parse it. A JSON syntax error is an error. An unknown `schema`
-   resolves successfully but is unsupported for mutation, so a reader can still
+   resolves successfully but is unsupported for mutation, so the CLI can still
    display what it found and refuse to touch it.
 3. Normalize `stores`:
    - object form → use the role→path map directly;
@@ -303,7 +325,7 @@ only for repositories that opt into v2.
 4. Validate. A manifest that fails validation resolves to an **invalid**
    layout: reads report the problem; every mutation is refused.
 5. The caller compares `min_reader` with the running version through
-   `Support`; resolution itself is version-independent so a reader can display
+   `Support`; resolution itself is version-independent so the CLI can display
    a layout it must not mutate.
 
 Resolution never creates a directory and never writes.
@@ -347,9 +369,9 @@ portability bug the tool can refuse cheaply.
   `vMAJOR.MINOR.PATCH`, so `v0.6.0` and `0.6.0` compare equal.
 - A prerelease suffix sorts below its release (`0.6.0-rc.1 < 0.6.0`).
 - `dev` or any unparseable running version is **unsupported for mutation**. A
-  source build cannot prove which release's capabilities it contains, and the
-  guard must fail closed: an older source build must not be mistaken for the
-  released writer. Reads still work, so `layout show`, `layout validate`,
+  source build cannot prove which release it was built from, and the guard must
+  fail closed: an older source build must not be mistaken for the released
+  binary. Reads still work, so `layout show`, `layout validate`,
   `drift`, and `doctor` can display a v2 layout from a dev build. A v1
   repository is unaffected, because the implicit v1 layout is always mutable.
 - A parseable running version below `min_reader` is unsupported for mutation:
@@ -360,29 +382,29 @@ command re-implements the comparison.
 
 ## 6. Compatibility model
 
-### 6.1 One release, two capabilities
+### 6.1 One release, one version floor
 
 There is one released version: **v0.6.0**. It contains:
 
-- the reader: `internal/layout` parser, resolver, validation, version
+- manifest parsing: `internal/layout` parser, resolver, validation, version
   comparison, the v2 router constant, drift layout fields, doctor layout
   checks, and read-only `agents layout show|validate|path`;
 - the guard: `init` and fleet `update` resolve the manifest first and refuse or
   skip an unsupported, invalid, or `migrating` layout;
-- the writer: layout-aware scaffold, `agents init` layout flags, atomic
+- mutation: layout-aware scaffold, `agents init` layout flags, atomic
   manifest writes;
 - the migration: `agents layout migrate` with plan, apply, and resume;
 - the skill changes: role-based `recording-what-you-learn` and v2-aware
   `migrating-fleet-context`, each with a legacy digest for its previous text.
 
-Read-only and write are capabilities, not releases. The guard exists so that a
-future manifest-aware binary older than a repository's `min_reader` refuses
-mutation. The test matrix exercises it by building version-stamped test
-binaries (for example `-X main.version=v0.5.99` and
-`-X main.version=v0.6.0`) and running the same fixture against both. No v0.5.2
-release exists.
+Inspection and mutation are code paths in one release, not two releases. The
+guard exists so that a future manifest-aware binary older than a repository's
+`min_reader` refuses mutation. The test matrix exercises it by building
+version-stamped test binaries (for example `-X main.version=v0.5.99` and
+`-X main.version=v0.6.0`) and running the same fixture against both. There is
+no intermediate release; those binaries are test scaffolding only.
 
-### 6.2 Binary capability × repository layout
+### 6.2 Binary version × repository layout
 
 | Binary | v1 (no manifest) | v2 (`min_reader` 0.6.0) |
 |---|---|---|
@@ -456,8 +478,8 @@ agents layout migrate --profile <p> [--store-root <path> | --stores <role=path> 
 
 v0.6.0 ships all four subcommands and the layout flags on `agents init`.
 
-`show` prints the resolved layout: schema, profile, status, minimum reader,
-content root, archive, and one line per role. `--json` emits the normalized
+`show` prints the resolved layout: schema, profile, status, minimum mutating
+version (`min_reader`), content root, archive, and one line per role. `--json` emits the normalized
 `Layout` object (one role→path map, never the raw shorthand). `--router` prints
 the exact canonical router for the resolved layout and nothing else, so the
 migration skill can restore it without embedding a second copy.
@@ -769,7 +791,7 @@ change. The preferred path is branch isolation, which never needs it.
 |---|---|---|
 | Resolution | implicit v1; v2 map; v2 shorthand; scattered map; `store_root` agreement | A layout shape with no resolver |
 | Validation | V1–V19, including duplicate JSON keys, `..`, absolute paths, symlink components, `.agents/` stores, overlap, case-only collisions | A manifest that redirects a write outside the repo or onto another store |
-| Version | a simulated older manifest-aware version vs `min_reader: 0.6.0` refuses; `v0.6.0` allows; `dev` refuses mutation but reads; v1 positive control always allows | Silent mutation by an older manifest-aware reader |
+| Version | a simulated older manifest-aware version vs `min_reader: 0.6.0` refuses; `v0.6.0` allows; `dev` refuses mutation but reads; v1 positive control always allows | Silent mutation by an older manifest-aware binary |
 | Router/digest | v1 stays `clean_current`; v2 router accepted; v1 router in a v2 repo is `clean_legacy`; every changed asset has a legacy digest | The 2026-09-01 fleet-wide `customized` accident, or a v1 router reported as drift |
 | Drift | v1 fields unchanged plus new fields; v2 stores/profile/min_reader/status; `unsupported`; misplaced only inside declared stores; archive excluded | A report that cannot be acted on, or a v1 behavior change |
 | Doctor | `layout:manifest` for v1/active/migrating/unsupported/invalid; `layout:stores`; `layout:qna` at `docs/qna` and `.context/qna` | A v2 repository with no health check |
