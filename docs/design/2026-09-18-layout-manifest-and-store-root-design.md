@@ -58,6 +58,7 @@ are open. Until the queue is empty, §0 is provisional.
 | Q7 | §0 row 7 | The other five repositories are deferred, not permanently excluded; a code repository's v2 migration can keep `docs/` and change only the manifest, router, and skills. Is the remaining advisory — `drift` exits 1 until each of them migrates — acceptable, or should the `recording-what-you-learn` asset change be deferred too? | open — row 7 reframed after review; confirm the advisory |
 | Q8 | §7.3, §8.3, `cmd_drift.go:isDriftClean` | Should `drift` accept a known-legacy user-owned skill? The old v0.5.1 names were `ok`/`clean_legacy`/`customized`; `isDriftClean` required the first for every embedded skill, while `doctor` already accepted the other two for the user-owned skill. | resolved 2026-09-18 — adopt §0.2: drift is strict currency, doctor is health, skill states are `current`/`known_legacy`/`diverged`/`missing` |
 | Q9 | §8.1, §8.4 | Should the router states use the same currency vocabulary as the skill states? The old `clean_legacy` meant the same kind of thing in both state machines, so the word "clean" carried the same ambiguity. | resolved 2026-09-18 — full alignment: `current`/`known_legacy`/`diverged`/`missing`; see §0.3 |
+| Q10 | §0 row 1, §4.2, V12 | Do we persist `store_root` at all? The `stores` map already carries every path; `store_root` adds a second manifest shape and a consistency rule. | open — recommendation: drop the manifest field, keep `--store-root` as a CLI input, and compute a display-only summary |
 
 ### 0.2 Q8 model (accepted 2026-09-18)
 
@@ -231,8 +232,12 @@ does not get this from the serialized data either: `protoc` enforces
 here are:
 
 1. `schema` in the manifest selects a versioned profile registry
-   (`profilesV2`, `profilesV3`, ...). The registry is code or embedded data,
-   not per-repository manifest data.
+   (`profilesV2`, `profilesV3`, ...). The registry lives in the `agents`
+   binary (`internal/layout/profiles.go`, or embedded JSON under
+   `internal/layout/profiles/`), not in the repository. A repository cannot
+   invent a profile: adding one is a tool change with defaults, tests, docs,
+   and a release. A repository that needs local conventions uses `custom` and
+   writes them in `.agents/AGENTS.md`.
 2. Each registry entry is `active`, `deprecated`, or `reserved`; reserved
    names are a cross-version list.
 3. `Validate` returns blocking `Problems` separately from non-blocking
@@ -247,6 +252,12 @@ here are:
 6. Tests hold the invariants: no reserved name is reused; every active
    profile has a definition; a v3 reader reads a v2 manifest through the v2
    registry; an unknown profile round-trips unchanged.
+
+The writer is closed and the reader is open: `init`/`migrate` emit only names
+from the current registry, while every reader accepts a name it does not know
+(warning, `custom` defaults, original string preserved). That is what makes
+adding a profile additive without a schema bump, and what prevents a typo
+written by a human from being silently turned into a different profile.
 
 Rules:
 
