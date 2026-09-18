@@ -160,11 +160,20 @@ borrow is protobuf's identity discipline, applied to names:
 | field number | no separate identity; the JSON name is the identity |
 | enum value number | no separate identity; the profile name is the identity |
 | add an enum value | add a profile name; old readers must tolerate unknown values |
-| remove an enum value | retire the name, never reuse it; a migration maps it |
+| remove an enum value | remove the entry, reserve its number and name, never reuse either; a migration maps old values |
 | fork | new profile name; the old name keeps its old meaning |
 | never change a number's meaning | never change a profile name's meaning |
 | open enum (proto3) | unknown profile accepted and treated as `custom` for defaults, with a warning |
 | closed enum (proto2) | unknown profile is a hard failure; requires a schema bump |
+
+Precision from the protobuf language guide: protobuf does **not** forbid
+removing an enum entry. It forbids reusing its numeric value, and it
+recommends reserving both the number and the name, because names affect JSON
+serialization. In `layout.json` the name is the only identity, so reserving
+the name is mandatory. Adding an enum value is safe; proto3 enums are open
+(unknown values are preserved), while proto2 enums are closed (unknown values
+become unknown fields). The proposed open-profile model is the proto3 shape;
+the closed model is the proto2 shape and requires a schema bump.
 
 The proposed model is the open enum. The schema version is the compatibility
 contract; profile names are stable identities inside that schema.
@@ -222,9 +231,10 @@ Rules:
   invalid; `init` and `migrate` offer only current names, and `doctor` /
   `layout show` warn on unknown or deprecated names. If this is accepted, V14
   changes from a hard `profile_unknown` failure to a warning.
-- Removing a profile means removing it from the offered defaults and, if its
-  semantics are gone, mapping it in the next schema migration. It is never
-  silently reinterpreted under the same name.
+- Removing a profile is allowed. Remove it from the offered defaults, reserve
+  its name, never reuse that name for a different meaning, and map it in the
+  migration if its semantics are gone. Old readers keep accepting the
+  reserved name; new writers never emit it.
 - A fork is a new profile name (`content-vault` → `content-vault-editorial`),
   not a version suffix. Existing repositories keep the pre-fork label until a
   human or the migration skill decides which fork applies; if neither fits,
