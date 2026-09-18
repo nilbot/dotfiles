@@ -81,6 +81,11 @@ same change set updates:
 8. Re-read every changed prose file after editing for context, logic, and tone
    consistency. The named docs tests in `.github/workflows/verify.yml` are the
    mechanical backstop, not the whole review.
+9. Drift and doctor prose in living documents uses the v0.6.0 vocabulary:
+   `current`, `known_legacy`, `diverged`, `missing`. The old
+   `clean_current`/`clean_legacy`/`drifted`/`customized` names remain only in
+   historical records (the 2026-08-29 design, the 2026-09-01 journal) and in
+   explicit rename notes.
 
 ## Locked Interfaces
 
@@ -163,7 +168,7 @@ type MigrateOptions struct {
 	Stores      map[string]string
 	Archive     string
 	Running     string
-	RouterState string // drift.RouterState as a string; "clean_current" or "clean_legacy"
+	RouterState string // drift.RouterState as a string; "current" or "known_legacy"
 }
 
 type LinkCandidate struct {
@@ -1093,13 +1098,13 @@ func CanonicalRouterDigestFor(l layout.Layout) string {
 
 In `LegacyRouterDigests`, add `scaffold.DefaultAgentsMD` to the `templates`
 slice. The canonical check runs first, so a v1 repository is unaffected; a v2
-repository carrying the v1 router becomes `clean_legacy`.
+repository carrying the v1 router becomes `known_legacy`.
 
 - [ ] **Step 5: Run the tests**
 
 Run: `go test -count=1 ./internal/drift ./internal/scaffold -v`
 Expected: PASS. Existing `TestInspectCleanCurrentRepo` is the v1 positive
-control: it must still report `clean_current`.
+control: it must still report `current`.
 
 - [ ] **Step 6: Commit**
 
@@ -1161,7 +1166,7 @@ func TestInspectV2ReportResolvesStoresAndRefusesBelowFloor(t *testing.T) {
 	if rep.Unsupported != "below_floor" {
 		t.Fatalf("unsupported = %q, want below_floor", rep.Unsupported)
 	}
-	if isDriftClean(rep) {
+	if isCurrent(rep) {
 		t.Fatal("an unsupported layout must not report clean")
 	}
 }
@@ -1250,13 +1255,22 @@ and `Stores`. Misplacement dispatches:
   archive subtree; classify `-plan.md` outside the `plans` store and
   `-design.md` outside the `design` store.
 
-`isDriftClean` adds:
+`isCurrent` adds:
 
 ```go
 if report.Unsupported != "" || report.LayoutStatus == layout.StatusMigrating {
 	return false
 }
 ```
+
+The same step renames the state vocabulary in `digests.go` and `drift.go`:
+`RouterCleanCurrent` → `RouterCurrent`, `RouterCleanLegacy` →
+`RouterKnownLegacy`, `RouterDrifted` → `RouterDiverged`; `ComponentOK` →
+`ComponentCurrent`, `ComponentCleanLegacy` → `ComponentKnownLegacy`,
+`ComponentCustomized` → `ComponentDiverged`. The JSON values become
+`current`, `known_legacy`, `diverged`, and `missing`. Update the doctor
+skill-check tests and the drift tests to the new names; `doctor`'s own
+`ok`/`warn`/`fail` statuses do not change.
 
 - [ ] **Step 4: Thread the running version through every caller**
 
@@ -2054,7 +2068,7 @@ func TestPlanMigrationBuildsDirectoryMovesAndRecordsArchive(t *testing.T) {
 	writeFile(t, filepath.Join(root, "docs/archive/plans/old-plan.md"), "old")
 	p, err := PlanMigration(root, MigrateOptions{
 		Profile: ProfileContentVault, StoreRoot: ".context",
-		Running: "v0.6.0", RouterState: "clean_current",
+		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2080,7 +2094,7 @@ func TestPlanMigrationBlocksDriftedRouterAndExistingTarget(t *testing.T) {
 	mkdirAll(t, root, ".context/design")
 	p, err := PlanMigration(root, MigrateOptions{
 		Profile: ProfileCodeRepo, StoreRoot: ".context",
-		Running: "v0.6.0", RouterState: "drifted",
+		Running: "v0.6.0", RouterState: "diverged",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2097,7 +2111,7 @@ func TestPlanMigrationReportsLinkCandidatesWithoutRewriting(t *testing.T) {
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
 	p, err := PlanMigration(root, MigrateOptions{
 		Profile: ProfileCodeRepo, StoreRoot: ".context",
-		Running: "v0.6.0", RouterState: "clean_current",
+		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2142,7 +2156,7 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 		RouterAction: opts.RouterState + " -> canonical v2",
 		Archive:      from.Archive,
 	}
-	if opts.RouterState != "clean_current" && opts.RouterState != "clean_legacy" {
+	if opts.RouterState != "current" && opts.RouterState != "known_legacy" {
 		p.Blockers = append(p.Blockers, Blocker{Code: "router_not_clean",
 			Detail: "run the migrating-fleet-context skill to reconcile the root router first"})
 	}
@@ -2237,7 +2251,7 @@ func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
 	before := trackedBlobs(t, root, "docs")
 	p, err := PlanMigration(root, MigrateOptions{
 		Profile: ProfileContentVault, StoreRoot: ".context",
-		Running: "v0.6.0", RouterState: "clean_current",
+		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil || len(p.Blockers) > 0 {
 		t.Fatalf("plan = (%+v, %v)", p, err)
@@ -2268,7 +2282,7 @@ func TestResumeCompletesAJournaledCrash(t *testing.T) {
 	root := newGitV1RepoWithContent(t)
 	p, _ := PlanMigration(root, MigrateOptions{
 		Profile: ProfileCodeRepo, StoreRoot: ".context",
-		Running: "v0.6.0", RouterState: "clean_current",
+		Running: "v0.6.0", RouterState: "current",
 	})
 	// Simulate a crash after the manifest was written and the first move ran.
 	m := p.To.Manifest
@@ -2479,7 +2493,7 @@ git commit -m "feat(layout): add the migration command and plan output"
 
 **Interfaces:**
 - Consumes: `agents layout show|validate|path`, `agents layout migrate`.
-- Produces: role-based prose and `clean_legacy` classification for both old
+- Produces: role-based prose and `known_legacy` classification for both old
   assets.
 
 - [ ] **Step 1: Write the failing prose and digest tests**
@@ -2511,7 +2525,7 @@ func TestChangedSkillAssetsHaveLegacyDigests(t *testing.T) {
 		}
 		legacy := drift.LegacySkillDigests(skill)
 		if len(legacy) == 0 {
-			t.Fatalf("%s has no legacy digest; old copies will report customized", skill)
+			t.Fatalf("%s has no legacy digest; old copies will report diverged", skill)
 		}
 		for _, d := range legacy {
 			if d == current {
@@ -2534,6 +2548,19 @@ Extend `TestMigrationSkillCoversItsSpecifiedProtocol`'s `required` table with:
 {"layout_status", "migrating vs active"},
 {"unsupported", "stop instead of guessing"},
 {"archive", "immutable archive handling"},
+```
+
+The same test updates the existing router-state requirements from
+`clean_current`/`clean_legacy`/`drifted` to
+`current`/`known_legacy`/`diverged`, keeps `missing`, and forbids the old
+backticked state names in the skill asset:
+
+```go
+for _, old := range []string{"`clean_current`", "`clean_legacy`", "`drifted`", "`customized`"} {
+	if strings.Contains(text, old) {
+		t.Errorf("%s still uses the v0.5.1 state name %s", rel, old)
+	}
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2583,6 +2610,11 @@ state table, traceability, approval gate, commit/PR) and add:
 
 Name `agents layout show`, `--dry-run`, `--apply`, `--resume`, and `agents
 layout path`; state that the archive is never a move source or destination.
+The router-state table uses the v0.6.0 names: `current`, `known_legacy`,
+`diverged`, `missing`. For the skill's own embedded-asset states, use the same
+names. Actions: agents-owned non-current → refresh; user-owned `known_legacy`
+on v1 → leave, on v2 → replace; `diverged` → three-way merge if a base is
+identifiable, otherwise stop and ask; `missing` → populate current.
 When reconciling `.agents/AGENTS.md`, preserve per-role collaboration policy
 (which stores humans edit, which agents mostly write, which are read-only for
 one side); if it is missing and cannot be inferred, stop and ask.
@@ -2711,7 +2743,7 @@ func TestMigrationFixtureLinksAndArchiveSurvive(t *testing.T) {
 
 	p, err := PlanMigration(root, MigrateOptions{
 		Profile: ProfileContentVault, StoreRoot: ".context",
-		Running: "v0.6.0", RouterState: "clean_current",
+		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil || len(p.Blockers) > 0 {
 		t.Fatalf("plan = (%+v, %v)", p, err)

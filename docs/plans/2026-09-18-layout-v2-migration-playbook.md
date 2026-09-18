@@ -16,7 +16,7 @@ Measured on 2026-09-18 before writing this playbook:
 | Fact | Evidence |
 |---|---|
 | paperbubble is a git worktree with a clean tree | `git status --short --branch` → `## agents-editorial` |
-| Its root router is canonical v1 | `agents drift --json` → `router_state: clean_current` |
+| Its root router is canonical v1 | `agents drift --json` → `router_state: current` |
 | It has the four-store `docs/` skeleton and no content there | `git ls-files docs` → exactly the four `README.md` files |
 | It has no `docs/archive/` | `ls -la docs/` shows only `design`, `journal`, `plans`, `qna` |
 | No markdown outside `docs/` links into the stores, except the root router | `rg` over `*.md` returns only `AGENTS.md:6-9` |
@@ -88,7 +88,7 @@ shasum -a 256 AGENTS.md .agents/AGENTS.md  > /tmp/paperbubble-context-before.sha
 Expected:
 
 - `layout_before.json` is `agents.layout/v1` with stores `docs/{design,plans,journal,qna}`.
-- `drift_before.json` is `clean_current`, all four `docs_stores` true,
+- `drift_before.json` is `current`, all four `docs_stores` true,
   `misplaced_docs: []`.
 - `docs_before.txt` is exactly the four README files.
 
@@ -129,7 +129,7 @@ Expected plan, based on the measured baseline:
 layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   from    agents.layout/v1  docs/{design,plans,journal,qna}
   to      agents.layout/v2  profile=content-vault  store_root=.context
-  router  clean_current -> canonical v2 (deterministic swap)
+  router  current -> canonical v2 (deterministic swap)
   archive none
   git     branch feat/layout-v2-migration, tree clean
 
@@ -151,7 +151,7 @@ Review every line of the JSON plan:
 | `blockers` | empty | any blocker stops the migration |
 | `to.stores` | `.context/{design,plans,journal,qna}` | the requested layout |
 | `archive` | `""` | no archive exists; nothing may be moved or recorded |
-| `router` | `clean_current -> canonical v2` | the router is proven boilerplate, so the swap is deterministic |
+| `router` | `current -> canonical v2` | the router is proven boilerplate, so the swap is deterministic |
 | `moves` | four directory moves | no file-level copy list |
 | `link_candidates` | empty | if non-empty, the skill rewrites them after apply |
 
@@ -283,7 +283,7 @@ For paperbubble the expected count is zero. Any unclassifiable block is a
 stop-and-ask, not a judgement call.
 
 The root `AGENTS.md` was replaced deterministically because the pre-flight
-proved `clean_current`; do not hand-edit it. Confirm:
+proved `current`; do not hand-edit it. Confirm:
 
 ```bash
 grep -n 'docs/' AGENTS.md && echo "STOP: v2 router names a store path"
@@ -306,8 +306,8 @@ Expected drift:
 
 - `layout_version: v2`, `layout_status: active`, `unsupported: ""`;
 - `stores` resolves to `.context/{design,plans,journal,qna}`;
-- `router_state: clean_current` against the v2 router;
-- both embedded skills `ok`;
+- `router_state: current` against the v2 router;
+- both embedded skills `current`;
 - `misplaced_docs: []`.
 
 Archive and blob proof:
@@ -390,7 +390,7 @@ After paperbubble is merged:
   excluded. A later code-repo migration can keep `docs/` and change only the
   manifest, router, and skills;
 - after v0.6.0, the other repositories' `recording-what-you-learn` copies report
-  `clean_legacy`, so `agents drift --all` exits 1 until each repository is
+  `known_legacy`, so `agents drift --all` exits 1 until each repository is
   migrated. That is the accepted advisory from design Decision 7, not a
   regression;
 - do not run `agents update --all --apply` as a response to that advisory. It
