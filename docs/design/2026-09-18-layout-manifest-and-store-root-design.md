@@ -27,11 +27,11 @@ the design, plan, and playbook all change before implementation starts.
 |---|---|---|---|
 | 1 | Canonical `stores` form | **Role→path map is canonical.** `store_root` + a names array is an accepted input shorthand; writers always expand it. When both are present, the map wins and `store_root` must be a common prefix of every store. | One shape for readers. A shorthand that survives on disk means two parsers and an ambiguity rule; an input shorthand has neither. `store_root` is still persisted when known, because it is the human-readable summary and the natural scan boundary for misplaced-document detection. |
 | 2 | `content_root` for `content-vault` | **Yes, with default `.`.** Emitted explicitly by `content-vault`; optional for the other profiles. It is semantic (what is content, what is meta), not a directory the tool creates. | It gives the recording and migration skills a machine-readable statement that the vault is the content and the stores are meta. Without it, "content-vault" is a label with no referent. |
-| 3 | Profile names and release numbers | Profiles `code-repo`, `content-vault`, `custom`; schema `agents.layout/v2`; **R1 read-only = v0.5.2; R2 write + migrate = v0.6.0.** | R1 adds no command that mutates a v2 repository and changes no embedded asset, so a patch release is honest. R2 adds write support, the migration command, and skill assets, which is a minor. |
+| 3 | Profile names and release number | Profiles `code-repo`, `content-vault`, `custom`; schema `agents.layout/v2`; **one release, v0.6.0, containing the reader, the guard, write support, and migration.** | The guard and `min_reader` negotiation are code that ships once. The old-reader refusal is tested by injecting an older version into the new binary, not by releasing one. A single release plus a deploy-before-flip gate is sufficient for a fleet upgraded together, and it avoids maintaining two release paths for one feature. |
 | 4 | Migration command and dry-run format | `agents layout migrate`, dry run by default and `--dry-run` accepted explicitly, `--apply` to execute, `--resume` to continue, `--json` for machines. Human output is a line-oriented plan (`move`, `keep`, `blocker`, `links`) ending in `N move, M keep, K blocked, L link(s)`. | Matches `agents update --all [--apply]`'s "dry run unless applied" convention, while keeping the invocation the plan already writes (`--dry-run`). The line-oriented form is reviewable in a terminal and diffable in a PR. |
 | 5 | Archive handling during migration | **The archive is never moved and never rewritten.** The manifest records its existing path (`archive`), defaulting to `docs/archive` when that directory exists in a v1 repo. A `docs/` left holding only the archive is not a shell. | `.agents/AGENTS.md` declares `docs/archive/` strictly immutable, and the 2026-09-01 journal records what happens when a migration is ordered to move files out of it. Keeping the archive in place is the only policy that needs no exception. Moving the archive wholesale is a separate future operation, not part of v2. |
 | 6 | `agents init --local` repositories | **v2 requires a tracked `.agents/`.** `--local` plus a v2 profile is refused; the manifest would otherwise be machine-local and a clone would silently fall back to v1. | `.agents/layout.json` is repository state shared by every clone. A manifest inside a git-excluded directory cannot be that. |
-| 7 | Fleet-wide `recording-what-you-learn` staleness after R2 | **Accept the advisory.** The old asset text is added to the legacy digest catalog, so repositories report `clean_legacy`, never `customized`. `agents drift --all` already exits 1 today; no repository changes until its own migration. | This is the difference between a loud, explainable staleness report and the 2026-09-01 accident where a changed asset made every repository report `customized`. It does not migrate any repository in the first round. |
+| 7 | Fleet-wide `recording-what-you-learn` staleness after v0.6.0 | **Accept the advisory.** The old asset text is added to the legacy digest catalog, so repositories report `clean_legacy`, never `customized`. `agents drift --all` already exits 1 today; no repository changes until its own migration. | This is the difference between a loud, explainable staleness report and the 2026-09-01 accident where a changed asset made every repository report `customized`. It does not migrate any repository in the first round. |
 
 ---
 
@@ -84,22 +84,32 @@ only because the tool could not express any other layout.
 
 ### 1.2 Why this must not be a flag day
 
-The 2026-09-01 journal records two independent accidents that constrain the
-solution:
+The 2026-09-01 journal constrains the solution in two ways.
 
-1. Changing an embedded asset without adding its old text to the legacy digest
-   catalog made every already-migrated repository report `customized` and exit
-   drift 1. A layout release touches the router, both bundled skills, and the
-   scaffold. Every asset change must carry a legacy digest.
-2. `agents update --all --apply` has no single-repository form, and `agents init`
-   is `writeIfAbsent`, so an old binary cannot be retrofitted. A repository that
-   becomes v2 while an old binary is still installed will be touched by that
-   binary in ways the old binary cannot know are wrong.
+**Every changed asset carries a legacy digest.** Changing an embedded asset
+without adding its old text to the legacy digest catalog made every
+already-migrated repository report `customized` and exit drift 1. A layout
+release touches the router and both bundled skills. Every asset change must
+carry a legacy digest, in the same release, gated by a test.
 
-The fleet is one machine today (six registered repositories), but the design
-must still be correct for a machine that is upgraded later. That makes the
-release **reader-first**: publish a read-only layout reader first, upgrade
-every binary that can touch the fleet, and only then publish write support.
+**A pre-manifest binary cannot be taught to refuse.** The old binary never
+reads `.agents/layout.json`, so `min_reader` is invisible to it. Measured on a
+disposable fixture on 2026-09-18 with the installed v0.5.1 binary:
+
+- on a v1 repository, a second `agents init` left the working tree unchanged;
+- on a v2 repository, `agents init` recreated
+  `docs/{design,plans,journal,qna}/README.md`, and
+  `agents update --all --apply` overwrote a v2-aware migration skill with the
+  binary's old embedded text.
+
+Those are examples of damage in the window after a repository flips and before
+the binary is upgraded. They are not an argument for splitting the feature
+across two releases. The hard constraint is ordering: **before any repository
+flips to v2, every binary that can touch it must be manifest-aware, and the
+binary actually resolved on `PATH` must be verified as such.** The sequence is
+one release, deployed and verified everywhere, then the pilot migration. The
+version matrix in §6 is therefore a **test matrix**, exercised by injecting an
+older running version into the new binary; it is not a release matrix.
 
 ## 2. Goals and non-goals
 
@@ -147,8 +157,8 @@ every binary that can touch the fleet, and only then publish write support.
 | **manifest** | `.agents/layout.json`. Declares schema, minimum reader, profile, status, and role→path mapping. |
 | **v1** | The legacy layout: no manifest, stores at `docs/{design,plans,journal,qna}`. |
 | **v2** | The manifest layout defined here. |
-| **reader** | A binary that can parse the manifest and report a layout without writing it. R1 is a reader release. |
-| **writer** | A binary that can create, mutate, and migrate a v2 layout. R2 is the first writer release. |
+| **reader capability** | Parse the manifest and report a layout without writing it. |
+| **writer capability** | Create, mutate, and migrate a v2 layout. Both capabilities ship in v0.6.0. |
 | **archive** | An immutable history directory, conventionally `docs/archive/`. Recorded in the manifest; never moved or rewritten by migration. |
 
 ## 4. The manifest
@@ -165,7 +175,7 @@ used `agents init --local`, which v2 refuses (Decision 6).
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema` | string | yes in v2 | Exactly `agents.layout/v2`. Any other value is an unknown schema and is unsupported for mutation. |
-| `min_reader` | string | yes in v2 | Lowest binary version that may mutate this repository. R2 writes `0.6.0`. A binary below it may read and display, but every mutation is refused. |
+| `min_reader` | string | yes in v2 | Lowest binary version that may mutate this repository. v0.6.0 writes `0.6.0`. A binary below it may read and display, but every mutation is refused. |
 | `profile` | string | yes in v2 | `code-repo`, `content-vault`, or `custom`. Selects defaults and the vocabulary the skills use; it never changes validation. |
 | `layout_status` | string | yes in v2 | `active` or `migrating`. A `migrating` manifest permits only `agents layout migrate --resume --apply`; every other write is refused and every read reports the state. |
 | `stores` | object or array | yes in v2 | The role→path map (canonical), or an array of role names to be joined onto `store_root` (input shorthand). |
@@ -334,12 +344,12 @@ portability bug the tool can refuse cheaply.
 `min_reader` is compared as semantic version `MAJOR.MINOR.PATCH`:
 
 - A running version begins with an optional `v`; release tags are
-  `vMAJOR.MINOR.PATCH`, so `v0.5.2` and `0.5.2` compare equal.
+  `vMAJOR.MINOR.PATCH`, so `v0.6.0` and `0.6.0` compare equal.
 - A prerelease suffix sorts below its release (`0.6.0-rc.1 < 0.6.0`).
 - `dev` or any unparseable running version is **unsupported for mutation**. A
   source build cannot prove which release's capabilities it contains, and the
-  guard must fail closed: an R1-era `make agents` binary must not be mistaken
-  for an R2 writer. Reads still work, so `layout show`, `layout validate`,
+  guard must fail closed: an older source build must not be mistaken for the
+  released writer. Reads still work, so `layout show`, `layout validate`,
   `drift`, and `doctor` can display a v2 layout from a dev build. A v1
   repository is unaffected, because the implicit v1 layout is always mutable.
 - A parseable running version below `min_reader` is unsupported for mutation:
@@ -350,49 +360,59 @@ command re-implements the comparison.
 
 ## 6. Compatibility model
 
-### 6.1 Release split
+### 6.1 One release, two capabilities
 
-| Release | Version | Contains | Does not contain |
-|---|---|---|---|
-| **R1** | `v0.5.2` | `internal/layout` parser, resolver, validation, version comparison; v2 router constant; drift layout fields; doctor layout checks; read-only `agents layout show\|validate\|path`; mutation guard in `init` and fleet `update`; no embedded-asset changes | `agents layout migrate`; v2 writes; scaffold v2; skill rewrites |
-| **R2** | `v0.6.0` | layout-aware `scaffold.Create`; `agents init --profile/--store-root/...`; `agents layout migrate` with resume; role-based recording skill; v2-aware migrating skill; legacy digests for both changed assets; v2 no-op `init` | Migrating any repository other than the approved pilot |
+There is one released version: **v0.6.0**. It contains:
 
-R1 deliberately changes no embedded asset. That is what keeps the release free
-of the digest-catalog churn that caused the 2026-09-01 fleet-wide `customized`
-report. R1 does add the v2 router as a Go constant (`scaffold.V2AgentsMD`) so
-readers can validate and print it; no file under `assets/` changes, so no
-existing repository's digest moves.
+- the reader: `internal/layout` parser, resolver, validation, version
+  comparison, the v2 router constant, drift layout fields, doctor layout
+  checks, and read-only `agents layout show|validate|path`;
+- the guard: `init` and fleet `update` resolve the manifest first and refuse or
+  skip an unsupported, invalid, or `migrating` layout;
+- the writer: layout-aware scaffold, `agents init` layout flags, atomic
+  manifest writes;
+- the migration: `agents layout migrate` with plan, apply, and resume;
+- the skill changes: role-based `recording-what-you-learn` and v2-aware
+  `migrating-fleet-context`, each with a legacy digest for its previous text.
 
-### 6.2 Old/new binary × v1/v2 repository
+Read-only and write are capabilities, not releases. The guard exists so that a
+future manifest-aware binary older than a repository's `min_reader` refuses
+mutation. The test matrix exercises it by building version-stamped test
+binaries (for example `-X main.version=v0.5.99` and
+`-X main.version=v0.6.0`) and running the same fixture against both. No v0.5.2
+release exists.
 
-| Binary \ repo | v1 (no manifest) | v2 (`min_reader` 0.6.0) |
+### 6.2 Binary capability × repository layout
+
+| Binary | v1 (no manifest) | v2 (`min_reader` 0.6.0) |
 |---|---|---|
-| **v0.5.1 and earlier** | Current behavior. Correct and unchanged. | **Unsafe.** The binary does not know the manifest exists: `init` creates `docs/{design,plans,journal,qna}` shells, `drift` reports the stores missing, `update --all --apply` overwrites the repository's v2-aware migration skill with the pre-v2 asset. No technical guard is possible; the reader-first gate below is the guard. |
-| **v0.5.2 (R1)** | Correct v1 behavior. `layout show` synthesizes v1. Mutations allowed. | Reads and validates the manifest. `drift` reports `unsupported: min_reader`; `doctor` warns; `init` and fleet `update` refuse and skip; no file is written; no skill is refreshed. |
-| **v0.6.0 (R2)** | Correct v1 behavior. `drift` reports v1 and, when entities are stale, advises the migration skill. No automatic migration. | Full read/write support: `layout show\|validate\|path\|migrate`, layout-aware `init`, guarded fleet `update`, v2-aware skills. |
-| **v0.7.0+** | Correct v1 behavior. | Correct v2 behavior, and future layouts must set `min_reader` to the first binary that understands them. |
+| **v0.5.1 and earlier** | Current behavior. Correct and unchanged. | **Unsafe.** The binary does not know the manifest exists: `init` creates `docs/{design,plans,journal,qna}` shells, `drift` reports the stores missing, and `update --all --apply` overwrites the repository's v2-aware migration skill with the pre-v2 asset. No technical guard is possible; the deploy-before-flip gate below is the guard. |
+| **v0.5.99 (test-only older manifest-aware build)** | Correct v1 behavior. | Reads and validates; refuses mutation with `unsupported: min_reader`. This row exists only as a test control. |
+| **v0.6.0** | Correct v1 behavior. `drift` reports v1 and, when entities are stale, advises the migration skill. No automatic migration. | Full read/write support: `layout show\|validate\|path\|migrate`, layout-aware `init`, guarded fleet `update`, v2-aware skills. |
+| **v0.7.0+** | Correct v1 behavior. | Correct v2 behavior; future layouts set `min_reader` to the first binary that understands them. |
 
-### 6.3 Mixed-fleet update gate
+### 6.3 Deploy-before-flip gate
 
 The repository cannot enforce this from inside a v2 manifest, because a binary
-that does not read the manifest cannot be told to stop. The gate is therefore
-operational and ordered:
+that does not read the manifest cannot be told to stop. The gate is operational
+and ordered:
 
-1. Release **R1 v0.5.2**.
-2. Upgrade every machine that can run `agents init`, `agents update --all
-   --apply`, or `agents save` against the fleet. Verify with `agents version`
-   on each machine, and with `agents layout show` against a v2 fixture.
-3. Only after every machine reports `v0.5.2` or newer, release **R2 v0.6.0**.
-4. Only after R2 is installed, run the paperbubble migration playbook.
-5. A machine still on v0.5.1 must be upgraded before it is allowed to run any
-   fleet command. The release notes name this as a hard prerequisite, not a
-   suggestion.
+1. Implement and test v0.6.0, including the version-stamped guard matrix in
+   §6.1.
+2. Release v0.6.0.
+3. Upgrade every machine that can run `agents init`, `agents update --all
+   --apply`, or `agents save` against the fleet. Verify both `agents version`
+   and that the `agents` resolved on `PATH` is that binary; the existing
+   `binary` doctor check exists for exactly this.
+4. Only after every machine passes, run the paperbubble migration playbook.
+5. A machine still on v0.5.1 cannot be prevented from touching a v2
+   repository; it is prevented from existing on a machine that touches the
+   fleet. The release notes name this as a hard prerequisite, not a suggestion.
 
-During the R2 window, a `v0.6.0` binary's `agents update --all --apply` reads
-each repository's manifest before wiring or refreshing anything. A repository
-that is unsupported, invalid, or `migrating` is skipped with a named reason and
-its skill bytes are left untouched. A v1 repository is wired and refreshed as
-before.
+`v0.6.0` still reads each repository's manifest before wiring or refreshing in
+fleet `update`, and skips unsupported, invalid, or `migrating` repositories
+with a named reason. That is defense-in-depth for future schema versions and
+for an older manifest-aware binary, not the primary gate.
 
 ### 6.4 Repair path when an old binary touched a v2 repository
 
@@ -407,7 +427,7 @@ Symptoms:
 
 Repair, in order:
 
-1. Install R2 (preferred) or R1 on the machine that will touch the repository.
+1. Install v0.6.0 on the machine that will touch the repository.
 2. `agents layout validate` to confirm the manifest itself was not damaged.
 3. `git status --porcelain` and inspect the `docs/` entries. If `docs/` holds
    only the regenerated four-store shell, `git rm -r docs/` (or remove the
@@ -434,8 +454,7 @@ agents layout migrate --profile <p> [--store-root <path> | --stores <role=path> 
                        [--backup-tag <name>] [--json]
 ```
 
-R1 ships the first three only. R2 adds `migrate` and the layout flags on
-`agents init`.
+v0.6.0 ships all four subcommands and the layout flags on `agents init`.
 
 `show` prints the resolved layout: schema, profile, status, minimum reader,
 content root, archive, and one line per role. `--json` emits the normalized
@@ -488,7 +507,7 @@ Full semantics are in §9 and the migration playbook. Surface rules:
 | `unsupported_detail` | `""` | human-readable reason |
 
 `docs_stores` remains, populated with role presence for both versions, and is
-deprecated. It is removed no earlier than two minor releases after R2 (not
+deprecated. It is removed no earlier than two minor releases after v0.6.0 (not
 before `v0.8.0`), and the release notes must name the removal.
 `misplaced_docs` keeps its meaning. For v2 it walks the declared stores and, when
 `store_root` is present, that root, excluding the archive. It does not walk
@@ -508,12 +527,12 @@ documents.
 | `layout:stores` | `ok` when all four roles resolve to directories; `warn` with the missing role and path otherwise |
 | `layout:qna` | the freshness indicator, resolved through the `qna` role instead of hardcoded `docs/qna` |
 
-`docs:qna` is removed; the rename is named in the R1 release notes.
+`docs:qna` is removed; the rename is named in the v0.6.0 release notes.
 
 ### 7.5 Init and update
 
 `agents init` keeps its v1 behavior when no layout flag and no manifest is
-present. In R2 it also accepts `--profile`, `--store-root`, `--content-root`,
+present. In v0.6.0 it also accepts `--profile`, `--store-root`, `--content-root`,
 `--stores`, and `--archive`; any of them creates a v2 layout. On a v2
 repository with an active supported manifest, `init` is a no-op for an intact
 layout and creates only missing *manifest-declared* stores. It never creates
@@ -565,10 +584,8 @@ changes state.
 
 ### 8.2 Skill digest catalog
 
-R1 changes no skill asset.
-
-R2 changes both embedded skills, so both old versions enter the legacy digest
-catalog:
+v0.6.0 changes both embedded skills in the same release, so both old versions
+enter the legacy digest catalog:
 
 - `recording-what-you-learn`: keep the existing 2026-08-20 legacy entry and add
   the v0.5.1 text as a second legacy entry;
@@ -621,7 +638,7 @@ path does not paste a router at all: it restores the exact bytes from
 
 `.agents/AGENTS.md` is user-owned and stays semantic: what the content is, what
 each role is for, and which conventions apply. It does not name physical store
-paths. The starter template is updated in R2; existing repositories keep their
+paths. The starter template is updated in v0.6.0; existing repositories keep their
 own file and are corrected by the migration skill's prose reconciliation, not
 by a deterministic overwrite.
 
@@ -752,7 +769,7 @@ change. The preferred path is branch isolation, which never needs it.
 |---|---|---|
 | Resolution | implicit v1; v2 map; v2 shorthand; scattered map; `store_root` agreement | A layout shape with no resolver |
 | Validation | V1–V19, including duplicate JSON keys, `..`, absolute paths, symlink components, `.agents/` stores, overlap, case-only collisions | A manifest that redirects a write outside the repo or onto another store |
-| Version | `v0.5.2` vs `min_reader: 0.6.0` refuses; `v0.6.0` allows; `dev` is current source; v1 positive control always allows | Silent mutation by an old reader |
+| Version | a simulated older manifest-aware version vs `min_reader: 0.6.0` refuses; `v0.6.0` allows; `dev` refuses mutation but reads; v1 positive control always allows | Silent mutation by an older manifest-aware reader |
 | Router/digest | v1 stays `clean_current`; v2 router accepted; v1 router in a v2 repo is `clean_legacy`; every changed asset has a legacy digest | The 2026-09-01 fleet-wide `customized` accident, or a v1 router reported as drift |
 | Drift | v1 fields unchanged plus new fields; v2 stores/profile/min_reader/status; `unsupported`; misplaced only inside declared stores; archive excluded | A report that cannot be acted on, or a v1 behavior change |
 | Doctor | `layout:manifest` for v1/active/migrating/unsupported/invalid; `layout:stores`; `layout:qna` at `docs/qna` and `.context/qna` | A v2 repository with no health check |
@@ -771,8 +788,8 @@ pass, and a probe that never ran looks green.
 
 | Risk | Mitigation |
 |---|---|
-| An old binary touches a v2 repo | Reader-first release gate; R1's mutation guard; §6.4 repair path; paperbubble is the only v2 repository in round 1 |
-| A changed asset makes the fleet report `customized` | R1 changes no asset; R2 adds legacy digests for both changed skills, gated by tests |
+| An old binary touches a v2 repo | Deploy-before-flip gate (§6.3); v0.6.0's mutation guard; §6.4 repair path; paperbubble is the only v2 repository in round 1 |
+| A changed asset makes the fleet report `customized` | v0.6.0 adds legacy digests for both changed skills in the same release, gated by tests |
 | `agents update --all --apply` refreshes a skill in an unsupported repo | The manifest gate runs before wiring and before `RefreshInfrastructuralSkills`; negative test asserts byte-identical skill |
 | `--local` repo silently loses its manifest on clone | V18 rejects v2 in a repo whose `.agents/` is excluded; `init --local --profile` refuses |
 | Archive gets moved by a well-meaning migration | The archive is recorded, excluded from move lists and walks, and a fixture asserts its blobs are unchanged |
@@ -788,8 +805,8 @@ No implementation starts until:
 1. this design, its implementation plan, and its migration playbook are
    reviewed and the seven decisions in §0 are confirmed or changed;
 2. the plan is approved for execution;
-3. R1 is released and every fleet machine is confirmed at `>= v0.5.2`;
-4. R2 is released;
-5. the paperbubble dry run is presented and the human approves the `--apply`.
+3. v0.6.0 is released, and every fleet machine is confirmed to resolve that
+   binary on `PATH`;
+4. the paperbubble dry run is presented and the human approves the `--apply`.
 
 Until then, paperbubble stays frozen and no fleet repository is migrated.

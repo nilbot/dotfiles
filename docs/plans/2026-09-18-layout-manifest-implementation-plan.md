@@ -6,17 +6,18 @@
 > checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the four documentation roles resolvable to any repository-relative
-store through `.agents/layout.json`, reader-first, without changing v1 behavior
-and without leaving a `docs/` shell in a content vault.
+store through `.agents/layout.json`, without changing v1 filesystem or mutation
+behavior, and without leaving a `docs/` shell in a content vault.
 
 **Architecture:** A new read-only `agents/internal/layout` package resolves,
-normalizes, validates, and version-checks a layout. R1 (v0.5.2) publishes that
-reader and a mutation guard, changes no embedded asset, and adds read-only
-`agents layout show|validate|path`. R2 (v0.6.0) adds atomic manifest writes,
-layout-aware `scaffold.CreateWithLayout`, `agents init` layout flags,
-`agents layout migrate` (plan/apply/resume), role-based skills, and legacy
-digests for both changed skill assets. Drift and doctor consume the resolved
-layout instead of joining `docs/`.
+normalizes, validates, and version-checks a layout. One release, **v0.6.0**,
+ships the reader, the mutation guard, read-only `agents layout
+show|validate|path`, atomic manifest writes, layout-aware
+`scaffold.CreateWithLayout`, `agents init` layout flags, `agents layout migrate`
+(plan/apply/resume), role-based skills, and legacy digests for both changed
+skill assets. The read-only/write separation is a capability boundary tested
+with version-stamped fixtures, not two releases. Drift and doctor consume the
+resolved layout instead of joining `docs/`.
 
 **Tech Stack:** Go 1.26+ standard library (`encoding/json`, `os`, `path/filepath`,
 `crypto/sha256`), `agents/internal/repo` for Git, Markdown assets embedded with
@@ -31,19 +32,20 @@ layout instead of joining `docs/`.
 - Schema string is exactly `agents.layout/v2`; the synthesized legacy schema is
   `agents.layout/v1`.
 - Manifest path is exactly `.agents/layout.json`.
-- `min_reader` written by R2 is exactly `0.6.0`.
+- `min_reader` written by v0.6.0 is exactly `0.6.0`.
 - Profiles are exactly `code-repo`, `content-vault`, `custom`.
 - Roles are exactly `design`, `plans`, `journal`, `qna`; all four are required
   in v2.
 - `layout_status` is exactly `active` or `migrating`.
-- R1 is released as `v0.5.2`; R2 is released as `v0.6.0`.
+- The single release is `v0.6.0`. No `v0.5.2` release exists; `v0.5.2` may
+  appear only as an injected older version in tests.
 - Exit codes: `OK=0`, `Advisory=1`, `Block=2`, `Malformed=3`, `Skip=4`,
   `NoRecord=5` (`agents/internal/exitcode`).
 - No v1 filesystem or mutation behavior changes when `.agents/layout.json` is
   absent. Drift gains additive fields and doctor renames `docs:qna` to
   `layout:qna`; both are named in the design.
-- No embedded asset changes in R1. Every changed asset in R2 gets a legacy
-  digest entry for its exact previous bytes.
+- Every changed embedded asset in v0.6.0 gets a legacy digest entry for its
+  exact previous bytes, in the same release.
 - The archive is never moved, rewritten, or walked for misplaced documents.
 - No migration may copy a file; `git mv` is the only mechanism.
 - All Go test invocations use `-count=1`; tests read tracked non-Go files.
@@ -52,8 +54,9 @@ layout instead of joining `docs/`.
   affected docs update in the same change set.
 - Direct pushes to `master` are forbidden; work lands through a PR that passes
   the `gate` job.
-- The paperbubble repository stays frozen until the playbook is approved and R2
-  is installed. No task in this plan runs against it.
+- The paperbubble repository stays frozen until the playbook is approved and
+  v0.6.0 is installed and verified on every machine. No task in this plan runs
+  against it.
 
 ## Locked Interfaces
 
@@ -126,11 +129,11 @@ func HasProblem(ps []Problem, code string) bool
 func Support(running string, l Layout) (ok bool, reason string)
 func Path(l Layout, role string) (string, bool)
 
-// agents/internal/layout/write.go (R2)
+// agents/internal/layout/write.go (v0.6.0)
 func MarshalManifest(m Manifest) ([]byte, error)
 func WriteManifest(root string, m Manifest) error
 
-// agents/internal/layout/migrate.go (R2)
+// agents/internal/layout/migrate.go (v0.6.0)
 type MigrateOptions struct {
 	Profile     string
 	StoreRoot   string
@@ -177,7 +180,7 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error)
 func ApplyMigration(root string, p Plan, backupTag string) error
 func ResumeMigration(root string) error
 
-// agents/internal/scaffold (R2)
+// agents/internal/scaffold (v0.6.0)
 func CreateWithLayout(root string, local bool, l layout.Layout) error
 
 // agents/internal/drift
@@ -217,7 +220,7 @@ the tests below. They are test scaffolding, never production code.
 
 ---
 
-## Part A — R1 v0.5.2: read-only layout awareness
+## Part A — layout reader, guard, and read-only commands (ships in v0.6.0)
 
 ### Task 1: Resolve the implicit v1 and manifest v2 layouts
 
@@ -1681,14 +1684,19 @@ git commit -m "fix(layout): guard init and fleet update against unsupported mani
 
 ---
 
-### Task 8: Release R1 and stop for the fleet-upgrade gate
+### Task 8: Prove the reader/writer guard with version-stamped test binaries
 
 **Files:**
-- Modify: `agents/README.md` (release note section, if present)
+- No production file changes. The fixture lives in a `mktemp -d` directory.
+- Durable coverage stays in `agents/internal/layout` and `agents/cmd_*_test.go`,
+  where the running version is injected directly.
 
 **Interfaces:**
-- Consumes: Tasks 1–7.
-- Produces: R1 `v0.5.2` installed on every machine that can touch the fleet.
+- Consumes: Tasks 1–7, and the `version` variable in `agents/main.go`.
+- Produces: a binary-level positive/negative control. An older manifest-aware
+  build refuses to mutate a v2 fixture; v0.6.0 operates on it; v1 stays mutable
+  for both. This is the two-version test the design requires, without two
+  releases.
 
 - [ ] **Step 1: Run the local verification gate**
 
@@ -1702,54 +1710,70 @@ go vet ./...
 Expected: all three pass. `-count=1` is mandatory; the repo's `verify.yml`
 carries the reason.
 
-- [ ] **Step 2: Rebuild and smoke-test the local binary**
+- [ ] **Step 2: Build the two version-stamped binaries**
 
 ```bash
-cd /Users/nilbot/dotfiles
-make agents
-agents version   # `make agents` is an unstamped dev build; the released archive is stamped v0.5.2
-agents doctor; echo "exit=$?"
-agents drift --all; echo "exit=$?"
+cd /Users/nilbot/dotfiles/agents
+go build -o /tmp/agents-old -ldflags "-X main.version=v0.5.99" .
+go build -o /tmp/agents-new -ldflags "-X main.version=v0.6.0" .
+/tmp/agents-old version
+/tmp/agents-new version
 ```
 
-Expected: the same three doctor warnings as the 2026-09-18 baseline (nothing new
-from this change), and drift exits 1 only for the pre-existing autogo-mlx and
-desktop_pet drift.
+- [ ] **Step 3: Build a disposable v2 fixture**
 
-- [ ] **Step 3: Release `v0.5.2` (human-gated)**
+Use the fixture from the 2026-09-18 probe: a temp git repo with
+`.agents/layout.json` (`min_reader: 0.6.0`), the four `.context/<role>/README.md`
+files, the v2 router, and a `.agents/skills/migrating-fleet-context/SKILL.md`
+containing a unique marker. Redirect `XDG_STATE_HOME` to a temp directory and
+commit the fixture before any command runs.
+
+- [ ] **Step 4: Assert the old binary refuses**
 
 ```bash
-git tag -a v0.5.2 -m "agents v0.5.2: reader-first layout manifests"
-git push origin v0.5.2
+XDG_STATE_HOME="$STATE" /tmp/agents-old layout show --json   # reads v2
+XDG_STATE_HOME="$STATE" /tmp/agents-old layout validate      # exit 1: unsupported
+XDG_STATE_HOME="$STATE" /tmp/agents-old init                 # refuses, no write
+XDG_STATE_HOME="$STATE" /tmp/agents-old update --all --apply # skips, no refresh
+git status --porcelain                                       # must be empty
+grep -q 'MARKER' .agents/skills/migrating-fleet-context/SKILL.md
 ```
 
-The release workflow builds the archives and syncs the Homebrew formula.
+Expected: the reads succeed, every mutation refuses or skips, the working tree
+is unchanged, and the marker survives. This is the negative control.
 
-- [ ] **Step 4: Upgrade every fleet machine and record the gate**
-
-On every machine that can run `agents init`, `agents update --all --apply`, or
-`agents save` against the fleet:
+- [ ] **Step 5: Assert v0.6.0 operates**
 
 ```bash
-brew upgrade agents
-agents version         # must be >= v0.5.2
-agents layout validate # a v1 repo must exit 0
+XDG_STATE_HOME="$STATE" /tmp/agents-new layout validate      # exit 0
+XDG_STATE_HOME="$STATE" /tmp/agents-new init                 # no-op on intact v2
+XDG_STATE_HOME="$STATE" /tmp/agents-new update --all --apply # refreshes skills
 ```
 
-Do not start R2 until every machine passes. Name each machine in the rollout
-note. This is the reader-first gate from design §6.3.
+Expected: `init` leaves the tree unchanged; `update` refreshes the migration
+skill and wires the repository.
 
-- [ ] **Step 5: Commit any release-note change and merge R1**
+- [ ] **Step 6: Run the v1 positive control**
 
 ```bash
-git add agents/README.md
-git commit -m "docs(agents): describe the reader-first layout release"
-gh pr create --fill
+XDG_STATE_HOME="$STATE" /tmp/agents-old init  # in a v1 fixture, twice
+XDG_STATE_HOME="$STATE" /tmp/agents-new init  # same fixture
+git status --porcelain                        # must be empty after both
 ```
+
+Expected: v1 is mutable and idempotent for both binaries. This is the control
+that keeps the guard from being a blanket refusal.
+
+- [ ] **Step 7: Record the evidence in the PR**
+
+The durable automated gates remain the unit tests in Tasks 2 and 7
+(`Support("v0.5.99", v2)` refuses, `Support("v0.6.0", v2)` allows, v1 allows).
+The binary-level run is the end-to-end confirmation that the version stamp
+reaches the guard.
 
 ---
 
-## Part B — R2 v0.6.0: write support and migration
+## Part B — write support and migration (same v0.6.0 release)
 
 ### Task 9: Layout-aware scaffold, manifest writes, and `init` flags
 
@@ -1977,7 +2001,7 @@ because it must move the stores and prove the router is boilerplate.
 
 Creation is a mutation: it requires `layout.Support(running, target)` to be
 true. An unstamped `make agents` dev build therefore refuses v2 creation; the
-operator uses the released R2 binary, and tests inject `v0.6.0`.
+operator uses the released v0.6.0 binary, and tests inject `v0.6.0`.
 
 `--local` with a v2 layout, or with `--profile`/`--store-root`, is refused with
 the design's Decision 6 reason.
@@ -2718,7 +2742,7 @@ TestLayoutManifestIsVisibleToLinguist
 - [ ] **Step 5: Update the design catalog**
 
 The design row is already in `docs/design/README.md` with status **proposed**.
-When R2 ships, update that status to **implemented 2026-xx-xx** and name the
+When v0.6.0 ships, update that status to **implemented 2026-xx-xx** and name the
 released version.
 
 - [ ] **Step 6: Run every gate**
@@ -2745,14 +2769,15 @@ git commit -m "test(layout): cover migration fixtures, links, and prose gates"
 
 ---
 
-### Task 16: Release R2 and hand the pilot to the playbook
+### Task 16: Release v0.6.0, verify the deploy gate, and hand the pilot to the playbook
 
 **Files:**
 - Modify: `agents/README.md`, root `README.md`
 
 **Interfaces:**
 - Consumes: Tasks 9–15.
-- Produces: R2 `v0.6.0` and the go/no-go for the paperbubble dry run.
+- Produces: v0.6.0 installed and verified on every machine, and the go/no-go
+  for the paperbubble dry run.
 
 - [ ] **Step 1: Re-run the full local gate**
 
@@ -2778,17 +2803,26 @@ git tag -a v0.6.0 -m "agents v0.6.0: layout manifests, store roots, migration"
 git push origin v0.6.0
 ```
 
-- [ ] **Step 3: Upgrade and run the fleet dry run**
+- [ ] **Step 3: Upgrade every machine and verify the resolved binary**
 
 ```bash
 brew upgrade agents
 agents version                 # expect v0.6.0
+command -v agents              # record the resolved path
+agents doctor                  # the `binary` check must report ok
 agents update --all            # dry run: confirm v1 repos would rewire and refresh
 agents drift --all --json      # expect no new v2 repositories yet
 ```
 
-Do not run `agents update --all --apply` until the dry run names every repository
-and every reason. No v2 repository exists yet.
+Repeat on every machine that can run `agents init`, `agents update --all
+--apply`, or `agents save` against the fleet. Record each machine, the version,
+and the resolved path. `agents doctor`'s `binary` check is the one that proves
+the `agents` on `PATH` is the running executable, which is exactly the stale
+binary path this gate exists to catch.
+
+Do not run `agents update --all --apply` until the dry run names every
+repository and every reason. Do not start the paperbubble migration until every
+machine passes. No v2 repository exists yet.
 
 - [ ] **Step 4: Hand off to the playbook**
 
@@ -2810,7 +2844,7 @@ gate. Do not run `--apply` without the human's explicit approval.
 | 4 v2/v1 routers and digest catalog | 3, 13 |
 | 5 CLI, drift, doctor, scaffold, fleet, `layout` | 4, 5, 6, 9, 10, 11, 12, 14 |
 | 6 skills | 13 |
-| 7 reader-first releases and matrix | 6, 7, 8, 16 |
+| 7 deploy-before-flip gate and version matrix | 2, 7, 8, 16 |
 | 8 migration and rollback | 10, 11, 12, and the playbook |
 | 9 tests, prose gates, fixtures | 2, 3, 13, 14, 15 |
 

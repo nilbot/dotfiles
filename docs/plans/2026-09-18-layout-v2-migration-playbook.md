@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-18
 **Status:** **Proposed — do not execute.** This playbook runs only after the
-design and implementation plan are approved, R2 `v0.6.0` is released, and every
-machine that can touch the fleet is at `>= v0.5.2`.
+design and implementation plan are approved, `v0.6.0` is released, and every
+machine that can touch the fleet resolves that binary on `PATH`.
 **Scope:** exactly one repository, `/Users/nilbot/gist/paperbubble`. It does not
 migrate dotfiles, cowork, autogo-mlx, lewm-mlx, or desktop_pet.
 **Design:** [layout manifest and store-root freedom](../design/2026-09-18-layout-manifest-and-store-root-design.md)
@@ -32,10 +32,14 @@ first and why no other repository is in scope.
 
 ## 1. Non-negotiables
 
-1. **Reader-first.** Do not run `--apply` until every machine that can run
-   `agents init`, `agents update --all --apply`, or `agents save` against the
-   fleet reports `agents version >= v0.5.2`. A v0.5.1 binary cannot see the
-   manifest and will recreate the shell.
+1. **Deploy before flip.** Do not run `--apply` until every machine that can
+   run `agents init`, `agents update --all --apply`, or `agents save` against
+   the fleet resolves `v0.6.0` on `PATH` (`agents version` plus the `binary`
+   doctor check). A v0.5.1 binary cannot see the manifest. Measured on a
+   disposable fixture on 2026-09-18: it recreates the four `docs/` READMEs on a
+   v2 repository and overwrites a v2-aware migration skill. There is no
+   technical guard for a pre-manifest binary; this deployment gate is the
+   guard.
 2. **Frozen until approval.** No paperbubble write happens before Step 4's
    explicit human approval.
 3. **Branch and tag first.** The migration runs on a dedicated branch, and the
@@ -46,9 +50,9 @@ first and why no other repository is in scope.
    appears before execution, stop: the tool must record it and leave it alone.
 6. **No `agents save` during the migration.** It commits only `.agents/` and
    would split the manifest from the moved stores.
-7. **No fleet-wide `agents update --all --apply` as part of the pilot.** R2's
+7. **No fleet-wide `agents update --all --apply` as part of the pilot.** The
    update gate would touch the five v1 repositories too. Refresh paperbubble's
-   bundled skills from the R2 assets on the pilot branch (Step 6) and leave the
+   bundled skills from the v0.6.0 assets on the pilot branch (Step 6) and leave the
    fleet alone.
 8. **The vault is content, the stores are meta.** Never add vault notes to
    `.context/`, and never treat `.context/` as part of the vault's content
@@ -226,7 +230,7 @@ report.
 
 ## 8. Step 6 — Refresh skills and reconcile prose
 
-The migrated repository must end with the R2 bundled skills, not the v0.5.1
+The migrated repository must end with the v0.6.0 bundled skills, not the v0.5.1
 ones. This step deliberately avoids `agents update --all --apply`.
 
 ### 8.1 Verify nothing local would be lost
@@ -251,7 +255,7 @@ user-owned prose and needs a three-way review, not a replacement; a modified
 `migrating-fleet-context` is a stale agent-owned asset, but the divergence
 still needs to be read before it is discarded.
 
-### 8.2 Replace with the R2 assets
+### 8.2 Replace with the v0.6.0 assets
 
 ```bash
 cp "$SRC/agents/internal/scaffold/assets/skills/recording-what-you-learn/SKILL.md" \
@@ -385,7 +389,7 @@ After paperbubble is merged:
 - paperbubble is the only v2 repository; `agents drift --json` reports it
   supported and clean;
 - the other five repositories remain v1 and are not touched;
-- after R2, the other repositories' `recording-what-you-learn` copies report
+- after v0.6.0, the other repositories' `recording-what-you-learn` copies report
   `clean_legacy`, so `agents drift --all` exits 1 until each repository is
   migrated. That is the accepted advisory from design Decision 7, not a
   regression;
