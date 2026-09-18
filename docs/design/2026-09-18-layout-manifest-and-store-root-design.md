@@ -51,7 +51,7 @@ are open. Until the queue is empty, §0 is provisional.
 |---|---|---|---|
 | Q1 | §0 row 1, §4 | Is one `store_root` and one meta root the right model, or can roles have different roots and different collaboration policies? Concrete example: `docs/{qna,journal}` for human collaboration and `docs/agents/{design,plans}` for almost-exclusively agent writes. | resolved 2026-09-18 — the `stores` map may point roles at different roots; the manifest is physical-only; collaboration policy belongs in `.agents/AGENTS.md` |
 | Q2 | §0 row 2 | Is `content_root` needed at all? `content-vault` may already carry the semantic meaning, and `.context` is inside any content root by construction. | resolved 2026-09-18 — drop it; `profile` carries the semantic meaning |
-| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | open |
+| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | open — leaning: profile is an open, non-binding label; schema is the compatibility unit; working model in §0.4 |
 | Q4 | §9.4 | Is `--resume` really a linear list progression? The full state machine is not written down: partial directory moves, failure between `git mv` and the manifest update, and non-linear recovery all need explicit states and transitions. | open |
 | Q5 | §0 row 5, §9.5 | Does archive immutability depend on whether the archive holds meta or more explicit knowledge? What is the rule when the archive mixes both? | open |
 | Q6 | §0 row 6, §7.5 | For `--local` repositories: where are docs stored and tracked? How does `agents` determine trackedness? If docs are tracked while `.agents/` is not, how are skill writes to tracked docs governed? Is `.gitignore` a projection of `layout.json`, or is the manifest a projection of ignore state? | open |
@@ -140,6 +140,35 @@ Impact:
   that path.
 - cost: a lexical sweep, not a semantic change. `drifted` -> `diverged` is the
   largest part because "drifted" appears in the design's core narrative.
+
+### 0.4 Q3 profile evolution (proposed, leaning)
+
+`profile` is a **non-binding label**: it selects defaults, vocabulary, and
+advisory checks. It never changes validation and never changes the meaning of
+`stores`. Everything that must be true for safe operation is explicit in
+`schema`, `min_mut_ver_floor`, `stores`, `store_root`, `archive`, or
+`.agents/AGENTS.md`.
+
+Rules:
+
+- The schema version is the compatibility unit. A reader keeps the profile
+  vocabulary of every schema version it can read.
+- Adding a profile is an open-string change. Unknown values are accepted, not
+  invalid; `init` and `migrate` offer only current names, and `doctor` /
+  `layout show` warn on unknown or deprecated names. If this is accepted, V14
+  changes from a hard `profile_unknown` failure to a warning.
+- Removing a profile means removing it from the offered defaults and, if its
+  semantics are gone, mapping it in the next schema migration. It is never
+  silently reinterpreted under the same name.
+- A fork is a new profile name (`content-vault` → `content-vault-editorial`),
+  not a version suffix. Existing repositories keep the pre-fork label until a
+  human or the migration skill decides which fork applies; if neither fits,
+  the answer is `custom`. The physical layout is already explicit, so the
+  pending decision is operational, not structural.
+- A profile change is a manifest-label migration. The migration skill may edit
+  the label and run `agents layout validate`. A dedicated
+  `agents layout profile set <name>` command is deferred until profile changes
+  become frequent enough to deserve a command.
 
 ---
 
