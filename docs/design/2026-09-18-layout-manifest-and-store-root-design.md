@@ -51,7 +51,7 @@ are open. Until the queue is empty, §0 is provisional.
 |---|---|---|---|
 | Q1 | §0 row 1, §4 | Is one `store_root` and one meta root the right model, or can roles have different roots and different collaboration policies? Concrete example: `docs/{qna,journal}` for human collaboration and `docs/agents/{design,plans}` for almost-exclusively agent writes. | resolved 2026-09-18 — the `stores` map may point roles at different roots; the manifest is physical-only; collaboration policy belongs in `.agents/AGENTS.md` |
 | Q2 | §0 row 2 | Is `content_root` needed at all? `content-vault` may already carry the semantic meaning, and `.context` is inside any content root by construction. | resolved 2026-09-18 — drop it; `profile` carries the semantic meaning |
-| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | open — leaning: profile is an open, non-binding label; schema is the compatibility unit; working model in §0.4 |
+| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | open — leaning: protobuf-style stable identities; profile names are identities, not versions; schema is the compatibility unit; working model and audit in §0.4 |
 | Q4 | §9.4 | Is `--resume` really a linear list progression? The full state machine is not written down: partial directory moves, failure between `git mv` and the manifest update, and non-linear recovery all need explicit states and transitions. | open |
 | Q5 | §0 row 5, §9.5 | Does archive immutability depend on whether the archive holds meta or more explicit knowledge? What is the rule when the archive mixes both? | open |
 | Q6 | §0 row 6, §7.5 | For `--local` repositories: where are docs stored and tracked? How does `agents` determine trackedness? If docs are tracked while `.agents/` is not, how are skill writes to tracked docs governed? Is `.gitignore` a projection of `layout.json`, or is the manifest a projection of ignore state? | open |
@@ -148,6 +148,71 @@ advisory checks. It never changes validation and never changes the meaning of
 `stores`. Everything that must be true for safe operation is explicit in
 `schema`, `min_mut_ver_floor`, `stores`, `store_root`, `archive`, or
 `.agents/AGENTS.md`.
+
+Protobuf is the right precedent, with one correction. Protobuf binary
+compatibility is carried by **field and enum numbers**, not names; but
+`layout.json` is JSON, so an enum value's **name is on the wire**. The correct
+borrow is protobuf's identity discipline, applied to names:
+
+| protobuf concept | `layout.json` equivalent |
+|---|---|
+| message type / version | `schema: agents.layout/v2` |
+| field number | no separate identity; the JSON name is the identity |
+| enum value number | no separate identity; the profile name is the identity |
+| add an enum value | add a profile name; old readers must tolerate unknown values |
+| remove an enum value | retire the name, never reuse it; a migration maps it |
+| fork | new profile name; the old name keeps its old meaning |
+| never change a number's meaning | never change a profile name's meaning |
+| open enum (proto3) | unknown profile accepted and treated as `custom` for defaults, with a warning |
+| closed enum (proto2) | unknown profile is a hard failure; requires a schema bump |
+
+The proposed model is the open enum. The schema version is the compatibility
+contract; profile names are stable identities inside that schema.
+
+#### What is currently inconsistent
+
+The main body still reads as though `profile` were a closed, behavior-bearing
+enum. These details are the source of the "English feels off" reaction:
+
+1. §4.2 says `profile` "selects defaults and the vocabulary the skills use",
+   but no defaults are defined. After `content_root` was dropped, the only
+   remaining creation-time default candidate is the store layout; today
+   `agents init --profile content-vault` without `--store-root` is undefined.
+2. V14 makes an unknown profile a hard validation failure. That contradicts
+   "profile never changes validation"; under the open model it must be a
+   warning that falls back to `custom` behavior.
+3. The vocabulary table in §3 defines `role`, `store`, `store_root`, and
+   `manifest`, but never defines `profile`.
+4. `--profile` as a creation-time input and `profile` as a persisted manifest
+   label are conflated; the design never says which one is the stable
+   identity.
+5. `min_mut_ver_floor` gates binaries, not profile semantics. Profile
+   evolution is a schema/migration concern; the version floor does not make a
+   profile fork safe or unsafe.
+6. The main body still assumes the three-name closed set; only this section
+   describes the open model.
+
+#### Proposed fixes (pending confirmation)
+
+1. Define `profile` in §3: a stable, human-readable identity for a set of
+   creation-time defaults and advisory conventions. It is not a version, not a
+   type, and not a validation rule.
+2. Define creation-time defaults:
+   - `code-repo` → stores `docs/{design,plans,journal,qna}` (the v1 shape);
+   - `content-vault` → stores `.context/{design,plans,journal,qna}`;
+   - `custom` → no defaults; `--store-root` or `--stores` is required.
+   `agents layout migrate` always requires an explicit `--store-root` or
+   `--stores`; it never takes a profile default, because a migration must be
+   explicit.
+3. V14 becomes non-empty validation. Unknown and deprecated profiles are
+   warnings from `layout validate` and `doctor`; an unknown profile behaves as
+   `custom` for defaults. Remove `profile_unknown` from the hard-problem list.
+4. Distinguish `--profile` (creation-time input used by `init` and by the
+   dry-run planner to select a template) from the manifest `profile`
+   (persisted identity, read-only for behavior). Changing the persisted
+   identity is a label migration, not a layout migration.
+5. `min_mut_ver_floor` is not the profile compatibility axis; the schema
+   version and the migration are.
 
 Rules:
 
