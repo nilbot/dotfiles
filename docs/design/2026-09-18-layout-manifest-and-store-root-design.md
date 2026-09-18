@@ -25,12 +25,12 @@ the design, plan, and playbook all change before implementation starts.
 
 | # | Question | Recommendation | Why |
 |---|---|---|---|
-| 1 | Canonical `stores` form | **Role→path map is canonical and the only form in the manifest.** Profile creation defaults may put all four roles under one parent, but they expand to the map; `--stores role=path` is the CLI override. There is no persisted `store_root`. | One shape to parse. A shorthand that survives on disk means two parsers and an ambiguity rule; expanding at creation time removes both. The map already carries every path, and profile defaults cover the shared-parent case. |
+| 1 | Canonical `stores` form | **Role→path map is canonical and the only form in the manifest.** CLI template defaults may put all four roles under one parent, but they expand to the map; `--stores role=path` is the CLI override. There is no persisted `store_root`. | One shape to parse. A shorthand that survives on disk means two parsers and an ambiguity rule; expanding at creation time removes both. The map already carries every path, and template defaults cover the shared-parent case. |
 | 2 | `content_root` for `content-vault` | **No — dropped.** `content-vault` already carries the semantic meaning: the repository's content is the vault and the stores are meta. The manifest describes physical paths, not a second content root. | The field had no consumer: the migration path never scans the whole content root, and `.context` is inside the repository root by construction. Keeping it would be schema weight without a behavior. |
-| 3 | Profile names and release number | Profiles `code-repo`, `content-vault`, `custom`; schema `agents.layout/v2`; **one release, v0.6.0, containing manifest parsing, the guard, write support, and migration.** | The guard and the `min_mut_ver_floor` version floor are code that ships once. The below-floor refusal is tested by injecting an older version into the new binary, not by releasing one. A single release plus a deploy-before-flip gate is sufficient for a fleet upgraded together, and it avoids maintaining two release paths for one feature. |
+| 3 | CLI template names and release number | CLI templates `code-repo` and `content-vault`; no template or `custom` means no defaults. The manifest has no `profile` field. Schema `agents.layout/v2`; **one release, v0.6.0, containing manifest parsing, the guard, write support, and migration.** | The guard and the `min_mut_ver_floor` version floor are code that ships once. The below-floor refusal is tested by injecting an older version into the new binary, not by releasing one. A single release plus a deploy-before-flip gate is sufficient for a fleet upgraded together, and it avoids maintaining two release paths for one feature. |
 | 4 | Migration command and dry-run format | `agents layout migrate`, dry run by default and `--dry-run` accepted explicitly, `--apply` to execute, `--resume` to continue, `--json` for machines. Human output is a line-oriented plan (`move`, `keep`, `blocker`, `links`) ending in `N move, M keep, K blocked, L link(s)`. | Matches `agents update --all [--apply]`'s "dry run unless applied" convention, while keeping the invocation the plan already writes (`--dry-run`). The line-oriented form is reviewable in a terminal and diffable in a PR. |
 | 5 | Archive handling during migration | **The archive is never moved and never rewritten.** The manifest records its existing path (`archive`), defaulting to `docs/archive` when that directory exists in a v1 repo. A `docs/` left holding only the archive is not a shell. | `.agents/AGENTS.md` declares `docs/archive/` strictly immutable, and the 2026-09-01 journal records what happens when a migration is ordered to move files out of it. Keeping the archive in place is the only policy that needs no exception. Moving the archive wholesale is a separate future operation, not part of v2. |
-| 6 | `agents init --local` repositories | **v2 requires a tracked `.agents/`.** `--local` plus a v2 profile is refused; the manifest would otherwise be machine-local and a clone would silently fall back to v1. | `.agents/layout.json` is repository state shared by every clone. A manifest inside a git-excluded directory cannot be that. |
+| 6 | `agents init --local` repositories | **v2 requires a tracked `.agents/`.** `--local` plus a v2 layout is refused; the manifest would otherwise be machine-local and a clone would silently fall back to v1. | `.agents/layout.json` is repository state shared by every clone. A manifest inside a git-excluded directory cannot be that. |
 | 7 | The other five repositories' `recording-what-you-learn` copies in v0.6.0 | **Do not refresh or replace their copies in round 1.** Add the old asset text to the legacy digest catalog so an unmodified old copy reports `known_legacy`, never `diverged`. `agents drift --all` still exits 1 until each repository migrates; that is accepted and named in the release notes. | The old skill is still correct for a v1 repository; the only cost is an advisory. Without the legacy digest, an unmodified old copy would be indistinguishable from a local customization — the 2026-09-01 accident. This row defers those repositories; it does not exclude them permanently. |
 
 The other five repositories are **deferred, not permanently excluded**. A code
@@ -44,21 +44,21 @@ one; until then, the old copy is still correct for that repository's v1 layout.
 
 These questions came from the first read of this document on 2026-09-18. They
 are recorded here rather than resolved one by one, because several of them can
-invalidate the recommendations above. Q1, Q2, Q8, and Q9 are resolved; the rest
-are open. Until the queue is empty, §0 is provisional.
+invalidate the recommendations above. Q1, Q2, Q3, Q8, Q9, and Q10 are
+resolved; Q4–Q7 remain open. Until the queue is empty, §0 is provisional.
 
 | # | Anchored to | Question | Status |
 |---|---|---|---|
 | Q1 | §0 row 1, §4 | Can roles have different roots and different collaboration policies? Concrete example: `docs/{qna,journal}` for human collaboration and `docs/agents/{design,plans}` for almost-exclusively agent writes. | resolved 2026-09-18 — the `stores` map may point roles at different roots; the manifest is physical-only; collaboration policy belongs in `.agents/AGENTS.md` |
-| Q2 | §0 row 2 | Is `content_root` needed at all? `content-vault` may already carry the semantic meaning, and `.context` is inside any content root by construction. | resolved 2026-09-18 — drop it; `profile` carries the semantic meaning |
-| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | open — leaning: protobuf-style stable identities; profile names are identities, not versions; schema is the compatibility unit; working model and audit in §0.4 |
+| Q2 | §0 row 2 | Is `content_root` needed at all? `content-vault` may already carry the semantic meaning, and `.context` is inside any content root by construction. | resolved 2026-09-18 — drop it; the domain doc carries the semantic meaning |
+| Q3 | §0 row 3 | Do we need future profiles such as `code-repo-v2` for backwards compatibility, and what is the profile-evolution rule? | resolved 2026-09-18 — no persisted profile; `--template` is a CLI-only creation input; semantic conventions live in `.agents/AGENTS.md`; see §0.4 |
 | Q4 | §9.4 | Is `--resume` really a linear list progression? The full state machine is not written down: partial directory moves, failure between `git mv` and the manifest update, and non-linear recovery all need explicit states and transitions. | open |
 | Q5 | §0 row 5, §9.5 | Does archive immutability depend on whether the archive holds meta or more explicit knowledge? What is the rule when the archive mixes both? | open |
 | Q6 | §0 row 6, §7.5 | For `--local` repositories: where are docs stored and tracked? How does `agents` determine trackedness? If docs are tracked while `.agents/` is not, how are skill writes to tracked docs governed? Is `.gitignore` a projection of `layout.json`, or is the manifest a projection of ignore state? | open |
 | Q7 | §0 row 7 | The other five repositories are deferred, not permanently excluded; a code repository's v2 migration can keep `docs/` and change only the manifest, router, and skills. Is the remaining advisory — `drift` exits 1 until each of them migrates — acceptable, or should the `recording-what-you-learn` asset change be deferred too? | open — row 7 reframed after review; confirm the advisory |
 | Q8 | §7.3, §8.3, `cmd_drift.go:isDriftClean` | Should `drift` accept a known-legacy user-owned skill? The old v0.5.1 names were `ok`/`clean_legacy`/`customized`; `isDriftClean` required the first for every embedded skill, while `doctor` already accepted the other two for the user-owned skill. | resolved 2026-09-18 — adopt §0.2: drift is strict currency, doctor is health, skill states are `current`/`known_legacy`/`diverged`/`missing` |
 | Q9 | §8.1, §8.4 | Should the router states use the same currency vocabulary as the skill states? The old `clean_legacy` meant the same kind of thing in both state machines, so the word "clean" carried the same ambiguity. | resolved 2026-09-18 — full alignment: `current`/`known_legacy`/`diverged`/`missing`; see §0.3 |
-| Q10 | §0 row 1, §4.2 (old V12) | Do we persist `store_root` at all? The `stores` map already carries every path; `store_root` adds a second manifest shape and a consistency rule. | resolved 2026-09-18 — remove `store_root` from the manifest and the CLI; profile defaults plus `--stores role=path` cover every case |
+| Q10 | §0 row 1, §4.2 (old V12) | Do we persist `store_root` at all? The `stores` map already carries every path; `store_root` adds a second manifest shape and a consistency rule. | resolved 2026-09-18 — remove `store_root` from the manifest and the CLI; template defaults plus `--stores role=path` cover every case |
 
 ### 0.2 Q8 model (accepted 2026-09-18)
 
@@ -142,143 +142,44 @@ Impact:
 - cost: a lexical sweep, not a semantic change. `drifted` -> `diverged` is the
   largest part because "drifted" appears in the design's core narrative.
 
-### 0.4 Q3 profile evolution (proposed, leaning)
+### 0.4 Q3 resolution (accepted 2026-09-18): no persisted profile
 
-`profile` is a **non-binding label**: it selects defaults, vocabulary, and
-advisory checks. It never changes validation and never changes the meaning of
-`stores`. Everything that must be true for safe operation is explicit in
-`schema`, `min_mut_ver_floor`, `stores`, `archive`, or
-`.agents/AGENTS.md`.
+The manifest stores physical layout only. It has no `profile` field. The
+semantic conventions — content vault versus code repository, per-role
+collaboration policy, vocabulary — live in `.agents/AGENTS.md`, which the root
+router already requires the agent to read.
 
-Protobuf is the right precedent, with one correction. Protobuf binary
-compatibility is carried by **field and enum numbers**, not names; but
-`layout.json` is JSON, so an enum value's **name is on the wire**. The correct
-borrow is protobuf's identity discipline, applied to names:
+Creation-time convenience is a CLI-only template:
 
-| protobuf concept | `layout.json` equivalent |
-|---|---|
-| message type / version | `schema: agents.layout/v2` |
-| field number | no separate identity; the JSON name is the identity |
-| enum value number | no separate identity; the profile name is the identity |
-| add an enum value | add a profile name; old readers must tolerate unknown values |
-| remove an enum value | remove the entry, reserve its number and name, never reuse either; a migration maps old values |
-| fork | new profile name; the old name keeps its old meaning |
-| never change a number's meaning | never change a profile name's meaning |
-| open enum (proto3) | unknown profile accepted and treated as `custom` for defaults, with a warning |
-| closed enum (proto2) | unknown profile is a hard failure; requires a schema bump |
+- `agents init --template code-repo` and
+  `agents layout migrate --template code-repo` expand to
+  `docs/{design,plans,journal,qna}`.
+- `--template content-vault` expands to
+  `.context/{design,plans,journal,qna}`.
+- No `--template`, or `--template custom`, means no defaults;
+  `--stores role=path` must supply all four roles.
+- `--stores` overrides individual roles on top of the template defaults; the
+  dry run shows the expanded map.
+- The template name is never written to the manifest. It has no wire identity,
+  so it needs no registry, no reserved names, no open/closed enum, and no
+  cross-version migration. Adding or removing a template is a CLI change; an
+  unknown template is a clear CLI error, and existing repositories are
+  unaffected.
+- The template table lives in the CLI (`internal/layout/templates.go` or
+  equivalent) and is covered by tests: every template's defaults pass
+  V1–V16; the expanded map is written to the manifest; the `Manifest` type and
+  its JSON have no `profile` field.
 
-Precision from the protobuf language guide: protobuf does **not** forbid
-removing an enum entry. It forbids reusing its numeric value, and it
-recommends reserving both the number and the name, because names affect JSON
-serialization. In `layout.json` the name is the only identity, so reserving
-the name is mandatory. Adding an enum value is safe; proto3 enums are open
-(unknown values are preserved), while proto2 enums are closed (unknown values
-become unknown fields). The proposed open-profile model is the proto3 shape;
-the closed model is the proto2 shape and requires a schema bump.
-
-The proposed model is the open enum. The schema version is the compatibility
-contract; profile names are stable identities inside that schema.
-
-#### What is currently inconsistent
-
-The main body still reads as though `profile` were a closed, behavior-bearing
-enum. These details are the source of the "English feels off" reaction:
-
-1. §4.2 says `profile` "selects defaults and the vocabulary the skills use",
-   but no defaults are defined. After `content_root` was dropped, the only
-   remaining creation-time default candidate is the store layout; today
-   `agents init --profile content-vault` has no defined store map.
-2. V13 makes an unknown profile a hard validation failure. That contradicts
-   "profile never changes validation"; under the open model it must be a
-   warning that falls back to `custom` behavior.
-3. The vocabulary table in §3 defines `role`, `store`, and
-   `manifest`, but never defines `profile`.
-4. `--profile` as a creation-time input and `profile` as a persisted manifest
-   label are conflated; the design never says which one is the stable
-   identity.
-5. `min_mut_ver_floor` gates binaries, not profile semantics. Profile
-   evolution is a schema/migration concern; the version floor does not make a
-   profile fork safe or unsafe.
-6. The main body still assumes the three-name closed set; only this section
-   describes the open model.
-
-#### Proposed fixes (pending confirmation)
-
-1. Define `profile` in §3: a stable, human-readable identity for a set of
-   creation-time defaults and advisory conventions. It is not a version, not a
-   type, and not a validation rule.
-2. Define creation-time defaults:
-   - `code-repo` → stores `docs/{design,plans,journal,qna}` (the v1 shape);
-   - `content-vault` → stores `.context/{design,plans,journal,qna}`;
-   - `custom` → no defaults; `--stores` is required.
-   `agents layout migrate` uses the profile's defaults unless `--stores`
-   overrides them; the dry run shows the expanded map before approval.
-3. V13 becomes non-empty validation. Unknown and deprecated profiles are
-   warnings from `layout validate` and `doctor`; an unknown profile behaves as
-   `custom` for defaults. Remove `profile_unknown` from the hard-problem list.
-4. Distinguish `--profile` (creation-time input used by `init` and by the
-   dry-run planner to select a template) from the manifest `profile`
-   (persisted identity, read-only for behavior). Changing the persisted
-   identity is a label migration, not a layout migration.
-5. `min_mut_ver_floor` is not the profile compatibility axis; the schema
-   version and the migration are.
-
-#### How the constraints are enforced
-
-JSON stores values; it cannot enforce cross-version identity rules. Protobuf
-does not get this from the serialized data either: `protoc` enforces
-`reserved`, and the runtime handles unknown values. The equivalent layers
-here are:
-
-1. `schema` in the manifest selects a versioned profile registry
-   (`profilesV2`, `profilesV3`, ...). The registry lives in the `agents`
-   binary (`internal/layout/profiles.go`, or embedded JSON under
-   `internal/layout/profiles/`), not in the repository. A repository cannot
-   invent a profile: adding one is a tool change with defaults, tests, docs,
-   and a release. A repository that needs local conventions uses `custom` and
-   writes them in `.agents/AGENTS.md`.
-2. Each registry entry is `active`, `deprecated`, or `reserved`; reserved
-   names are a cross-version list.
-3. `Validate` returns blocking `Problems` separately from non-blocking
-   `Warnings`. An empty profile is a problem; an unknown, deprecated, or
-   reserved profile is a warning; an unknown profile behaves as `custom` for
-   defaults.
-4. `MarshalManifest` preserves the profile string. No generic writer rewrites
-   it; only the profile migration writes a new value, and that path refuses to
-   emit a reserved name.
-5. `agents layout migrate` (a schema upgrade) takes an explicit profile
-   choice; if the old profile is reserved and no choice is given, it stops.
-6. Tests hold the invariants: no reserved name is reused; every active
-   profile has a definition; a v3 reader reads a v2 manifest through the v2
-   registry; an unknown profile round-trips unchanged.
-
-The writer is closed and the reader is open: `init`/`migrate` emit only names
-from the current registry, while every reader accepts a name it does not know
-(warning, `custom` defaults, original string preserved). That is what makes
-adding a profile additive without a schema bump, and what prevents a typo
-written by a human from being silently turned into a different profile.
-
-Rules:
-
-- The schema version is the compatibility unit. A reader keeps the profile
-  vocabulary of every schema version it can read.
-- Adding a profile is an open-string change. Unknown values are accepted, not
-  invalid; `init` and `migrate` offer only current names, and `doctor` /
-  `layout show` warn on unknown or deprecated names. If this is accepted, V13
-  changes from a hard `profile_unknown` failure to a warning.
-- Removing a profile is allowed. Remove it from the offered defaults, reserve
-  its name, never reuse that name for a different meaning, and map it in the
-  migration if its semantics are gone. Old readers keep accepting the
-  reserved name; new writers never emit it.
-- A fork is a new profile name (`content-vault` → `content-vault-editorial`),
-  not a version suffix. Existing repositories keep the pre-fork label until a
-  human or the migration skill decides which fork applies; if neither fits,
-  the answer is `custom`. The physical layout is already explicit, so the
-  pending decision is operational, not structural.
-- A profile change is a manifest-label migration. The migration skill may edit
-  the label and run `agents layout validate`. A dedicated
-  `agents layout profile set <name>` command is deferred until profile changes
-  become frequent enough to deserve a command.
+Why the persisted-profile model was rejected: `profile` is a non-physical
+label with no concrete machine consumer in this design. The skills resolve
+paths through the manifest; the router is profile-independent; `doctor` has no
+profile-specific check. Its only consumer was creation-time defaults. Keeping
+it would require a versioned registry, reserved-name rules, a warning channel,
+raw-JSON preservation on rewrite, and a profile migration path — real
+machinery for a label that only supplied defaults. If a concrete
+machine-readable semantic label is needed later, it can be added with a new
+schema version and a migration; the protobuf-style identity rules are recorded
+in the [2026-09-18 journal](../journal/2026-09-18-why-layout-has-no-persisted-profile.md).
 
 ---
 
@@ -400,7 +301,8 @@ older running version into the new binary; it is not a release matrix.
 |---|---|
 | **role** | One of `design`, `plans`, `journal`, `qna`. A logical store, independent of path. |
 | **store** | The physical directory a role resolves to, repository-relative. |
-| **manifest** | `.agents/layout.json`. Declares schema, the `min_mut_ver_floor` version floor, profile, status, and role→path mapping. |
+| **manifest** | `.agents/layout.json`. Declares schema, the `min_mut_ver_floor` version floor, status, stores, archive, and the migration journal. |
+| **template** | A CLI-only creation input (`--template code-repo|content-vault`) that expands to a default store map. It is never persisted in the manifest. |
 | **v1** | The legacy layout: no manifest, stores at `docs/{design,plans,journal,qna}`. |
 | **v2** | The manifest layout defined here. |
 | **inspection** | Parse, validate, and report the layout without writing it. |
@@ -422,14 +324,13 @@ used `agents init --local`, which v2 refuses (Decision 6).
 |---|---|---|---|
 | `schema` | string | yes in v2 | Exactly `agents.layout/v2`. Any other value is an unknown schema and is unsupported for mutation. |
 | `min_mut_ver_floor` | string | yes in v2 | Lowest binary version that may mutate this repository. v0.6.0 writes `0.6.0`. A binary below it may read and display, but every mutation is refused. |
-| `profile` | string | yes in v2 | `code-repo`, `content-vault`, or `custom`. Selects defaults and the vocabulary the skills use; it never changes validation. |
 | `layout_status` | string | yes in v2 | `active` or `migrating`. A `migrating` manifest permits only `agents layout migrate --resume --apply`; every other write is refused and every read reports the state. |
 | `stores` | object | yes in v2 | The role→path map. All four roles are required; each path is explicit. There is no `store_root` shorthand. |
 | `archive` | string | optional | Repository-relative immutable history directory. Defaults to `docs/archive` when that directory exists in a v1 repository. Never a move source or destination. |
 | `migration` | object | required while `layout_status` is `migrating` | The resumable journal: `from`, `started_at` (RFC 3339), and `moves` (`from`, `to`, `role`, `state`). Removed when the layout becomes `active`. |
 
 `stores` may point roles at different roots; all four paths are explicit.
-Creation-time convenience comes from the profile's defaults or the CLI's
+Creation-time convenience comes from the CLI template's defaults or the CLI's
 `--stores role=path`, but the manifest itself always contains the expanded
 map. Collaboration policy — which stores humans edit and which agents mostly
 write — is domain prose in `.agents/AGENTS.md`, not manifest data.
@@ -450,7 +351,6 @@ The pilot target for paperbubble:
 {
   "schema": "agents.layout/v2",
   "min_mut_ver_floor": "0.6.0",
-  "profile": "content-vault",
   "layout_status": "active",
   "stores": {
     "design": ".context/design",
@@ -463,8 +363,8 @@ The pilot target for paperbubble:
 
 `paperbubble` has no `docs/archive/`, so `archive` is absent.
 
-The profile's creation defaults expand to this map:
-`agents layout migrate --profile content-vault` uses
+The CLI template's creation defaults expand to this map:
+`agents layout migrate --template content-vault` uses
 `.context/{design,plans,journal,qna}`. `--stores role=path` overrides any
 role; the CLI expands the overrides into the map before writing. The manifest
 itself always contains the expanded map.
@@ -475,7 +375,6 @@ The scattered form is for a repository whose stores do not share a parent:
 {
   "schema": "agents.layout/v2",
   "min_mut_ver_floor": "0.6.0",
-  "profile": "custom",
   "layout_status": "active",
   "stores": {
     "design": "architecture/design",
@@ -502,7 +401,7 @@ Durable context for this repo is described by `.agents/layout.json`
 (`agents.layout/v2`). Read that manifest before assuming where anything lives;
 it names the meta stores and their paths. This file is only the pointer.
 
-- `.agents/layout.json` — profile, status, and one path per role
+- `.agents/layout.json` — status and one path per role
 - `agents layout show` — the same layout, resolved and validated (when the CLI is installed)
 - `agents layout path <role>` — one store, by role: design, plans, journal, qna
 
@@ -568,11 +467,10 @@ doctor, drift report, and CLI can name it.
 | V10 | `path_overlap` | Two stores are equal, or one is a path-prefix of the other. |
 | V11 | `path_case_collision` | Two store paths differ only by case. Enforced on every filesystem, not only on case-insensitive ones, so a repository does not become unportable. |
 | V12 | `archive_overlap` | `archive` equals a store, contains a store, or is contained by a store. |
-| V13 | `profile_unknown` | `profile` is not `code-repo`, `content-vault`, or `custom`. Q3 proposes making an unknown profile a warning, not a failure. |
-| V14 | `status_unknown` | `layout_status` is not `active` or `migrating`. |
-| V15 | `migration_missing` | `layout_status` is `migrating` and the `migration` journal is absent or malformed. |
-| V16 | `min_mut_ver_floor_invalid` | `min_mut_ver_floor` is not a parseable `MAJOR.MINOR.PATCH` version. |
-| V17 | `local_agents` | A v2 manifest is present in a repository whose `.agents/` is git-excluded or otherwise untracked. |
+| V13 | `status_unknown` | `layout_status` is not `active` or `migrating`. |
+| V14 | `migration_missing` | `layout_status` is `migrating` and the `migration` journal is absent or malformed. |
+| V15 | `min_mut_ver_floor_invalid` | `min_mut_ver_floor` is not a parseable `MAJOR.MINOR.PATCH` version. |
+| V16 | `local_agents` | A v2 manifest is present in a repository whose `.agents/` is git-excluded or otherwise untracked. |
 
 Case-insensitive collision detection is deliberately stronger than the
 filesystem. A layout that works on macOS and fails after a clone to Linux is a
@@ -687,7 +585,7 @@ Repair, in order:
 agents layout show [--json] [--router]
 agents layout validate [--json]
 agents layout path <role>
-agents layout migrate --profile <p> [--stores <role=path> ...]
+agents layout migrate --template <p> [--stores <role=path> ...]
                        [--archive <path>]
                        [--dry-run | --apply | --resume --apply]
                        [--backup-tag <name>] [--json]
@@ -695,13 +593,13 @@ agents layout migrate --profile <p> [--stores <role=path> ...]
 
 v0.6.0 ships all four subcommands and the layout flags on `agents init`.
 
-`show` prints the resolved layout: schema, profile, status, minimum mutating
-version (`min_mut_ver_floor`), content root, archive, and one line per role. `--json` emits the normalized
+`show` prints the resolved layout: schema, status, minimum mutating version
+(`min_mut_ver_floor`), stores, archive, and one line per role. `--json` emits the normalized
 `Layout` object (one role→path map, never the raw shorthand). `--router` prints
 the exact canonical router for the resolved layout and nothing else, so the
 migration skill can restore it without embedding a second copy.
 
-`validate` runs V1–V17 and prints one line per problem with the manifest path
+`validate` runs V1–V16 and prints one line per problem with the manifest path
 and the offending value. Exit 0 when the repository is a valid v1 or v2
 layout; 1 when invalid or unsupported for mutation; 4 when not inside a
 repository with `.agents/`.
@@ -722,9 +620,9 @@ Full semantics are in §9 and the migration playbook. Surface rules:
 - `--backup-tag <name>` is required with every non-resume `--apply`. The tool
   creates the annotated tag at HEAD before the first write, so the rollback
   point exists even if the operator forgot to create a branch.
-- `--profile` is required on the first `--apply` and on `--dry-run` for a v1
-  repository. `--stores role=path` is optional and overrides the profile's
-  creation defaults; `custom` requires at least one `--stores`.
+- `--template` is optional. When present, its creation defaults supply the
+  store map; `--stores role=path` overrides individual roles. When absent (or
+  `custom`), `--stores` must supply all four roles.
 - `--json` emits one object: `repo`, `dry_run`, `from`, `to`, `router`,
   `archive`, `moves`, `link_candidates`, `blockers`, `counts`.
 - Exit codes: 0 applied and no link candidates; 1 dry-run plan ready, or
@@ -739,7 +637,6 @@ Full semantics are in §9 and the migration playbook. Surface rules:
 | Field | v1 value | v2 value |
 |---|---|---|
 | `layout_version` | `v1` | `v2` or `unknown` |
-| `profile` | `""` | manifest value |
 | `min_mut_ver_floor` | `""` | manifest value |
 | `layout_status` | `active` | `active` or `migrating` |
 | `stores` | `docs/{design,plans,journal,qna}` | resolved role→path map |
@@ -778,8 +675,8 @@ not change.
 ### 7.5 Init and update
 
 `agents init` keeps its v1 behavior when no layout flag and no manifest is
-present. In v0.6.0 it also accepts `--profile`, `--stores`, and `--archive`;
-any of them creates a v2 layout, with the profile supplying creation defaults.
+present. In v0.6.0 it also accepts `--template`, `--stores`, and `--archive`;
+any of them creates a v2 layout, with the template supplying creation defaults.
 On a v2
 repository with an active supported manifest, `init` is a no-op for an intact
 layout and creates only missing *manifest-declared* stores. It never creates
@@ -900,6 +797,9 @@ by a deterministic overwrite.
 Per-role collaboration policy belongs here: which stores humans edit, which
 agents mostly write, and which are read-only for one side. The manifest records
 where a role lives, not how the repository wants that role used.
+The semantic profile also belongs here: whether the repository is a content
+vault or a code repository, and any vocabulary that follows from that. The CLI
+template name is not persisted and is not read back as a repo property.
 
 ## 9. Migration mechanics
 
@@ -921,7 +821,7 @@ where a role lives, not how the repository wants that role used.
 - the running binary reports `Support(targetLayout)` true. A binary below
   `min_mut_ver_floor`, or an unstamped `dev` build, plans but refuses to apply;
 - no target path exists, except the resumable "already moved" case in §9.4;
-- the computed layout passes V1–V17;
+- the computed layout passes V1–V16;
 - `.agents/` is tracked (Decision 6).
 
 ### 9.2 Plan and dry run
@@ -935,7 +835,7 @@ Human output:
 ```
 layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   from    agents.layout/v1  docs/{design,plans,journal,qna}
-  to      agents.layout/v2  profile=content-vault
+  to      agents.layout/v2  stores=.context/{design,plans,journal,qna}
   router  current -> canonical v2 (deterministic swap)
   archive none
   git     branch agents-editorial, tree clean
@@ -950,7 +850,7 @@ layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   links   0 markdown links point into the moved stores
   result  4 move, 1 keep, 0 blocked, 0 link(s)
 
-  apply   agents layout migrate --profile content-vault \
+  apply   agents layout migrate --template content-vault \
             --apply --backup-tag pre-layout-v2-20260918
 ```
 
@@ -1026,12 +926,13 @@ change. The preferred path is branch isolation, which never needs it.
 
 | Area | Tests | What fails without it |
 |---|---|---|
-| Resolution | implicit v1; v2 map; scattered map; profile defaults | A layout shape with no resolver |
-| Validation | V1–V17, including duplicate JSON keys, `..`, absolute paths, symlink components, `.agents/` stores, overlap, case-only collisions | A manifest that redirects a write outside the repo or onto another store |
+| Resolution | implicit v1; v2 map; scattered map; template defaults | A layout shape with no resolver |
+| Validation | V1–V16, including duplicate JSON keys, `..`, absolute paths, symlink components, `.agents/` stores, overlap, case-only collisions | A manifest that redirects a write outside the repo or onto another store |
 | Version | a simulated older manifest-aware version vs `min_mut_ver_floor: 0.6.0` refuses; `v0.6.0` allows; `dev` refuses mutation but reads; v1 positive control always allows | Silent mutation by an older manifest-aware binary |
 | Router/digest | v1 stays `current`; v2 router accepted; v1 router in a v2 repo is `known_legacy`; every changed asset has a legacy digest | The 2026-09-01 fleet-wide `diverged` accident, or a v1 router reported as drift |
 | Currency/health | `drift` is strict currency (`current` only) while `doctor` reports owner-based health for `known_legacy`/`diverged`/`missing`; the two results are allowed to differ | A tool “fixing” the divergence by teaching `drift` about ownership or layout |
-| Drift | v1 fields unchanged plus new fields; v2 stores/profile/min_mut_ver_floor/status; `unsupported`; misplaced only inside declared stores; archive excluded | A report that cannot be acted on, or a v1 behavior change |
+| Drift | v1 fields unchanged plus new fields; v2 stores/min_mut_ver_floor/status; `unsupported`; misplaced only inside declared stores; archive excluded | A report that cannot be acted on, or a v1 behavior change |
+| Template | every CLI template expands to a valid map (V1–V16); `--stores` overrides per role; no template/custom requires all four; the manifest has no `profile` field | A template that writes an invalid layout, or a profile field that reappears in the manifest |
 | Doctor | `layout:manifest` for v1/active/migrating/unsupported/invalid; `layout:stores`; `layout:qna` at `docs/qna` and `.context/qna` | A v2 repository with no health check |
 | Init | v1 unchanged; v2 no-op on an intact repo; v2 creates only manifest-declared missing stores; `--local` + v2 refused | A docs shell reappearing |
 | Fleet update | unsupported/migrating skipped before wiring and refresh; skill bytes unchanged; v1 positive control wired and refreshed; supported v2 wired and refreshed | A fleet command downgrading a v2 repository's skill |
@@ -1051,7 +952,7 @@ pass, and a probe that never ran looks green.
 | An old binary touches a v2 repo | Deploy-before-flip gate (§6.3); v0.6.0's mutation guard; §6.4 repair path; paperbubble is the only v2 repository in round 1 |
 | A changed asset makes an unmodified old copy report `diverged` | v0.6.0 adds legacy digests for both changed skills in the same release, gated by tests |
 | `agents update --all --apply` refreshes a skill in an unsupported repo | The manifest gate runs before wiring and before `RefreshInfrastructuralSkills`; negative test asserts byte-identical skill |
-| `--local` repo silently loses its manifest on clone | V18 rejects v2 in a repo whose `.agents/` is excluded; `init --local --profile` refuses |
+| `--local` repo silently loses its manifest on clone | V16 rejects v2 in a repo whose `.agents/` is excluded; `init --local --template` refuses |
 | Archive gets moved by a well-meaning migration | The archive is recorded, excluded from move lists and walks, and a fixture asserts its blobs are unchanged |
 | Vault content is scanned as if it were docs | v2 misplacement walks declared stores, not the whole vault |
 | Resume guesses after a crash | Filesystem truth table; both/neither present refuses and names both paths |
@@ -1063,8 +964,8 @@ pass, and a probe that never ran looks green.
 No implementation starts until:
 
 1. this design, its implementation plan, and its migration playbook are
-   reviewed; the seven decisions in §0 and the review queue Q1–Q9 are resolved
-   or explicitly deferred;
+   reviewed; the §0 decisions and the review queue Q1–Q10 are resolved or
+   explicitly deferred;
 2. the plan is approved for execution;
 3. v0.6.0 is released, and every fleet machine is confirmed to resolve that
    binary on `PATH`;

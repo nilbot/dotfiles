@@ -33,7 +33,8 @@ resolved layout instead of joining `docs/`.
   `agents.layout/v1`.
 - Manifest path is exactly `.agents/layout.json`.
 - `min_mut_ver_floor` written by v0.6.0 is exactly `0.6.0`.
-- Profiles are exactly `code-repo`, `content-vault`, `custom`.
+- CLI templates are exactly `code-repo`, `content-vault`, `custom`; they are
+  creation inputs and are never persisted in the manifest.
 - Roles are exactly `design`, `plans`, `journal`, `qna`; all four are required
   in v2.
 - `layout_status` is exactly `active` or `migrating`.
@@ -67,7 +68,8 @@ same change set updates:
 2. root `README.md` — the generated block
    (`agents help --render=markdown`) and any prose that describes the command
    set.
-3. `agents/commands.go` — built-in help usage and detail for every new flag.
+3. `agents/commands.go` — built-in help usage and detail for every new flag,
+   including `--template`; the manifest has no `profile` field.
 4. `claude/skills/agents-tool/SKILL.md` — every command with
    `Audience: Agent`.
 5. `docs/design/README.md` — the design catalog status.
@@ -86,6 +88,10 @@ same change set updates:
    `clean_current`/`clean_legacy`/`drifted`/`customized` names remain only in
    historical records (the 2026-08-29 design, the 2026-09-01 journal) and in
    explicit rename notes.
+10. Manifest documentation lists exactly `schema`, `min_mut_ver_floor`,
+    `layout_status`, `stores`, `archive`, and `migration`. There is no
+    `profile` and no `store_root`. `--template` is documented as a
+    creation-time CLI input, never as a manifest field.
 
 ## Locked Interfaces
 
@@ -101,9 +107,9 @@ const (
 	StatusActive    = "active"
 	StatusMigrating = "migrating"
 
-	ProfileCodeRepo     = "code-repo"
-	ProfileContentVault = "content-vault"
-	ProfileCustom       = "custom"
+	TemplateCodeRepo     = "code-repo"
+	TemplateContentVault = "content-vault"
+	TemplateCustom       = "custom"
 
 	RoleDesign  = "design"
 	RolePlans   = "plans"
@@ -135,7 +141,6 @@ type Migration struct {
 type Manifest struct {
 	Schema       string            `json:"schema"`
 	MinMutVerFloor    string            `json:"min_mut_ver_floor,omitempty"`
-	Profile      string            `json:"profile,omitempty"`
 	LayoutStatus string            `json:"layout_status"`
 	Archive      string            `json:"archive,omitempty"`
 	Stores       map[string]string `json:"stores"`
@@ -159,10 +164,11 @@ func Path(l Layout, role string) (string, bool)
 // agents/internal/layout/write.go (v0.6.0)
 func MarshalManifest(m Manifest) ([]byte, error)
 func WriteManifest(root string, m Manifest) error
+func templateDefaults(name string) (map[string]string, bool)
 
 // agents/internal/layout/migrate.go (v0.6.0)
 type MigrateOptions struct {
-	Profile     string
+	Template    string
 	Stores      map[string]string
 	Archive     string
 	Running     string
@@ -266,6 +272,7 @@ package layout
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -297,7 +304,6 @@ func TestResolveV2MapIsCanonical(t *testing.T) {
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
   "min_mut_ver_floor": "0.6.0",
-  "profile": "content-vault",
   "layout_status": "active",
   "stores": {
     "design": ".context/design",
@@ -307,7 +313,7 @@ func TestResolveV2MapIsCanonical(t *testing.T) {
   }
 }`)
 	l := Resolve(root)
-	if l.Schema != SchemaV2 || l.Profile != ProfileContentVault {
+	if l.Schema != SchemaV2 {
 		t.Fatalf("layout = %+v", l)
 	}
 	if l.Stores[RoleDesign] != ".context/design" || l.Stores[RoleQNA] != ".context/qna" {
@@ -323,7 +329,6 @@ func TestResolveRejectsArrayStores(t *testing.T) {
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
   "min_mut_ver_floor": "0.6.0",
-  "profile": "code-repo",
   "layout_status": "active",
   "stores": ["design", "plans", "journal", "qna"]
 }`)
@@ -338,7 +343,6 @@ func TestResolveRejectsDuplicateStoreKeys(t *testing.T) {
 	writeManifest(t, root, `{
   "schema": "agents.layout/v2",
   "min_mut_ver_floor": "0.6.0",
-  "profile": "custom",
   "layout_status": "active",
   "stores": {
     "design": "a/design",
@@ -363,6 +367,23 @@ func TestResolveUnknownSchemaIsUnsupportedNotGuessed(t *testing.T) {
 	}
 	if l.Stores != nil {
 		t.Fatalf("an unknown schema must not resolve stores: %v", l.Stores)
+	}
+}
+
+func TestManifestJSONHasNoProfileField(t *testing.T) {
+	data, err := MarshalManifest(Manifest{
+		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2,
+		LayoutStatus: StatusActive,
+		Stores: map[string]string{
+			RoleDesign: "docs/design", RolePlans: "docs/plans",
+			RoleJournal: "docs/journal", RoleQNA: "docs/qna",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"profile"`) {
+		t.Fatalf("manifest still has a profile field: %s", data)
 	}
 }
 ```
@@ -398,9 +419,9 @@ const (
 	StatusActive    = "active"
 	StatusMigrating = "migrating"
 
-	ProfileCodeRepo     = "code-repo"
-	ProfileContentVault = "content-vault"
-	ProfileCustom       = "custom"
+	TemplateCodeRepo     = "code-repo"
+	TemplateContentVault = "content-vault"
+	TemplateCustom       = "custom"
 
 	RoleDesign  = "design"
 	RolePlans   = "plans"
@@ -427,7 +448,6 @@ const (
 	ProblemPathOverlap     = "path_overlap"
 	ProblemPathCase        = "path_case_collision"
 	ProblemArchiveOverlap  = "archive_overlap"
-	ProblemProfileUnknown  = "profile_unknown"
 	ProblemStatusUnknown   = "status_unknown"
 	ProblemMigration       = "migration_missing"
 	ProblemMinMutVerFloor       = "min_mut_ver_floor_invalid"
@@ -476,7 +496,6 @@ func V1ForRoot(root string) Layout { return v1Layout(root) }
 type rawManifest struct {
 	Schema       string          `json:"schema"`
 	MinMutVerFloor    string          `json:"min_mut_ver_floor"`
-	Profile      string          `json:"profile"`
 	LayoutStatus string          `json:"layout_status"`
 	Archive      string          `json:"archive"`
 	Stores       json.RawMessage `json:"stores"`
@@ -506,7 +525,6 @@ func Resolve(root string) Layout {
 		Manifest: Manifest{
 			Schema:       raw.Schema,
 			MinMutVerFloor:    raw.MinMutVerFloor,
-			Profile:      raw.Profile,
 			LayoutStatus: raw.LayoutStatus,
 			Archive:      raw.Archive,
 			Migration:    raw.Migration,
@@ -598,7 +616,7 @@ git commit -m "feat(layout): resolve implicit v1 and manifest v2 layouts"
 **Interfaces:**
 - Consumes: `Resolve`, `Layout`, `Problem`.
 - Produces: `Validate(root, l) []Problem`, `Support(running, l) (bool, string)`,
-  and the V1–V17 validation rules from design §5.2.
+  and the V1–V16 validation rules from design §5.2.
 
 - [ ] **Step 1: Write the failing validation and version tests**
 
@@ -635,7 +653,7 @@ func TestValidateRejectsUnsafePaths(t *testing.T) {
 
 func mk(stores map[string]string) Layout {
 	return Layout{Manifest: Manifest{
-		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: ProfileCustom,
+		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2,
 		LayoutStatus: StatusActive, Stores: stores,
 	}}
 }
@@ -717,9 +735,6 @@ func Validate(root string, l Layout) []Problem {
 		if _, ok := l.Stores[role]; !ok {
 			ps = append(ps, Problem{Code: ProblemRoleMissing, Path: role})
 		}
-	}
-	if l.Profile != ProfileCodeRepo && l.Profile != ProfileContentVault && l.Profile != ProfileCustom {
-		ps = append(ps, Problem{Code: ProblemProfileUnknown, Detail: l.Profile})
 	}
 	if l.LayoutStatus != StatusActive && l.LayoutStatus != StatusMigrating {
 		ps = append(ps, Problem{Code: ProblemStatusUnknown, Detail: l.LayoutStatus})
@@ -986,7 +1001,7 @@ func TestV1RouterIsLegacyForV2(t *testing.T) {
 	v1 := layout.Resolve(t.TempDir())
 	v2 := layout.Layout{Manifest: layout.Manifest{
 		Schema: layout.SchemaV2, MinMutVerFloor: layout.MinMutVerFloorV2,
-		Profile: layout.ProfileContentVault, LayoutStatus: layout.StatusActive,
+		LayoutStatus: layout.StatusActive,
 		Stores: map[string]string{
 			layout.RoleDesign:  ".context/design",
 			layout.RolePlans:   ".context/plans",
@@ -1027,7 +1042,7 @@ Durable context for this repo is described by ` + "`.agents/layout.json`" + `
 (` + "`agents.layout/v2`" + `). Read that manifest before assuming where anything lives;
 it names the meta stores and their paths. This file is only the pointer.
 
-- ` + "`.agents/layout.json`" + ` — profile, status, and one path per role
+- ` + "`.agents/layout.json`" + ` — status and one path per role
 - ` + "`agents layout show`" + ` — the same layout, resolved and validated (when the CLI is installed)
 - ` + "`agents layout path <role>`" + ` — one store, by role: design, plans, journal, qna
 
@@ -1091,7 +1106,7 @@ git commit -m "feat(drift): add the v2 router and keep the v1 router as legacy"
 **Interfaces:**
 - Consumes: `layout.Resolve`, `layout.Support`, `CanonicalRouterDigestFor`.
 - Produces: `InspectRepo(root, runningVersion) (DriftReport, error)` with
-  `layout_version`, `profile`, `min_mut_ver_floor`, `layout_status`, `stores`,
+  `layout_version`, `min_mut_ver_floor`, `layout_status`, `stores`,
   `unsupported`, and `unsupported_detail`.
 
 - [ ] **Step 1: Write the failing drift tests**
@@ -1170,7 +1185,6 @@ type DriftReport struct {
 	Diff          string            `json:"diff,omitempty"`
 
 	LayoutVersion     string            `json:"layout_version"`
-	Profile           string            `json:"profile,omitempty"`
 	MinMutVerFloor         string            `json:"min_mut_ver_floor,omitempty"`
 	LayoutStatus      string            `json:"layout_status,omitempty"`
 	Stores            map[string]string `json:"stores"`
@@ -1189,7 +1203,6 @@ if l.Schema == layout.SchemaV2 {
 } else if l.Schema != layout.SchemaV1 {
 	report.LayoutVersion = "unknown"
 }
-report.Profile = l.Profile
 report.MinMutVerFloor = l.MinMutVerFloor
 report.LayoutStatus = l.LayoutStatus
 report.Stores = l.Stores
@@ -1339,7 +1352,7 @@ func layoutManifestCheck(l layout.Layout, running string) Check {
 			Remedy: "upgrade the agents binary before mutating this repository"}
 	}
 	return Check{Name: "layout:manifest", Status: OK,
-		Detail: fmt.Sprintf("agents.layout/v2 profile=%s stores=%d", l.Profile, len(l.Stores))}
+		Detail: fmt.Sprintf("agents.layout/v2 stores=%d", len(l.Stores))}
 }
 
 func layoutStoresCheck(root string, l layout.Layout) Check {
@@ -1975,7 +1988,7 @@ so the manifest stays visible in PR review.
 Usage:
 
 ```
-agents init [--local] [--profile <p>]
+agents init [--local] [--template <p>]
             [--stores <role=path>] [--archive <path>]
 ```
 
@@ -1996,7 +2009,36 @@ Creation is a mutation: it requires `layout.Support(running, target)` to be
 true. An unstamped `make agents` dev build therefore refuses v2 creation; the
 operator uses the released v0.6.0 binary, and tests inject `v0.6.0`.
 
-`--local` with a v2 layout, or with `--profile`/`--stores`, is refused with
+Implement `internal/layout/templates.go`:
+
+```go
+func templateDefaults(name string) (map[string]string, bool) {
+	switch name {
+	case TemplateCodeRepo:
+		return map[string]string{
+			RoleDesign: "docs/design", RolePlans: "docs/plans",
+			RoleJournal: "docs/journal", RoleQNA: "docs/qna",
+		}, true
+	case TemplateContentVault:
+		return map[string]string{
+			RoleDesign: ".context/design", RolePlans: ".context/plans",
+			RoleJournal: ".context/journal", RoleQNA: ".context/qna",
+		}, true
+	case TemplateCustom, "":
+		return nil, true
+	default:
+		return nil, false // unknown template: the CLI reports an error
+	}
+}
+```
+
+Start from `templateDefaults(template)`, apply each `--stores role=path` as an
+override, and require all four roles. Test every non-nil template's map with
+`Validate`; `custom`/no template returns nil and requires all four `--stores`;
+an unknown template returns `ok=false` and the CLI rejects it with a named
+error rather than silently treating it as `custom`.
+
+`--local` with a v2 layout, or with `--template`/`--stores`, is refused with
 the design's Decision 6 reason.
 
 - [ ] **Step 6: Run the scaffold, init, and doc gates**
@@ -2031,7 +2073,7 @@ func TestPlanMigrationBuildsDirectoryMovesAndRecordsArchive(t *testing.T) {
 	mkdirAll(t, root, "docs/archive/plans")
 	writeFile(t, filepath.Join(root, "docs/archive/plans/old-plan.md"), "old")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault,
+		Template: TemplateContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil {
@@ -2057,7 +2099,7 @@ func TestPlanMigrationBlocksDriftedRouterAndExistingTarget(t *testing.T) {
 	root := newGitV1Repo(t)
 	mkdirAll(t, root, ".context/design")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault,
+		Template: TemplateContentVault,
 		Running: "v0.6.0", RouterState: "diverged",
 	})
 	if err != nil {
@@ -2074,7 +2116,7 @@ func TestPlanMigrationReportsLinkCandidatesWithoutRewriting(t *testing.T) {
 		"See [the plan](../plans/a-plan.md).\n")
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault,
+		Template: TemplateContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil {
@@ -2150,14 +2192,14 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 func targetLayout(from Layout, opts MigrateOptions) Layout {
 	stores := opts.Stores
 	if len(stores) == 0 {
-		stores = profileDefaults(opts.Profile)
+		stores, _ = templateDefaults(opts.Template)
 	}
 	archive := opts.Archive
 	if archive == "" {
 		archive = from.Archive
 	}
 	return Layout{Manifest: Manifest{
-		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2, Profile: opts.Profile,
+		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2,
 		LayoutStatus: StatusActive, Archive: archive, Stores: stores,
 	}}
 }
@@ -2171,9 +2213,11 @@ func blockersFromProblems(ps []Problem) []Blocker {
 }
 ```
 
-`profileDefaults` is the versioned registry lookup from design §0.4; `custom`
-has no defaults, so `agents layout migrate --profile custom` requires
-`--stores`, and an empty map becomes the existing `role_missing` blockers.
+`templateDefaults` is the CLI template table from design §0.4. Because the
+template name is never persisted, it has no schema-version compatibility
+burden. The CLI rejects `ok=false` as an unknown template. `custom`/no template
+returns `(nil, true)` and requires `--stores`; an empty map becomes the
+existing `role_missing` blockers.
 
 `scanLinkCandidates` walks each source store, skips fenced code blocks, finds
 markdown `](target)` links, resolves each target against the file's directory,
@@ -2211,7 +2255,7 @@ func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
 	root := newGitV1RepoWithContent(t) // docs/design/a-design.md, docs/plans/a-plan.md
 	before := trackedBlobs(t, root, "docs")
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault,
+		Template: TemplateContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil || len(p.Blockers) > 0 {
@@ -2242,7 +2286,7 @@ func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
 func TestResumeCompletesAJournaledCrash(t *testing.T) {
 	root := newGitV1RepoWithContent(t)
 	p, _ := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault,
+		Template: TemplateContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	// Simulate a crash after the manifest was written and the first move ran.
@@ -2374,7 +2418,7 @@ func TestLayoutMigrateDryRunIsDefaultAndPrintsThePlan(t *testing.T) {
 	t.Chdir(root)
 	var out bytes.Buffer
 	code := runLayoutMigrateWithVersion([]string{
-		"--profile", "content-vault", "--dry-run",
+		"--template", "content-vault", "--dry-run",
 	}, &out, "v0.6.0")
 	if code != exitcode.Advisory {
 		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
@@ -2393,7 +2437,7 @@ func TestLayoutMigrateApplyRequiresBackupTag(t *testing.T) {
 	t.Chdir(newGitV1RepoWithContent(t))
 	var out bytes.Buffer
 	code := runLayoutMigrateWithVersion([]string{
-		"--profile", "code-repo", "--apply",
+		"--template", "code-repo", "--apply",
 	}, &out, "v0.6.0")
 	if code != exitcode.Malformed || !strings.Contains(out.String(), "--backup-tag") {
 		t.Fatalf("exit = %d, output = %s", code, out.String())
@@ -2703,7 +2747,7 @@ func TestMigrationFixtureLinksAndArchiveSurvive(t *testing.T) {
 	linksBefore := countMarkdownLinks(t, root, "docs")
 
 	p, err := PlanMigration(root, MigrateOptions{
-		Profile: ProfileContentVault,
+		Template: TemplateContentVault,
 		Running: "v0.6.0", RouterState: "current",
 	})
 	if err != nil || len(p.Blockers) > 0 {
