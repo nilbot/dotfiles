@@ -188,7 +188,7 @@ with `.agents/`.
 | Field | Meaning |
 |---|---|
 | `manifest_path` | `.agents/layout.json`; omitted for the implicit v1 layout |
-| `problems` | array, never null; each entry has `code`, `path`, and `detail` |
+| `problems` | array, never null; each entry has a `code` and whichever of `path`/`detail` the rule supplies |
 | `supported` | whether this binary may mutate the repository; false when the layout has problems (`invalid`, `unknown_schema`) or when the version gate refuses |
 | `reason` | why not, when `supported` is false: `invalid`, `unknown_schema`, `below_floor`, `unreleased`, or `migrating` |
 | `schema` | `agents.layout/v1` or `agents.layout/v2` |

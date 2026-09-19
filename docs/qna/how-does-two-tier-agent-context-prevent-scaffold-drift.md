@@ -50,12 +50,15 @@ it is the record, and this file is only the pointer to it.
   are defined in `.agents/AGENTS.md`.
 ```
 
-That block is the **v1** canonical router, byte for byte. A repository with
-`.agents/layout.json` (schema `agents.layout/v2`) gets the manifest-pointing
-router instead, which names the manifest rather than the four `docs/` paths,
-because the v2 stores may live anywhere. `agents layout show --router` prints
-whichever router the resolved layout uses, and `agents layout path <role>`
-resolves one store without a second copy of the map in prose.
+That block is the preamble of the v1 canonical router, verbatim — not the whole
+of it. A repository with `.agents/layout.json` (schema `agents.layout/v2`) gets
+the manifest-pointing router instead, which names the manifest rather than the
+four `docs/` paths, because the v2 stores may live anywhere. Use
+`agents layout show --router` for the complete bytes of whichever router the
+resolved layout uses; it prints nothing and exits non-zero when a manifest is
+present but did not resolve, so a restore never silently falls back to v1 bytes.
+`agents layout path <role>` resolves one store without a second copy of the map
+in prose.
 
 ### 4. LLM Sorter as Drift Reconciliation
 

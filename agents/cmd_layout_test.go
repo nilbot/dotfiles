@@ -69,8 +69,9 @@ func newV2RepoForCmd(t *testing.T, storeRoot string) string {
 }
 
 // layoutGit runs one git command in a layout fixture and fails the test on
-// error. It is local to this file -- the name says what it is for, so a later
-// fixture helper with a general name cannot collide with it.
+// error. It exists rather than a general gitOutput helper because that name is
+// assigned to the migration tasks' fixtures and two definitions in one package
+// would collide; fold this into gitOutput once that helper lands.
 func layoutGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -80,6 +81,76 @@ func layoutGit(t *testing.T, root string, args ...string) string {
 		t.Fatalf("git %v in %s: %v\n%s", args, root, err, out)
 	}
 	return string(out)
+}
+
+// newManifestRepoForCmd is a git work tree with .agents/ and the manifest bytes
+// written verbatim, so a test can pin what the commands do with a document that
+// does not resolve at all -- broken JSON, or a schema from the future.
+// newV2RepoForCmd cannot produce either state: it renders through
+// layout.MarshalManifest.
+func newManifestRepoForCmd(t *testing.T, body string) string {
+	t.Helper()
+	root := newTestRepo(t)
+	manifest := filepath.Join(root, filepath.FromSlash(layout.ManifestRel))
+	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// newMigratingRepoForCmd is the v2 fixture mid-migration: status `migrating`
+// with a complete journal (a frozen v1 source and one move in the `moved`
+// phase), so V14 reports nothing and a refusal is attributable to the status
+// rather than to a broken manifest. The name is deliberately not the migration
+// CLI's own fixture name; that helper belongs to the migration tests, and two
+// definitions in one package would collide.
+func newMigratingRepoForCmd(t *testing.T) string {
+	t.Helper()
+	root := newTestRepo(t)
+	stores := make(map[string]string, len(layout.Roles()))
+	from := make(map[string]string, len(layout.Roles()))
+	var moves []layout.Move
+	for _, role := range layout.Roles() {
+		stores[role] = "context/" + role
+		from[role] = "docs/" + role
+		if err := os.MkdirAll(filepath.Join(root, "context", role), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		moves = append(moves, layout.Move{
+			Role: role, From: "docs/" + role, To: "context/" + role,
+			State: "moved", Files: 1, Bytes: 1, Digest: strings.Repeat("0", 64),
+		})
+	}
+	data, err := layout.MarshalManifest(layout.Manifest{
+		Schema:         layout.SchemaV2,
+		MinMutVerFloor: layout.MinMutVerFloorV2,
+		LayoutStatus:   layout.StatusMigrating,
+		Stores:         stores,
+		Migration: &layout.Migration{
+			From:            layout.MigrationFrom{Schema: layout.SchemaV1, Stores: from},
+			StartedAt:       "2026-09-19T00:00:00Z",
+			BackupTag:       "agents-layout-migration",
+			CreatedManifest: true,
+			Phase:           "moved",
+			Moves:           moves,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(root, filepath.FromSlash(layout.ManifestRel))
+	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	layoutGit(t, root, "add", "-A")
+	layoutGit(t, root, "commit", "-m", "fixture")
+	return root
 }
 
 func TestLayoutShowResolvesV1AndV2(t *testing.T) {
@@ -154,6 +225,49 @@ func TestLayoutShowRouterIsByteExact(t *testing.T) {
 	}
 }
 
+// A manifest that exists but did not resolve must not answer with router bytes.
+// The v1 router names docs/ stores such a repository may not have, and the
+// migration skill writes whatever this prints into AGENTS.md -- so the implicit
+// layout (no manifest at all) is the only state allowed to answer with v1
+// bytes. `validate` on the same repository still names the reason, so the
+// refusal is not silent.
+func TestLayoutShowRouterRefusesAnUnresolvedManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		body     string
+		wantCode string
+	}{
+		{"malformed json", `{"schema":"agents.layout/v2", BROKEN`, layout.ProblemManifestJSON},
+		{"unknown schema", `{"schema":"agents.layout/v3","layout_status":"active"}`, layout.ProblemSchemaUnknown},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Chdir(newManifestRepoForCmd(t, tc.body))
+			var out bytes.Buffer
+			if code := runLayoutShowWithVersion([]string{"--router"}, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Errorf("--router exit = %d, want Advisory", code)
+			}
+			if out.Len() != 0 {
+				t.Errorf("--router printed %d bytes for a manifest that did not resolve, want nothing:\n%s",
+					out.Len(), out.String())
+			}
+
+			out.Reset()
+			if code := runLayoutValidateWithVersion([]string{"--json"}, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Fatalf("validate exit = %d, want Advisory: %s", code, out.String())
+			}
+			var report struct {
+				Problems []layout.Problem `json:"problems"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+				t.Fatalf("validate --json is not one JSON object: %v\n%s", err, out.String())
+			}
+			if !layout.HasProblem(report.Problems, tc.wantCode) {
+				t.Errorf("validate problems = %v, want %s", report.Problems, tc.wantCode)
+			}
+		})
+	}
+}
+
 // An invalid manifest is still reported: the reader sees why, and then sees
 // what resolved. Returning after the problems alone would hide the layout.
 func TestLayoutShowReportsProblemsAndStillResolves(t *testing.T) {
@@ -212,6 +326,19 @@ func TestLayoutShowHumanOutputNamesEveryField(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("show output does not name %q:\n%s", want, out.String())
 		}
+	}
+
+	// The same report on an invalid manifest must not say "yes". A V-rule makes
+	// the layout unsupported for mutation (design §5.2), and `validate` on this
+	// repository answers `invalid`; the two surfaces read from one helper, so
+	// they cannot disagree.
+	t.Chdir(newV2RepoForCmd(t, "../escape"))
+	out.Reset()
+	if code := runLayoutShowWithVersion(nil, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("invalid exit = %d, want Advisory: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "Mutating:") || !strings.Contains(out.String(), "no (invalid") {
+		t.Errorf("an invalid layout reports a mutating verdict that disagrees with validate:\n%s", out.String())
 	}
 }
 
@@ -290,6 +417,44 @@ func TestLayoutValidateUnsupportedIsAdvisoryAndNamed(t *testing.T) {
 	if !report.Supported || report.Reason != "" || len(report.Problems) != 0 {
 		t.Errorf("supported/reason/problems = %v/%q/%v, want true/\"\"/none",
 			report.Supported, report.Reason, report.Problems)
+	}
+}
+
+// Design §7.1 names the migrating disposition: a migration in progress is
+// unsupported for mutation, so `path` prints nothing and exits 4 while
+// `validate` exits 1 and says why. The fixture's journal is complete, so no
+// V14 problem is present to explain the refusal -- the status alone does, which
+// is the half nothing else pinned.
+func TestLayoutMigratingLayoutRefusesByStatus(t *testing.T) {
+	t.Chdir(newMigratingRepoForCmd(t))
+	var out bytes.Buffer
+	if code := runLayoutPathWithVersion([]string{"qna"}, &out, "v0.6.0"); code != exitcode.Skip {
+		t.Fatalf("path exit = %d, want Skip: %s", code, out.String())
+	}
+	if strings.TrimSpace(out.String()) != "" {
+		t.Fatalf("a migrating layout must print nothing: %q", out.String())
+	}
+
+	out.Reset()
+	if code := runLayoutValidateWithVersion([]string{"--json"}, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("validate exit = %d, want Advisory: %s", code, out.String())
+	}
+	var report struct {
+		Problems     []layout.Problem `json:"problems"`
+		Supported    bool             `json:"supported"`
+		Reason       string           `json:"reason"`
+		LayoutStatus string           `json:"layout_status"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatalf("validate --json is not one JSON object: %v\n%s", err, out.String())
+	}
+	if len(report.Problems) != 0 {
+		t.Fatalf("problems = %v; the fixture journal is complete, so the status alone must explain the refusal",
+			report.Problems)
+	}
+	if report.LayoutStatus != layout.StatusMigrating || report.Supported || report.Reason != "migrating" {
+		t.Errorf("status/supported/reason = %q/%v/%q, want %q/false/migrating",
+			report.LayoutStatus, report.Supported, report.Reason, layout.StatusMigrating)
 	}
 }
 

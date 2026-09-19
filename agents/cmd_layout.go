@@ -79,12 +79,31 @@ func printLayout(w io.Writer, l layout.Layout, running string) {
 		printStoreLine(w, l, role)
 	}
 	fmt.Fprintf(w, "Archive:           %s\n", orNone(l.Archive))
-	if ok, reason := layout.Support(running, l); ok {
+	if ok, reason := mutationVerdict(running, l); ok {
 		fmt.Fprintf(w, "Mutating:          yes (running %s)\n", safetext.Flatten(running))
 	} else {
 		fmt.Fprintf(w, "Mutating:          no (%s; running %s)\n",
 			safetext.Flatten(reason), safetext.Flatten(running))
 	}
+}
+
+// mutationVerdict is the one answer `show`'s human report and `validate` both
+// give to "may this binary mutate this repository". layout.Support is only the
+// version and status gate; a V-rule makes the whole layout unsupported for
+// mutation too (design §5.2), so an invalid manifest must not read as "yes" on
+// one surface while the other says `invalid`. The reason strings are the ones
+// drift's `unsupported` field uses.
+func mutationVerdict(running string, l layout.Layout) (bool, string) {
+	supported, reason := layout.Support(running, l)
+	if len(l.Problems) > 0 {
+		supported = false
+		if layout.HasProblem(l.Problems, layout.ProblemSchemaUnknown) {
+			reason = "unknown_schema"
+		} else {
+			reason = "invalid"
+		}
+	}
+	return supported, reason
 }
 
 func printStoreLine(w io.Writer, l layout.Layout, role string) {
@@ -150,15 +169,27 @@ func runLayoutShowWithVersion(args []string, stdout io.Writer, running string) i
 	// --router is the migration skill's byte-restore path: it captures this
 	// output and writes it to AGENTS.md. It prints the router and nothing else
 	// -- no problem lines, no report -- because any extra byte corrupts the
-	// file it restores. It is selected by schema, not by validity: a repository
-	// mid-migration still has to be able to restore its own router.
+	// file it restores. It is selected by schema, not by validity: a v2
+	// repository with a bad store path still has a v2 router to restore.
+	//
+	// The v1 bytes are only for the implicit layout, where no manifest exists
+	// at all (ManifestPath == ""). A manifest that could not be read or parsed,
+	// or that declares a schema this binary does not know, resolves to a
+	// non-v2 schema with a manifest on disk -- and answering it with the v1
+	// router would write bytes naming docs/ stores that repository may not
+	// have, with exit 0. That is the corruption this path exists to prevent,
+	// so it refuses instead: nothing printed, exit 1.
 	if *router {
-		if l.Schema == layout.SchemaV2 {
+		switch {
+		case l.Schema == layout.SchemaV2:
 			fmt.Fprint(stdout, layout.V2AgentsMD)
-		} else {
+			return exitcode.OK
+		case l.ManifestPath == "":
 			fmt.Fprint(stdout, scaffold.DefaultAgentsMD)
+			return exitcode.OK
+		default:
+			return exitcode.Advisory
 		}
-		return exitcode.OK
 	}
 
 	// The machine path prints the object and nothing else. The Layout carries
@@ -227,22 +258,9 @@ func runLayoutValidateWithVersion(args []string, stdout io.Writer, running strin
 		return code
 	}
 	l := layout.Resolve(root)
-	// Support answers "may this binary mutate it", which is a separate question
-	// from "is it valid". The report keeps them in separate fields, but the
-	// summary boolean folds them together the way drift's `unsupported` field
-	// does: a V-rule makes the whole layout unsupported for mutation (design
-	// §5.2), so reporting `supported: true` beside a problem list would invite
-	// exactly the mutation the rule just refused.
-	supported, reason := layout.Support(running, l)
-	if len(l.Problems) > 0 {
-		supported = false
-		switch {
-		case layout.HasProblem(l.Problems, layout.ProblemSchemaUnknown):
-			reason = "unknown_schema"
-		default:
-			reason = "invalid"
-		}
-	}
+	// The same verdict `show`'s human report prints, from the same helper: two
+	// surfaces of one command must not disagree about one repository.
+	supported, reason := mutationVerdict(running, l)
 
 	if *asJSON {
 		problems := l.Problems
@@ -310,11 +328,13 @@ func runLayoutPathWithVersion(args []string, stdout io.Writer, running string) i
 		return code
 	}
 	l := layout.Resolve(root)
-	// The layout's own state is weighed before the role is looked up, because
-	// design §7.1 gives an invalid or unsupported layout its own disposition
-	// (1 or 4, nothing printed) in every case -- including the case where the
-	// manifest is too broken to resolve the role at all, which would otherwise
-	// be reported as a caller's typo.
+	// Precedence is deliberate, not an accident of ordering: the layout's own
+	// state is weighed before the role is looked up, so a manifest too broken
+	// to resolve a role is reported as an invalid layout (1) rather than as the
+	// caller's typo (3), and an unsupported one refuses with 4 either way.
+	// Design §7.1 gives an invalid or unsupported layout those dispositions in
+	// every case, and a caller is never told its role name was wrong when the
+	// real problem is the manifest.
 	if len(l.Problems) > 0 {
 		return exitcode.Advisory
 	}
