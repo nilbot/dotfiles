@@ -1398,7 +1398,7 @@ repository, so its copies stay the frozen v1 texts and remain canonical for it
 
 **Interfaces:**
 - Consumes: `layout.Layout`, `scaffold.DefaultAgentsMD`.
-- Produces: `scaffold.V2AgentsMD`, `drift.CanonicalRouterDigestFor(l)`,
+- Produces: `layout.V2AgentsMD`, `drift.CanonicalRouterDigestFor(l)`,
   `scaffold.skillAssets`, `scaffold.SkillAssetPath`, the frozen v1 asset files,
   the v2 flat texts, and the `LegacyRecordingSkillV051` /
   `LegacyMigratingSkillV051` byte constants.
@@ -1408,11 +1408,11 @@ repository, so its copies stay the frozen v1 texts and remain canonical for it
 ```go
 func TestV2RouterNamesTheManifestNotAStorePath(t *testing.T) {
 	for _, want := range []string{".agents/layout.json", "agents.layout/v2", "agents layout path"} {
-		if !strings.Contains(scaffold.V2AgentsMD, want) {
+		if !strings.Contains(layout.V2AgentsMD, want) {
 			t.Errorf("v2 router does not name %q", want)
 		}
 	}
-	if strings.Contains(scaffold.V2AgentsMD, "docs/") {
+	if strings.Contains(layout.V2AgentsMD, "docs/") {
 		t.Error("the v2 router must not hardcode a store path")
 	}
 }
@@ -1444,19 +1444,38 @@ func TestV1RouterIsLegacyForV2(t *testing.T) {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `go test -count=1 ./internal/drift -run 'TestV2Router|TestV1RouterIsLegacy' -v`
-Expected: FAIL — `scaffold.V2AgentsMD` and `CanonicalRouterDigestFor` are
+Expected: FAIL — `layout.V2AgentsMD` and `CanonicalRouterDigestFor` are
 undefined.
 
-- [ ] **Step 3: Add `V2AgentsMD` to `scaffold.go`**
+- [ ] **Step 3: Add `V2AgentsMD` to `agents/internal/layout`**
 
-Paste the router from design §4.4 as a raw string constant, exactly as the
-design shows. Add a comment above it:
+Paste the router from design §4.4 exactly as the design shows. It is exported
+as `layout.V2AgentsMD`, not `scaffold.V2AgentsMD`: Task 9 makes `scaffold`
+import `layout`, so the router cannot live in `scaffold` without a cycle.
+Because the router text contains backticks, hold it in the embedded asset
+`agents/internal/layout/assets/router-v2.md` and export it as a `var`
+populated by `//go:embed` — Go cannot `//go:embed` into a constant. Add the
+comment above the declaration:
 
 ```go
 // V2AgentsMD is the canonical router for a repository with
 // .agents/layout.json. It names the manifest and the CLI's resolved view; it
 // must not name a store path. DefaultAgentsMD remains the v1 router.
-const V2AgentsMD = `# Agent context
+//
+// It is a var populated by //go:embed rather than a const: the text contains
+// backticks, so the only literal that could hold it is an interpreted string,
+// and Go cannot //go:embed into a constant. The asset at
+// assets/router-v2.md holds design §4.4 verbatim: 1225 bytes, sha256
+// c6cecd53b08cb2459d5e846c9f871fee71c5c45a9ecd3b4b9885b54a18adcc66. The
+// bytes below are shown in the plan's concatenation spelling only to keep the
+// text reviewable here; the asset is the source of truth.
+//
+//go:embed assets/router-v2.md
+var V2AgentsMD string
+
+// The design §4.4 text, for reference:
+//
+// `# Agent context
 
 Durable context for this repo is described by ` + "`.agents/layout.json`" + `
 (` + "`agents.layout/v2`" + `). Read that manifest before assuming where anything lives;
@@ -1479,7 +1498,7 @@ and a missing hook fails silently.
 
 Recording is covered by the global instruction and the ` + "`recording-what-you-learn`" + `
 skill; it is not repo-specific and is not restated here.
-`
+// `
 ```
 
 - [ ] **Step 4: Add the layout-aware digest selector and extend the legacy list**
@@ -1489,7 +1508,7 @@ skill; it is not repo-specific and is not restated here.
 // must match for RouterCleanCurrent.
 func CanonicalRouterDigestFor(l layout.Layout) string {
 	if l.Schema == layout.SchemaV2 {
-		return DigestString(scaffold.V2AgentsMD)
+		return DigestString(layout.V2AgentsMD)
 	}
 	return DigestString(scaffold.DefaultAgentsMD)
 }
@@ -2199,7 +2218,7 @@ git commit -m "feat(doctor): check the manifest and resolve stores by role"
 
 **Interfaces:**
 - Consumes: `layout.Resolve`, `layout.Validate`, `layout.Support`,
-  `scaffold.DefaultAgentsMD`, `scaffold.V2AgentsMD`.
+  `scaffold.DefaultAgentsMD`, `layout.V2AgentsMD`.
 - Produces: `runLayoutShow`, `runLayoutValidate`, `runLayoutPath`, and their
   version-injectable siblings.
 
@@ -2287,7 +2306,7 @@ func runLayoutShowWithVersion(args []string, stdout io.Writer, running string) i
 	}
 	if *router {
 		if l.Schema == layout.SchemaV2 {
-			fmt.Fprint(stdout, scaffold.V2AgentsMD)
+			fmt.Fprint(stdout, layout.V2AgentsMD)
 		} else {
 			fmt.Fprint(stdout, scaffold.DefaultAgentsMD)
 		}
@@ -2857,7 +2876,8 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 	}
 	router := DefaultAgentsMD
 	if l.Schema == layout.SchemaV2 {
-		router = V2AgentsMD
+		// layout.V2AgentsMD, not a local symbol: see Task 3 Step 3.
+		router = layout.V2AgentsMD
 	}
 	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), router); err != nil {
 		return err
@@ -3424,7 +3444,7 @@ git commit -m "feat(layout): plan v1 to v2 store moves without writing"
 - Modify: `agents/internal/layout/migrate_test.go`
 
 **Interfaces:**
-- Consumes: `Plan`, `WriteManifest`, `repo.Git`, `scaffold.V2AgentsMD`.
+- Consumes: `Plan`, `WriteManifest`, `repo.Git`, `layout.V2AgentsMD`.
 - Produces: `ApplyMigration(root, p, backupTag) error` (plan-if-absent, then
   reconcile), `ResumeMigration(root) error` (reconcile only, never re-plans),
   `AbortMigration(root) error`, `reconcileMigration`, `MoveError`,
@@ -3457,7 +3477,7 @@ func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
 		t.Fatal("docs/ shell survived a migration with no archive")
 	}
 	router, _ := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if string(router) != scaffold.V2AgentsMD {
+	if string(router) != layout.V2AgentsMD {
 		t.Fatal("v2 router was not written")
 	}
 	if out := gitOutput(t, root, "tag", "--list", "pre-layout-v2-test"); strings.TrimSpace(out) == "" {
@@ -4051,12 +4071,12 @@ func writeV2Router(root string) error {
 		return err
 	}
 	path := filepath.Join(root, "AGENTS.md")
-	if current, err := os.ReadFile(path); err == nil && string(current) == scaffold.V2AgentsMD {
+	if current, err := os.ReadFile(path); err == nil && string(current) == layout.V2AgentsMD {
 		return nil
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return os.WriteFile(path, []byte(scaffold.V2AgentsMD), 0o644)
+	return os.WriteFile(path, []byte(layout.V2AgentsMD), 0o644)
 }
 
 // docsResidue is defined with the planner in Task 10; apply reuses it so the

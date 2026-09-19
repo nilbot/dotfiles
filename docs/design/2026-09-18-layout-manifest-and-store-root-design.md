@@ -986,7 +986,7 @@ Adding commands and flags updates, in the same change set:
 ### 8.1 Two canonical routers
 
 `scaffold.DefaultAgentsMD` remains the v1 canonical router, byte-for-byte.
-`scaffold.V2AgentsMD` is the manifest-pointing router in §4.4. `drift` selects
+`layout.V2AgentsMD` is the manifest-pointing router in §4.4. `drift` selects
 the canonical digest by the resolved layout:
 
 - v1 → `DefaultAgentsMD`;
