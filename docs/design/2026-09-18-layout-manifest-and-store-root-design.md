@@ -1,10 +1,10 @@
 # Design: Layout Manifest and Store-Root Freedom for Agent Context (`agents.layout/v2`)
 
 **Date:** 2026-09-18
-**Status:** **Proposed — awaiting review.** The §0 decisions are resolutions
-recorded in review; none of them is an approval. No implementation, release, or
-repository migration may start until this document, its implementation plan, and
-its migration playbook are approved by a human.
+**Status:** **Approved 2026-09-19 (review gate 1); not approved for
+execution.** The human review closed on 2026-09-19; the §0 decisions are the
+approved resolutions. No implementation, release, or repository migration may
+start until gates 2–4 of §12 are met.
 **Applies to:** `agents` CLI (`layout`, `scaffold`, `drift`, `doctor`, `init`,
 `update`), the root router (`AGENTS.md` / `CLAUDE.md`), `.agents/AGENTS.md`,
 `.agents/skills/`, and the physical location of the four documentation stores.
@@ -18,11 +18,12 @@ else in that design stands.
 
 ---
 
-## 0. Decisions (resolved in review, pending approval)
+## 0. Decisions (resolved in review, approved 2026-09-19)
 
-Every question below has a resolution recorded in review on 2026-09-18; **none
-of them is an approval.** The plan and playbook are written against these
-resolutions and change with them. §0.1 records how each question was resolved;
+Every question below has a resolution recorded in review on 2026-09-18, and the
+resolutions were **approved by a human on 2026-09-19** (design §12, gate 1).
+The plan and playbook are written against these resolutions and change with
+them. §0.1 records how each question was resolved;
 §0.2–§0.4 are the resolutions recorded in the first review, and §0.5–§0.8 the
 four recorded in the second. If a resolution changes, the design, plan, and
 playbook all change before implementation starts.
@@ -64,12 +65,12 @@ which repositories are already non-current and why.
 These questions came from the first read of this document on 2026-09-18. They
 are recorded here rather than resolved one by one, because several of them can
 invalidate the recommendations above. **All ten have a recorded resolution as of
-2026-09-18, so the queue is empty** — but a recorded resolution is a proposal of
-record, not an approval: §0 stays provisional for implementation purposes until
-a human approves this document (§12). Q1, Q2, Q3, Q8, Q9, and Q10 were resolved
-in the first pass — the ledger records each, and Q3, Q8, and Q9 have their own
-sections in §0.2–§0.4; Q4–Q7 were resolved in the second pass and are recorded
-in §0.5–§0.8. The measurements behind the second pass, and the two plan
+2026-09-18, and the resolutions were confirmed by the human approval of
+2026-09-19 (§12, gate 1), so the queue is closed.** Implementation still waits
+for gate 2. Q1, Q2, Q3, Q8, Q9, and Q10 were resolved in the first pass — the
+ledger records each, and Q3, Q8, and Q9 have their own sections in
+§0.2–§0.4; Q4–Q7 were resolved in the second pass and are recorded in
+§0.5–§0.8. The measurements behind the second pass, and the two plan
 defects it found, are recorded in the
 [2026-09-18 journal](../journal/2026-09-18-why-v0-6-0-keeps-the-v1-skill-text-canonical.md).
 
@@ -1328,11 +1329,14 @@ pass, and a probe that never ran looks green.
 No implementation starts until:
 
 1. this design, its implementation plan, and its migration playbook are
-   reviewed and **approved by a human**; the review queue Q1–Q10 has recorded
-   resolutions (all ten, 2026-09-18) and this approval is what confirms §0;
+   reviewed and **approved by a human** — **closed 2026-09-19**; the review
+   queue Q1–Q10 has recorded resolutions (all ten, 2026-09-18) and this
+   approval is what confirms §0;
 2. the plan is approved for execution;
 3. v0.6.0 is released, and every fleet machine is confirmed to resolve that
    binary on `PATH`;
 4. the paperbubble dry run is presented and the human approves the `--apply`.
+
+Gate 1 closed on 2026-09-19; gates 2–4 remain open.
 
 Until then, paperbubble stays frozen and no fleet repository is migrated.

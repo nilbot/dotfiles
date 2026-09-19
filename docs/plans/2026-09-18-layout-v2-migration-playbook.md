@@ -1,9 +1,10 @@
 # Layout v2 Migration Playbook — paperbubble Pilot
 
 **Date:** 2026-09-18
-**Status:** **Proposed — do not execute.** This playbook runs only after the
-design and implementation plan are approved, `v0.6.0` is released, and every
-machine that can touch the fleet resolves that binary on `PATH`.
+**Status:** **Approved as a document 2026-09-19 (design §12, gate 1); do not
+execute.** This playbook runs only after gate 2 approves the implementation
+plan for execution, `v0.6.0` is released, every machine that can touch the fleet
+resolves that binary on `PATH`, and the §6 approval gate is passed.
 **Scope:** exactly one repository, `/Users/nilbot/gist/paperbubble`. It does not
 migrate dotfiles, cowork, autogo-mlx, lewm-mlx, or desktop_pet; §12 records the
 measured state of each and why.

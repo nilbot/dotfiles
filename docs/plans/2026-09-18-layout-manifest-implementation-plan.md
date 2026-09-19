@@ -1,8 +1,8 @@
 # Layout Manifest and Store-Root Freedom Implementation Plan
 
-**Status:** **Proposed — do not execute.** Every task below waits for the
-design, this plan, and the migration playbook to be approved by a human
-(design §12).
+**Status:** **Approved as a document 2026-09-19 (design §12, gate 1); not
+approved for execution.** No task below runs until gate 2 (this plan approved
+for execution) and the remaining gates of design §12 are met.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
@@ -4923,9 +4923,9 @@ TestLayoutManifestIsVisibleToLinguist
 
 - [ ] **Step 5: Update the design catalog**
 
-The design row is already in `docs/design/README.md` with status **proposed**.
-When v0.6.0 ships, update that status to **implemented 2026-xx-xx** and name the
-released version.
+The design row in `docs/design/README.md` records the gate-1 approval
+(**approved 2026-09-19 — not approved for execution**). When v0.6.0 ships,
+update that status to **implemented 2026-xx-xx** and name the released version.
 
 - [ ] **Step 6: Run every gate**
 
