@@ -32,7 +32,7 @@ Numbers are stable catalog identifiers, not priority or order.
 | — | [antigravity multi-harness onboarding](2026-08-28-antigravity-multi-harness-onboarding.md) | **implemented 2026-08-28** — adapter, dialect, dual-layer instruction topology |
 | — | [contributor guardrails and scaffold decoupling](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) | **implemented 2026-08-28** — conditional doctor, standalone support |
 | — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **implemented 2026-08-31; §7 amended 2026-09-01** — two-tier context, 4-store layout, bundled skills, LLM migration. Read Amendment 1 before touching the migration skill: the original §7 contradicted §7.2 on archive immutability and left "3-way merge" undefined. |
-| — | [layout manifest and store-root freedom](2026-09-18-layout-manifest-and-store-root-design.md) | **approved 2026-09-19 — not approved for execution** — single-release `agents.layout/v2`, role→path stores, deploy-before-flip gate, `.context/` pilot for content vaults. Gate 1 (document review) is closed; implementation, release, and migration still wait for gate 2 of the design's §12. |
+| — | [layout manifest and store-root freedom](2026-09-18-layout-manifest-and-store-root-design.md) | **approved 2026-09-19; execution approved 2026-09-19** — single-release `agents.layout/v2`, role→path stores, deploy-before-flip gate, `.context/` pilot for content vaults. Gates 1 and 2 (document review, execution) are closed and implementation is running; release and migration still wait for gates 3–4 of the design's §12. |
 
 
 **Spec 1 is the foundation** — terminology, the placement rule, the pointer

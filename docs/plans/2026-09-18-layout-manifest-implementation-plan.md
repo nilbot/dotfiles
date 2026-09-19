@@ -1,8 +1,9 @@
 # Layout Manifest and Store-Root Freedom Implementation Plan
 
-**Status:** **Approved as a document 2026-09-19 (design §12, gate 1); not
-approved for execution.** No task below runs until gate 2 (this plan approved
-for execution) and the remaining gates of design §12 are met.
+**Status:** **Approved 2026-09-19 (design §12, gate 1); execution approved
+2026-09-19 (gate 2).** Tasks 1–15 and Task 16 Steps 1–2 run task by task
+against this plan. Task 16 Step 3 (tag and release) and the migration playbook
+wait for gate 3, which is a separate human decision.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > superpowers:subagent-driven-development (recommended) or
