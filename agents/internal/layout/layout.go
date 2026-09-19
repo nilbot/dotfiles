@@ -101,8 +101,11 @@ type Manifest struct {
 }
 
 // Layout is the resolved manifest plus where it was read from and every reason
-// that resolution is not clean. An empty ManifestPath means the implicit v1
-// layout: no manifest exists.
+// that resolution is not clean. ManifestPath is set whenever a manifest was
+// found at .agents/layout.json, including when it could not be read, could not
+// be parsed, or declares a schema this build does not know; an empty
+// ManifestPath means no manifest was there and the implicit v1 layout was
+// synthesized.
 type Layout struct {
 	Manifest
 	ManifestPath string    `json:"manifest_path,omitempty"`
@@ -168,17 +171,27 @@ func Resolve(root string) Layout {
 		return v1Layout(root)
 	}
 	if err != nil {
-		return Layout{Problems: []Problem{{Code: ProblemManifestRead, Path: ManifestRel, Detail: err.Error()}}}
+		return Layout{
+			ManifestPath: ManifestRel,
+			Problems:     []Problem{{Code: ProblemManifestRead, Path: ManifestRel, Detail: err.Error()}},
+		}
 	}
 	var raw rawManifest
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return Layout{Problems: []Problem{{Code: ProblemManifestJSON, Path: ManifestRel, Detail: err.Error()}}}
+		return Layout{
+			ManifestPath: ManifestRel,
+			Problems:     []Problem{{Code: ProblemManifestJSON, Path: ManifestRel, Detail: err.Error()}},
+		}
 	}
 	if raw.Schema != SchemaV2 {
+		detail := raw.Schema
+		if detail == "" {
+			detail = "schema missing"
+		}
 		return Layout{
 			Manifest:     Manifest{Schema: raw.Schema},
 			ManifestPath: ManifestRel,
-			Problems:     []Problem{{Code: ProblemSchemaUnknown, Path: ManifestRel, Detail: raw.Schema}},
+			Problems:     []Problem{{Code: ProblemSchemaUnknown, Path: ManifestRel, Detail: detail}},
 		}
 	}
 	l := Layout{

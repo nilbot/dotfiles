@@ -117,3 +117,31 @@ func TestManifestJSONHasNoProfileField(t *testing.T) {
 		t.Fatalf("manifest still has a profile field: %s", data)
 	}
 }
+
+// A manifest that was found but could not be used must still say where it was:
+// ManifestPath is what distinguishes "there is no manifest" (implicit v1) from
+// "there is one and it is broken".
+func TestResolveProblemReturnsRecordTheManifestPath(t *testing.T) {
+	corrupt := t.TempDir()
+	writeManifest(t, corrupt, "{not json")
+	l := Resolve(corrupt)
+	if !hasProblem(l.Problems, ProblemManifestJSON) {
+		t.Fatalf("problems = %v, want %s", l.Problems, ProblemManifestJSON)
+	}
+	if l.ManifestPath != ManifestRel {
+		t.Fatalf("an unparseable manifest must report its path: %q, want %q", l.ManifestPath, ManifestRel)
+	}
+
+	noSchema := t.TempDir()
+	writeManifest(t, noSchema, `{}`)
+	m := Resolve(noSchema)
+	if !hasProblem(m.Problems, ProblemSchemaUnknown) {
+		t.Fatalf("problems = %v, want %s", m.Problems, ProblemSchemaUnknown)
+	}
+	if m.ManifestPath != ManifestRel {
+		t.Fatalf("a schema-less manifest must report its path: %q, want %q", m.ManifestPath, ManifestRel)
+	}
+	if len(m.Problems) != 1 || m.Problems[0].Detail == "" {
+		t.Fatalf("an absent schema needs a non-empty detail: %+v", m.Problems)
+	}
+}
