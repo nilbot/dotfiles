@@ -464,16 +464,17 @@ func validateRel(root, path string) *Problem {
 	for _, part := range parts {
 		cur = filepath.Join(cur, part)
 		info, err := os.Lstat(cur)
-		if errors.Is(err, fs.ErrNotExist) {
-			// The ordinary case: a manifest is validated before its stores
-			// exist, so the walk stops at the first component that is not there.
-			break
-		}
 		if err != nil {
-			// The component exists but cannot be inspected. It is not known to
-			// be a symlink, and no V-rule names "unreadable", so the walk stops
-			// rather than claim anything about it.
-			break
+			if errors.Is(err, fs.ErrNotExist) {
+				// The ordinary case: a manifest is validated before its stores
+				// exist, so the walk stops at the first component that is not
+				// there. Nothing deeper exists either, so a deeper symlink
+				// cannot exist.
+				break
+			}
+			// The component exists but cannot be inspected, so the symlink
+			// question has no answer and V8 must not pass by default.
+			return &Problem{Code: ProblemPathInvalid, Path: path, Detail: err.Error()}
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return &Problem{Code: ProblemPathSymlink, Path: path}

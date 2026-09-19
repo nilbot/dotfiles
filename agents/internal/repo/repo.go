@@ -162,13 +162,20 @@ var errExitOne = errors.New("git answered no (exit 1)")
 const notARepoRefusal = "fatal: not a git repository (or any of the parent directories):"
 
 // gitFailure is a git invocation that failed for a reason other than "no" (exit
-// 1). stderr is kept because only git's message tells the two apart.
+// 1). stderr is kept because only git's message tells the two apart, and it is
+// carried into Error() because that message is the only artifact that separates
+// a dubious-ownership refusal from a corrupt .git when a caller reports it.
 type gitFailure struct {
 	err    error
 	stderr string
 }
 
-func (e *gitFailure) Error() string { return e.err.Error() }
+func (e *gitFailure) Error() string {
+	if msg := strings.TrimSpace(e.stderr); msg != "" {
+		return e.err.Error() + ": " + msg
+	}
+	return e.err.Error()
+}
 
 func (e *gitFailure) Unwrap() error { return e.err }
 
@@ -185,13 +192,17 @@ func (e *gitFailure) refusedAsNotARepo() bool {
 // A failure carries git's stderr, so its caller can classify it: collapsing
 // every failure to ErrNotARepo would make a dubious-ownership refusal, a
 // corrupt .git, or a missing git binary read as "nothing to track".
+//
+// The environment is forced to the C locale for the same reason discoverRoot
+// does it: the classification reads git's own refusal message, and a translated
+// message would silently turn "not a repository" into an operational error.
 func runExit(dir string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Stdout = io.Discard
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	cmd.Env = sanitizeEnv(os.Environ())
+	cmd.Env = withCLocale(sanitizeEnv(os.Environ()))
 	err := cmd.Run()
 	if err == nil {
 		return nil

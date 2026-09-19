@@ -129,6 +129,29 @@ func TestValidateSeesTheRepositoryRootAsContainingEveryStore(t *testing.T) {
 	}
 }
 
+// A component that exists but cannot be inspected leaves V8's symlink question
+// unanswered, so validation must not pass by default. A directory with mode
+// 0o000 gives EACCES to Lstat for everyone but root.
+func TestValidateFailsClosedWhenAComponentCannotBeInspected(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can search a 0o000 directory, so Lstat cannot fail here")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// Restore the mode before t.TempDir's own cleanup runs.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	got := Validate(root, mk(storesWith(RoleDesign, "locked/design")))
+	if !hasProblem(got, ProblemPathInvalid) {
+		t.Fatalf("problems = %v, want %s for a component that cannot be inspected", got, ProblemPathInvalid)
+	}
+}
+
 // V9 is about where a store resolves, not how it is spelled: a leading "./" or
 // an interior ".." that stays inside the root must not smuggle knowledge into
 // .agents/. Problem.Path keeps the raw spelling, because that is what the

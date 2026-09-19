@@ -137,6 +137,21 @@ func TestTrackednessHelpersOutsideARepository(t *testing.T) {
 	}
 }
 
+// The classification reads git's own refusal, which git translates when message
+// catalogs and a non-C locale are in force. runExit forces the C locale for
+// that reason; the caller's locale must not turn "not a repository" into an
+// operational error that V16 then refuses.
+func TestTrackednessOutsideARepositorySurvivesATranslatedLocale(t *testing.T) {
+	t.Setenv("LC_ALL", "de_DE.UTF-8")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	if _, err := IsIgnored(t.TempDir(), ".agents/layout.json"); !errors.Is(err, ErrNotARepo) {
+		t.Fatalf("IsIgnored outside a repository under a German locale = %v, want ErrNotARepo", err)
+	}
+	if _, err := IsTracked(t.TempDir(), ".agents/layout.json"); !errors.Is(err, ErrNotARepo) {
+		t.Fatalf("IsTracked outside a repository under a German locale = %v, want ErrNotARepo", err)
+	}
+}
+
 func TestIsTrackedDistinguishesUntrackedFromStaged(t *testing.T) {
 	root := newTempGitRepo(t)
 	writeFile(t, filepath.Join(root, ".agents/layout.json"), "{}")
@@ -170,6 +185,9 @@ func TestIsTrackedFailsClosedOnAGitError(t *testing.T) {
 	if errors.Is(err, ErrNotARepo) {
 		t.Fatalf("a corrupt index is not a missing repository: %v", err)
 	}
+	if !strings.Contains(err.Error(), "index") {
+		t.Fatalf("the failure must carry git's own message: %v", err)
+	}
 }
 
 // The same switch for the ignore question, with a failure that is not a missing
@@ -184,5 +202,8 @@ func TestIsIgnoredFailsClosedOnAGitError(t *testing.T) {
 	}
 	if errors.Is(err, ErrNotARepo) {
 		t.Fatalf("a broken git config is not a missing repository: %v", err)
+	}
+	if !strings.Contains(err.Error(), ".git/config") {
+		t.Fatalf("the failure must carry git's own message: %v", err)
 	}
 }
