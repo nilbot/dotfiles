@@ -47,9 +47,9 @@ func rootCommand() *Command {
 			Run:      func(a []string, io IO) int { return runDrift(a, io.Out) },
 		},
 		{
-			Name: "layout", Summary: "inspect the resolved documentation layout",
-			Usage:    "agents layout show|validate|path",
-			Detail:   "Reads .agents/layout.json and reports the layout this repository resolves to. A repository with no manifest resolves to the implicit v1 layout, whose four stores are under docs/. Read-only: nothing in this family creates a store, writes a file, or moves a document.",
+			Name: "layout", Summary: "inspect the resolved layout, or migrate v1 to v2",
+			Usage:    "agents layout show|validate|path|migrate",
+			Detail:   "Reads .agents/layout.json and reports the layout this repository resolves to. A repository with no manifest resolves to the implicit v1 layout, whose four stores are under docs/. `show`, `validate`, and `path` are read-only: nothing they do creates a store, writes a file, or moves a document. `migrate` is the family's one mutation -- it moves the v1 stores to the v2 paths with `git mv`, writes the manifest, and replaces the router.",
 			Audience: []Audience{Human, Agent},
 			Sub: []*Command{
 				{
@@ -72,6 +72,16 @@ func rootCommand() *Command {
 					Detail:   "Prints the repository-relative path the role resolves to and nothing else, so a skill can use it in a command substitution. Roles are design, plans, journal, and qna. A missing operand or an unknown role is malformed (exit 3); an unsupported, invalid, or migrating layout prints nothing and exits 4 or 1.",
 					Audience: []Audience{Human, Agent},
 					Run:      func(a []string, io IO) int { return runLayoutPath(a, io.Out) },
+				},
+				{
+					Name: "migrate", Summary: "plan, apply, resume, or abort a v1 to v2 migration",
+					Usage: "agents layout migrate [--template <p>] [--stores <role=path> ...]\n" +
+						"                       [--archive <path>]\n" +
+						"                       [--dry-run | --apply | --resume --apply | --abort --apply]\n" +
+						"                       [--backup-tag <name>] [--json]",
+					Detail:   "Plans a v1 to v2 migration and applies, resumes, or aborts it. Dry run by default, and --dry-run is an accepted explicit synonym; --apply performs it and requires --backup-tag <name>, an annotated tag created at HEAD before the first write, so the rollback point exists even without a branch. --template supplies the target store map from a template's defaults and --stores <role=path> overrides one role; with no template, --stores must name all four roles. The plan is refused, naming each reason, when the router is diverged or missing, a source store is missing or a symlink, a target path already exists, docs/ holds anything but the four stores and the declared archive, or this binary is below the target's min_mut_ver_floor. Planning also requires a clean working tree, no merge, rebase, cherry-pick, revert, am, or bisect in progress, and a branch that is not master or main. A `migrating` manifest is never re-planned: --resume --apply continues the journal it froze and --abort --apply deletes it while nothing can have moved, and every other invocation refuses, naming the phase and the remedy. --json emits one object whose phase is planned for a dry run or a fresh --apply, and the journal phase a --resume continued from. Exits 0 when applied with no link candidates or when --abort completed, 1 for a dry-run plan, blockers, remaining link candidates, or a refused abort, 3 for malformed flags, 4 outside a repository with .agents/, and 5 when apply failed mid-way with the manifest left migrating for the next resume.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutMigrate(a, io.Out) },
 				},
 			},
 		},

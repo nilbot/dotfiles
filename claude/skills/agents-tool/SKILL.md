@@ -137,7 +137,7 @@ other checkouts still points at where it used to be.
 
 `agents drift` inspects the repository or fleet for context layout drift, canonical router diffs, domain context, skills, and misplaced documentation. It is non-mutating.
 
-`agents layout` is the read-only view of where the documentation stores live. A repository with no manifest resolves to the v1 `docs/` layout; one with `.agents/layout.json` resolves the four roles — `design`, `plans`, `journal`, `qna` — from that manifest, which is the authority for a v2 repository. Reach for it before writing to a knowledge store rather than assembling a `docs/` path by hand, which is right only on v1.
+`agents layout` reports where the documentation stores live: `show`, `validate`, and `path` are read-only, and `migrate` is the family's one mutation. A repository with no manifest resolves to the v1 `docs/` layout; one with `.agents/layout.json` resolves the four roles — `design`, `plans`, `journal`, `qna` — from that manifest, which is the authority for a v2 repository. Reach for it before writing to a knowledge store rather than assembling a `docs/` path by hand, which is right only on v1.
 
 `agents layout show` prints the schema, status, minimum mutating version, store map, and archive the repository resolves to; `--router` prints the canonical root router and nothing else. `agents layout validate` reports one line per problem and answers both halves of "may I rely on this": exit `1` when the manifest is invalid, and also when this binary may not mutate the repository — below `min_mut_ver_floor`, an unreleased build, or a migration in progress. `agents layout path` prints exactly one store path and nothing else, so use it in a command substitution:
 
@@ -146,3 +146,34 @@ qna=$(agents layout path qna)
 ```
 
 All three exit `4` outside a repository with `.agents/`; `path` prints nothing when the layout is unsupported, invalid, or migrating, so read the exit code rather than assuming the output is a path.
+
+## Migrating a repository to a v2 layout
+
+`agents layout migrate` adopts an existing v1 repository into an
+`agents.layout/v2` manifest by moving the four stores with `git mv` and
+replacing the router. It moves tracked stores, so it is not yours to run on your
+own initiative: run the dry run — the default — and show the plan to the human.
+
+```bash
+agents layout migrate --template content-vault --dry-run
+```
+
+`--apply` requires `--backup-tag <name>`, an annotated tag created at HEAD
+before the first write; that tag is the rollback point, so name it something the
+human will recognise. The plan is refused, with every reason named in one
+report, when the router is diverged or missing, a store is missing or a symlink,
+a target exists, `docs/` holds residue, or the binary is below the target's
+`min_mut_ver_floor`. A resume runs with the moved stores staged, which is why a
+clean tree is required to plan and not to resume.
+
+A `migrating` manifest is never re-planned. `agents layout migrate --resume --apply`
+continues the journal it froze, and `agents layout migrate --abort --apply`
+deletes a journal from phase `planned` while nothing can have moved; every other
+invocation refuses and names the phase. Do not try to work around a `migrating`
+manifest by hand — the `migrating-fleet-context` skill owns that state, including
+the link rewrite that follows a completed migration.
+
+Exit `0` when applied with no link candidates, `1` for a dry-run plan, blockers,
+remaining link candidates, or a refused abort, `3` for malformed flags, `4`
+outside a repository with `.agents/`, and `5` when a move failed mid-way — in
+which case the manifest stays `migrating` and the next step is to resume it.

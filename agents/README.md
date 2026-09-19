@@ -8,7 +8,7 @@ A developer harness manager, repository context framework, and transcript record
 
 - **Multi-Harness Wiring**: Automatically configures and keeps in sync hook configurations for Claude Code (`.claude/settings.json`), Codex (`.codex/hooks.json`), and Antigravity (`.agents/hooks.json`).
 - **Two-Tier Context & Drift Detection**: Enforces clean separation between canonical machine routing (`AGENTS.md`, `CLAUDE.md`) and repository domain guidelines (`.agents/AGENTS.md`). `agents drift` inspects context layout, canonical diffs, domain context, bundled skills, and misplaced documentation across repositories. Repository-specific skills under `.agents/skills/` are listed as `local_skills` and never classified as drift.
-- **Layout Manifest Resolution**: `agents layout show`, `agents layout validate`, and `agents layout path` read `.agents/layout.json` and report the layout a repository resolves to — schema, status, minimum mutating version (`min_mut_ver_floor`), and the store each role names — without writing anything. A repository with no manifest keeps the implicit v1 `docs/` layout.
+- **Layout Manifest Resolution**: `agents layout show`, `agents layout validate`, and `agents layout path` read `.agents/layout.json` and report the layout a repository resolves to — schema, status, minimum mutating version (`min_mut_ver_floor`), and the store each role names — without writing anything. A repository with no manifest keeps the implicit v1 `docs/` layout. `agents layout migrate` adopts an existing v1 repository into a v2 layout: it freezes a resumable journal before the first move, moves each store with `git mv`, and replaces the router.
 - **Fleet Maintenance & Skill Refresh**: `agents update` rewires machine hooks across registered repositories, refreshes the authoritative `migrating-fleet-context` skill, and emits advisory notices if any repository exhibits context drift.
 - **Durable Transcript Caching**: Captures and preserves subagent conversation transcripts before harnesses delete them, storing them in `.agents/transcripts/` with retention and size bounding.
 - **Repository Guardrails & Pre-Commit Secret Scanning**: Integrates `gitleaks` into `agents guard --staged` to catch secret leaks before commit.
@@ -108,6 +108,22 @@ qna=$(agents layout path qna)
 agents layout validate
 ```
 
+Adopt an existing v1 repository into an `agents.layout/v2` layout (dry run
+first; `--apply` requires a backup tag):
+
+```bash
+# The plan: what moves where, what blocks it, and the links it would break
+agents layout migrate --template content-vault --dry-run
+
+# Apply it on a migration branch, with the rollback point as an annotated tag
+agents layout migrate --template content-vault \
+  --apply --backup-tag pre-layout-v2-20260918
+
+# Continue a migration that stopped mid-way; --abort deletes a manifest from
+# phase `planned`, while nothing can have moved
+agents layout migrate --resume --apply
+```
+
 Inspect session transcripts and agent activity:
 
 ```bash
@@ -162,10 +178,11 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 | `agents wire` | regenerate harness configs (merges, never overwrites) |
 | `agents doctor` | report wiring, trust evidence, reachability, and lane health |
 | `agents drift` | inspect context layout and router drift |
-| `agents layout` | inspect the resolved documentation layout |
+| `agents layout` | inspect the resolved layout, or migrate v1 to v2 |
 | `agents layout show` | print the resolved layout, or the canonical router |
 | `agents layout validate` | check the layout against every validation rule |
 | `agents layout path` | print one store path by role |
+| `agents layout migrate` | plan, apply, resume, or abort a v1 to v2 migration |
 | `agents save` | commit .agents/ paths and nothing else (escape hatch) |
 | `agents trace` | query records; read one back; copy reachable ones |
 | `agents trace ls` | query records |
@@ -182,7 +199,8 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 
 ### Layout commands
 
-`agents layout` is the read-only view of `.agents/layout.json`. `show` prints the
+`agents layout` reads `.agents/layout.json`; `show`, `validate`, and `path` are
+read-only, and `migrate` is the family's only mutation. `show` prints the
 resolved layout — `--json` for the normalized object (prose-free, with any
 problems carried inside the object), `--router` for the canonical root router
 and nothing else. `path <role>` prints one repository-relative store path
@@ -191,7 +209,7 @@ layout validation rules and exits `0` for a valid, supported layout, `1` for
 problems or a manifest this binary may not mutate, and `4` outside a repository
 with `.agents/`. Nothing in this family creates a layout: `agents init` with
 `--template`, `--stores`, or `--archive` creates a v2 one, and adopting an
-existing v1 repository is the migration command's job, not init's.
+existing v1 repository is `agents layout migrate`'s job, not init's.
 
 `agents layout validate --json` emits one object:
 
@@ -203,6 +221,48 @@ existing v1 repository is the migration command's job, not init's.
 | `reason` | why not, when `supported` is false: `invalid`, `unknown_schema`, `below_floor`, `unreleased`, or `migrating` |
 | `schema` | `agents.layout/v1` or `agents.layout/v2` |
 | `layout_status` | `active` or `migrating` |
+
+### Migration (`agents layout migrate`)
+
+`agents layout migrate` adopts an existing v1 repository into an
+`agents.layout/v2` manifest. The dry run is the default — `--dry-run` is an
+accepted explicit synonym — and writes nothing. `--apply` performs it and
+requires `--backup-tag <name>`, an annotated tag created at HEAD before the
+first write, so the rollback point exists even without a branch. `--template`
+supplies the target store map from a template's defaults and
+`--stores <role>=<path>` overrides one role; with no template, `--stores` must
+name all four roles.
+
+Planning refuses, naming every reason in one report, when the router is diverged
+or missing, a source store is missing or a symlink, a target path already
+exists, `docs/` holds anything but the four stores and the declared archive, or
+this binary is below the target's `min_mut_ver_floor`. It also requires a clean
+working tree, no merge, rebase, cherry-pick, revert, am, or bisect in progress,
+and a branch that is not `master` or `main`.
+
+A `migrating` manifest is never re-planned: `--resume --apply` continues the
+journal it froze, and `--abort --apply` deletes a journal this migration created
+while nothing can have moved (phase `planned`, every move `pending`), leaving the
+backup tag as the record. Every other invocation against a `migrating` manifest
+refuses and names the phase and the remedy.
+
+| Invocation | Exit |
+|---|---|
+| dry run, or no apply flag: the plan is printed and nothing is written | `1` |
+| `--apply` applied, no blockers and no link candidates | `0` |
+| `--apply` applied, but markdown links still point into the moved stores | `1` |
+| `--apply`: plan blockers, or `docs_residue` appeared after the moves | `1` |
+| `--apply`: missing `--backup-tag`, conflicting flags, or malformed input | `3` |
+| `--apply`: a move failed mid-way; the manifest stays `migrating` | `5` |
+| `--abort --apply`: manifest deleted, backup tag left | `0` |
+| `--abort --apply` refused, or no `migrating` manifest | `1` |
+| any: not inside a repository with `.agents/` | `4` |
+
+`agents layout migrate --json` emits the plan as one object: `repo`, `dry_run`,
+`phase`, `from`, `to`, `router`, `archive`, `moves`, `link_candidates`,
+`blockers`, and `counts`. `phase` is `planned` for a dry run or a fresh
+`--apply`, and the journal phase a `--resume` continued from — a resume reports
+the journal's own plan, never a re-planned one.
 
 ---
 
