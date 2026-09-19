@@ -57,6 +57,14 @@ cd my-project
 agents init
 ```
 
+`agents init` creates the implicit v1 layout, whose four stores are
+`docs/{design,plans,journal,qna}`. To create an `agents.layout/v2` layout
+instead, pass a template: `agents init --template content-vault` puts the same
+four stores under `.context/`, and `agents init --template code-repo` keeps them
+under `docs/`. `--stores <role>=<path>` overrides an individual role and
+`--archive <path>` records the immutable archive. A repository that already has
+`AGENTS.md` or `docs/` is refused: adopting it is `agents layout migrate`'s job.
+
 Run diagnostics to verify that harnesses, hooks, and scaffold integrity are intact:
 
 ```bash
@@ -181,7 +189,9 @@ and nothing else. `path <role>` prints one repository-relative store path
 (`design`, `plans`, `journal`, `qna`) and nothing else. `validate` runs the
 layout validation rules and exits `0` for a valid, supported layout, `1` for
 problems or a manifest this binary may not mutate, and `4` outside a repository
-with `.agents/`.
+with `.agents/`. Nothing in this family creates a layout: `agents init` with
+`--template`, `--stores`, or `--archive` creates a v2 one, and adopting an
+existing v1 repository is the migration command's job, not init's.
 
 `agents layout validate --json` emits one object:
 

@@ -20,8 +20,8 @@ func rootCommand() *Command {
 		},
 		{
 			Name: "init", Summary: "create .agents/, triggers, wiring, fleet entry",
-			Usage:    "agents init [--local]",
-			Detail:   "Scaffolds .agents/, writes harness wiring, and registers this repository in the machine-local fleet. Prints the remaining trust steps and exits 1 (advisory) so the state is visible rather than assumed. --local keeps .agents/ git-ignored.",
+			Usage:    "agents init [--local] [--template <p>]\n            [--stores <role=path>] [--archive <path>]",
+			Detail:   "Scaffolds .agents/, writes harness wiring, and registers this repository in the machine-local fleet. Prints the remaining trust steps and exits 1 (advisory) so the state is visible rather than assumed. --local keeps .agents/ git-ignored. --template, --stores, and --archive create an agents.layout/v2 layout instead of the implicit v1 one: --template code-repo expands to docs/{design,plans,journal,qna}, --template content-vault expands to .context/{design,plans,journal,qna}, and --template custom (or no --template) takes no defaults; --stores role=path overrides one role on top of the defaults, is repeatable, and with no template must name all four roles; --archive names the repository-relative archive to record, and with no --archive the manifest inherits docs/archive when that directory exists. The template name is a creation input and is never written to the manifest. A repository that already has a v1 layout (AGENTS.md or docs/) is refused, because adopting it is `agents layout migrate`'s job, and --local with any layout flag is refused.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runInit(a, io.Out) },
 		},

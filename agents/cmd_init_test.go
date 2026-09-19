@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
@@ -556,12 +558,10 @@ func TestInitRefusesInvalidAndMigratingManifestsWithoutWriting(t *testing.T) {
 // The pre-flight asks both paths too: `/.agents/**` is invisible to a
 // directory-only query, and `--local` itself writes the `/.agents/` form.
 //
-// Controller ruling R4 keeps the layout flags (`--template`, `--stores`,
-// `--archive`) out of this task, so no `init` invocation can reach a v2 write
-// yet. The refusal is therefore asked of the guard directly, and the CLI half
-// pins what init does today: it refuses the flag it does not define without
-// writing anything. Task 9 flips `layoutFlagsPresent` and this call reaches the
-// same guard, at which point the Malformed assertion becomes the Advisory one.
+// Task 9 flips `layoutFlagsPresent` from this flag, so the invocation below now
+// reaches the same guard the direct call above does: Advisory, tree untouched,
+// and the reason names the ignored .agents/ rather than the malformed input the
+// flag used to be.
 func TestInitRefusesV2FlagsWhenAgentsIsIgnored(t *testing.T) {
 	for _, pattern := range []string{"/.agents/", "/.agents", "/.agents/**", ".agents/"} {
 		t.Run(pattern, func(t *testing.T) {
@@ -577,8 +577,11 @@ func TestInitRefusesV2FlagsWhenAgentsIsIgnored(t *testing.T) {
 			}
 
 			var out bytes.Buffer
-			if code := runInitWithVersion([]string{"--template", "content-vault"}, &out, "v0.6.0"); code != exitcode.Malformed {
-				t.Fatalf("exit = %d, want Malformed while the layout flags do not exist: %s", code, out.String())
+			if code := runInitWithVersion([]string{"--template", "content-vault"}, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Fatalf("exit = %d, want the Advisory refusal of the trackedness pre-flight: %s", code, out.String())
+			}
+			if !strings.Contains(out.String(), "ignored") {
+				t.Fatalf("the refusal must name the ignored .agents/: %s", out.String())
 			}
 			if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
 				t.Fatal("init wrote a v2 layout into a repository whose .agents/ is ignored")
@@ -593,6 +596,336 @@ func TestInitRefusesV2FlagsWhenAgentsIsIgnored(t *testing.T) {
 			out.Reset()
 			if code := runInitWithVersion([]string{"--local"}, &out, "v0.6.0"); code != exitcode.Advisory {
 				t.Fatalf("--local init = %d, want the v1 trust-step Advisory: %s", code, out.String())
+			}
+		})
+	}
+}
+
+// readManifestForCmd reads the manifest a command wrote. A missing or
+// unparseable document is a failure rather than an empty result: every
+// assertion built on it is about bytes the command actually produced.
+func readManifestForCmd(t *testing.T, root string) layout.Manifest {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(layout.ManifestRel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m layout.Manifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatal(err)
+	}
+	return m
+}
+
+// R1, and the trap Task 7's implementer flagged: the layout written to the
+// manifest must be the one the scaffold receives. Re-resolving after the write
+// would return the document just written, the §7.5 no-op keys on a manifest
+// that is present and active, and the repository would be left with a manifest
+// and no stores at all. The assertions are about the stores, not the document.
+//
+// The template name is a creation input and has no wire identity, so this also
+// pins that the expanded map -- never the name -- is what lands on disk.
+func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want map[string]string
+	}{
+		{
+			"content-vault",
+			[]string{"--template", "content-vault"},
+			map[string]string{
+				layout.RoleDesign: ".context/design", layout.RolePlans: ".context/plans",
+				layout.RoleJournal: ".context/journal", layout.RoleQNA: ".context/qna",
+			},
+		},
+		{
+			// code-repo is the v2 layout whose stores are the v1 paths: a
+			// repository can adopt v2 without moving a document (design §0).
+			"code-repo",
+			[]string{"--template", "code-repo"},
+			map[string]string{
+				layout.RoleDesign: "docs/design", layout.RolePlans: "docs/plans",
+				layout.RoleJournal: "docs/journal", layout.RoleQNA: "docs/qna",
+			},
+		},
+		{
+			// No template: --stores supplies every role, which is what custom
+			// and the empty template mean (design §0.4).
+			"stores-only",
+			[]string{
+				"--stores", "design=architecture/design",
+				"--stores", "plans=architecture/plans",
+				"--stores", "journal=notes/log",
+				"--stores", "qna=notes/qna",
+			},
+			map[string]string{
+				layout.RoleDesign: "architecture/design", layout.RolePlans: "architecture/plans",
+				layout.RoleJournal: "notes/log", layout.RoleQNA: "notes/qna",
+			},
+		},
+		{
+			"override",
+			[]string{"--template", "content-vault", "--stores", "qna=notes/qna"},
+			map[string]string{
+				layout.RoleDesign: ".context/design", layout.RolePlans: ".context/plans",
+				layout.RoleJournal: ".context/journal", layout.RoleQNA: "notes/qna",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			root := newRepo(t)
+			t.Chdir(root)
+
+			var out bytes.Buffer
+			if code := runInitWithVersion(tc.args, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Fatalf("exit = %d, want the trust-step Advisory: %s", code, out.String())
+			}
+
+			m := readManifestForCmd(t, root)
+			if m.Schema != layout.SchemaV2 || m.LayoutStatus != layout.StatusActive ||
+				m.MinMutVerFloor != layout.MinMutVerFloorV2 {
+				t.Fatalf("manifest header = %+v", m)
+			}
+			if !reflect.DeepEqual(m.Stores, tc.want) {
+				t.Fatalf("manifest stores = %v, want %v", m.Stores, tc.want)
+			}
+			for role, store := range tc.want {
+				rel := filepath.Join(filepath.FromSlash(store), "README.md")
+				if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
+					t.Errorf("the recorded %s store %s was not created: %v", role, store, err)
+				}
+			}
+			// docs/ is v1's store shell. A v2 layout whose stores are not under
+			// docs/ must not leave that shell behind; code-repo legitimately
+			// puts its stores there, so the check follows the layout asked for.
+			usesDocs := false
+			for _, store := range tc.want {
+				usesDocs = usesDocs || strings.HasPrefix(store, "docs/")
+			}
+			if _, err := os.Stat(filepath.Join(root, "docs")); !usesDocs && !os.IsNotExist(err) {
+				t.Error("a v2 creation whose stores are elsewhere left the v1 docs/ shell behind")
+			}
+			router, err := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(router) != layout.V2AgentsMD {
+				t.Error("a v2 creation wrote the v1 router")
+			}
+		})
+	}
+}
+
+// The template name has no wire identity (design §0.4): no profile, no
+// store_root, no template field, and the name itself must not appear.
+func TestInitManifestCarriesNoTemplateName(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := newRepo(t)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runInitWithVersion(
+		[]string{"--template", "content-vault", "--stores", "qna=notes/qna"},
+		&out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want the trust-step Advisory: %s", code, out.String())
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(layout.ManifestRel)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"profile", "template", "store_root", "content-vault"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Errorf("the manifest names %q:\n%s", forbidden, data)
+		}
+	}
+}
+
+// R2: --archive records the path and does not create it. The archive is a place
+// the manifest protects (V12); V12 does not make a directory.
+func TestInitRecordsTheArchiveWithoutCreatingIt(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := newRepo(t)
+	t.Chdir(root)
+
+	var out bytes.Buffer
+	if code := runInitWithVersion(
+		[]string{"--template", "content-vault", "--archive", ".context/archive"},
+		&out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want the trust-step Advisory: %s", code, out.String())
+	}
+	if got := readManifestForCmd(t, root).Archive; got != ".context/archive" {
+		t.Fatalf("archive = %q, want .context/archive", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".context", "archive")); !os.IsNotExist(err) {
+		t.Error("init created the archive directory, which V12 protects rather than makes")
+	}
+}
+
+// R2's default: with no --archive, the target inherits the v1 archive the tree
+// already has, and never invents a path.
+//
+// This default is unreachable through the CLI with docs/archive present: a
+// repository that has docs/ is refused by design §7.5's existing-layout rule
+// before any flag is applied. The rule still governs the layout this command
+// constructs, so it is pinned at the seam that implements it.
+func TestInitArchiveDefaultsToTheV1Archive(t *testing.T) {
+	withArchive := newRepo(t)
+	if err := os.MkdirAll(filepath.Join(withArchive, "docs", "archive"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := archiveForInit(withArchive, false, "")
+	if err != nil || got != "docs/archive" {
+		t.Errorf("archive default = (%q, %v), want docs/archive", got, err)
+	}
+	got, err = archiveForInit(newRepo(t), false, "")
+	if err != nil || got != "" {
+		t.Errorf("archive default with no docs/archive = (%q, %v), want empty", got, err)
+	}
+	got, err = archiveForInit(withArchive, true, "notes/archive")
+	if err != nil || got != "notes/archive" {
+		t.Errorf("supplied archive = (%q, %v), want notes/archive", got, err)
+	}
+	// An explicitly empty --archive is an input the operator supplied, not the
+	// absence of one, so it is refused rather than recorded as "no archive".
+	if got, err := archiveForInit(withArchive, true, ""); err == nil {
+		t.Errorf(`--archive "" = (%q, nil), want a refusal`, got)
+	}
+}
+
+// Every malformed layout flag is a CLI typo, not a manifest to write: exit 3,
+// a message naming the offending value, and nothing on disk.
+func TestInitRejectsMalformedLayoutFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"unknown flag", []string{"--bogus"}, "bogus"},
+		{"unknown template", []string{"--template", "prose-vault"}, "prose-vault"},
+		{"store without an equals sign", []string{"--stores", "design"}, "design"},
+		{"store without a role", []string{"--stores", "=docs/design"}, "=docs/design"},
+		{"store without a path", []string{"--stores", "design="}, "design="},
+		{"role outside the four", []string{"--template", "content-vault", "--stores", "changelog=notes/changelog"}, "changelog"},
+		{"missing role without a template", []string{"--stores", "qna=notes/qna"}, "plans"},
+		{"custom with no stores", []string{"--template", "custom"}, "design"},
+		{"absolute store path", []string{"--template", "content-vault", "--stores", "design=/tmp/design"}, "/tmp/design"},
+		{"escaping store path", []string{"--template", "content-vault", "--stores", "design=../design"}, "../design"},
+		{"overlapping stores", []string{"--template", "content-vault", "--stores", "qna=.context/design"}, ".context/design"},
+		{"escaping archive", []string{"--template", "content-vault", "--archive", "../archive"}, "../archive"},
+		{"archive equal to a store", []string{"--template", "content-vault", "--archive", ".context/design"}, ".context/design"},
+		{"archive containing a store", []string{"--template", "content-vault", "--archive", ".context"}, ".context"},
+		{"archive contained by a store", []string{"--template", "content-vault", "--archive", ".context/design/archive"}, ".context/design/archive"},
+		{"empty archive", []string{"--template", "content-vault", "--archive="}, "archive"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			root := newRepo(t)
+			t.Chdir(root)
+			before := snapshotTree(t, root)
+
+			var out bytes.Buffer
+			if code := runInitWithVersion(tc.args, &out, "v0.6.0"); code != exitcode.Malformed {
+				t.Fatalf("exit = %d, want Malformed (3): %s", code, out.String())
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Errorf("the rejection must name %q: %s", tc.want, out.String())
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+				t.Error("a malformed invocation wrote into the repository")
+			}
+		})
+	}
+}
+
+// design §7.5: with no manifest and a v1 layout already in the tree, adopting
+// the repository is `agents layout migrate`'s job -- it moves the stores and
+// proves the router is boilerplate. Every layout flag is refused, before
+// anything is written, whichever marker the tree carries.
+func TestInitRefusesLayoutFlagsOnAnExistingV1Layout(t *testing.T) {
+	markers := []struct {
+		name string
+		root func(*testing.T) string
+	}{
+		{"agents-md", func(t *testing.T) string {
+			root := newRepo(t)
+			if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte("# existing\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return root
+		}},
+		{"docs", func(t *testing.T) string {
+			root := newRepo(t)
+			if err := os.MkdirAll(filepath.Join(root, "docs", "design"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return root
+		}},
+		{"scaffolded", newRepoWithAgents},
+	}
+	flags := []struct {
+		name string
+		args []string
+	}{
+		{"template", []string{"--template", "content-vault"}},
+		{"stores", []string{"--stores", "design=architecture/design"}},
+		{"archive", []string{"--archive", "notes/archive"}},
+	}
+	for _, m := range markers {
+		for _, f := range flags {
+			t.Run(m.name+"/"+f.name, func(t *testing.T) {
+				t.Setenv("XDG_STATE_HOME", t.TempDir())
+				root := m.root(t)
+				t.Chdir(root)
+				before := snapshotTree(t, root)
+
+				var out bytes.Buffer
+				if code := runInitWithVersion(f.args, &out, "v0.6.0"); code != exitcode.Advisory {
+					t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+				}
+				if !strings.Contains(out.String(), "--"+f.name) {
+					t.Errorf("the refusal must name --%s: %s", f.name, out.String())
+				}
+				if !strings.Contains(out.String(), "agents layout migrate") {
+					t.Errorf("the refusal must name the remedy: %s", out.String())
+				}
+				if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+					t.Error("a refused init wrote into the repository")
+				}
+			})
+		}
+	}
+}
+
+// Decision 6, design §0.7: a manifest a clone cannot see would leave that clone
+// resolving v1 while the stores sat at the v2 paths. --local is refused with
+// the layout flags exactly as it is on a repository whose manifest already
+// resolves v2, and the check runs before the manifest exists.
+func TestInitRefusesLocalWithLayoutFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{"template", []string{"--local", "--template", "content-vault"}},
+		{"stores", []string{"--local", "--stores", "design=architecture/design"}},
+		{"archive", []string{"--local", "--archive", "notes/archive"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			root := newRepo(t)
+			t.Chdir(root)
+			before := snapshotTree(t, root)
+
+			var out bytes.Buffer
+			if code := runInitWithVersion(tc.args, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+			}
+			if !strings.Contains(out.String(), "--local is not supported") {
+				t.Errorf("the refusal must name --local and the reason: %s", out.String())
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+				t.Error("a refused --local init wrote into the repository")
 			}
 		})
 	}

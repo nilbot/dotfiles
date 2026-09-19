@@ -38,6 +38,13 @@ registers it in the machine's fleet. It exits `1`, not `0` — the trust steps i
 prints are still outstanding, and reporting a working setup that is not yet
 working is the failure this code exists to prevent.
 
+`agents init` creates the implicit v1 layout unless you pass a layout flag: on a
+repository with no `AGENTS.md` and no `docs/`, `--template content-vault`
+creates an `agents.layout/v2` layout under `.context/`, `--template code-repo`
+keeps the four stores under `docs/`, and `--stores <role>=<path>` overrides an
+individual role. A repository that already has a v1 layout is refused, because
+adopting it is the migration command's job rather than init's.
+
 ## Recording is not this tool's job any more
 
 Use the `recording-what-you-learn` skill. Findings go to `docs/qna/`, work
