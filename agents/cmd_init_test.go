@@ -365,6 +365,52 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 	return snap
 }
 
+// The guard approves a supported v2 layout, and the binary that may write it
+// must then write *that* layout: `init` used to create the v1 docs/ shell even
+// here, which is the same anti-shell failure design §1.2 records for v0.5.1.
+// The manifest declares the stores, so init creates nothing (design §7.5).
+func TestInitOnSupportedV2WritesNoV1Shell(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := newV2RepoForCmd(t, ".context")
+	t.Chdir(root)
+	before := snapshotTree(t, root)
+
+	var out bytes.Buffer
+	if code := runInitWithVersion(nil, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want the v1 trust-step Advisory this command already returns: %s", code, out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs")); !os.IsNotExist(err) {
+		t.Fatal("init created a docs/ shell in a supported v2 repository")
+	}
+	// Every file that was already there is untouched: the manifest, the four
+	// declared stores and their READMEs, the router, .gitattributes. `init`
+	// still wires harnesses -- that is its other job, and the only thing it may
+	// add to a repository whose layout the manifest already declares.
+	after := snapshotTree(t, root)
+	for rel, want := range before {
+		if got, ok := after[rel]; !ok || got != want {
+			t.Fatalf("init changed %s", rel)
+		}
+	}
+	for rel := range after {
+		if _, existed := before[rel]; existed {
+			continue
+		}
+		// Machine wiring is the one thing `init` may add here; it is what this
+		// command is for, and these are the paths scaffold already treats as
+		// machine-local. Nothing else may appear: not docs/, not a store, not
+		// a skill.
+		if rel == ".claude" || rel == ".codex" ||
+			strings.HasPrefix(rel, ".claude"+string(filepath.Separator)) ||
+			strings.HasPrefix(rel, ".codex"+string(filepath.Separator)) ||
+			rel == filepath.Join(".agents", "hooks.json") ||
+			rel == filepath.Join(".agents", ".agents-wire.lock") {
+			continue
+		}
+		t.Fatalf("init created %s in a repository whose layout it must not write", rel)
+	}
+}
+
 // A manifest this binary may not write is refused before anything is written:
 // v1 `init` creates docs/{design,plans,journal,qna}, which in a v2 repository
 // are the wrong stores entirely.

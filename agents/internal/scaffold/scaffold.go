@@ -70,6 +70,15 @@ var gitattributesLines = []string{
 	".agents/** linguist-generated=true",
 }
 
+// v2GitattributesLines adds the manifest exception after the blanket rule.
+// gitattributes is last-match-wins, so the one .agents/ file a maintainer has to
+// read in a diff stops being linguist-generated while every other one stays
+// hidden. It is deliberately not part of gitattributesLines: a v1 repository has
+// no manifest, and `init` must not edit its tracked .gitattributes to describe a
+// file that is not there.
+var v2GitattributesLines = append(append([]string{}, gitattributesLines...),
+	".agents/layout.json -linguist-generated")
+
 // excludeLines are machine-specific generated paths. They go in
 // .git/info/exclude rather than the repo's tracked .gitignore: an ignore list
 // belongs to the repository's maintainers, not to this tool.
@@ -95,26 +104,15 @@ var dirs = []string{
 	"skills",
 }
 
-var docsDirs = []string{
-	"design",
-	"plans",
-	"journal",
-	"qna",
-}
-
-// embeddedAssets are the layout-independent files Create installs. The two
-// bundled skills are deliberately not here: their canonical text is selected by
-// the resolved layout (design §0.8), so Create writes them through
-// SkillAssetPath instead.
+// embeddedAssets are the layout-independent files CreateWithLayout installs.
+// Neither the four docs/<role>/README.md files nor the two bundled skills are
+// here: both travel with the store the resolved layout puts them in (design
+// §0.8), so CreateWithLayout writes them from the layout it was handed.
 var embeddedAssets = []struct {
 	relPath   string
 	assetPath string
 }{
 	{".agents/AGENTS.md", "assets/dotagents/AGENTS.md"},
-	{"docs/design/README.md", "assets/docs/design/README.md"},
-	{"docs/plans/README.md", "assets/docs/plans/README.md"},
-	{"docs/journal/README.md", "assets/docs/journal/README.md"},
-	{"docs/qna/README.md", "assets/docs/qna/README.md"},
 }
 
 // bundledSkills are the skills embedded in the binary and refreshed by it.
@@ -155,8 +153,29 @@ func SkillAssetPath(schema, skillName string) (string, error) {
 	return path, nil
 }
 
-// Create is idempotent. Running it on an initialized repo must change nothing.
+// Create is the v1-compatible entry point: a caller that has not resolved a
+// layout gets the implicit one, exactly as before layouts existed. Like
+// CreateWithLayout it is idempotent -- running it on an initialized repository
+// changes nothing.
 func Create(root string, local bool) error {
+	return CreateWithLayout(root, local, layout.V1ForRoot(root))
+}
+
+// CreateWithLayout scaffolds .agents/ plus the stores the resolved layout
+// declares, and writes the router that layout selects. It never creates docs/
+// for a v2 layout: docs/{design,plans,journal,qna} are v1's stores, and an
+// older binary recreating them on a v2 repository is the anti-shell failure
+// design §1.2 exists to prevent.
+//
+// A layout whose manifest is already in the repository is that manifest's own
+// declaration, so this returns without writing anything for it (design §7.5).
+// It deliberately does not create a store the manifest declares and the tree
+// lacks: the manifest is the authority, and a half-created store is Task 10's
+// `store_missing` blocker rather than init's remedy. Support and validity are
+// the caller's gate (layoutRefusal); ManifestPath is what tells a manifest read
+// back from the repository apart from a layout a caller constructed in order to
+// create it.
+func CreateWithLayout(root string, local bool, l layout.Layout) error {
 	// First, before anything is written: a refusal that leaves a half-scaffolded
 	// repo behind is a worse outcome than the one it is refusing.
 	if local {
@@ -167,6 +186,17 @@ func Create(root string, local bool) error {
 		if linked {
 			return ErrLocalInLinkedWorktree
 		}
+	}
+
+	// design §7.5: a manifest already in this repository is the authority, so
+	// `init` is a no-op for it -- not even a declared store the tree lacks, and
+	// not a missing router either. A half-created store is the migration
+	// command's `store_missing` blocker; a missing router is what `drift` and
+	// `doctor` report. Adding either here would be this function inventing a
+	// layout the manifest does not describe.
+	if l.Schema == layout.SchemaV2 && l.ManifestPath != "" &&
+		l.LayoutStatus == layout.StatusActive && len(l.Problems) == 0 {
+		return nil
 	}
 
 	agents := filepath.Join(root, ".agents")
@@ -186,9 +216,20 @@ func Create(root string, local bool) error {
 		}
 	}
 
-	docsRoot := filepath.Join(root, "docs")
-	for _, d := range docsDirs {
-		if err := os.MkdirAll(filepath.Join(docsRoot, d), 0o755); err != nil {
+	// One loop for both schemas: v1's stores are the synthesized docs/<role>,
+	// a v2 manifest's are wherever it says. The README that explains a store
+	// travels with the store, so a repository never gets a bare directory whose
+	// purpose is only in the binary.
+	for _, role := range layout.Roles() {
+		store, ok := layout.Path(l, role)
+		if !ok {
+			return fmt.Errorf("layout declares no %s store", role)
+		}
+		if err := os.MkdirAll(filepath.Join(root, store), 0o755); err != nil {
+			return err
+		}
+		assetPath := "assets/docs/" + role + "/README.md"
+		if err := writeIfAbsentFromFS(filepath.Join(root, store, "README.md"), AssetsFS, assetPath); err != nil {
 			return err
 		}
 	}
@@ -200,12 +241,11 @@ func Create(root string, local bool) error {
 	}
 
 	// The resolved layout selects each bundled skill's canonical text (design
-	// §0.8). Resolved once, here, rather than per skill, so both skills are
-	// written from one reading of the manifest. This is what keeps a fresh v1
-	// repository byte-identical to what v0.5.1 wrote: the flat asset is now the
-	// v2 text, and installing it into a v1 repository would make `agents init`
-	// produce a repository that `agents drift` immediately calls customized.
-	l := layout.Resolve(root)
+	// §0.8), from the layout the caller handed us rather than a second read of
+	// the manifest. This is what keeps a fresh v1 repository byte-identical to
+	// what v0.5.1 wrote: the flat asset is now the v2 text, and installing it
+	// into a v1 repository would make `agents init` produce a repository that
+	// `agents drift` immediately calls customized.
 	for _, skillName := range bundledSkills {
 		assetPath, err := SkillAssetPath(l.Schema, skillName)
 		if err != nil {
@@ -217,14 +257,22 @@ func Create(root string, local bool) error {
 		}
 	}
 
-	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), DefaultAgentsMD); err != nil {
+	router := DefaultAgentsMD
+	if l.Schema == layout.SchemaV2 {
+		router = layout.V2AgentsMD
+	}
+	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), router); err != nil {
 		return err
 	}
 	if err := linkIfAbsent(filepath.Join(root, "CLAUDE.md"), "AGENTS.md"); err != nil {
 		return err
 	}
 
-	if err := appendMissingLines(filepath.Join(root, ".gitattributes"), gitattributesLines); err != nil {
+	attributes := gitattributesLines
+	if l.Schema == layout.SchemaV2 {
+		attributes = v2GitattributesLines
+	}
+	if err := appendMissingLines(filepath.Join(root, ".gitattributes"), attributes); err != nil {
 		return err
 	}
 

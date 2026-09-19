@@ -52,12 +52,18 @@ func runInitWithVersion(args []string, stdout io.Writer, running string) int {
 	// a layout this binary may not mutate is refused rather than half-scaffolded.
 	// Advisory, not OK: the repository is untouched and the operator has a
 	// remedy to read.
-	if _, refusal := layoutRefusal(rc.Root, running, layoutFlagsPresent); refusal != "" {
+	l, refusal := layoutRefusal(rc.Root, running, layoutFlagsPresent)
+	if refusal != "" {
 		fmt.Fprintf(stdout, "agents init: refusing to write: layout %s\n", refusal)
 		return exitcode.Advisory
 	}
 
-	if err := scaffold.Create(rc.Root, *local); err != nil {
+	// Scaffold from the layout just resolved, never from the implicit v1: that
+	// is what stops `init` recreating docs/{design,plans,journal,qna} in the v2
+	// repository the guard has approved, which is the anti-shell guarantee of
+	// design §1.2. A manifest already in the repository is its own declaration,
+	// so CreateWithLayout writes nothing for it (design §7.5).
+	if err := scaffold.CreateWithLayout(rc.Root, *local, l); err != nil {
 		fmt.Fprintf(stdout, "agents init: %v\n", err)
 		return exitcode.NoRecord
 	}
