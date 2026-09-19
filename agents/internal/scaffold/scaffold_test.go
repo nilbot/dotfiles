@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/layout"
 )
@@ -576,6 +577,23 @@ func TestSkillAssetPathRejectsUnknownSchemaAndSkill(t *testing.T) {
 	}
 }
 
+// canonicalV1SkillBytes resolves a skill's canonical text for the v1 layout.
+// These fixtures have no manifest, so v1 is the resolved layout and the frozen
+// v1 text is canonical (design §0.8) -- asserting against the flat asset would
+// pin the v2 text as the expectation for a v1 repository.
+func canonicalV1SkillBytes(t *testing.T, skillName string) []byte {
+	t.Helper()
+	assetPath, err := SkillAssetPath(layout.SchemaV1, skillName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := AssetsFS.ReadFile(assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
 func TestRefreshInfrastructuralSkills(t *testing.T) {
 	dir := newRepo(t)
 	if err := Create(dir, false); err != nil {
@@ -609,10 +627,7 @@ func TestRefreshInfrastructuralSkills(t *testing.T) {
 	}
 
 	// migrating-fleet-context should be overwritten with canonical embedded asset
-	expectedMigrating, err := AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	expectedMigrating := canonicalV1SkillBytes(t, "migrating-fleet-context")
 	gotMigrating, err := os.ReadFile(migratingPath)
 	if err != nil {
 		t.Fatal(err)
@@ -646,15 +661,47 @@ func TestRefreshInfrastructuralSkillsCreatesMissingDirectory(t *testing.T) {
 	if err := RefreshInfrastructuralSkills(dir); err != nil {
 		t.Fatalf("RefreshInfrastructuralSkills failed on missing directory: %v", err)
 	}
-	expectedMigrating, err := AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	expectedMigrating := canonicalV1SkillBytes(t, "migrating-fleet-context")
 	gotMigrating, err := os.ReadFile(migratingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(gotMigrating) != string(expectedMigrating) {
 		t.Fatalf("migrating-fleet-context was not written correctly")
+	}
+}
+
+// TestRefreshInfrastructuralSkillsLeavesMatchingCopyUnwritten pins the no-op
+// half of the refresh contract: an unmodified v1 repository must be untouched,
+// not rewritten with identical bytes. The mtime check is what distinguishes
+// "wrote the same bytes" from "did not write", which the design's byte-identical
+// promise and cmd_fleet's run-on-every-repository call site both require.
+func TestRefreshInfrastructuralSkillsLeavesMatchingCopyUnwritten(t *testing.T) {
+	dir := newRepo(t)
+	if err := Create(dir, false); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+
+	// A v1 repository's fresh copy is already canonical, so refreshing it must
+	// be a no-op.
+	want := canonicalV1SkillBytes(t, "migrating-fleet-context")
+	if got, err := os.ReadFile(migratingPath); err != nil || string(got) != string(want) {
+		t.Fatalf("Create did not install the v1 canonical text: err=%v", err)
+	}
+
+	past := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(migratingPath, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshInfrastructuralSkills(dir); err != nil {
+		t.Fatalf("RefreshInfrastructuralSkills failed: %v", err)
+	}
+	info, err := os.Stat(migratingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(past) {
+		t.Error("refresh rewrote an already-canonical copy; an unmodified repository must be a literal no-op")
 	}
 }

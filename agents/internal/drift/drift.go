@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
@@ -33,6 +34,12 @@ func InspectRepo(root string) (DriftReport, error) {
 		DocsStores:    map[string]bool{"design": false, "plans": false, "journal": false, "qna": false},
 		MisplacedDocs: []string{},
 	}
+
+	// The resolved layout selects which skill text is canonical (design §0.8): a
+	// v1 repository's copy is the frozen v1 text, a v2 repository's is the v2
+	// text. Resolved once; the currency predicate and the state names stay
+	// layout-blind.
+	l := layout.Resolve(root)
 
 	// 1. Router inspection (AGENTS.md)
 	agentsPath := filepath.Join(root, "AGENTS.md")
@@ -100,7 +107,7 @@ func InspectRepo(root string) (DriftReport, error) {
 			}
 		} else {
 			h := DigestBytes(data)
-			canDigest, err := CanonicalSkillDigest(skillName)
+			canDigest, err := CanonicalSkillDigestFor(skillName, l)
 			if err == nil && h == canDigest {
 				report.Skills[skillName] = string(ComponentOK)
 			} else if IsLegacySkillDigest(skillName, h) {

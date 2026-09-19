@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
@@ -307,7 +308,15 @@ func TestFleetUpdateApplyRefreshesInfrastructuralSkills(t *testing.T) {
 	if code != exitcode.OK {
 		t.Fatalf("exit=%d want OK; output=%q", code, out.String())
 	}
-	expectedContent, err := scaffold.AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
+	// This repository has no manifest, so it resolves v1 and the canonical text
+	// for the refresh is the frozen v1 asset, not the flat (v2) one. Resolve it
+	// the way the code under test does rather than hardcoding a path: the
+	// assertion still proves the exact bytes written.
+	assetPath, err := scaffold.SkillAssetPath(layout.Resolve(repo).Schema, "migrating-fleet-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedContent, err := scaffold.AssetsFS.ReadFile(assetPath)
 	if err != nil {
 		t.Fatal(err)
 	}

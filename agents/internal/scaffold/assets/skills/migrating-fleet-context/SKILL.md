@@ -201,41 +201,20 @@ The manifest records where a role lives, not how the repository wants it used.
 If the policy is missing and cannot be inferred from the repository's own
 rules, **stop and ask** rather than inventing one.
 
-Then restore the root `AGENTS.md` verbatim. On a v1 repository that is the
-canonical v1 router, pasted below:
-
-```markdown
-# Agent context
-
-Durable context for this repo lives in `docs/`. Read it before assuming;
-it is the record, and this file is only the pointer to it.
-
-- `docs/qna/` — answers indexed by the question you would ask again
-- `docs/plans/` — implementation plans
-- `docs/journal/` — dated record of what happened
-- `docs/design/` — the design still in force
-
-## Repository Architecture & Guidelines
-- Domain engineering guidelines, commenting standards, and safety constraints
-  are defined in `.agents/AGENTS.md`.
-- Repo-specific procedures and skills are located in `.agents/skills/`.
-
-## Machine Wiring
-`.agents/` holds machine wiring and local skills. A hook cannot install itself
-and a missing hook fails silently.
-- If the `agents` CLI is installed, run `agents doctor` early and report any warnings before relying on this context.
-- If `agents` is not installed on this machine, skip machine wiring checks and adhere directly to the repository instructions above.
-
-Recording is covered by the global instruction and the `recording-what-you-learn`
-skill; it is not repo-specific and is not restated here.
-```
-
-On a v2 repository, do not paste that block: the canonical router names the
-manifest and the resolved roles, and the tool prints its exact bytes.
+Then restore the root `AGENTS.md` verbatim — with the tool, not from a template
+in this file. `agents layout show --router` prints the canonical router for the
+resolved layout and nothing else, so the bytes cannot have diverged from the
+binary that will later classify them:
 
 ```bash
 agents layout show --router > AGENTS.md
 ```
+
+On a v1 repository that prints the router pointing at the four `docs/` stores;
+on a v2 repository it prints the manifest-pointing router. Pasting either by
+hand is how a repository ends up carrying a router the tool then reports as
+diverged. This skill deliberately keeps no second copy: only the v1 text does,
+because a v1 repository has no `agents layout` to ask.
 
 ---
 

@@ -3,6 +3,7 @@
 package scaffold
 
 import (
+	"bytes"
 	"embed"
 	"errors"
 	"fmt"
@@ -101,17 +102,26 @@ var docsDirs = []string{
 	"qna",
 }
 
+// embeddedAssets are the layout-independent files Create installs. The two
+// bundled skills are deliberately not here: their canonical text is selected by
+// the resolved layout (design §0.8), so Create writes them through
+// SkillAssetPath instead.
 var embeddedAssets = []struct {
 	relPath   string
 	assetPath string
 }{
 	{".agents/AGENTS.md", "assets/dotagents/AGENTS.md"},
-	{".agents/skills/recording-what-you-learn/SKILL.md", "assets/skills/recording-what-you-learn/SKILL.md"},
-	{".agents/skills/migrating-fleet-context/SKILL.md", "assets/skills/migrating-fleet-context/SKILL.md"},
 	{"docs/design/README.md", "assets/docs/design/README.md"},
 	{"docs/plans/README.md", "assets/docs/plans/README.md"},
 	{"docs/journal/README.md", "assets/docs/journal/README.md"},
 	{"docs/qna/README.md", "assets/docs/qna/README.md"},
+}
+
+// bundledSkills are the skills embedded in the binary and refreshed by it.
+// Which text is canonical for each is a function of the resolved layout.
+var bundledSkills = []string{
+	"recording-what-you-learn",
+	"migrating-fleet-context",
 }
 
 // skillAssets maps schema -> skill name -> embedded asset path. The flat path
@@ -185,6 +195,24 @@ func Create(root string, local bool) error {
 
 	for _, a := range embeddedAssets {
 		if err := writeIfAbsentFromFS(filepath.Join(root, a.relPath), AssetsFS, a.assetPath); err != nil {
+			return err
+		}
+	}
+
+	// The resolved layout selects each bundled skill's canonical text (design
+	// §0.8). Resolved once, here, rather than per skill, so both skills are
+	// written from one reading of the manifest. This is what keeps a fresh v1
+	// repository byte-identical to what v0.5.1 wrote: the flat asset is now the
+	// v2 text, and installing it into a v1 repository would make `agents init`
+	// produce a repository that `agents drift` immediately calls customized.
+	l := layout.Resolve(root)
+	for _, skillName := range bundledSkills {
+		assetPath, err := SkillAssetPath(l.Schema, skillName)
+		if err != nil {
+			return err
+		}
+		relPath := filepath.Join(".agents", "skills", skillName, "SKILL.md")
+		if err := writeIfAbsentFromFS(filepath.Join(root, relPath), AssetsFS, assetPath); err != nil {
 			return err
 		}
 	}
@@ -295,15 +323,28 @@ func appendMissingLines(path string, want []string) error {
 // RefreshInfrastructuralSkills refreshes the 100% agents-owned infrastructural skills
 // (migrating-fleet-context) to match AssetsFS, creating the directory if needed.
 // It never overwrites recording-what-you-learn or any user-defined custom skills.
+//
+// The resolved layout selects the canonical bytes (design §0.8): a v1
+// repository is refreshed to the frozen v1 text, never to the v2 text. A copy
+// that already matches is left unwritten rather than rewritten with identical
+// bytes -- the design promises an unmodified v1 repository is untouched, and
+// cmd_fleet runs this against every registered repository.
 func RefreshInfrastructuralSkills(repoRoot string) error {
-	const assetPath = "assets/skills/migrating-fleet-context/SKILL.md"
+	const skillName = "migrating-fleet-context"
+	assetPath, err := SkillAssetPath(layout.Resolve(repoRoot).Schema, skillName)
+	if err != nil {
+		return err
+	}
 	content, err := AssetsFS.ReadFile(assetPath)
 	if err != nil {
 		return err
 	}
-	targetDir := filepath.Join(repoRoot, ".agents", "skills", "migrating-fleet-context")
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+	target := filepath.Join(repoRoot, ".agents", "skills", skillName, "SKILL.md")
+	if existing, err := os.ReadFile(target); err == nil && bytes.Equal(existing, content) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(targetDir, "SKILL.md"), content, 0o644)
+	return os.WriteFile(target, content, 0o644)
 }

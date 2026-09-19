@@ -70,6 +70,81 @@ func TestInspectCleanCurrentRepo(t *testing.T) {
 	}
 }
 
+// installFrozenV1Layout builds a v1 repository (no .agents/layout.json) by
+// hand: the frozen v0.5.1 skill texts, the v1 docs/ stores, and the v1 router.
+// It deliberately does not call scaffold.Create, so the test below pins the
+// classifier rather than whatever bytes the writer happens to install.
+func installFrozenV1Layout(t *testing.T, dir string) {
+	t.Helper()
+	for skill, text := range map[string]string{
+		"recording-what-you-learn": LegacyRecordingSkillV051,
+		"migrating-fleet-context":  LegacyMigratingSkillV051,
+	} {
+		path := filepath.Join(dir, ".agents", "skills", skill, "SKILL.md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".agents", "AGENTS.md"), []byte("# Domain rules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, store := range []string{"design", "plans", "journal", "qna"} {
+		if err := os.MkdirAll(filepath.Join(dir, "docs", store), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(scaffold.DefaultAgentsMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestFrozenV1SkillTextsAreCurrentOnAV1Repository pins design §0.8 for the
+// bundled skills: the resolved layout selects the canonical text, so a v1
+// repository carrying the frozen v0.5.1 texts is current — not customized.
+// That is this release's central no-op promise for v1 repositories, and the
+// fixture is hand-built so a writer installing the wrong layout's bytes cannot
+// make the assertion pass by agreeing with the classifier.
+func TestFrozenV1SkillTextsAreCurrentOnAV1Repository(t *testing.T) {
+	dir := newRepo(t)
+	installFrozenV1Layout(t, dir)
+
+	report, err := InspectRepo(dir)
+	if err != nil {
+		t.Fatalf("InspectRepo failed: %v", err)
+	}
+	if report.RouterState != RouterCleanCurrent {
+		t.Errorf("router_state = %q, want %q", report.RouterState, RouterCleanCurrent)
+	}
+	if report.SymlinkState != "ok" {
+		t.Errorf("symlink_state = %q, want ok", report.SymlinkState)
+	}
+	if report.DomainState != "ok" {
+		t.Errorf("domain_state = %q, want ok", report.DomainState)
+	}
+	for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+		if got := report.Skills[skill]; got != string(ComponentOK) {
+			t.Errorf("skills[%s] = %q, want %q: the frozen v1 text is this layout's canonical text", skill, got, ComponentOK)
+		}
+	}
+	for _, store := range []string{"design", "plans", "journal", "qna"} {
+		if !report.DocsStores[store] {
+			t.Errorf("docs_stores[%s] = false, want true", store)
+		}
+	}
+	if len(report.MisplacedDocs) != 0 {
+		t.Errorf("misplaced_docs = %v, want none", report.MisplacedDocs)
+	}
+	if report.Diff != "" {
+		t.Errorf("diff = %q, want empty", report.Diff)
+	}
+}
+
 func TestInspectLegacyRouterRepo(t *testing.T) {
 	dir := newRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {

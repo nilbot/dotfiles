@@ -287,6 +287,8 @@ func TestSkillAssetsSplitByLayout(t *testing.T) {
 		"agents layout migrate", "--dry-run", "--apply", "--resume", "--abort",
 		"--local", "min_mut_ver_floor", "layout_status",
 		"the other layout's canonical text", "cannot perform the flip",
+		// Design §8.4 names both of these as part of the v2 text's surface.
+		"agents layout show", "agents layout path",
 	} {
 		if !strings.Contains(v2Migrating, want) {
 			t.Errorf("the v2 migrating text does not name %q", want)

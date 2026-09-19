@@ -3,7 +3,6 @@ package drift
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"sync"
 
 	"github.com/nilbot/dotfiles/agents/internal/layout"
@@ -809,9 +808,14 @@ func IsLegacyRouterDigest(digest string) bool {
 	return false
 }
 
-// CanonicalSkillDigest returns the SHA256 digest of an embedded skill from scaffold.AssetsFS.
-func CanonicalSkillDigest(skillName string) (string, error) {
-	assetPath := fmt.Sprintf("assets/skills/%s/SKILL.md", skillName)
+// CanonicalSkillDigestFor returns the SHA256 digest of the canonical skill
+// text for the resolved layout: the frozen v1 text for a v1 repository, the
+// v2 text for a v2 one. The resolved layout selects the bytes (design §0.8).
+func CanonicalSkillDigestFor(skillName string, l layout.Layout) (string, error) {
+	assetPath, err := scaffold.SkillAssetPath(l.Schema, skillName)
+	if err != nil {
+		return "", err
+	}
 	content, err := scaffold.AssetsFS.ReadFile(assetPath)
 	if err != nil {
 		return "", err
