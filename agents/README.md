@@ -8,6 +8,7 @@ A developer harness manager, repository context framework, and transcript record
 
 - **Multi-Harness Wiring**: Automatically configures and keeps in sync hook configurations for Claude Code (`.claude/settings.json`), Codex (`.codex/hooks.json`), and Antigravity (`.agents/hooks.json`).
 - **Two-Tier Context & Drift Detection**: Enforces clean separation between canonical machine routing (`AGENTS.md`, `CLAUDE.md`) and repository domain guidelines (`.agents/AGENTS.md`). `agents drift` inspects context layout, canonical diffs, domain context, bundled skills, and misplaced documentation across repositories. Repository-specific skills under `.agents/skills/` are listed as `local_skills` and never classified as drift.
+- **Layout Manifest Resolution**: `agents layout show`, `agents layout validate`, and `agents layout path` read `.agents/layout.json` and report the layout a repository resolves to — schema, status, minimum mutating version (`min_mut_ver_floor`), and the store each role names — without writing anything. A repository with no manifest keeps the implicit v1 `docs/` layout.
 - **Fleet Maintenance & Skill Refresh**: `agents update` rewires machine hooks across registered repositories, refreshes the authoritative `migrating-fleet-context` skill, and emits advisory notices if any repository exhibits context drift.
 - **Durable Transcript Caching**: Captures and preserves subagent conversation transcripts before harnesses delete them, storing them in `.agents/transcripts/` with retention and size bounding.
 - **Repository Guardrails & Pre-Commit Secret Scanning**: Integrates `gitleaks` into `agents guard --staged` to catch secret leaks before commit.
@@ -86,6 +87,19 @@ agents update --all
 agents update --all --apply
 ```
 
+Resolve where the documentation stores live (read-only, never writes):
+
+```bash
+# The resolved layout: schema, status, min_mut_ver_floor, stores, archive
+agents layout show
+
+# One store path by role, for use in a shell command substitution
+qna=$(agents layout path qna)
+
+# Validate the manifest; exits 1 for problems or an unsupported version floor
+agents layout validate
+```
+
 Inspect session transcripts and agent activity:
 
 ```bash
@@ -140,6 +154,10 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 | `agents wire` | regenerate harness configs (merges, never overwrites) |
 | `agents doctor` | report wiring, trust evidence, reachability, and lane health |
 | `agents drift` | inspect context layout and router drift |
+| `agents layout` | inspect the resolved documentation layout |
+| `agents layout show` | print the resolved layout, or the canonical router |
+| `agents layout validate` | check the layout against every validation rule |
+| `agents layout path` | print one store path by role |
 | `agents save` | commit .agents/ paths and nothing else (escape hatch) |
 | `agents trace` | query records; read one back; copy reachable ones |
 | `agents trace ls` | query records |
@@ -153,6 +171,27 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 | `agents guard` | pre-commit checks (the only command that blocks) |
 | `agents hook` | harness hook entrypoint |
 <!-- END GENERATED -->
+
+### Layout commands
+
+`agents layout` is the read-only view of `.agents/layout.json`. `show` prints the
+resolved layout — `--json` for the normalized object, `--router` for the
+canonical root router and nothing else. `path <role>` prints one
+repository-relative store path (`design`, `plans`, `journal`, `qna`) and nothing
+else. `validate` runs the layout validation rules and exits `0` for a valid,
+supported layout, `1` for problems or a manifest this binary may not mutate, and
+`4` outside a repository with `.agents/`.
+
+`agents layout validate --json` emits one object:
+
+| Field | Meaning |
+|---|---|
+| `manifest_path` | `.agents/layout.json`; omitted for the implicit v1 layout |
+| `problems` | array, never null; each entry has `code`, `path`, and `detail` |
+| `supported` | whether this binary may mutate the repository; false when the layout has problems (`invalid`, `unknown_schema`) or when the version gate refuses |
+| `reason` | why not, when `supported` is false: `invalid`, `unknown_schema`, `below_floor`, `unreleased`, or `migrating` |
+| `schema` | `agents.layout/v1` or `agents.layout/v2` |
+| `layout_status` | `active` or `migrating` |
 
 ---
 

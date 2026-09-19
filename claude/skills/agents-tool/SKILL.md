@@ -26,10 +26,12 @@ context. A hook cannot install itself and a missing hook fails silently, so an
 empty or stale `.agents/` means the setup is broken rather than that there is
 nothing to say. Report that rather than working around it.
 
-Knowledge lives in the repository's documentation, not in `.agents/`. Read
-`docs/qna/` and `docs/design/` before assuming, or whatever the repository's own
-`CLAUDE.md` names. `.agents/` is machine wiring: hooks, the trace cache, and
-`.agents/skills/` for procedures specific to that repository.
+Knowledge lives in the repository's documentation, not in `.agents/`. Read the
+`qna` and `design` stores before assuming — `docs/qna/` and `docs/design/` in a
+v1 repository, or whatever `agents layout path` resolves in a v2 one — or
+whatever the repository's own `CLAUDE.md` names. `.agents/` is machine wiring:
+hooks, the trace cache, and `.agents/skills/` for procedures specific to that
+repository.
 
 If the repository has no `.agents/` at all, `agents init` scaffolds it and
 registers it in the machine's fleet. It exits `1`, not `0` — the trust steps it
@@ -124,3 +126,13 @@ other checkouts still points at where it used to be.
 ## Inspecting context and drift
 
 `agents drift` inspects the repository or fleet for context layout drift, canonical router diffs, domain context, skills, and misplaced documentation. It is non-mutating.
+
+`agents layout` is the read-only view of where the documentation stores live. A repository with no manifest resolves to the v1 `docs/` layout; one with `.agents/layout.json` resolves the four roles — `design`, `plans`, `journal`, `qna` — from that manifest, which is the authority for a v2 repository. Reach for it before writing to a knowledge store rather than assembling a `docs/` path by hand, which is right only on v1.
+
+`agents layout show` prints the schema, status, minimum mutating version, store map, and archive the repository resolves to; `--router` prints the canonical root router and nothing else. `agents layout validate` reports one line per problem and answers both halves of "may I rely on this": exit `1` when the manifest is invalid, and also when this binary may not mutate the repository — below `min_mut_ver_floor`, an unreleased build, or a migration in progress. `agents layout path` prints exactly one store path and nothing else, so use it in a command substitution:
+
+```bash
+qna=$(agents layout path qna)
+```
+
+All three exit `4` outside a repository with `.agents/`; `path` prints nothing when the layout is unsupported, invalid, or migrating, so read the exit code rather than assuming the output is a path.

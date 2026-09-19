@@ -93,6 +93,10 @@ agents help --render=markdown
 | `agents wire` | regenerate harness configs (merges, never overwrites) |
 | `agents doctor` | report wiring, trust evidence, reachability, and lane health |
 | `agents drift` | inspect context layout and router drift |
+| `agents layout` | inspect the resolved documentation layout |
+| `agents layout show` | print the resolved layout, or the canonical router |
+| `agents layout validate` | check the layout against every validation rule |
+| `agents layout path` | print one store path by role |
 | `agents save` | commit .agents/ paths and nothing else (escape hatch) |
 | `agents trace` | query records; read one back; copy reachable ones |
 | `agents trace ls` | query records |

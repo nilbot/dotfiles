@@ -47,6 +47,35 @@ func rootCommand() *Command {
 			Run:      func(a []string, io IO) int { return runDrift(a, io.Out) },
 		},
 		{
+			Name: "layout", Summary: "inspect the resolved documentation layout",
+			Usage:    "agents layout show|validate|path",
+			Detail:   "Reads .agents/layout.json and reports the layout this repository resolves to. A repository with no manifest resolves to the implicit v1 layout, whose four stores are under docs/. Read-only: nothing in this family creates a store, writes a file, or moves a document.",
+			Audience: []Audience{Human, Agent},
+			Sub: []*Command{
+				{
+					Name: "show", Summary: "print the resolved layout, or the canonical router",
+					Usage:    "agents layout show [--json] [--router]",
+					Detail:   "Prints the schema, status, min_mut_ver_floor, stores, archive, and one line per role. --json emits the normalized layout object, whose stores are the resolved role-to-path map rather than the manifest's spelling. --router prints the canonical router for the resolved layout and nothing else, so the migration skill can restore AGENTS.md byte-for-byte. An invalid manifest prints one line per problem before the report and exits 1.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutShow(a, io.Out) },
+				},
+				{
+					Name: "validate", Summary: "check the layout against every validation rule",
+					Usage:    "agents layout validate [--json]",
+					Detail:   "Runs the layout validation rules and prints one line per problem. Exits 0 for a valid layout this binary may mutate; 1 when the layout is invalid or this binary may not mutate it; 4 outside a repository with .agents/. --json emits one object with manifest_path, problems, supported, reason, schema, and layout_status: supported is false when the layout has problems or the version gate refuses, and reason names which.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutValidate(a, io.Out) },
+				},
+				{
+					Name: "path", Summary: "print one store path by role",
+					Usage:    "agents layout path <role>",
+					Detail:   "Prints the repository-relative path the role resolves to and nothing else, so a skill can use it in a command substitution. Roles are design, plans, journal, and qna. A missing operand or an unknown role is malformed (exit 3); an unsupported, invalid, or migrating layout prints nothing and exits 4 or 1.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutPath(a, io.Out) },
+				},
+			},
+		},
+		{
 			Name: "save", Summary: "commit .agents/ paths and nothing else (escape hatch)",
 			Usage:    "agents save [-m msg]",
 			Detail:   "Commits .agents/ paths and nothing else, so machine wiring never rides along in a code commit. Knowledge is documentation and lives in docs/, committed normally.",

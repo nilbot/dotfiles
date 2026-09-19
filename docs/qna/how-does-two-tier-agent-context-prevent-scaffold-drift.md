@@ -50,12 +50,19 @@ it is the record, and this file is only the pointer to it.
   are defined in `.agents/AGENTS.md`.
 ```
 
+That block is the **v1** canonical router, byte for byte. A repository with
+`.agents/layout.json` (schema `agents.layout/v2`) gets the manifest-pointing
+router instead, which names the manifest rather than the four `docs/` paths,
+because the v2 stores may live anywhere. `agents layout show --router` prints
+whichever router the resolved layout uses, and `agents layout path <role>`
+resolves one store without a second copy of the map in prose.
+
 ### 4. LLM Sorter as Drift Reconciliation
 
 When external contributors add domain rules directly to root `AGENTS.md`, the repository enters an unpartitioned drift state.
 
-Rather than failing or clobbering, the LLM migration engine (`agents migrate` / fleet skill):
-1. Detects drift against canonical `DefaultAgentsMD`.
+Rather than failing or clobbering, the LLM migration engine (the `migrating-fleet-context` skill, driven by the operator):
+1. Detects drift against the canonical router for the resolved layout — `DefaultAgentsMD` on a v1 repository, the manifest-pointing router on v2.
 2. Extracts human-authored rules and appends them to `.agents/AGENTS.md`.
-3. Restores root `AGENTS.md` to canonical form.
+3. Restores root `AGENTS.md` to canonical form, taking the bytes from `agents layout show --router` rather than embedding a second copy of the text.
 4. Presents an interactive diff for explicit human approval.

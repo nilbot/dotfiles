@@ -33,11 +33,18 @@ no tracked root files.
 ### 2. `wire` and `update` only touch machine-local harness JSON
 
 Neither `agents wire` nor `agents update --all --apply` ever inspects or modifies
-`AGENTS.md`. Their scope is restricted to generated, machine-local, git-excluded files:
+`AGENTS.md` or `CLAUDE.md`. Their scope is restricted to generated, machine-local, git-excluded files:
 - `.claude/settings.json`
 - `.codex/hooks.json`
 - `.agents/hooks.json`
 - `.claude/skills` and `.codex/skills` symlinks
+
+The one tracked file `update` writes is the `agents`-owned
+`migrating-fleet-context` skill under `.agents/skills/`, refreshed to the
+canonical text for the repository's **resolved layout**: a v1 repository (no
+`.agents/layout.json`) keeps the frozen v1 text, a v2 repository gets the
+manifest-aware text. It is `agents`-owned, so that refresh is not a rewrite of
+human-authored content — and it does not touch the root instructions.
 
 ### 3. Why automatic template migration is rejected
 
