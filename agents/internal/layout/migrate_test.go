@@ -1565,19 +1565,46 @@ func TestApplyMigrationFreezesTheJournalBeforeTheFirstMove(t *testing.T) {
 
 // The design §10 requirement "crash fixture at every move boundary" is this
 // table: every move × every write boundary, every phase boundary, and one
-// non-prefix case. The boundary list is derived from the moves, so adding a
-// role adds coverage instead of leaving a silent gap. Design §0.5 names three
-// instants per move; `after-move` and `before-journal` are the two halves of its
-// middle instant, kept separate so the index-reconciliation seam (where `git mv`
-// has renamed the tree but the index is not yet updated) is its own row.
+// non-prefix case (TestResumeHandlesANonPrefixCrash).
+//
+// The boundaries are enumerated, never derived: both lists below are literals and
+// the expected count is a third literal, so dropping a row -- from the list or
+// from the loop that runs it -- fails this test instead of leaving a silent gap.
+//
+// The five instants are design §0.5's four, with its middle one split:
+//
+//	before-move    before `git mv` (instant 1)
+//	after-move     after `git mv`, before the destination digest is verified (instant 2)
+//	before-index   after that verification, before the index reconciliation
+//	after-index    after the index agrees with the worktree, before the journal
+//	               rewrite (instant 3 -- the seam inside `git mv` itself)
+//	after-journal  after the journal records `done` (instant 4)
+//
+// The four phase rows bound the single idempotent action of each phase, and each
+// fires while the journal still records the phase before it:
+//
+//	phase-moved   every move is done, before `moved` is recorded
+//	phase-pruned  before the emptied source directories are removed
+//	phase-router  before the v2 router is written (journal still `pruned`)
+//	phase-active  with the router written and the journal at `router`, before it
+//	              is retired as `active`
 func TestResumeCrashMatrix(t *testing.T) {
-	steps := []string{"before-move", "after-move", "before-journal", "after-journal"}
-	phases := []string{"moved", "pruned", "router"}
+	steps := []string{"before-move", "after-move", "before-index", "after-index", "after-journal"}
+	phases := []string{"phase-moved", "phase-pruned", "phase-router", "phase-active"}
 	moves := 4
+	// 4 moves × 5 instants + 4 phase boundaries. Deliberately not computed from
+	// the two lists above: that would make the assertion agree with whatever the
+	// lists happen to say, which is how the previous version of this test could
+	// not fail when a boundary was dropped.
+	const wantBoundaries = 24
 	covered := 0
+	// ran records the rows that actually executed, so deleting a `t.Run` call
+	// is caught as well as deleting an entry from a list.
+	var ran []string
 
 	run := func(t *testing.T, step string, moveIndex int) {
 		t.Helper()
+		ran = append(ran, fmt.Sprintf("%s/%d", step, moveIndex))
 		root := newGitV1RepoWithContent(t)
 		p, err := PlanMigration(root, MigrateOptions{
 			Template: TemplateContentVault,
@@ -1615,10 +1642,13 @@ func TestResumeCrashMatrix(t *testing.T) {
 	}
 	for _, phase := range phases {
 		covered++
-		t.Run("phase-"+phase, func(t *testing.T) { run(t, "phase-"+phase, 0) })
+		t.Run(phase, func(t *testing.T) { run(t, phase, 0) })
 	}
-	if covered != moves*len(steps)+len(phases) {
-		t.Fatalf("crash matrix covers %d boundaries, want %d", covered, moves*len(steps)+len(phases))
+	if covered != wantBoundaries {
+		t.Fatalf("crash matrix lists %d boundaries, want %d", covered, wantBoundaries)
+	}
+	if len(ran) != wantBoundaries {
+		t.Fatalf("crash matrix ran %d boundaries, want %d: %v", len(ran), wantBoundaries, ran)
 	}
 }
 
@@ -1865,6 +1895,68 @@ func TestApplyAddsTheManifestLinguistExceptionOnce(t *testing.T) {
 	}
 	if out := gitOutput(t, root, "check-attr", "linguist-generated", "--", ".agents/AGENTS.md"); !strings.Contains(out, "true") {
 		t.Fatalf("git check-attr on .agents/AGENTS.md = %q, want the blanket rule still true", out)
+	}
+}
+
+// A repository with no .gitattributes at all (a hand-built one, or one whose
+// maintainers never needed the file) must still come out of the migration with
+// the exception, as the only line: the append path creates the file when the
+// read reports ENOENT, and it must not precede it with a stray blank line.
+func TestApplyCreatesGitattributesWhenTheRepositoryHasNone(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	if err := os.Remove(filepath.Join(root, ".gitattributes")); err != nil {
+		t.Fatal(err)
+	}
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "drop .gitattributes")
+	p := planV2(t, root)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err != nil {
+		t.Fatal(err)
+	}
+	attrs, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
+	if err != nil {
+		t.Fatalf(".gitattributes was not created: %v", err)
+	}
+	if string(attrs) != manifestLinguistLine+"\n" {
+		t.Fatalf(".gitattributes = %q, want exactly the one manifest line", attrs)
+	}
+	if l := Resolve(root); l.LayoutStatus != StatusActive || l.Migration != nil {
+		t.Fatalf("layout = %+v", l)
+	}
+}
+
+// R3's third condition: abort is permitted only for a manifest this migration
+// created. A `migrating` manifest that predates the run is the operator's record
+// of someone else's half-finished migration, so deleting it would destroy the
+// only pointer to a tag they may still need.
+func TestAbortRefusesAManifestThisRunDidNotCreate(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	m := p.To.Manifest
+	m.LayoutStatus = StatusMigrating
+	m.Migration = &Migration{
+		From:      MigrationFrom{Schema: p.From.Schema, Stores: p.From.Stores, Archive: p.From.Archive},
+		StartedAt: "2026-09-18T00:00:00Z", BackupTag: "pre-layout-v2-test",
+		CreatedManifest: false, Phase: PhasePlanned, Moves: p.Moves,
+	}
+	if err := WriteManifest(root, m); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotTree(t, root)
+	err := AbortMigration(root)
+	if err == nil {
+		t.Fatal("abort must refuse a manifest this run did not create")
+	}
+	for _, want := range []string{"phase", "did not create the manifest", "--resume --apply"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not name %q", err, want)
+		}
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+		t.Fatalf("a refused abort changed the tree:\nbefore: %v\nafter:  %v", before, after)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ManifestRel)); statErr != nil {
+		t.Fatalf("a refused abort must leave the manifest in place: %v", statErr)
 	}
 }
 

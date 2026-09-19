@@ -310,6 +310,12 @@ func entryKind(mode fs.FileMode) string {
 // the declared archive. The planner refuses them up front; apply re-checks the
 // same list after the moves, because docs/ can gain an entry mid-flight and
 // silently leaving a shell behind is the failure this design exists to prevent.
+//
+// A docs/ that cannot be read reports nil here, deliberately: this function's
+// contract is "the entries that are residue", and it has no error to carry one.
+// The apply-time caller does not rely on that silence -- pruneSources, which runs
+// before it in the same reconciliation, surfaces an unreadable docs/ as an error
+// because every v1 move source lives under docs/.
 func docsResidue(root, archive string) []string {
 	entries, err := os.ReadDir(filepath.Join(root, "docs"))
 	if err != nil {
@@ -667,12 +673,31 @@ func markdownLinks(line string) []markdownLink {
 // Apply, resume, and abort: the reconciliation engine (design §0.5, §9.3, §9.4)
 // ---------------------------------------------------------------------------
 
-// reconcileHook is the crash-matrix seam (design §10): nil in production, set by
-// tests to fail once between two writes. It exists so the crash boundaries are
-// enumerable rather than asserted -- every write in the engine sits between two
-// named hook calls, and TestResumeCrashMatrix walks the names. Nothing on a
-// production path assigns it (R4): a seam that armed itself would make a real
-// migration fail on an error no operator caused.
+// reconcileHook is the crash-matrix seam (design §0.5, §10): nil in production,
+// set by tests to fail once between two writes. It exists so the crash
+// boundaries are enumerable rather than asserted, and TestResumeCrashMatrix
+// walks every name below.
+//
+// The five per-move names are design §0.5's four instants, with its middle one
+// split so the index seam is its own row:
+//
+//	before-move    before `git mv` (instant 1)
+//	after-move     after `git mv`, before the destination digest is verified (instant 2)
+//	before-index   after that verification, before the index reconciliation
+//	after-index    after the index agrees with the worktree, before the journal rewrite (instant 3)
+//	after-journal  after the journal records `done` (instant 4)
+//
+// The four phase names each fire at the start of the single idempotent action
+// that produces that phase, so the journal at that moment still records the
+// phase before it:
+//
+//	phase-moved    every move is done, before the `moved` phase is recorded
+//	phase-pruned   before the emptied source directories are removed
+//	phase-router   before the v2 router is written
+//	phase-active   with the router written, before the journal is retired
+//
+// Nothing on a production path assigns it (R4): a seam that armed itself would
+// make a real migration fail on an error no operator caused.
 var reconcileHook func(step string, moveIndex int) error
 
 // hook fires the crash seam when a test armed one.
@@ -817,6 +842,11 @@ func reconcileMigration(root string) error {
 				return err
 			}
 		case PhaseRouter:
+			// The journal is at `router`: the moves, the pruning, and the router
+			// are all behind it, and only the retirement of the journal is left.
+			if err := hook("phase-active", 0); err != nil {
+				return err
+			}
 			m.LayoutStatus = StatusActive
 			m.Migration = nil
 			if err := WriteManifest(root, m); err != nil {
@@ -896,10 +926,17 @@ func runMoves(root string, m *Manifest) error {
 					"after `git mv`, %s has %s but the journal recorded %s: the tree changed under the migration",
 					mv.To, got, mv.Digest), Remedy: moveRemedy(m, mv)}
 			}
-			if err := hook("before-journal", i); err != nil {
+			if err := hook("before-index", i); err != nil {
 				return err
 			}
 			if err := stageRename(root, mv); err != nil {
+				return err
+			}
+			// The third instant of design §0.5: the worktree and the index now
+			// agree, and the journal does not yet record `done`. It is the seam
+			// `git mv` itself exposes, which is why it is its own boundary rather
+			// than folded into the instant after the rename.
+			if err := hook("after-index", i); err != nil {
 				return err
 			}
 			mv.State = MoveDone
@@ -1012,29 +1049,52 @@ func moveRemedy(m *Manifest, mv *Move) string {
 		mv.From, mv.To, tag, mv.From)
 }
 
-// pruneSources removes directories the moves emptied. ENOENT and ENOTEMPTY are
-// not failures: the first is a re-run of this step, the second means the
-// directory still holds something, which the residue check reports rather than
-// deletes. The archive is never a move source, so a docs/ that holds it is left
-// standing by the same rule (design §9.5).
+// pruneSources removes directories the moves emptied. Not removing something is
+// not a failure -- a directory that is already gone is a re-run of this step, and
+// a directory that still holds entries is what the residue check reports rather
+// than deletes. Nothing else is swallowed: a directory that cannot be read or
+// removed is a real failure and is surfaced, because reporting a clean migration
+// over a tree the tool could not inspect is exactly the silent success design
+// §9.5 refuses. The archive is never a move source, so a docs/ that holds it is
+// left standing by the same rule.
 func pruneSources(root string, m *Manifest) error {
 	if err := hook("phase-pruned", 0); err != nil {
 		return err
 	}
-	for _, mv := range m.Migration.Moves {
-		_ = os.Remove(filepath.Join(root, filepath.Dir(mv.From))) // empty directories only
+	// removeIfEmpty never calls os.Remove on a directory it has not just seen
+	// empty, which is what keeps ENOTEMPTY out of the error handling entirely:
+	// the only expected failure left is ENOENT, from a second run of this step.
+	removeIfEmpty := func(dir string) error {
+		entries, err := os.ReadDir(dir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return nil
+		case err != nil:
+			return fmt.Errorf("%s: %w", filepath.ToSlash(dir), err)
+		case len(entries) > 0:
+			return nil
+		}
+		if err := os.Remove(dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s: %w", filepath.ToSlash(dir), err)
+		}
+		return nil
 	}
-	if entries, err := os.ReadDir(filepath.Join(root, "docs")); err == nil && len(entries) == 0 {
-		if err := os.Remove(filepath.Join(root, "docs")); err != nil && !os.IsNotExist(err) {
+	for _, mv := range m.Migration.Moves {
+		if err := removeIfEmpty(filepath.Join(root, filepath.Dir(mv.From))); err != nil {
 			return err
 		}
+	}
+	if err := removeIfEmpty(filepath.Join(root, "docs")); err != nil {
+		return err
 	}
 	m.Migration.Phase = PhasePruned
 	return WriteManifest(root, *m)
 }
 
 // writeV2Router is idempotent: a router already equal to the v2 text is left
-// alone, so re-running after a crash writes nothing new.
+// alone, so re-running after a crash writes nothing new. The `phase-router`
+// boundary fires before the write, while the journal still records `pruned`;
+// the crash with the journal at `router` is `phase-active` in the caller.
 func writeV2Router(root string) error {
 	if err := hook("phase-router", 0); err != nil {
 		return err
