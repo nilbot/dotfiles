@@ -32,6 +32,10 @@ func newRepo(t *testing.T) string {
 		{"config", "user.name", "T"},
 		{"config", "commit.gpgsign", "false"},
 		{"config", "core.hooksPath", ".git/hooks"},
+		// Same reason as newTestRepo: git's background maintenance must not
+		// run under a fixture a test is concurrently walking.
+		{"config", "maintenance.auto", "false"},
+		{"config", "gc.auto", "0"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir

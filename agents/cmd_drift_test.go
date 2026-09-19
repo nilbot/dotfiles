@@ -24,6 +24,14 @@ func newTestRepo(t *testing.T) string {
 		{"config", "user.email", "t@example.com"},
 		{"config", "user.name", "T"},
 		{"config", "commit.gpgsign", "false"},
+		// Disable git's background maintenance for this fixture. Measured on
+		// macOS CI: a `maintenance.lock` under .git/ appeared and vanished
+		// while snapshotTree walked the tree, so the walk failed with ENOENT
+		// on a file git had just removed. Nothing in these tests needs git to
+		// maintain the repository, so the race is removed at its source rather
+		// than swallowed inside the snapshot.
+		{"config", "maintenance.auto", "false"},
+		{"config", "gc.auto", "0"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
