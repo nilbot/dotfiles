@@ -10,7 +10,9 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // The migration fixtures build a v1 repository through scaffold itself, so the
@@ -543,18 +545,23 @@ func TestPlanMigrationRequiresAllFourRolesWithoutATemplate(t *testing.T) {
 }
 
 // The planner writes nothing at all: no manifest, no store directory, no index
-// change, not even a temporary file. It is the whole promise of a dry run, so
-// the proof is a whole-tree snapshot rather than an assertion about the paths
-// the implementation happens to touch -- including for a plan that is refused.
+// change, not even a temporary file, and not one rewritten link byte. It is the
+// whole promise of a dry run, so the proof is a whole-tree snapshot rather than
+// an assertion about the paths the implementation happens to touch -- including
+// for a plan that is refused. Both fixtures hold a markdown link into a moving
+// store, so a planner that rewrote links in place would fail here rather than
+// only contradict the absence of a write call in the source.
 func TestPlanMigrationWritesNothingAtAll(t *testing.T) {
-	root := newGitV1RepoWithContent(t)
-	mkdirAll(t, root, "docs/archive/plans")
-	writeFile(t, filepath.Join(root, "docs/archive/plans/2020-old-plan.md"), "archived\n")
-	writeFile(t, filepath.Join(root, "docs/notes.md"), "residue\n")
-	before := snapshotTree(t, root)
-	indexBefore := gitOutput(t, root, "status", "--porcelain", "--untracked-files=all")
+	const link = "See [the plan](../plans/a-plan.md).\n"
+	refused := newGitV1RepoWithContent(t)
+	writeFile(t, filepath.Join(refused, "docs/design/a-design.md"), link)
+	mkdirAll(t, refused, "docs/archive/plans")
+	writeFile(t, filepath.Join(refused, "docs/archive/plans/2020-old-plan.md"), "archived\n")
+	writeFile(t, filepath.Join(refused, "docs/notes.md"), "residue\n")
+	before := snapshotTree(t, refused)
+	indexBefore := gitOutput(t, refused, "status", "--porcelain", "--untracked-files=all")
 
-	p, err := PlanMigration(root, MigrateOptions{
+	p, err := PlanMigration(refused, MigrateOptions{
 		Template: TemplateContentVault,
 		Running:  "v0.6.0", RouterState: "current",
 	})
@@ -564,8 +571,12 @@ func TestPlanMigrationWritesNothingAtAll(t *testing.T) {
 	if !hasBlocker(p.Blockers, "docs_residue") {
 		t.Fatalf("the fixture must be refused so both outcomes are covered: %v", p.Blockers)
 	}
+	if len(p.LinkCandidates) != 1 {
+		t.Fatalf("the refused plan must report the link it did not touch: %+v", p.LinkCandidates)
+	}
 
 	clean := newGitV1RepoWithContent(t)
+	writeFile(t, filepath.Join(clean, "docs/design/a-design.md"), link)
 	beforeClean := snapshotTree(t, clean)
 	p, err = PlanMigration(clean, MigrateOptions{
 		Template: TemplateContentVault,
@@ -577,7 +588,7 @@ func TestPlanMigrationWritesNothingAtAll(t *testing.T) {
 	if len(p.Moves) != 4 {
 		t.Fatalf("moves = %+v", p.Moves)
 	}
-	if p.Counts.Move != 4 || p.Counts.Blocked != 0 || p.Counts.Links != 0 {
+	if p.Counts.Move != 4 || p.Counts.Blocked != 0 || p.Counts.Links != 1 {
 		t.Fatalf("counts = %+v", p.Counts)
 	}
 	if p.DryRun != true || p.Phase != PhasePlanned || p.Repo != clean {
@@ -586,16 +597,68 @@ func TestPlanMigrationWritesNothingAtAll(t *testing.T) {
 	if after := snapshotTree(t, clean); !reflect.DeepEqual(beforeClean, after) {
 		t.Fatalf("a planned migration changed the tree:\nbefore: %v\nafter:  %v", beforeClean, after)
 	}
-	if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+	if after := snapshotTree(t, refused); !reflect.DeepEqual(before, after) {
 		t.Fatalf("a refused migration changed the tree:\nbefore: %v\nafter:  %v", before, after)
 	}
-	if after := gitOutput(t, root, "status", "--porcelain", "--untracked-files=all"); after != indexBefore {
+	if after := gitOutput(t, refused, "status", "--porcelain", "--untracked-files=all"); after != indexBefore {
 		t.Fatalf("git state changed:\nbefore: %q\nafter:  %q", indexBefore, after)
 	}
 	for _, rel := range []string{ManifestRel, ".context", "notes"} {
-		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+		if _, err := os.Lstat(filepath.Join(refused, filepath.FromSlash(rel))); !os.IsNotExist(err) {
 			t.Fatalf("planner created %s", rel)
 		}
+	}
+}
+
+// Every exit carries the header and the counts, refusals included: a JSON
+// consumer reads `dry_run`, `repo`, and `blocked` before it reads the blockers,
+// and a refused dry run that reported `"dry_run": false` with `"blocked": 0`
+// would read as a plan already applied. The Support refusal is the routine path
+// for every unstamped or below-floor binary.
+func TestPlanMigrationRefusedPlansKeepTheirHeaderAndCounts(t *testing.T) {
+	cases := []struct {
+		name string
+		opts MigrateOptions
+	}{
+		{"invalid target", MigrateOptions{Running: "v0.6.0", RouterState: "current"}},
+		{"unsupported binary", MigrateOptions{Template: TemplateContentVault, Running: "v0.5.1", RouterState: "current"}},
+		{"unclean router", MigrateOptions{Template: TemplateContentVault, Running: "v0.6.0", RouterState: "missing"}},
+		{"residue", MigrateOptions{Template: TemplateContentVault, Running: "v0.6.0", RouterState: "current"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newGitV1Repo(t)
+			if tc.name == "residue" {
+				writeFile(t, filepath.Join(root, "docs/scratch.md"), "x\n")
+			}
+			p, err := PlanMigration(root, tc.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(p.Blockers) == 0 {
+				t.Fatalf("the fixture must be refused: %+v", p)
+			}
+			if !p.DryRun {
+				t.Fatalf("a refusal is still a dry run: %+v", p)
+			}
+			if p.Repo != root {
+				t.Fatalf("repo = %q, want %q", p.Repo, root)
+			}
+			if p.Phase != PhasePlanned {
+				t.Fatalf("phase = %q, want %q", p.Phase, PhasePlanned)
+			}
+			if p.RouterAction == "" {
+				t.Fatal("a refused plan still says what it would have done to the router")
+			}
+			if p.From.Schema != SchemaV1 || p.To.Schema != SchemaV2 {
+				t.Fatalf("from/to = %q/%q", p.From.Schema, p.To.Schema)
+			}
+			if p.Counts.Blocked != len(p.Blockers) || p.Counts.Move != len(p.Moves) ||
+				p.Counts.Links != len(p.LinkCandidates) {
+				t.Fatalf("counts = %+v for %d blockers, %d moves, %d links",
+					p.Counts, len(p.Blockers), len(p.Moves), len(p.LinkCandidates))
+			}
+		})
 	}
 }
 
@@ -795,11 +858,13 @@ func TestPlanMigrationRefusesAMachineLocalManifest(t *testing.T) {
 
 // The link scan is a report about links that will break, so it reads markdown
 // only, it ignores fenced examples, and it ignores everything that is not a
-// repository path: a URL, a mailto, and a bare fragment are not moved by a
-// store migration. A title is part of the syntax, not of the target.
+// repository path: a URL, a mailto, a bare fragment, and an absolute filesystem
+// path are not moved by a store migration. A title is part of the syntax, not
+// of the target, and a fence left open at end of file still hides what follows
+// it.
 func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 	root := newGitV1Repo(t)
-	writeFile(t, filepath.Join(root, "docs/design/notes.md"), strings.Join([]string{
+	body := strings.Join([]string{
 		`See [the plan](../plans/a-plan.md "the plan").`,
 		"",
 		"```md",
@@ -807,9 +872,13 @@ func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 		"```",
 		"",
 		"A [site](https://example.com/plans/a-plan.md), a [mail](mailto:t@example.com),",
-		"an [anchor](#section), and an [escape](../../outside.md).",
+		"an [anchor](#section), an [absolute](/etc/hosts), and an [escape](../../outside.md).",
 		"",
-	}, "\n"))
+		"```",
+		"A fence that never closes: [the plan](../plans/a-plan.md).",
+		"",
+	}, "\n")
+	writeFile(t, filepath.Join(root, "docs/design/notes.md"), body)
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
 	writeFile(t, filepath.Join(root, "docs/plans/readme.txt"), "[not markdown](../plans/a-plan.md)\n")
 
@@ -836,6 +905,13 @@ func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 	}
 	if p.Counts.Links != 1 {
 		t.Fatalf("counts = %+v", p.Counts)
+	}
+	after, err := os.ReadFile(filepath.Join(root, "docs/design/notes.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != body {
+		t.Fatalf("the planner rewrote a file it had only reported:\n%s", after)
 	}
 }
 
@@ -892,8 +968,21 @@ func TestDigestTreeCoversEveryEntryAndIsNotAGitOid(t *testing.T) {
 	if files != 3 || withLink == withFile {
 		t.Fatalf("a symlink must be counted and hashed: files=%d %q", files, withLink)
 	}
+	// A symlink to a directory is one entry, not a traversal: the walk records
+	// the link and never descends through it, which is what keeps a store from
+	// claiming content outside itself.
+	if err := os.Symlink("nested", filepath.Join(root, "docs/design/nested-link")); err != nil {
+		t.Fatal(err)
+	}
+	withDirLink, files, _, err := digestTree(root, "docs/design")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files != 4 || withDirLink == withLink {
+		t.Fatalf("a directory symlink must be one entry of its own: files=%d %q", files, withDirLink)
+	}
 	writeFile(t, filepath.Join(root, "docs/design/README.md"), "changed\n")
-	if got, _, _, err := digestTree(root, "docs/design"); err != nil || got == withLink {
+	if got, _, _, err := digestTree(root, "docs/design"); err != nil || got == withDirLink {
 		t.Fatalf("a changed file must change the digest: (%q, %v)", got, err)
 	}
 
@@ -996,5 +1085,229 @@ func TestRewriteLinksKeepsEveryLinkResolving(t *testing.T) {
 	}
 	if string(again) != string(body) {
 		t.Fatalf("the rewrite is not idempotent:\n%s\n%s", body, again)
+	}
+}
+
+// Design §0.4: --stores layers on the template rather than replacing it. One
+// override replaces one role, and the template supplies the other three; a
+// planner that took the override map as the whole layout would refuse a
+// perfectly well-formed invocation with three role_missing blockers.
+func TestPlanMigrationLayersStoresOverTheTemplate(t *testing.T) {
+	root := newGitV1Repo(t)
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Stores:   map[string]string{RoleDesign: "notes/design"},
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) != 0 {
+		t.Fatalf("plan = (%+v, %v)", p.Blockers, err)
+	}
+	targets := map[string]string{}
+	for _, m := range p.Moves {
+		targets[m.Role] = m.To
+	}
+	want := map[string]string{
+		RoleDesign: "notes/design", RolePlans: ".context/plans",
+		RoleJournal: ".context/journal", RoleQNA: ".context/qna",
+	}
+	for role, path := range want {
+		if targets[role] != path {
+			t.Fatalf("stores = %v, want %v", targets, want)
+		}
+	}
+}
+
+// Design §9.1: only a router state the skill has provably left alone is clean.
+// `known_legacy` is boilerplate the migration may replace; `diverged`, `missing`,
+// and an unsaid state are each the skill's work first.
+func TestPlanMigrationBlocksOnlyAnUncleanRouter(t *testing.T) {
+	root := newGitV1Repo(t)
+	for _, tc := range []struct {
+		state   string
+		blocked bool
+	}{
+		{"current", false},
+		{"known_legacy", false},
+		{"diverged", true},
+		{"missing", true},
+		{"", true},
+	} {
+		p, err := PlanMigration(root, MigrateOptions{
+			Template: TemplateContentVault,
+			Running:  "v0.6.0", RouterState: tc.state,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := hasBlocker(p.Blockers, "router_not_clean"); got != tc.blocked {
+			t.Fatalf("router %q: router_not_clean = %v, want %v: %v", tc.state, got, tc.blocked, p.Blockers)
+		}
+		if !strings.HasPrefix(p.RouterAction, tc.state+" ") {
+			t.Fatalf("router %q: RouterAction = %q", tc.state, p.RouterAction)
+		}
+	}
+}
+
+// A named pipe has no bytes to hash, no content identity to verify a move
+// against, and os.ReadFile on one blocks on open until a writer appears -- so a
+// planner that read every non-directory entry would hang forever on a store
+// that holds one. The store is refused instead, and the refusal is timely: the
+// goroutine guard turns a regression back into a failure rather than a hung
+// test binary.
+func TestPlanMigrationRefusesAStoreWithANamedPipe(t *testing.T) {
+	root := newGitV1Repo(t)
+	pipe := filepath.Join(root, "docs/design/pipe")
+	if err := syscall.Mkfifo(pipe, 0o644); err != nil {
+		t.Skipf("this platform cannot create a named pipe: %v", err)
+	}
+	type result struct {
+		p   Plan
+		err error
+	}
+	results := make(chan result, 1)
+	go func() {
+		p, err := PlanMigration(root, MigrateOptions{
+			Template: TemplateContentVault,
+			Running:  "v0.6.0", RouterState: "current",
+		})
+		results <- result{p, err}
+	}()
+	select {
+	case got := <-results:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if !hasBlocker(got.p.Blockers, "store_unreadable") {
+			t.Fatalf("blockers = %v, want store_unreadable", got.p.Blockers)
+		}
+		found := false
+		for _, b := range got.p.Blockers {
+			if b.Code == "store_unreadable" && strings.Contains(b.Detail, "design=docs/design") &&
+				strings.Contains(b.Detail, "named pipe") {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("the refusal must name the store and the entry: %v", got.p.Blockers)
+		}
+		for _, m := range got.p.Moves {
+			if m.Role == RoleDesign {
+				t.Fatalf("a store whose identity cannot be taken must not be planned as a move: %+v", m)
+			}
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the planner blocked on a named pipe: os.ReadFile on a FIFO waits for a writer forever")
+	}
+}
+
+// The archive overlap is asked of the v1 source stores, not of the moves that
+// survived the per-store checks: a store that is missing is still a store the
+// archive sits inside, and one run has to name both findings rather than
+// withholding the overlap until the operator has fixed the first refusal.
+func TestPlanMigrationReportsArchiveOverlapForAStoreItCannotMove(t *testing.T) {
+	root := newGitV1Repo(t)
+	if err := os.RemoveAll(filepath.Join(root, "docs/plans")); err != nil {
+		t.Fatal(err)
+	}
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault, Archive: "docs/plans/archive",
+		Running: "v0.6.0", RouterState: "current",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !namedBlocker(p.Blockers, "store_missing", "plans=docs/plans") {
+		t.Fatalf("store_missing = %v, want plans=docs/plans", p.Blockers)
+	}
+	if !namedBlocker(p.Blockers, "archive_not_in_source", "docs/plans") {
+		t.Fatalf("the overlap must be named in the same run: %v", p.Blockers)
+	}
+	if len(p.Moves) != 3 {
+		t.Fatalf("moves = %+v", p.Moves)
+	}
+	if p.Counts.Blocked != len(p.Blockers) || p.Counts.Move != len(p.Moves) {
+		t.Fatalf("counts = %+v", p.Counts)
+	}
+}
+
+// The archive is never a move, refused plans included: a JSON consumer reads
+// moves and blockers together, and a plan that lists the overlap it refuses
+// contradicts the guarantee it is reporting on. The refusal still names the
+// store, so dropping the move hides nothing.
+func TestPlanMigrationNeverPlansTheArchiveAsAMove(t *testing.T) {
+	root := newGitV1Repo(t)
+	mkdirAll(t, root, "docs/design/archive")
+	writeFile(t, filepath.Join(root, "docs/design/archive/old.md"), "old\n")
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault, Archive: "docs/design/archive",
+		Running: "v0.6.0", RouterState: "current",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !namedBlocker(p.Blockers, "archive_not_in_source", "docs/design") {
+		t.Fatalf("blockers = %v, want archive_not_in_source naming docs/design", p.Blockers)
+	}
+	for _, m := range p.Moves {
+		if m.Role == RoleDesign || pathPrefix(m.From, "docs/design") || pathPrefix(".context/design", m.To) {
+			t.Fatalf("a refused plan still lists the archive's store as a move: %+v", m)
+		}
+	}
+	if len(p.Moves) != 3 || p.Counts.Move != 3 || p.Counts.Blocked != len(p.Blockers) {
+		t.Fatalf("moves = %+v, counts = %+v", p.Moves, p.Counts)
+	}
+}
+
+// A declared archive may be nested below docs/, and the directories that exist
+// only to hold it are part of the declaration: refusing docs/archive as residue
+// would make `--archive docs/archive/plans` unsatisfiable, because the operator
+// cannot both keep the archive and empty its parent.
+func TestPlanMigrationAllowsAnArchiveNestedUnderDocs(t *testing.T) {
+	for _, archive := range []string{"docs/archive", "docs/archive/plans"} {
+		t.Run(archive, func(t *testing.T) {
+			root := newGitV1Repo(t)
+			mkdirAll(t, root, "docs/archive/plans")
+			writeFile(t, filepath.Join(root, "docs/archive/plans/2020-old-plan.md"), "old\n")
+			p, err := PlanMigration(root, MigrateOptions{
+				Template: TemplateContentVault, Archive: archive,
+				Running: "v0.6.0", RouterState: "current",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(p.Blockers) != 0 {
+				t.Fatalf("the declared archive's own ancestors are not residue: %v", p.Blockers)
+			}
+			if p.Archive != archive || len(p.Moves) != 4 {
+				t.Fatalf("archive = %q, moves = %+v", p.Archive, p.Moves)
+			}
+		})
+	}
+}
+
+// Trackedness is one question asked of git (design §0.7), and an unanswered
+// question must not read as a pass: a source that is not a repository at all
+// cannot be told whether .agents/ is ignored, so the plan is refused rather
+// than planned against a manifest whose trackedness nobody can see.
+func TestPlanMigrationRefusesWhenTrackednessCannotBeAsked(t *testing.T) {
+	root := t.TempDir()
+	for _, role := range Roles() {
+		mkdirAll(t, root, "docs/"+role)
+	}
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !namedBlocker(p.Blockers, ProblemLocalAgents, "cannot determine") {
+		t.Fatalf("blockers = %v, want a fail-closed %s", p.Blockers, ProblemLocalAgents)
+	}
+	if len(p.Moves) != 4 {
+		t.Fatalf("moves = %+v", p.Moves)
+	}
+	if p.Counts.Blocked != len(p.Blockers) {
+		t.Fatalf("counts = %+v", p.Counts)
 	}
 }

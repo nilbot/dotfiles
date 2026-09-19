@@ -112,18 +112,26 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 		return Plan{}, fmt.Errorf("migration source is not a valid v1 layout")
 	}
 	to := targetLayout(from, opts)
-	if ps := Validate(root, to); len(ps) > 0 {
-		return Plan{Phase: PhasePlanned, From: from, To: to, Blockers: blockersFromProblems(ps)}, nil
-	}
-	if ok, reason := Support(opts.Running, to); !ok {
-		return Plan{Phase: PhasePlanned, From: from, To: to, Blockers: []Blocker{{
-			Code: reason, Detail: "this binary must not write the target layout",
-		}}}, nil
-	}
+	// One header for every exit. A refusal is still a dry run that wrote
+	// nothing, and a JSON consumer reads `dry_run`, `repo`, and `counts.blocked`
+	// before it reads the blockers: an early exit that left `"dry_run": false`
+	// and `"blocked": 0` beside its reasons would read as a plan already
+	// applied. finishPlan sets the counts from what the plan holds, so no exit
+	// can forget either.
 	p := Plan{
 		Repo: root, DryRun: true, Phase: PhasePlanned, From: from, To: to,
 		RouterAction: opts.RouterState + " -> canonical v2",
 		Archive:      to.Archive,
+	}
+	if ps := Validate(root, to); len(ps) > 0 {
+		p.Blockers = blockersFromProblems(ps)
+		return finishPlan(p), nil
+	}
+	if ok, reason := Support(opts.Running, to); !ok {
+		p.Blockers = []Blocker{{
+			Code: reason, Detail: "this binary must not write the target layout",
+		}}
+		return finishPlan(p), nil
 	}
 	if opts.RouterState != "current" && opts.RouterState != "known_legacy" {
 		p.Blockers = append(p.Blockers, Blocker{Code: "router_not_clean",
@@ -132,6 +140,10 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 	// Decision 6 and design §0.7: a manifest in an ignored .agents/ is
 	// machine-local and a clone would silently fall back to v1. Both paths are
 	// asked, because `/.agents/**` is invisible to the directory query alone.
+	// An ignored .agents/ is already V16's finding through Validate above, so
+	// what this reaches is the fail-closed case: trackedness cannot be asked at
+	// all -- a source that is not a repository -- and an unanswered question
+	// must not read as a pass.
 	if ignored, err := AgentsIgnored(root); err != nil {
 		p.Blockers = append(p.Blockers, Blocker{Code: "local_agents",
 			Detail: "cannot determine whether .agents/ is ignored: " + err.Error()})
@@ -168,16 +180,32 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 			p.Blockers = append(p.Blockers, Blocker{Code: "store_unreadable", Detail: role + "=" + src + ": " + err.Error()})
 			continue
 		}
+		// The archive is never a move source or destination, refused plans
+		// included: `Moves` and `Blockers` are read together, and a plan that
+		// lists the overlap it refuses contradicts itself. The refusal already
+		// names the store, and this runs after the per-store findings above so
+		// that one run still reports them too.
+		if to.Archive != "" && (pathPrefix(to.Archive, src) || pathPrefix(src, to.Archive) ||
+			pathPrefix(to.Archive, dst) || pathPrefix(dst, to.Archive)) {
+			continue
+		}
 		p.Moves = append(p.Moves, Move{
 			Role: role, From: src, To: dst, State: MovePending,
 			Files: files, Bytes: size, Digest: digest,
 		})
 	}
 	p.Blockers = append(p.Blockers, residueBlockers(root, to.Archive)...)
-	p.Blockers = append(p.Blockers, archiveInSourceBlockers(to.Archive, p.Moves)...)
+	p.Blockers = append(p.Blockers, archiveInSourceBlockers(to.Archive, from)...)
 	p.LinkCandidates = scanLinkCandidates(root, p.Moves, from, to)
+	return finishPlan(p), nil
+}
+
+// finishPlan sets a plan's counts from what it actually holds, so every exit --
+// accepted or refused -- reports `counts.blocked` as the number of blockers it
+// carries and `counts.move`/`counts.links` as the lists beside them.
+func finishPlan(p Plan) Plan {
 	p.Counts = Counts{Move: len(p.Moves), Blocked: len(p.Blockers), Links: len(p.LinkCandidates)}
-	return p, nil
+	return p
 }
 
 // digestTree is the source identity recorded at plan time: every entry — files,
@@ -212,6 +240,16 @@ func digestTree(root, rel string) (string, int, int64, error) {
 			if rec.target, err = os.Readlink(path); err != nil {
 				return err
 			}
+		case !d.Type().IsRegular():
+			// A named pipe, socket, or device is not content this migration can
+			// carry: it has no bytes to hash, no content identity to verify the
+			// move against, and `git mv` cannot record it either. It is refused
+			// rather than hashed as a fourth kind, and it is refused *before* any
+			// read because os.ReadFile on a FIFO blocks on open until a writer
+			// appears -- a planner that hangs forever is the worst outcome
+			// available to it.
+			return fmt.Errorf("%s is a %s, not a regular file this migration can carry",
+				filepath.ToSlash(relPath), entryKind(d.Type()))
 		default:
 			rec.kind = "f"
 			if rec.data, err = os.ReadFile(path); err != nil {
@@ -245,6 +283,25 @@ func digestTree(root, rel string) (string, int, int64, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), files, total, nil
 }
 
+// entryKind names an entry that is neither a directory, a symlink, nor a
+// regular file, for the refusal that turns it away.
+func entryKind(mode fs.FileMode) string {
+	switch {
+	case mode&os.ModeNamedPipe != 0:
+		return "named pipe"
+	case mode&os.ModeSocket != 0:
+		return "socket"
+	case mode&os.ModeCharDevice != 0:
+		return "character device"
+	case mode&os.ModeDevice != 0:
+		return "device"
+	case mode&os.ModeIrregular != 0:
+		return "irregular file"
+	default:
+		return mode.Type().String()
+	}
+}
+
 // docsResidue lists entries left in docs/ that are neither a v1 source store nor
 // the declared archive. The planner refuses them up front; apply re-checks the
 // same list after the moves, because docs/ can gain an entry mid-flight and
@@ -258,17 +315,35 @@ func docsResidue(root, archive string) []string {
 	for _, role := range Roles() {
 		allowed[role] = true
 	}
-	var out []string
 	// The declared archive is compared cleaned, because `--archive ./docs/archive`
 	// and `--archive docs/archive/` are the same place and only one of them is a
 	// spelling Validate rejects.
 	declared := strings.TrimSuffix(filepath.ToSlash(filepath.Clean(archive)), "/")
+	// A declared archive may be nested (docs/archive/plans), and the directories
+	// under docs/ that exist only to hold it are part of it: refusing
+	// docs/archive would make that declaration unsatisfiable, since the operator
+	// cannot both keep the archive and empty its parent.
+	nested := map[string]bool{}
+	for _, ancestor := range docsArchiveAncestors(declared) {
+		nested[ancestor] = true
+	}
+	var out []string
 	for _, e := range entries {
 		rel := "docs/" + e.Name()
-		if allowed[e.Name()] || (archive != "" && rel == declared) {
+		if allowed[e.Name()] || (archive != "" && (rel == declared || nested[rel])) {
 			continue
 		}
 		out = append(out, rel)
+	}
+	return out
+}
+
+// docsArchiveAncestors lists the directories between docs/ and a declared
+// archive: the chain that exists only to hold it.
+func docsArchiveAncestors(declared string) []string {
+	var out []string
+	for dir := filepath.ToSlash(filepath.Dir(declared)); strings.HasPrefix(dir, "docs/"); dir = filepath.ToSlash(filepath.Dir(dir)) {
+		out = append(out, dir)
 	}
 	return out
 }
@@ -287,18 +362,27 @@ func residueBlockers(root, archive string) []Blocker {
 }
 
 // archiveInSourceBlockers refuses when the declared or derived archive equals or
-// sits inside a move source. V12 validates the target layout only, so without
+// sits inside a v1 source store. V12 validates the target layout only, so without
 // this `git mv docs/plans .context/plans` would drag the archive along and leave
 // the manifest naming a path that no longer exists.
-func archiveInSourceBlockers(archive string, moves []Move) []Blocker {
+//
+// It asks the source layout's stores, not the moves that survived the per-store
+// checks: one run names every offending store, including one that is already
+// blocked as missing or symlinked, so the operator is not sent around the loop
+// once per refusal.
+func archiveInSourceBlockers(archive string, from Layout) []Blocker {
 	if archive == "" {
 		return nil
 	}
 	var out []Blocker
-	for _, m := range moves {
-		if pathPrefix(m.From, archive) || pathPrefix(archive, m.From) {
+	for _, role := range Roles() {
+		src, ok := Path(from, role)
+		if !ok {
+			continue
+		}
+		if pathPrefix(src, archive) || pathPrefix(archive, src) {
 			out = append(out, Blocker{Code: "archive_not_in_source",
-				Detail: archive + " overlaps the move source " + m.From + "; move the archive out of the store first, or declare a different archive"})
+				Detail: archive + " overlaps the move source " + src + "; move the archive out of the store first, or declare a different archive"})
 		}
 	}
 	return out
