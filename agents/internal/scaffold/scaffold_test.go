@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 )
 
 // newRepo builds a real git repository. An earlier version of these tests just
@@ -540,6 +542,37 @@ func TestCreatePreservesExistingCustomAssets(t *testing.T) {
 	gotDoc, err := os.ReadFile(customDocPath)
 	if err != nil || string(gotDoc) != customDoc {
 		t.Errorf("got %q, want %q", string(gotDoc), customDoc)
+	}
+}
+
+// The selector itself: both skills resolve under both layouts, to distinct
+// paths, and every path is readable from AssetsFS (the v1/ subdirectories are
+// embedded recursively by `//go:embed assets/*`).
+func TestSkillAssetPathsResolvePerLayout(t *testing.T) {
+	for _, schema := range []string{layout.SchemaV1, layout.SchemaV2} {
+		for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+			path, err := SkillAssetPath(schema, skill)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := AssetsFS.ReadFile(path); err != nil {
+				t.Fatalf("%s/%s: %q: %v", schema, skill, path, err)
+			}
+		}
+	}
+	v1, _ := SkillAssetPath(layout.SchemaV1, "recording-what-you-learn")
+	v2, _ := SkillAssetPath(layout.SchemaV2, "recording-what-you-learn")
+	if v1 == v2 {
+		t.Fatal("the v1 and v2 texts must be distinct assets")
+	}
+}
+
+func TestSkillAssetPathRejectsUnknownSchemaAndSkill(t *testing.T) {
+	if _, err := SkillAssetPath("agents.layout/v9", "recording-what-you-learn"); err == nil {
+		t.Error("an unknown schema must not resolve to some default asset")
+	}
+	if _, err := SkillAssetPath(layout.SchemaV2, "no-such-skill"); err == nil {
+		t.Error("an unknown skill must not resolve")
 	}
 }
 

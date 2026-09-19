@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nilbot/dotfiles/agents/internal/drift"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
@@ -237,48 +239,100 @@ func TestMigrationSkillCoversItsSpecifiedProtocol(t *testing.T) {
 	}
 }
 
-// The skill exists twice: the repository's own copy and the embedded asset the
-// binary scaffolds into every other repository. Nothing bound them together,
-// so they could diverge silently and the fleet would be migrated by whichever
-// copy the reader happened to open.
-func TestMigrationSkillMatchesEmbeddedAsset(t *testing.T) {
-	root := task18RepoRoot(t)
-	repoCopy, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+// skillAssetBytes resolves one embedded skill asset for a resolved layout and
+// returns its bytes. The flat path holds the v2 text; v1/SKILL.md holds the
+// frozen v1 text (design §0.8).
+func skillAssetBytes(t *testing.T, schema, skill string) string {
+	t.Helper()
+	path, err := scaffold.SkillAssetPath(schema, skill)
 	if err != nil {
-		t.Fatalf("repository copy: %v", err)
+		t.Fatal(err)
 	}
-	asset, err := os.ReadFile(filepath.Join(root, "agents", "internal", "scaffold",
-		"assets", "skills", "migrating-fleet-context", "SKILL.md"))
+	data, err := scaffold.AssetsFS.ReadFile(path)
 	if err != nil {
-		t.Fatalf("embedded asset: %v", err)
+		t.Fatal(err)
 	}
-	if !bytes.Equal(repoCopy, asset) {
-		t.Errorf(".agents/skills/migrating-fleet-context/SKILL.md and its embedded asset differ; "+
-			"they are scaffolded into every other repository from the asset, so they must be identical "+
-			"(repo copy %d bytes, asset %d bytes)", len(repoCopy), len(asset))
+	return string(data)
+}
+
+// The split itself: the flat assets are the v2 texts and v1/SKILL.md is the
+// frozen v0.5.1 bytes.
+func TestSkillAssetsSplitByLayout(t *testing.T) {
+	v1Recording := skillAssetBytes(t, layout.SchemaV1, "recording-what-you-learn")
+	v2Recording := skillAssetBytes(t, layout.SchemaV2, "recording-what-you-learn")
+	v1Migrating := skillAssetBytes(t, layout.SchemaV1, "migrating-fleet-context")
+	v2Migrating := skillAssetBytes(t, layout.SchemaV2, "migrating-fleet-context")
+
+	if v1Recording == v2Recording || v1Migrating == v2Migrating {
+		t.Fatal("the flat (v2) and v1 assets must differ after the split")
+	}
+	// The frozen half is byte-identical to the recorded v0.5.1 bytes, so the
+	// constants and the files cannot drift apart unnoticed.
+	if v1Recording != drift.LegacyRecordingSkillV051 {
+		t.Error("the frozen v1 recording text is not the recorded v0.5.1 bytes")
+	}
+	if v1Migrating != drift.LegacyMigratingSkillV051 {
+		t.Error("the frozen v1 migrating text is not the recorded v0.5.1 bytes")
+	}
+	// The v2 half is the new prose.
+	if strings.Contains(v2Recording, "docs/") {
+		t.Error("the v2 recording text still hardcodes a docs/ path")
+	}
+	for _, want := range []string{"agents layout path qna", "agents layout path journal", ".agents/layout.json"} {
+		if !strings.Contains(v2Recording, want) {
+			t.Errorf("the v2 recording text does not name %q", want)
+		}
+	}
+	for _, want := range []string{
+		"agents layout migrate", "--dry-run", "--apply", "--resume", "--abort",
+		"--local", "min_mut_ver_floor", "layout_status",
+		"the other layout's canonical text", "cannot perform the flip",
+	} {
+		if !strings.Contains(v2Migrating, want) {
+			t.Errorf("the v2 migrating text does not name %q", want)
+		}
 	}
 }
 
-// The skill pastes the canonical router so a migrating agent can restore it
-// without a second tool. That is a second copy of DefaultAgentsMD, and the two
-// ship in the same binary -- so nothing except this test stops a change to one
-// from silently leaving the other behind, telling every migrated repository to
-// adopt a router the tool then reports as drifted.
-func TestMigrationSkillPastesTheCanonicalRouter(t *testing.T) {
+// A v1 repository's copy is the v1 asset, not the flat one: that is what keeps
+// this release a no-op for dotfiles and every other v1 repository.
+func TestMigrationSkillMatchesEmbeddedAsset(t *testing.T) {
 	root := task18RepoRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, ".agents", "skills",
-		"migrating-fleet-context", "SKILL.md"))
+	l := layout.Resolve(root)
+	asset, err := scaffold.SkillAssetPath(l.Schema, "migrating-fleet-context")
 	if err != nil {
-		t.Fatalf("the migration skill is missing: %v", err)
+		t.Fatal(err)
 	}
+	want, err := scaffold.AssetsFS.ReadFile(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf(".agents/skills/migrating-fleet-context/SKILL.md is not the %s asset", l.Schema)
+	}
+}
+
+// The skill's v1 text pastes the canonical router so a migrating agent can
+// restore it without a second tool. That is a second copy of DefaultAgentsMD,
+// and the two ship in the same binary -- so nothing except this test stops a
+// change to one from silently leaving the other behind, telling every migrated
+// v1 repository to adopt a router the tool then reports as drifted.
+//
+// It reads the v1 asset rather than the repository copy: dotfiles is a v1
+// repository today, but the binding is to the v1 canonical text, and the v2
+// text deliberately pastes no router at all (it restores the bytes from
+// `agents layout show --router`).
+func TestMigrationSkillPastesTheCanonicalRouter(t *testing.T) {
+	data := skillAssetBytes(t, layout.SchemaV1, "migrating-fleet-context")
 
 	const fence = "```markdown\n# Agent context\n"
-	i := strings.Index(string(data), fence)
+	i := strings.Index(data, fence)
 	if i < 0 {
 		t.Fatal("the skill no longer pastes a canonical router block; if that is deliberate, " +
 			"delete this test, and if it is not, restore the block")
 	}
-	body := string(data)[i+len("```markdown\n"):]
+	body := data[i+len("```markdown\n"):]
 	j := strings.Index(body, "\n```")
 	if j < 0 {
 		t.Fatal("unterminated router code fence in the skill")

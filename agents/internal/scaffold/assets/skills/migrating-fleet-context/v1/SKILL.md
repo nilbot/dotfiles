@@ -1,15 +1,13 @@
 ---
 name: migrating-fleet-context
-description: Use when `agents doctor` reports a `scaffold:*` warning, `agents drift` exits non-zero, or a repository keeps domain rules in a root `AGENTS.md`/`CLAUDE.md`, lacks `.agents/AGENTS.md`, is missing the stores its layout declares, carries plans or designs in the wrong store, or has a bundled skill that no longer matches the installed binary.
+description: Use when `agents doctor` reports a `scaffold:*` warning, `agents drift` exits non-zero, or a repository keeps domain rules in a root `AGENTS.md`/`CLAUDE.md`, lacks `.agents/AGENTS.md`, is missing `docs/` stores, carries plans or designs in the wrong store, or has a bundled skill that no longer matches the installed binary.
 ---
 
 # Migrating Fleet Context
 
 Moves a repository onto the Two-Tier Agent Context architecture: a canonical
 root router at `AGENTS.md`, domain rules in `.agents/AGENTS.md`, durable
-knowledge in the four stores the repository's layout declares. In v1 those
-stores are the four `docs/` directories; in v2 `.agents/layout.json` names
-them, and they may live anywhere.
+knowledge in the four `docs/` stores.
 
 **The deterministic tools know the states; only you can read the prose.**
 `agents drift` tells you exactly what is wrong and never guesses at meaning.
@@ -51,73 +49,20 @@ name in the final report, rather than migrating:
 
 - registry entries reported `missing` or `unknown`
 - any repository whose working tree is dirty
-- any repository already `current` on every field
+- any repository already `clean_current` with every other field `ok`
 
 Fields to read from each report:
 
 | field | use |
 |---|---|
-| `layout_version` | `v1`, `v2`, or `unknown` — see Step 1.5 |
-| `layout_status` | `active` or `migrating` — see Step 1.5 |
-| `min_mut_ver_floor` | the oldest binary allowed to mutate the layout |
-| `unsupported` | non-empty means stop: the schema is unknown, the binary is below `min_mut_ver_floor`, or the manifest is invalid |
-| `stores` | the resolved role→path map. `docs_stores` is the deprecated v1 shape |
 | `router_state` | picks your procedure — see Step 4 |
 | `symlink_state` | `ok` \| `not_symlink` \| `broken` \| `missing` — see Step 5 |
 | `domain_state` | `ok` \| `missing` — whether `.agents/AGENTS.md` exists |
-| `skills` | embedded skills only: `current` \| `known_legacy` \| `diverged` \| `missing` |
+| `skills` | embedded skills only: `ok` \| `clean_legacy` \| `customized` \| `missing` |
 | `local_skills` | the repository's own skills. **Never touch these.** |
+| `docs_stores` | which of `design`/`plans`/`journal`/`qna` exist |
 | `misplaced_docs` | plans and designs in the wrong live store |
 | `diff` | unified diff of the root router against canonical |
-
----
-
-## Step 1.5: Read the layout manifest
-
-| manifest state | action |
-|---|---|
-| absent | v1; use `agents layout migrate --dry-run` to plan |
-| active v2, supported | no layout move; reconcile prose and links only |
-| `layout_status: migrating` | stop; run `agents layout migrate --resume --apply` |
-| unsupported or unknown schema | stop; the binary is older than `min_mut_ver_floor` |
-| `.agents/` is ignored (`--local`) | stop; v2 is unavailable here — a manifest would be machine-local |
-
-`agents layout show` prints the resolved layout — schema, status,
-`min_mut_ver_floor`, archive, and one path per role — so read it instead of
-assuming a directory name. `agents layout path <role>` prints a single store and
-nothing else, for use in a command substitution. The four roles are `design`,
-`plans`, `journal`, and `qna`.
-
-The layout move itself is deterministic and belongs to the tool:
-
-```bash
-agents layout migrate --dry-run              # the plan; moves nothing
-agents layout migrate --apply --backup-tag pre-layout-v2-<date>
-agents layout migrate --resume --apply       # continue a `migrating` manifest
-agents layout migrate --abort --apply        # only from `planned`, nothing moved
-```
-
-`--dry-run` is the default and is the only form to run before the plan is
-approved: it names every move and touches nothing. `--apply` is required to
-move anything, and requires `--backup-tag` — the annotated rollback point the
-tool creates at HEAD — except with `--resume` and `--abort`, where the manifest
-already carries the migration. `--resume --apply` never re-plans: it reads the
-journal in the manifest and reconciles the filesystem against its recorded
-digests. Any phase later than `planned` resumes rather than restarts, and
-`--abort --apply` exists only for a `planned` phase with nothing moved and a
-manifest this migration created; it deletes the manifest and leaves the backup
-tag as the record.
-
-**The archive is never a move source or a destination.** The manifest records
-it, every walk and every move list excludes it, and live knowledge found in it
-is promoted by a human into a live store — never extracted by the tool.
-
-The canonical text of this skill is selected by the resolved layout. The v1
-copy of this skill cannot perform the flip: it predates `agents layout
-migrate`, and a v1 repository's bundled skills are the frozen v1 texts. The CLI
-flips the layout; this skill's v2 text is installed afterwards by the migration
-playbook (`agents init` on a fresh clone, or `agents update --all --apply` once
-the layout is v2).
 
 ---
 
@@ -149,9 +94,7 @@ agents update --all --apply
 `--all` is not optional: `agents update` refuses to run without it, and
 `agents wire` does not refresh skills. There is no single-repository form, so
 this rewrites the skill in **every registered repository**, not just this one.
-It reads each repository's manifest first: unsupported and `migrating`
-repositories are skipped, named, and left byte-for-byte unchanged. Two
-consequences, both yours to handle:
+Two consequences, both yours to handle:
 
 - In this repository the refreshed skill is an uncommitted change on your
   branch. That is fine — it belongs in this migration's commit.
@@ -172,12 +115,12 @@ partition, or invents content for a file that has none.
 
 | `router_state` | What it means | What to do |
 |---|---|---|
-| `current` | matches the installed binary's canonical router for the resolved layout | nothing. Do not "improve" it. |
-| `known_legacy` | a known older canonical template, **no repository content** | replace wholesale with the canonical router. There is nothing to extract — the digest already proved that. |
-| `diverged` | canonical text plus, or reworded into, repository content | semantic reconcile, below |
+| `clean_current` | matches the installed binary's canonical router | nothing. Do not "improve" it. |
+| `clean_legacy` | a known older canonical template, **no repository content** | replace wholesale with the canonical router. There is nothing to extract — the digest already proved that. |
+| `drifted` | canonical text plus, or reworded into, repository content | semantic reconcile, below |
 | `missing` | no root `AGENTS.md` at all | do not invent one. Go to Step 5 and read `CLAUDE.md`. If that is absent too, **stop and ask** what this repository's rules are. |
 
-### Semantic reconcile (`diverged` only)
+### Semantic reconcile (`drifted` only)
 
 Two inputs — the current root file and the canonical router — and one output
 per block. This is not a three-way merge; there is no base. Read the `diff`
@@ -185,24 +128,17 @@ field to see what the repository added.
 
 Classify **every** block:
 
-- **Boilerplate**, to be replaced by the canonical router: pointer tables into
-  the store roots, old single-line `agents doctor` instructions, references to
-  retired commands (handoff writing, `save`, `index`, and the memory tooling —
-  none of which the CLI defines any more).
+- **Boilerplate**, to be replaced by the canonical router: pointer tables to
+  `docs/` or `.agents/memory/`, old single-line `agents doctor` instructions,
+  references to retired commands (handoff writing, `save`, `index`, and the
+  memory tooling — none of which the CLI defines any more).
 - **Domain rules**, to be preserved in `.agents/AGENTS.md`: tech stack
   conventions, test mandates, safety constraints, architecture invariants, PR
   and workflow policy, commenting standards.
 
 Write the domain rules to `.agents/AGENTS.md`. If it already exists, append
-into the matching section without duplicating what is there. Preserve the
-**per-role collaboration policy** while you are in that file: which stores
-humans edit, which agents mostly write, and which are read-only for one side.
-The manifest records where a role lives, not how the repository wants it used.
-If the policy is missing and cannot be inferred from the repository's own
-rules, **stop and ask** rather than inventing one.
-
-Then restore the root `AGENTS.md` verbatim. On a v1 repository that is the
-canonical v1 router, pasted below:
+into the matching section without duplicating what is there. Then overwrite the
+root `AGENTS.md` with the canonical router verbatim:
 
 ```markdown
 # Agent context
@@ -228,13 +164,6 @@ and a missing hook fails silently.
 
 Recording is covered by the global instruction and the `recording-what-you-learn`
 skill; it is not repo-specific and is not restated here.
-```
-
-On a v2 repository, do not paste that block: the canonical router names the
-manifest and the resolved roles, and the tool prints its exact bytes.
-
-```bash
-agents layout show --router > AGENTS.md
 ```
 
 ---
@@ -275,30 +204,20 @@ Only create the symlink once the content has a destination.
 
 **Embedded skills** (`skills` in the report) are the only ones you touch.
 
-Each skill has one canonical text per layout, and the resolved layout selects
-it. The flat embedded text is the v2 canonical text; the frozen v0.5.1 text is
-the v1 canonical text.
-
 | state | action |
 |---|---|
-| `current` | nothing |
-| `missing` | populate this layout's canonical text: `agents init`, or `agents update --all --apply` for `migrating-fleet-context` |
-| `known_legacy` | refresh it: an `agents`-owned skill is rewritten by `agents update --all --apply`; a user-owned copy that is this layout's older text stays as it is on v1 and is replaced on v2; a copy that equals the other layout's canonical text is replaced, below |
-| `diverged` | three-way merge, below — except `migrating-fleet-context`, which is `agents`-owned: refresh it with `agents update --all --apply` and keep no local edits |
-
-A user-owned copy whose digest equals **the other layout's canonical text** is
-replaced with this layout's canonical text. The digest proves it is not a local
-edit, so there is nothing to merge; only `diverged` goes to a three-way merge or
-a stop-and-ask.
+| `ok` | nothing |
+| `missing` | populate from the binary: `agents init`, or `agents update --all --apply` for `migrating-fleet-context` |
+| `clean_legacy` | replace with the current version; the digest proved there are no local edits |
+| `customized` | three-way merge, below — except `migrating-fleet-context`, which is `agents`-owned: refresh it with `agents update --all --apply` and keep no local edits |
 
 ### Three-way merge (`recording-what-you-learn`)
 
 Name the three inputs before you start; an unnamed merge is a guess:
 
-- **upstream** — the version embedded in the running binary for the resolved
-  layout
+- **upstream** — the version embedded in the running binary
 - **base** — the canonical or legacy template the local file last matched,
-  identified by the digest catalog that produced the `known_legacy` state
+  identified by the digest catalog that produced the `clean_legacy` state
 - **local** — the working file on disk
 
 Apply upstream's changes to local, keeping local's additions. If the digest
@@ -311,22 +230,22 @@ delete them.
 
 ---
 
-## Step 7: Stores and retired stores
+## Step 7: Docs stores and retired stores
 
-Create any store missing from the resolved layout, with its `README.md`.
-`agents init` scaffolds them non-destructively.
+Create any store missing from `docs_stores`, with its `README.md`. `agents init`
+scaffolds them non-destructively.
 
-Relocate each entry in `misplaced_docs` into the role it belongs to:
+Relocate each entry in `misplaced_docs`:
 
 ```bash
-git mv "$(agents layout path journal)/<file>-plan.md" "$(agents layout path plans)/"
+git mv docs/journal/<file>-plan.md docs/plans/
 ```
 
 Then fix relative markdown links inside the moved files.
 
-**The archive is immutable and is never a source or a destination.** It holds
-executed plans and retired specs, and a record edited to stay true is not a
-record. `agents drift` does not report anything under it, and neither should
+**`docs/archive/` is immutable and is never a source or a destination.** It
+holds executed plans and retired specs, and a record edited to stay true is not
+a record. `agents drift` does not report anything under it, and neither should
 you relocate out of it.
 
 ### Retired stores
@@ -337,9 +256,9 @@ machine-generated and belongs nowhere. Triage each file:
 
 | content | destination |
 |---|---|
-| a topic-indexed finding | the `qna` role |
-| a design still in force | the `design` role |
-| an unexecuted plan | the `plans` role |
+| a topic-indexed finding | `docs/qna/` |
+| a design still in force | `docs/design/` |
+| an unexecuted plan | `docs/plans/` |
 | generated indexes, handoff scaffolding, trace pointers, stale summaries | drop |
 
 Name everything you dropped in the Step 10 report.
@@ -357,7 +276,7 @@ source quote (verbatim)                          | classification | destination
 -------------------------------------------------|----------------|---------------------
 "All tests must pass before commit; use uv, not pip" | domain rule | .agents/AGENTS.md §2
 "Run `agents doctor` early and surface what it says" | boilerplate | replaced by router
-"docs/sessions/... halt and resumption plan"         | misplaced doc | the `plans` store
+"docs/sessions/... halt and resumption plan"         | misplaced doc | docs/plans/
 ```
 
 Every block gets exactly one destination. Then state the count: *N blocks in, N
@@ -370,9 +289,8 @@ failure deterministic tools cannot catch for you.
 ## Step 9: Verify
 
 ```bash
-agents layout validate       # expect exit 0
-agents drift                 # expect exit 0
-agents doctor                # expect every scaffold:* check ok
+agents drift          # expect exit 0
+agents doctor         # expect all five scaffold:* checks ok
 ```
 
 Then the repository's own suite — `go test ./...`, `pytest`, `npm test`,
@@ -398,15 +316,14 @@ Only after approval, and staging the exact paths you changed — never `git add 
 and never a broad directory that sweeps up unrelated work:
 
 ```bash
-git add AGENTS.md CLAUDE.md .agents/AGENTS.md .agents/layout.json docs/
+git add AGENTS.md CLAUDE.md .agents/AGENTS.md docs/
 git diff --cached --stat
 git commit -m "refactor(context): migrate to two-tier agent context and 4-store layout"
 git push -u origin feat/two-tier-context-migration
 gh pr create --fill
 ```
 
-`docs/` is the v1 store root; on a v2 repository stage the root the manifest
-declares instead. In fleet mode, repeat from Step 2 for the next repository.
+In fleet mode, repeat from Step 2 for the next repository.
 
 ---
 
@@ -415,10 +332,7 @@ declares instead. In fleet mode, repeat from Step 2 for the next repository.
 - A block cannot be confidently classified as domain rule or boilerplate.
 - Two destinations are both plausible for the same block.
 - `router_state` is `missing` and there is no `CLAUDE.md` to read either.
-- `unsupported` is non-empty, or `layout_status` is `migrating`.
-- `.agents/` is ignored, so v2 is unavailable here.
-- The per-role collaboration policy is missing and cannot be inferred.
-- A `diverged` skill has no identifiable **base**.
+- A `customized` skill has no identifiable **base**.
 - The working tree is dirty, or the repository is mid-rebase or mid-merge.
 - `misplaced_docs` names a file whose correct store is genuinely unclear.
 
@@ -428,16 +342,10 @@ Asking costs one message. Guessing costs a rule nobody notices is gone.
 
 - About to remove `CLAUDE.md` without having `stat`-ed `AGENTS.md` first.
 - About to run `agents update` without `--all`; the CLI rejects it.
-- About to run `agents layout migrate --apply` without `--backup-tag`, or
-  without an approved dry run.
-- About to restart a migration instead of running
-  `agents layout migrate --resume --apply`.
-- About to apply the `diverged` procedure to a `known_legacy` router.
-- About to paste the v1 router into a v2 repository instead of using
-  `agents layout show --router`.
+- About to apply the `drifted` procedure to a `clean_legacy` router.
 - About to commit before presenting the traceability table.
 - About to touch a skill listed in `local_skills`.
-- About to relocate something out of the archive.
+- About to relocate something out of `docs/archive/`.
 - Parsing `agents drift --all --json` as an object.
 
 ## Where this comes from
@@ -446,11 +354,6 @@ This skill is owned and maintained by the `agents` CLI, not by the repository it
 is sitting in. `agents update --all --apply` overwrites it from the installed binary,
 so local edits here do not survive — if this repository needs different
 behaviour, that belongs in `.agents/AGENTS.md`.
-
-The text you are reading was selected by the repository's resolved layout
-(design §0.8). A v1 repository reads the frozen v0.5.1 text, which cannot drive
-a layout migration; the v2-aware text arrives after `agents layout migrate`
-flips the layout.
 
 **The tool is the authority on state, not this document.** `agents drift` and
 `agents doctor` report what a repository actually is; where they and this skill

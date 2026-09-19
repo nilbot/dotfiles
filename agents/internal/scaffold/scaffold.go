@@ -5,10 +5,12 @@ package scaffold
 import (
 	"embed"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
@@ -110,6 +112,37 @@ var embeddedAssets = []struct {
 	{"docs/plans/README.md", "assets/docs/plans/README.md"},
 	{"docs/journal/README.md", "assets/docs/journal/README.md"},
 	{"docs/qna/README.md", "assets/docs/qna/README.md"},
+}
+
+// skillAssets maps schema -> skill name -> embedded asset path. The flat path
+// holds the v2 text; v1/SKILL.md holds the frozen v1 text. Both exist for both
+// skills: the only mechanical remedy for a non-current bundled skill is a
+// fleet-wide `agents update --all --apply`, and the playbook forbids exactly
+// that during the pilot window, so freezing one more prose asset is cheaper
+// than leaving every v1 repository red for the length of the pilot (design
+// §0.8).
+var skillAssets = map[string]map[string]string{
+	layout.SchemaV1: {
+		"recording-what-you-learn": "assets/skills/recording-what-you-learn/v1/SKILL.md",
+		"migrating-fleet-context":  "assets/skills/migrating-fleet-context/v1/SKILL.md",
+	},
+	layout.SchemaV2: {
+		"recording-what-you-learn": "assets/skills/recording-what-you-learn/SKILL.md",
+		"migrating-fleet-context":  "assets/skills/migrating-fleet-context/SKILL.md",
+	},
+}
+
+// SkillAssetPath resolves one embedded skill asset for a schema.
+func SkillAssetPath(schema, skillName string) (string, error) {
+	byName, ok := skillAssets[schema]
+	if !ok {
+		return "", fmt.Errorf("no skill assets for schema %q", schema)
+	}
+	path, ok := byName[skillName]
+	if !ok {
+		return "", fmt.Errorf("no asset for skill %q", skillName)
+	}
+	return path, nil
 }
 
 // Create is idempotent. Running it on an initialized repo must change nothing.
