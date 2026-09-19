@@ -827,12 +827,48 @@ func CanonicalSkillDigestFor(skillName string, l layout.Layout) (string, error) 
 	return DigestBytes(content), nil
 }
 
-// LegacySkillDigests returns legacy SHA256 digests for a given skill.
+// legacySkillTexts is the historical half of the skill digest catalog: the
+// texts this binary recognizes that are neither layout's canonical text. A
+// skill with no earlier entry is present with an empty list, so "known skill,
+// no history" is distinguishable from "not a bundled skill".
+var legacySkillTexts = map[string][]string{
+	"recording-what-you-learn": {LegacyRecordingSkill},
+	"migrating-fleet-context":  {},
+}
+
+// LegacySkillDigests returns the SHA256 digests of every text this binary
+// recognizes for a skill other than its resolved-canonical one: the historical
+// texts plus both layouts' canonical texts.
+//
+// It is one layout-blind union, and that is deliberate (design §8.2: the
+// catalogs are closed over both layouts). Each layout's effective legacy set is
+// this union minus its own canonical text -- the v2 catalog is the historical
+// texts plus the v1 canonical text, and the v1 catalog is the historical texts
+// plus the v2 canonical text. Canonical is checked first, so the entry for the
+// layout's own text is shadowed: a v1 repository carrying the v1 text is
+// current, not known_legacy. The entry for the other layout's text is what
+// makes a shared copy known_legacy -- the state the skill's replacement rule
+// acts on -- instead of diverged.
+//
+// The canonical digests are read from the embedded assets through the selector
+// the classifier itself uses, so the catalog cannot drift from the bytes. The
+// union carries no layout knowledge into the currency predicate: isCurrent
+// stays layout-blind (design §0.2).
 func LegacySkillDigests(skillName string) []string {
-	if skillName == "recording-what-you-learn" {
-		return []string{DigestString(LegacyRecordingSkill)}
+	texts, known := legacySkillTexts[skillName]
+	if !known {
+		return nil
 	}
-	return nil
+	digests := make([]string, 0, len(texts)+2)
+	for _, t := range texts {
+		digests = append(digests, DigestString(t))
+	}
+	for _, schema := range []string{layout.SchemaV1, layout.SchemaV2} {
+		if d, err := CanonicalSkillDigestFor(skillName, layout.Layout{Manifest: layout.Manifest{Schema: schema}}); err == nil {
+			digests = append(digests, d)
+		}
+	}
+	return digests
 }
 
 // IsLegacySkillDigest returns true if digest matches a legacy version of the skill.
