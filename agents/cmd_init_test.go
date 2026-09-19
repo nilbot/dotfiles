@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
+	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 func TestInitScaffoldsWiresAndReportsTrust(t *testing.T) {
@@ -282,5 +285,192 @@ func TestInitDoesNotTouchTheAmbientStateDirectory(t *testing.T) {
 	}
 	if !strings.Contains(string(data), root) {
 		t.Errorf("the registry under XDG_STATE_HOME does not name %s:\n%s", root, data)
+	}
+}
+
+// ignoreAgents appends one ignore rule to the file that spelling belongs in: a
+// "/"-prefixed pattern is machine-local and goes to info/exclude in the common
+// directory, anything else is the repository's tracked .gitignore.
+//
+// The layout package and repo package each carry a private copy of this helper
+// because Go test helpers cannot cross a package boundary. This is the main
+// package's copy, for the commands that must refuse a machine-local manifest
+// (design §0.7).
+func ignoreAgents(t *testing.T, root, pattern string) {
+	t.Helper()
+	target := filepath.Join(root, ".gitignore")
+	if strings.HasPrefix(pattern, "/") {
+		exclude, err := repo.InfoExcludePath(root)
+		if err != nil {
+			t.Fatalf("resolve info/exclude for %s: %v", root, err)
+		}
+		target = exclude
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(pattern + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// snapshotTree records every path under root with its mode and bytes, so a test
+// can assert that a refused command wrote nothing at all -- including a file it
+// rewrote with the bytes it already had, which a content-only comparison would
+// call unchanged.
+func snapshotTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	snap := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			snap[rel] = "dir " + info.Mode().String()
+		case info.Mode()&os.ModeSymlink != 0:
+			target, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			snap[rel] = "symlink " + target
+		default:
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			snap[rel] = info.Mode().String() + " " + string(b)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("snapshot %s: %v", root, err)
+	}
+	return snap
+}
+
+// A manifest this binary may not write is refused before anything is written:
+// v1 `init` creates docs/{design,plans,journal,qna}, which in a v2 repository
+// are the wrong stores entirely.
+func TestInitRefusesUnsupportedV2WithoutWriting(t *testing.T) {
+	// The refusal happens before registration. A guard that regressed would
+	// register this fixture, so the fleet cache is kept out of the machine's
+	// own state directory.
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := newV2RepoForCmd(t, ".context")
+	t.Chdir(root)
+	before := snapshotTree(t, root)
+	var out bytes.Buffer
+	if code := runInitWithVersion(nil, &out, "v0.5.99"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+		t.Fatal("init wrote to an unsupported v2 repository")
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs")); !os.IsNotExist(err) {
+		t.Fatal("init created a docs/ shell in a v2 repository")
+	}
+	// The reason is the bare token the fleet listing prints, not a sentence:
+	// `skip (layout below_floor)` and this refusal must name the same thing.
+	if !strings.Contains(out.String(), "refusing to write: layout below_floor") {
+		t.Fatalf("the refusal must name the reason: %s", out.String())
+	}
+}
+
+// The guard covers every reason a manifest refuses, not only the version floor.
+// An invalid manifest is a repository whose stores cannot be resolved, and a
+// migration in flight is one whose stores are being moved right now; v1 `init`
+// would write docs/{design,plans,journal,qna} into both.
+func TestInitRefusesInvalidAndMigratingManifestsWithoutWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+		root func(*testing.T) string
+	}{
+		{"invalid", "manifest invalid:", func(t *testing.T) string {
+			return newManifestRepoForCmd(t, "{ not json")
+		}},
+		{"migrating", "refusing to write: layout migrating", newMigratingRepoForCmd},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			root := tc.root(t)
+			t.Chdir(root)
+			before := snapshotTree(t, root)
+			var out bytes.Buffer
+			if code := runInitWithVersion(nil, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("init wrote into a repository whose manifest it must not touch")
+			}
+			if _, err := os.Stat(filepath.Join(root, "docs")); !os.IsNotExist(err) {
+				t.Fatal("init created a docs/ shell in a repository with a manifest")
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("refusal output missing %q: %s", tc.want, out.String())
+			}
+		})
+	}
+}
+
+// The pre-flight asks both paths too: `/.agents/**` is invisible to a
+// directory-only query, and `--local` itself writes the `/.agents/` form.
+//
+// Controller ruling R4 keeps the layout flags (`--template`, `--stores`,
+// `--archive`) out of this task, so no `init` invocation can reach a v2 write
+// yet. The refusal is therefore asked of the guard directly, and the CLI half
+// pins what init does today: it refuses the flag it does not define without
+// writing anything. Task 9 flips `layoutFlagsPresent` and this call reaches the
+// same guard, at which point the Malformed assertion becomes the Advisory one.
+func TestInitRefusesV2FlagsWhenAgentsIsIgnored(t *testing.T) {
+	for _, pattern := range []string{"/.agents/", "/.agents", "/.agents/**", ".agents/"} {
+		t.Run(pattern, func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			root := newRepoWithAgents(t)
+			t.Chdir(root)
+			ignoreAgents(t, root, pattern)
+			before := snapshotTree(t, root)
+
+			// The v2 pre-flight: a manifest here would be machine-local.
+			if _, refusal := layoutRefusal(root, "v0.6.0", true); !strings.Contains(refusal, "ignored") {
+				t.Fatalf("v2 pre-flight reason = %q, want it to name the ignored .agents/", refusal)
+			}
+
+			var out bytes.Buffer
+			if code := runInitWithVersion([]string{"--template", "content-vault"}, &out, "v0.6.0"); code != exitcode.Malformed {
+				t.Fatalf("exit = %d, want Malformed while the layout flags do not exist: %s", code, out.String())
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("init wrote a v2 layout into a repository whose .agents/ is ignored")
+			}
+
+			// v1 is unchanged: `init --local` is the command that creates the
+			// ignored .agents/ in the first place, so this pre-flight must not
+			// refuse it.
+			if _, refusal := layoutRefusal(root, "v0.6.0", false); refusal != "" {
+				t.Fatalf("the v1 pre-flight refused %s: %q", pattern, refusal)
+			}
+			out.Reset()
+			if code := runInitWithVersion([]string{"--local"}, &out, "v0.6.0"); code != exitcode.Advisory {
+				t.Fatalf("--local init = %d, want the v1 trust-step Advisory: %s", code, out.String())
+			}
+		})
 	}
 }
