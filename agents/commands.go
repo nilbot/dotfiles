@@ -55,7 +55,7 @@ func rootCommand() *Command {
 				{
 					Name: "show", Summary: "print the resolved layout, or the canonical router",
 					Usage:    "agents layout show [--json] [--router]",
-					Detail:   "Prints the schema, status, min_mut_ver_floor, stores, archive, and one line per role. --json emits the normalized layout object, whose stores are the resolved role-to-path map rather than the manifest's spelling, and carries any problems in the object. --router prints the canonical router for the resolved layout and nothing else, so the migration skill can restore AGENTS.md byte-for-byte. An invalid manifest exits 1: the human report prints one line per problem before it, and --json stays one parseable object.",
+					Detail:   "Prints the schema, status, min_mut_ver_floor, stores, archive, and one line per role. --json emits the normalized layout object, whose stores are the resolved role-to-path map rather than the manifest's spelling, and carries any problems in the object. --router prints the canonical router for the resolved layout and nothing else, so the migration skill can restore AGENTS.md byte-for-byte; a manifest that exists but did not resolve prints nothing and exits 1, so a caller must capture the bytes before writing them. An invalid manifest exits 1: the human report prints one line per problem before it, and --json stays one parseable object.",
 					Audience: []Audience{Human, Agent},
 					Run:      func(a []string, io IO) int { return runLayoutShow(a, io.Out) },
 				},

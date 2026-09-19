@@ -207,7 +207,13 @@ resolved layout and nothing else, so the bytes cannot have diverged from the
 binary that will later classify them:
 
 ```bash
-agents layout show --router > AGENTS.md
+# Capture first, write only on success: a refused --router prints nothing, and
+# an unguarded redirect would truncate AGENTS.md to zero bytes.
+router="$(agents layout show --router)" || {
+  echo "refusing to rewrite AGENTS.md: --router did not resolve the layout" >&2
+  exit 1
+}
+printf '%s' "$router" > AGENTS.md
 ```
 
 On a v1 repository that prints the router pointing at the four `docs/` stores;
