@@ -5,7 +5,8 @@
 design and implementation plan are approved, `v0.6.0` is released, and every
 machine that can touch the fleet resolves that binary on `PATH`.
 **Scope:** exactly one repository, `/Users/nilbot/gist/paperbubble`. It does not
-migrate dotfiles, cowork, autogo-mlx, lewm-mlx, or desktop_pet.
+migrate dotfiles, cowork, autogo-mlx, lewm-mlx, or desktop_pet; §12 records the
+measured state of each and why.
 **Design:** [layout manifest and store-root freedom](../design/2026-09-18-layout-manifest-and-store-root-design.md)
 **Plan:** [layout manifest implementation plan](2026-09-18-layout-manifest-implementation-plan.md)
 
@@ -16,7 +17,7 @@ Measured on 2026-09-18 before writing this playbook:
 | Fact | Evidence |
 |---|---|
 | paperbubble is a git worktree with a clean tree | `git status --short --branch` → `## agents-editorial` |
-| Its root router is canonical v1 | `agents drift --json` → `router_state: current` |
+| Its root router is canonical v1 | `agents drift --json` → `router_state: clean_current` (v0.6.0 name: `current`) |
 | It has the four-store `docs/` skeleton and no content there | `git ls-files docs` → exactly the four `README.md` files |
 | It has no `docs/archive/` | `ls -la docs/` shows only `design`, `journal`, `plans`, `qna` |
 | No markdown outside `docs/` links into the stores, except the root router | `rg` over `*.md` returns only `AGENTS.md:6-9` |
@@ -48,15 +49,24 @@ first and why no other repository is in scope.
    failed migration even if the result looks right.
 5. **No archive movement.** There is no archive in paperbubble today. If one
    appears before execution, stop: the tool must record it and leave it alone.
+   Immutability is content-blind (design §0.6): "the archive is a place, not a
+   topic: everything under it is historical by definition, so nothing under it
+   is ever moved, rewritten, or reclassified", whatever it happens to hold.
 6. **No `agents save` during the migration.** It commits only `.agents/` and
    would split the manifest from the moved stores.
 7. **No fleet-wide `agents update --all --apply` as part of the pilot.** The
-   update gate would touch the five v1 repositories too. Refresh paperbubble's
+   update gate rewires every registered v1 repository. Refresh paperbubble's
    bundled skills from the v0.6.0 assets on the pilot branch (Step 6) and leave the
    fleet alone.
 8. **The vault is content, the stores are meta.** Never add vault notes to
    `.context/`, and never treat `.context/` as part of the vault's content
    graph.
+9. **A stuck migration is resumed, never hand-fixed.** If apply fails, run
+   `agents layout migrate --resume --apply`. `--abort --apply` is the only
+   delete, and it succeeds only while the journal's phase is `planned` with
+   every move still `pending` and `created_manifest` true; later phases refuse
+   and name `--resume --apply`. There is no `--force`, and a refusal that names
+   both paths is information, not an obstacle to route around.
 
 ## 2. Preconditions
 
@@ -69,6 +79,10 @@ git status --porcelain          # must be empty
 git branch --show-current       # must be agents-editorial or a new branch made below
 test -d .agents && test ! -d .context || { echo "unexpected layout; stop"; exit 1; }
 agents layout validate; echo "exit=$?"   # expect exit 0, implicit v1
+if git check-ignore -q --no-index -- .agents/layout.json \
+|| git check-ignore -q --no-index -- .agents; then
+  echo ".agents/ is ignored (--local): a v2 manifest would be machine-local; stop"; exit 1
+fi
 ```
 
 If `git status --porcelain` is not empty, stop. A dirty tree makes the approval
@@ -218,10 +232,35 @@ If apply fails mid-way, the manifest is left `migrating`. Do not hand-fix it;
 run `agents layout migrate --resume --apply` and name the failed move in the
 report.
 
+Apply runs the recorded phases in order — `planned` → `moved` → `pruned` →
+`router`, with the journal removed only when `layout_status` becomes `active`
+(design §0.5). Three outcomes need different words in the report:
+
+- **A `MoveError`.** Resume compares the filesystem and the recorded source
+  digest per move. A mismatch prints the two paths and a remedy line naming
+  which path to remove and how to `git restore --source=<tag>` the other. Hand
+  that line to the human; do not resolve it yourself.
+- **Nothing moved yet.** If the crash happened before the first `git mv`, the
+  journal is still `phase: planned` with every move `pending`:
+  `agents layout migrate --abort --apply` deletes the manifest this run created
+  and leaves the backup tag. Any later phase refuses and names `--resume
+  --apply`.
+- **`docs_residue`.** The moves completed but `docs/` retained an entry that is
+  neither a v1 store nor the declared archive. The layout is `active` and the
+  exit is advisory: name each entry, remove or relocate it, and commit. Do not
+  delete a path the tool did not name.
+
 ## 8. Step 6 — Refresh skills and reconcile prose
 
 The migrated repository must end with the v0.6.0 bundled skills, not the v0.5.1
 ones. This step deliberately avoids `agents update --all --apply`.
+
+The v0.5.1 skill **cannot perform the flip**: a v1 repository's
+`migrating-fleet-context` copy is the frozen v1 text, which predates
+`agents layout migrate` and knows nothing about layouts. The flip was the CLI's
+job and it is already done (Step 5); this step installs the v2 texts afterwards.
+The same rule is why `agents update --all --apply` refreshes the agents-owned
+skill only once the layout is v2, and why the fleet is left alone (§12).
 
 ### 8.1 Verify nothing local would be lost
 
@@ -245,7 +284,20 @@ user-owned prose and needs a three-way review, not a replacement; a modified
 `migrating-fleet-context` is a stale agent-owned asset, but the divergence
 still needs to be read before it is discarded.
 
+These paths are read from the **v0.5.1 tag**, where the flat asset path holds
+the v1 text. Design §0.8 does not change that reading: in the v0.6.0 tree the
+flat path is the v2 text, and the frozen v1 text lives at
+`agents/internal/scaffold/assets/skills/<skill>/v1/SKILL.md`.
+
 ### 8.2 Replace with the v0.6.0 assets
+
+The two `git show` paths below are the **v2** canonical texts, which is what
+paperbubble needs: Apply (Step 5) already made it a v2 repository. In the v0.6.0
+tree each skill also carries a frozen v1 text at
+`agents/internal/scaffold/assets/skills/<skill>/v1/SKILL.md`, which a v1
+repository keeps as its canonical asset (design §0.8). This step therefore
+takes the v2 text deliberately and is never a downgrade; if the repository
+being migrated were still v1, taking the flat path would be wrong.
 
 ```bash
 git -C "$SRC" rev-parse --verify v0.6.0^{commit}
@@ -365,6 +417,7 @@ chooses to.
 
 | When | Command | Notes |
 |---|---|---|
+| nothing moved yet (journal `phase: planned`, every move `pending`) | `agents layout migrate --abort --apply` | deletes the manifest this run created and leaves the backup tag; any later phase refuses and names `--resume --apply` |
 | before commit, on the migration branch | `git switch agents-editorial` then `git branch -D feat/layout-v2-migration` | the tree returns to the original branch; the backup tag remains |
 | before commit, staying on the branch | `git restore --source=pre-layout-v2-20260918 --staged --worktree :/` plus removing the new `.context/` | only when the tree contains nothing but the migration |
 | after commit, before merge | switch back to `agents-editorial` | the migration commit and tag remain as evidence |
@@ -373,7 +426,10 @@ chooses to.
 
 After any rollback, run `agents layout validate` and `git status --porcelain`
 and record the result. A rollback that leaves a `migrating` manifest is not a
-rollback; resume or restore the manifest explicitly.
+rollback: resume it with `agents layout migrate --resume --apply`, or — only
+while `phase` is still `planned` and nothing has moved — abort it with
+`--abort --apply`. Never hand-edit the journal, and never delete a manifest a
+later phase still needs.
 
 ## 12. Post-merge fleet state
 
@@ -381,17 +437,31 @@ After paperbubble is merged:
 
 - paperbubble is the only v2 repository; `agents drift --json` reports it
   supported and clean;
-- the other five repositories remain v1 in round 1; they are deferred, not
-  excluded. A later code-repo migration can keep `docs/` and change only the
-  manifest, router, and skills;
-- after v0.6.0, the other repositories' `recording-what-you-learn` copies report
-  `known_legacy`, so `agents drift --all` exits 1 until each repository is
-  migrated. That is the accepted advisory from design Decision 7, not a
-  regression;
-- do not run `agents update --all --apply` as a response to that advisory. It
-  refreshes the migrating skill but does not update the user-owned recording
-  skill and leaves uncommitted changes in repositories whose owners did not
-  ask for them;
+- the other five repositories remain v1 in round 1. The table below records the
+  measured state and round-1 group of each; a later code-repo migration can keep
+  `docs/` and change only the manifest, router, and skills;
+- **v0.6.0 adds no new v1 advisory; `dotfiles`, `paperbubble`, `cowork`, and
+  `lewm-mlx` stay `current`; `autogo-mlx` and `desktop_pet` continue to exit 1
+  for pre-existing 2026-08-29 two-tier reasons.** Design §0.8 selects the
+  canonical bundled-skill text by resolved layout, so a v1 repository keeps the
+  frozen v0.5.1 text as its canonical asset and stays `current`. Do not run
+  `agents update --all --apply` in response to anything in this section: it
+  refreshes the agents-owned skill only, and only once a layout is v2;
+- `agents drift --all` **already exited 1 before this release**, on v0.5.1, for
+  those two repositories. That is the baseline, not a new advisory:
+
+| Repository | Measured on 2026-09-18 with v0.5.1 (read-only; states named in the v0.6.0 vocabulary) | Round-1 group |
+|---|---|---|
+| paperbubble | v1; router `current`; domain ok; both skills current; 4/4 stores; `drift` exit 0 | **pilot** — this playbook |
+| cowork | v1; router `current`; domain ok; both skills current; 4/4 stores; `drift` exit 0 | ready later — a v2 adoption moves nothing |
+| lewm-mlx | v1; router `current`; domain ok; both skills current; 4/4 stores; `drift` exit 0 | ready later — a v2 adoption moves nothing |
+| autogo-mlx | router **missing**; recording skill **missing**; 1/4 stores; 2 misplaced docs; `drift` exit 1 | **not ready** — blocked on the 2026-08-29 two-tier migration, not on this layout release |
+| desktop_pet | router **diverged**; domain **missing**; recording skill **missing**; 0/4 stores; `drift` exit 1 | **not ready** — blocked on the 2026-08-29 two-tier migration |
+| dotfiles | v1; router `current`; domain ok; both skills current; 4/4 stores; `drift` exit 0 | the development repository — keeps the frozen v1 text and stays `current` with no copy change |
+
+- the debt this leaves is two repositories that are non-current for reasons the
+  2026-08-29 two-tier design owns. Clearing them is that migration, not a layout
+  change, and it is a separate decision;
 - the next repository migration is a separate decision with its own playbook
   section. Nothing in this document authorizes it.
 
@@ -399,8 +469,14 @@ After paperbubble is merged:
 
 - `agents version` is below the manifest's `min_mut_ver_floor` on any machine that can
   touch the repository;
+- `.agents/` is ignored (a `git check-ignore` rule matches it): the v2 path is
+  unavailable, because a manifest there would be machine-local (design §0.7);
 - the dry run reports any blocker, any link candidate, or any path other than
   the four expected stores;
+- the dry run reports `docs_residue`: an entry under `docs/` that is neither a
+  v1 store nor the declared archive;
+- resume or apply reports a `MoveError`: a digest mismatch, both paths present,
+  or neither present. Report the remedy line verbatim; do not resolve it;
 - `docs/archive/` exists, or any tracked file under `docs/` is not one of the
   four store READMEs;
 - either bundled skill differs from the v0.5.1 asset before replacement;
