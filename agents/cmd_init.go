@@ -146,6 +146,17 @@ func runInitWithVersion(args []string, stdout io.Writer, running string) int {
 			fmt.Fprintf(stdout, "agents init: refusing layout: %s\n", problemsText(ps))
 			return exitcode.Malformed
 		}
+		// Creation is a mutation, so it is gated on the layout being created --
+		// not on the layout this repository resolves to. For a manifest-less
+		// repository the resolved layout is the implicit v1 one, which
+		// layout.Support always accepts; asking it would let an unstamped dev
+		// build write a v0.6.0 manifest it then refuses to manage (design §5.3,
+		// §7.5). Advisory, like every other unsupported-layout refusal, and
+		// before the write.
+		if ok, reason := layout.Support(running, built); !ok {
+			fmt.Fprintf(stdout, "agents init: refusing to write: layout %s\n", reason)
+			return exitcode.Advisory
+		}
 		if err := layout.WriteManifest(rc.Root, built.Manifest); err != nil {
 			fmt.Fprintf(stdout, "agents init: %v\n", err)
 			return exitcode.NoRecord
@@ -166,6 +177,14 @@ func runInitWithVersion(args []string, stdout io.Writer, running string) int {
 		// to keep out of the tree are already excluded for every layout.
 		fmt.Fprintf(stdout, "agents init: %s\n", localV2Reason)
 		return exitcode.Advisory
+	} else if layoutFlagsPresent {
+		// Resolution order 1: an existing manifest wins, so a layout flag on
+		// this invocation cannot apply. Saying so is the difference between a
+		// silent no-op and an operator believing a --stores override took
+		// effect. (A manifest-less invocation cannot reach here: the first
+		// branch takes every flag-bearing one.)
+		fmt.Fprintf(stdout, "agents init: %s already declares this repository's layout, and an existing manifest wins: %s not applied\n",
+			layout.ManifestRel, flagsText(present))
 	}
 
 	// Scaffold from the layout just resolved or constructed, never from the

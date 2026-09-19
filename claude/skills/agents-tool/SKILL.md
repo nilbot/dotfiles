@@ -41,9 +41,11 @@ working is the failure this code exists to prevent.
 `agents init` creates the implicit v1 layout unless you pass a layout flag: on a
 repository with no `AGENTS.md` and no `docs/`, `--template content-vault`
 creates an `agents.layout/v2` layout under `.context/`, `--template code-repo`
-keeps the four stores under `docs/`, and `--stores <role>=<path>` overrides an
-individual role. A repository that already has a v1 layout is refused, because
-adopting it is the migration command's job rather than init's.
+keeps the four stores under `docs/`, `--stores <role>=<path>` overrides an
+individual role, and `--archive <path>` records the immutable archive (with no
+`--archive`, an existing `docs/archive` is inherited). A repository that already
+has a v1 layout is refused, because adopting it is the migration command's job
+rather than init's.
 
 ## Recording is not this tool's job any more
 

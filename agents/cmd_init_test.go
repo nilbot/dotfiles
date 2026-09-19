@@ -630,6 +630,9 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 		name string
 		args []string
 		want map[string]string
+		// absent names paths whose existence would mean an earlier --stores
+		// value survived instead of being overridden.
+		absent []string
 	}{
 		{
 			"content-vault",
@@ -638,6 +641,7 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 				layout.RoleDesign: ".context/design", layout.RolePlans: ".context/plans",
 				layout.RoleJournal: ".context/journal", layout.RoleQNA: ".context/qna",
 			},
+			nil,
 		},
 		{
 			// code-repo is the v2 layout whose stores are the v1 paths: a
@@ -648,6 +652,7 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 				layout.RoleDesign: "docs/design", layout.RolePlans: "docs/plans",
 				layout.RoleJournal: "docs/journal", layout.RoleQNA: "docs/qna",
 			},
+			nil,
 		},
 		{
 			// No template: --stores supplies every role, which is what custom
@@ -663,6 +668,7 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 				layout.RoleDesign: "architecture/design", layout.RolePlans: "architecture/plans",
 				layout.RoleJournal: "notes/log", layout.RoleQNA: "notes/qna",
 			},
+			nil,
 		},
 		{
 			"override",
@@ -671,6 +677,23 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 				layout.RoleDesign: ".context/design", layout.RolePlans: ".context/plans",
 				layout.RoleJournal: ".context/journal", layout.RoleQNA: "notes/qna",
 			},
+			nil,
+		},
+		{
+			// The flag is applied in the order it was given, so a role named
+			// twice is last-wins: the value the operator typed last is the one
+			// they meant. The first path must never reach the tree.
+			"repeated-role-last-wins",
+			[]string{
+				"--template", "content-vault",
+				"--stores", "qna=notes/first",
+				"--stores", "qna=notes/second",
+			},
+			map[string]string{
+				layout.RoleDesign: ".context/design", layout.RolePlans: ".context/plans",
+				layout.RoleJournal: ".context/journal", layout.RoleQNA: "notes/second",
+			},
+			[]string{"notes/first"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -697,6 +720,11 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 					t.Errorf("the recorded %s store %s was not created: %v", role, store, err)
 				}
 			}
+			for _, rel := range tc.absent {
+				if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+					t.Errorf("%s exists, so an earlier --stores value was not overridden: %v", rel, err)
+				}
+			}
 			// docs/ is v1's store shell. A v2 layout whose stores are not under
 			// docs/ must not leave that shell behind; code-repo legitimately
 			// puts its stores there, so the check follows the layout asked for.
@@ -715,6 +743,93 @@ func TestInitLayoutFlagsCreateTheStoresTheyRecord(t *testing.T) {
 				t.Error("a v2 creation wrote the v1 router")
 			}
 		})
+	}
+}
+
+// Creation is a mutation, and the layout it must be gated on is the one being
+// created -- not the one this repository resolves to. For a manifest-less
+// repository the resolved layout is the implicit v1 one, which layout.Support
+// always accepts; asking it would let an unstamped dev build write a v0.6.0
+// manifest it then refuses to manage (design §5.3, §7.5). The paired control is
+// the same invocation with a release version, which must still create.
+func TestInitCreationIsGatedOnTheRunningVersion(t *testing.T) {
+	args := []string{"--template", "content-vault"}
+
+	for _, tc := range []struct{ running, reason string }{
+		{"dev", "unreleased"},      // a source build cannot prove its release
+		{"v0.5.99", "below_floor"}, // older than the manifest it would write
+	} {
+		t.Run(tc.running+" refuses without writing", func(t *testing.T) {
+			t.Setenv("XDG_STATE_HOME", t.TempDir())
+			root := newRepo(t)
+			t.Chdir(root)
+			before := snapshotTree(t, root)
+
+			var out bytes.Buffer
+			if code := runInitWithVersion(args, &out, tc.running); code != exitcode.Advisory {
+				t.Fatalf("exit = %d, want the Advisory an unsupported layout gets: %s", code, out.String())
+			}
+			if !strings.Contains(out.String(), tc.reason) {
+				t.Fatalf("the refusal must name the reason %q: %s", tc.reason, out.String())
+			}
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(layout.ManifestRel))); !os.IsNotExist(err) {
+				t.Fatal("an unsupported build wrote the manifest")
+			}
+			if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+				t.Fatal("an unsupported build wrote a layout")
+			}
+		})
+	}
+
+	t.Run("v0.6.0 creates", func(t *testing.T) {
+		t.Setenv("XDG_STATE_HOME", t.TempDir())
+		root := newRepo(t)
+		t.Chdir(root)
+
+		var out bytes.Buffer
+		if code := runInitWithVersion(args, &out, "v0.6.0"); code != exitcode.Advisory {
+			t.Fatalf("exit = %d, want the trust-step Advisory: %s", code, out.String())
+		}
+		if got := readManifestForCmd(t, root).MinMutVerFloor; got != layout.MinMutVerFloorV2 {
+			t.Fatalf("min_mut_ver_floor = %q, want %q", got, layout.MinMutVerFloorV2)
+		}
+		for _, role := range layout.Roles() {
+			if _, err := os.Stat(filepath.Join(root, ".context", role, "README.md")); err != nil {
+				t.Errorf("the release version did not create .context/%s: %v", role, err)
+			}
+		}
+	})
+}
+
+// Resolution order 1: an existing manifest wins, so the layout flags cannot
+// apply. Ignoring them silently would leave an operator who typed
+// `--stores qna=notes/qna` believing the override took effect.
+func TestInitNamesLayoutFlagsAnExistingManifestOverrides(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := newV2RepoForCmd(t, ".context")
+	t.Chdir(root)
+	manifest := filepath.Join(root, filepath.FromSlash(layout.ManifestRel))
+	before, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if code := runInitWithVersion([]string{"--stores", "qna=notes/qna"}, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want the trust-step Advisory: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "--stores") || !strings.Contains(out.String(), "not applied") {
+		t.Fatalf("the output must name the ignored flag: %s", out.String())
+	}
+	after, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("init rewrote a manifest that already declares the layout")
+	}
+	if _, err := os.Stat(filepath.Join(root, "notes", "qna")); !os.IsNotExist(err) {
+		t.Fatal("an ignored --stores override created its store")
 	}
 }
 
