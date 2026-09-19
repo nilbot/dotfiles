@@ -11,19 +11,22 @@ import (
 
 type RouterState string
 
+// The state vocabulary is currency, not health (design §0.2, §0.3): a state
+// says how the repository's copy relates to the running binary's canonical
+// asset for the resolved layout, and each consumer decides what that means.
 const (
-	RouterCleanCurrent RouterState = "clean_current"
-	RouterCleanLegacy  RouterState = "clean_legacy"
-	RouterDrifted      RouterState = "drifted"
-	RouterMissing      RouterState = "missing"
+	RouterCurrent     RouterState = "current"
+	RouterKnownLegacy RouterState = "known_legacy"
+	RouterDiverged    RouterState = "diverged"
+	RouterMissing     RouterState = "missing"
 )
 
 type ComponentState string
 
 const (
-	ComponentOK          ComponentState = "ok"
-	ComponentCleanLegacy ComponentState = "clean_legacy"
-	ComponentCustomized  ComponentState = "customized"
+	ComponentCurrent     ComponentState = "current"
+	ComponentKnownLegacy ComponentState = "known_legacy"
+	ComponentDiverged    ComponentState = "diverged"
 	ComponentMissing     ComponentState = "missing"
 )
 
@@ -752,20 +755,21 @@ func DigestString(s string) string {
 	return DigestBytes([]byte(s))
 }
 
-// CanonicalRouterDigest returns the SHA256 digest of scaffold.DefaultAgentsMD.
-func CanonicalRouterDigest() string {
-	return DigestString(scaffold.DefaultAgentsMD)
+// canonicalRouterText returns the router bytes a repository with this layout
+// must carry (design §8.1): the v1 router for anything but v2, the
+// manifest-pointing v2 router for v2. The resolved layout selects the canonical
+// bytes, exactly as it selects the canonical skill text (§0.8).
+func canonicalRouterText(l layout.Layout) string {
+	if l.Schema == layout.SchemaV2 {
+		return layout.V2AgentsMD
+	}
+	return scaffold.DefaultAgentsMD
 }
 
 // CanonicalRouterDigestFor returns the digest a repository with this layout
-// must match for RouterCleanCurrent. The resolved layout selects the canonical
-// bytes (design §8.1): v1 keeps DefaultAgentsMD, v2 gets the manifest-pointing
-// router.
+// must match for RouterCurrent.
 func CanonicalRouterDigestFor(l layout.Layout) string {
-	if l.Schema == layout.SchemaV2 {
-		return DigestString(layout.V2AgentsMD)
-	}
-	return DigestString(scaffold.DefaultAgentsMD)
+	return DigestString(canonicalRouterText(l))
 }
 
 var (

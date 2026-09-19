@@ -13,6 +13,12 @@ import (
 )
 
 func runDrift(args []string, stdout io.Writer) int {
+	return runDriftWithVersion(args, stdout, version)
+}
+
+// runDriftWithVersion is runDrift with the running version injected, so a test
+// can ask what a repository looks like to a binary that may not mutate it.
+func runDriftWithVersion(args []string, stdout io.Writer, running string) int {
 	fs := flag.NewFlagSet("drift", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	jsonOut := fs.Bool("json", false, "output full drift report JSON")
@@ -50,7 +56,7 @@ func runDrift(args []string, stdout io.Writer) int {
 		allClean := (len(missing) == 0 && len(unknown) == 0)
 
 		for _, e := range present {
-			rep, err := drift.InspectRepo(e.Path)
+			rep, err := drift.InspectRepo(e.Path, running)
 			if err != nil {
 				allClean = false
 				continue
@@ -102,7 +108,7 @@ func runDrift(args []string, stdout io.Writer) int {
 	if targetDir == "" {
 		targetDir = "."
 	}
-	report, err := drift.InspectRepo(targetDir)
+	report, err := drift.InspectRepo(targetDir, running)
 	if err != nil {
 		fmt.Fprintf(stdout, "agents drift: %v\n", err)
 		return exitcode.NoRecord
@@ -128,30 +134,12 @@ func runDrift(args []string, stdout io.Writer) int {
 	return exitcode.Advisory
 }
 
+// isDriftClean is this package's name for the currency predicate, which lives
+// in internal/drift next to the report it judges (design §0.2). It is strict
+// currency: every embedded asset must be current, and an unsupported or
+// migrating layout is not current.
 func isDriftClean(report drift.DriftReport) bool {
-	if report.RouterState != drift.RouterCleanCurrent {
-		return false
-	}
-	if report.SymlinkState != "ok" {
-		return false
-	}
-	if report.DomainState != "ok" {
-		return false
-	}
-	for _, state := range report.Skills {
-		if state != string(drift.ComponentOK) {
-			return false
-		}
-	}
-	for _, ok := range report.DocsStores {
-		if !ok {
-			return false
-		}
-	}
-	if len(report.MisplacedDocs) > 0 {
-		return false
-	}
-	return true
+	return drift.IsCurrent(report)
 }
 
 func printDriftReport(w io.Writer, rep drift.DriftReport) {

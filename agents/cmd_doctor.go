@@ -29,13 +29,17 @@ type doctorCommandDependencies struct {
 }
 
 func defaultDoctorCommandDependencies() doctorCommandDependencies {
+	// The scaffold checks ask whether the resolved layout admits this binary
+	// (design §5.3), so the running version -- not a literal -- reaches them.
+	doctorDeps := doctor.DependenciesFor(DotfilesRoot())
+	doctorDeps.RunningVersion = version
 	return doctorCommandDependencies{
 		Getwd:      os.Getwd,
 		Discover:   repo.Discover,
 		ReadID:     machine.ReadID,
 		BinaryPath: binaryPath,
 		Now:        func() time.Time { return time.Now().UTC() },
-		DoctorDeps: doctor.DependenciesFor(DotfilesRoot()),
+		DoctorDeps: doctorDeps,
 		Run:        doctor.RunWithDeps,
 	}
 }

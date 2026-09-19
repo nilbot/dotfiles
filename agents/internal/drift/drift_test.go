@@ -2,6 +2,7 @@ package drift
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
@@ -30,20 +32,82 @@ func newRepo(t *testing.T) string {
 	return dir
 }
 
+// skillAssetBytes reads one embedded skill asset through the layout selector,
+// so a test can install the exact bytes a layout treats as canonical instead of
+// trusting whatever the writer happens to write.
+func skillAssetBytes(t *testing.T, schema, skill string) []byte {
+	t.Helper()
+	path, err := scaffold.SkillAssetPath(schema, skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := scaffold.AssetsFS.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+// writeV2Layout writes a valid v2 manifest at .agents/layout.json together with
+// the four store directories it declares. storeRoot is repository-relative
+// (".context" in the tests). The archive is declared too, so a v2 walker is
+// pinned to the manifest's own archive rather than a hardcoded docs/archive.
+func writeV2Layout(t *testing.T, dir, storeRoot string) {
+	t.Helper()
+	for _, role := range layout.Roles() {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(storeRoot), role), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := fmt.Sprintf(`{
+  "schema": %q,
+  "min_mut_ver_floor": "0.6.0",
+  "layout_status": "active",
+  "archive": %q,
+  "stores": {
+    "design": %q,
+    "plans": %q,
+    "journal": %q,
+    "qna": %q
+  }
+}`, layout.SchemaV2, storeRoot+"/archive",
+		storeRoot+"/design", storeRoot+"/plans", storeRoot+"/journal", storeRoot+"/qna")
+	path := filepath.Join(dir, ".agents", "layout.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// writeFile writes one fixture file, creating its parent directories. The
+// layout tests need paths the scaffold writer would never create -- a stray
+// plan in a journal store, a vault note outside every declared store.
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInspectCleanCurrentRepo(t *testing.T) {
 	dir := newRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
 	}
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
 	if report.RepoPath != dir {
 		t.Errorf("got repo path %q, want %q", report.RepoPath, dir)
 	}
-	if report.RouterState != RouterCleanCurrent {
-		t.Errorf("got router state %q, want %q", report.RouterState, RouterCleanCurrent)
+	if report.RouterState != RouterCurrent {
+		t.Errorf("got router state %q, want %q", report.RouterState, RouterCurrent)
 	}
 	if report.SymlinkState != "ok" {
 		t.Errorf("got symlink state %q, want ok", report.SymlinkState)
@@ -51,11 +115,11 @@ func TestInspectCleanCurrentRepo(t *testing.T) {
 	if report.DomainState != "ok" {
 		t.Errorf("got domain state %q, want ok", report.DomainState)
 	}
-	if report.Skills["recording-what-you-learn"] != string(ComponentOK) {
-		t.Errorf("got recording-what-you-learn skill state %q, want ok", report.Skills["recording-what-you-learn"])
+	if report.Skills["recording-what-you-learn"] != string(ComponentCurrent) {
+		t.Errorf("got recording-what-you-learn skill state %q, want current", report.Skills["recording-what-you-learn"])
 	}
-	if report.Skills["migrating-fleet-context"] != string(ComponentOK) {
-		t.Errorf("got migrating-fleet-context skill state %q, want ok", report.Skills["migrating-fleet-context"])
+	if report.Skills["migrating-fleet-context"] != string(ComponentCurrent) {
+		t.Errorf("got migrating-fleet-context skill state %q, want current", report.Skills["migrating-fleet-context"])
 	}
 	for _, store := range []string{"design", "plans", "journal", "qna"} {
 		if !report.DocsStores[store] {
@@ -106,7 +170,7 @@ func installFrozenV1Layout(t *testing.T, dir string) {
 
 // TestFrozenV1SkillTextsAreCurrentOnAV1Repository pins design §0.8 for the
 // bundled skills: the resolved layout selects the canonical text, so a v1
-// repository carrying the frozen v0.5.1 texts is current — not customized.
+// repository carrying the frozen v0.5.1 texts is current — not diverged.
 // That is this release's central no-op promise for v1 repositories, and the
 // fixture is hand-built so a writer installing the wrong layout's bytes cannot
 // make the assertion pass by agreeing with the classifier.
@@ -114,12 +178,12 @@ func TestFrozenV1SkillTextsAreCurrentOnAV1Repository(t *testing.T) {
 	dir := newRepo(t)
 	installFrozenV1Layout(t, dir)
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
-	if report.RouterState != RouterCleanCurrent {
-		t.Errorf("router_state = %q, want %q", report.RouterState, RouterCleanCurrent)
+	if report.RouterState != RouterCurrent {
+		t.Errorf("router_state = %q, want %q", report.RouterState, RouterCurrent)
 	}
 	if report.SymlinkState != "ok" {
 		t.Errorf("symlink_state = %q, want ok", report.SymlinkState)
@@ -128,8 +192,8 @@ func TestFrozenV1SkillTextsAreCurrentOnAV1Repository(t *testing.T) {
 		t.Errorf("domain_state = %q, want ok", report.DomainState)
 	}
 	for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
-		if got := report.Skills[skill]; got != string(ComponentOK) {
-			t.Errorf("skills[%s] = %q, want %q: the frozen v1 text is this layout's canonical text", skill, got, ComponentOK)
+		if got := report.Skills[skill]; got != string(ComponentCurrent) {
+			t.Errorf("skills[%s] = %q, want %q: the frozen v1 text is this layout's canonical text", skill, got, ComponentCurrent)
 		}
 	}
 	for _, store := range []string{"design", "plans", "journal", "qna"} {
@@ -142,6 +206,185 @@ func TestFrozenV1SkillTextsAreCurrentOnAV1Repository(t *testing.T) {
 	}
 	if report.Diff != "" {
 		t.Errorf("diff = %q, want empty", report.Diff)
+	}
+}
+
+// The report keeps the layout-blind field names v1 consumers already read and
+// adds the resolved layout's own fields (design §7.3). docs_stores is
+// deprecated but still populated, for both layouts, until v0.8.0 at the
+// earliest.
+func TestInspectV1ReportKeepsLegacyFieldsAndAddsLayoutFields(t *testing.T) {
+	// newRepo, not a bare t.TempDir(): scaffold.Create asks git for the
+	// repository's info/exclude path, so a v1 fixture must be a repository.
+	dir := newRepo(t)
+	if err := scaffold.Create(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := InspectRepo(dir, "v0.6.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.LayoutVersion != "v1" || rep.Stores["qna"] != "docs/qna" {
+		t.Fatalf("layout fields = %+v", rep)
+	}
+	if !rep.DocsStores["qna"] {
+		t.Fatal("docs_stores must remain populated for v1 consumers")
+	}
+	if rep.Unsupported != "" {
+		t.Fatalf("v1 must be supported, got %q", rep.Unsupported)
+	}
+}
+
+func TestInspectV2ReportResolvesStoresAndRefusesBelowFloor(t *testing.T) {
+	dir := t.TempDir()
+	writeV2Layout(t, dir, ".context")
+	rep, err := InspectRepo(dir, "v0.5.99")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.LayoutVersion != "v2" || rep.Stores["qna"] != ".context/qna" {
+		t.Fatalf("layout fields = %+v", rep)
+	}
+	if rep.Unsupported != "below_floor" {
+		t.Fatalf("unsupported = %q, want below_floor", rep.Unsupported)
+	}
+	if rep.UnsupportedDetail != "requires agents >= 0.6.0" {
+		t.Fatalf("unsupported_detail = %q", rep.UnsupportedDetail)
+	}
+	// docs_stores is deprecated, not dropped: it stays populated on both
+	// layouts until v0.8.0 at the earliest (design §7.3).
+	if !rep.DocsStores["qna"] {
+		t.Fatal("docs_stores must remain populated for v2 consumers")
+	}
+	if isCurrent(rep) {
+		t.Fatal("an unsupported layout must not report clean")
+	}
+}
+
+// The other half of the [below_floor] control: a v2 repository this binary may
+// mutate, carrying the v2 texts, is current -- which is what makes the v2 path
+// reachable at all.
+func TestInspectCleanV2RepoIsCurrent(t *testing.T) {
+	dir := t.TempDir()
+	writeV2Layout(t, dir, ".context")
+	for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+		writeFile(t, filepath.Join(dir, ".agents/skills", skill, "SKILL.md"),
+			string(skillAssetBytes(t, layout.SchemaV2, skill)))
+	}
+	writeFile(t, filepath.Join(dir, ".agents/AGENTS.md"), "# Domain rules\n")
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), layout.V2AgentsMD)
+	if err := os.Symlink("AGENTS.md", filepath.Join(dir, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, err := InspectRepo(dir, "v0.6.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !isCurrent(rep) {
+		t.Fatalf("a v2 repository with the v2 texts must be current: %+v", rep)
+	}
+}
+
+// The v2 walk follows the manifest's declared stores. A vault note that merely
+// ends in -plan.md is not an agents plan artifact (design §7.3), and the
+// archive is the manifest's archive, not docs/archive.
+func TestInspectV2MisplacedDocsWalksDeclaredStoresNotTheVault(t *testing.T) {
+	dir := t.TempDir()
+	writeV2Layout(t, dir, ".context")
+	writeFile(t, filepath.Join(dir, ".context/journal/wrong-plan.md"), "# wrong\n")
+	writeFile(t, filepath.Join(dir, "protein/a-plan.md"), "# vault note\n") // not an agents plan
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	if len(rep.MisplacedDocs) != 1 || rep.MisplacedDocs[0] != ".context/journal/wrong-plan.md" {
+		t.Fatalf("misplaced = %v", rep.MisplacedDocs)
+	}
+}
+
+// v1 keeps its walker exactly: docs/ is the only tree, and docs/archive/ is
+// immutable so nothing in it can be misplaced.
+func TestInspectV1MisplacedDocsStillWalkDocsAndExcludeArchive(t *testing.T) {
+	dir := newRepo(t)
+	if err := scaffold.Create(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "docs/journal/stray-plan.md"), "# stray\n")
+	writeFile(t, filepath.Join(dir, "docs/archive/plans/old-plan.md"), "# archived\n")
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	if !slices.Contains(rep.MisplacedDocs, "docs/journal/stray-plan.md") {
+		t.Fatalf("live stray plan not reported: %v", rep.MisplacedDocs)
+	}
+	for _, m := range rep.MisplacedDocs {
+		if strings.HasPrefix(m, "docs/archive/") {
+			t.Errorf("archive file reported as misplaced: %s", m)
+		}
+	}
+}
+
+// The v2 archive may be anywhere, so the exclusion is the manifest's archive
+// path. The positive control is in the same test: a live misplaced plan inside
+// a declared store is still reported.
+func TestInspectV2MisplacedDocsExcludesTheManifestArchive(t *testing.T) {
+	dir := t.TempDir()
+	writeV2Layout(t, dir, ".context")
+	writeFile(t, filepath.Join(dir, ".context/archive/plans/old-plan.md"), "# archived\n")
+	writeFile(t, filepath.Join(dir, ".context/archive/specs/old-design.md"), "# archived\n")
+	writeFile(t, filepath.Join(dir, ".context/journal/live-plan.md"), "# live\n")
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	for _, m := range rep.MisplacedDocs {
+		if strings.HasPrefix(m, ".context/archive/") {
+			t.Errorf("the manifest's archive was walked: %s", m)
+		}
+	}
+	if !slices.Contains(rep.MisplacedDocs, ".context/journal/live-plan.md") {
+		t.Fatalf("live misplaced plan not reported: %v", rep.MisplacedDocs)
+	}
+}
+
+// The resolved layout selects the canonical router (design §8.1), which is what
+// makes a v2 repository carrying the v2 router current instead of diverged; the
+// v1 router stays a known template there, never an unclassifiable drift.
+func TestInspectV2RepoAcceptsTheV2Router(t *testing.T) {
+	dir := t.TempDir()
+	writeV2Layout(t, dir, ".context")
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), layout.V2AgentsMD)
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	if rep.RouterState != RouterCurrent {
+		t.Fatalf("router_state = %q, want %q", rep.RouterState, RouterCurrent)
+	}
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), scaffold.DefaultAgentsMD)
+	rep, _ = InspectRepo(dir, "v0.6.0")
+	if rep.RouterState != RouterKnownLegacy {
+		t.Fatalf("v1 router on v2 = %q, want %q", rep.RouterState, RouterKnownLegacy)
+	}
+	// The diff is against the layout's own canonical router, not the v1 one:
+	// V2AgentsMD names the manifest and hardcodes no store path.
+	writeFile(t, filepath.Join(dir, "AGENTS.md"), "# local router\n")
+	rep, _ = InspectRepo(dir, "v0.6.0")
+	if rep.RouterState != RouterDiverged {
+		t.Fatalf("local router on v2 = %q, want %q", rep.RouterState, RouterDiverged)
+	}
+	if !strings.Contains(rep.Diff, "`agents.layout/v2`") {
+		t.Errorf("the diff is not against the v2 canonical router: %s", rep.Diff)
+	}
+	if strings.Contains(rep.Diff, "docs/") {
+		t.Errorf("the diff carries v1 store paths: %s", rep.Diff)
+	}
+}
+
+// The canonical text is chosen by the resolved layout (design §0.8). Task 3
+// already split the bytes, so this proves the selection path end to end; Task 13
+// adds the cross-layout `known_legacy` classification, which needs the legacy
+// catalog wired there.
+func TestSkillCurrencyUsesTheLayoutSelectedCanonical(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".agents/skills/recording-what-you-learn/SKILL.md"),
+		string(skillAssetBytes(t, layout.SchemaV1, "recording-what-you-learn")))
+	if rep, _ := InspectRepo(dir, "v0.6.0"); rep.Skills["recording-what-you-learn"] != "current" {
+		t.Fatalf("canonical bytes = %q, want current", rep.Skills["recording-what-you-learn"])
+	}
+	writeFile(t, filepath.Join(dir, ".agents/skills/recording-what-you-learn/SKILL.md"), "# local edit\n")
+	if rep, _ := InspectRepo(dir, "v0.6.0"); rep.Skills["recording-what-you-learn"] != "diverged" {
+		t.Fatalf("local edit = %q, want diverged", rep.Skills["recording-what-you-learn"])
 	}
 }
 
@@ -166,15 +409,15 @@ func TestInspectLegacyRouterRepo(t *testing.T) {
 			t.Fatalf("failed to write legacy template %d: %v", i, err)
 		}
 
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatalf("template %d: InspectRepo failed: %v", i, err)
 		}
-		if report.RouterState != RouterCleanLegacy {
-			t.Errorf("template %d: got router state %q, want %q", i, report.RouterState, RouterCleanLegacy)
+		if report.RouterState != RouterKnownLegacy {
+			t.Errorf("template %d: got router state %q, want %q", i, report.RouterState, RouterKnownLegacy)
 		}
 		if report.Diff != "" {
-			t.Errorf("template %d: expected empty diff for clean_legacy, got %q", i, report.Diff)
+			t.Errorf("template %d: expected empty diff for known_legacy, got %q", i, report.Diff)
 		}
 	}
 }
@@ -197,15 +440,15 @@ func TestInspectDriftedRepo(t *testing.T) {
 	}
 	f.Close()
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
-	if report.RouterState != RouterDrifted {
-		t.Errorf("got router state %q, want %q", report.RouterState, RouterDrifted)
+	if report.RouterState != RouterDiverged {
+		t.Errorf("got router state %q, want %q", report.RouterState, RouterDiverged)
 	}
 	if report.Diff == "" {
-		t.Error("expected non-empty diff for drifted repo")
+		t.Error("expected non-empty diff for a diverged repo")
 	}
 	if !strings.Contains(report.Diff, "+## Custom Domain Rules") {
 		t.Errorf("diff does not contain added lines: %s", report.Diff)
@@ -223,7 +466,7 @@ func TestInspectMissingDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
@@ -241,7 +484,7 @@ func TestInspectSymlinkStates(t *testing.T) {
 		if err := os.Remove(filepath.Join(dir, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -262,7 +505,7 @@ func TestInspectSymlinkStates(t *testing.T) {
 		if err := os.WriteFile(claudePath, []byte("regular file"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -279,7 +522,7 @@ func TestInspectSymlinkStates(t *testing.T) {
 		if err := os.Remove(filepath.Join(dir, "AGENTS.md")); err != nil {
 			t.Fatal(err)
 		}
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -303,7 +546,7 @@ func TestInspectSymlinkStates(t *testing.T) {
 		if err := os.Symlink("OTHER.md", claudePath); err != nil {
 			t.Fatal(err)
 		}
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -344,7 +587,7 @@ func TestInspectMisplacedDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
@@ -365,7 +608,7 @@ func TestInspectMisplacedDocs(t *testing.T) {
 }
 
 func TestInspectSkillStates(t *testing.T) {
-	t.Run("customized skill", func(t *testing.T) {
+	t.Run("diverged skill", func(t *testing.T) {
 		dir := newRepo(t)
 		if err := scaffold.Create(dir, false); err != nil {
 			t.Fatal(err)
@@ -378,12 +621,12 @@ func TestInspectSkillStates(t *testing.T) {
 		f.WriteString("\n## Custom local note\n")
 		f.Close()
 
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.Skills["recording-what-you-learn"] != string(ComponentCustomized) {
-			t.Errorf("got recording skill state %q, want customized", report.Skills["recording-what-you-learn"])
+		if report.Skills["recording-what-you-learn"] != string(ComponentDiverged) {
+			t.Errorf("got recording skill state %q, want diverged", report.Skills["recording-what-you-learn"])
 		}
 	})
 
@@ -397,12 +640,12 @@ func TestInspectSkillStates(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.Skills["recording-what-you-learn"] != string(ComponentCleanLegacy) {
-			t.Errorf("got recording skill state %q, want clean_legacy", report.Skills["recording-what-you-learn"])
+		if report.Skills["recording-what-you-learn"] != string(ComponentKnownLegacy) {
+			t.Errorf("got recording skill state %q, want known_legacy", report.Skills["recording-what-you-learn"])
 		}
 	})
 
@@ -416,7 +659,7 @@ func TestInspectSkillStates(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -438,7 +681,7 @@ func TestInspectSkillStates(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		report, err := InspectRepo(dir)
+		report, err := InspectRepo(dir, "v0.6.0")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -459,7 +702,7 @@ func TestDriftReportJSONSerialization(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,7 +733,7 @@ func TestDriftReportJSONSerialization(t *testing.T) {
 
 func TestInspectEmptyRepo(t *testing.T) {
 	dir := newRepo(t)
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +778,7 @@ func TestMisplacedDocsExcludesArchive(t *testing.T) {
 	// Live stores: genuinely misplaced, must still be reported.
 	mustWrite("docs/journal/2026-08-30-stray-plan.md", "# stray\n")
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
@@ -553,7 +796,7 @@ func TestMisplacedDocsExcludesArchive(t *testing.T) {
 
 // `.agents/skills/` is where repository-specific skills are supposed to live
 // (design section 2). The tool owns only the skills it embeds; classifying every
-// other directory as `customized` made isDriftClean report a repository as
+// other directory as `diverged` made the currency predicate report a repository as
 // dirty for using the feature exactly as designed, and no migration could ever
 // clear it. playground/autogo-mlx carries two such skills and could not report
 // clean on 2026-09-01.
@@ -572,7 +815,7 @@ func TestRepoSpecificSkillsAreListedNotJudged(t *testing.T) {
 		}
 	}
 
-	report, err := InspectRepo(dir)
+	report, err := InspectRepo(dir, "v0.6.0")
 	if err != nil {
 		t.Fatalf("InspectRepo failed: %v", err)
 	}
@@ -585,8 +828,8 @@ func TestRepoSpecificSkillsAreListedNotJudged(t *testing.T) {
 	}
 	// Still tracked: the embedded skills are judged as before. Without this the
 	// test would pass on an inspector that classified nothing at all.
-	if report.Skills["recording-what-you-learn"] != string(ComponentOK) {
-		t.Errorf("embedded skill state = %q, want ok", report.Skills["recording-what-you-learn"])
+	if report.Skills["recording-what-you-learn"] != string(ComponentCurrent) {
+		t.Errorf("embedded skill state = %q, want current", report.Skills["recording-what-you-learn"])
 	}
 	// Listed: a migrating agent needs to know they exist so it leaves them alone.
 	if !slices.Contains(report.LocalSkills, "human-ranked-sft") ||

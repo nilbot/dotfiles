@@ -1226,7 +1226,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := scaffold.Create(root, false); err != nil {
 			t.Fatal(err)
 		}
-		checks := checkScaffold(root)
+		checks := checkScaffold(root, "v0.6.0")
 		if len(checks) != 5 {
 			t.Fatalf("got %d checks, want 5", len(checks))
 		}
@@ -1257,13 +1257,13 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		}
 	})
 
-	t.Run("router legacy and drifted and missing", func(t *testing.T) {
+	t.Run("router legacy and diverged and missing", func(t *testing.T) {
 		// Clean legacy
 		rootLegacy := t.TempDir()
 		if err := os.WriteFile(filepath.Join(rootLegacy, "AGENTS.md"), []byte(drift.LegacySingleBulletRouter), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cLegacy := checkByName(t, checkScaffold(rootLegacy), "scaffold:router")
+		cLegacy := checkByName(t, checkScaffold(rootLegacy, "v0.6.0"), "scaffold:router")
 		if cLegacy.Status != Warn || cLegacy.Detail != "root AGENTS.md uses a legacy canonical template" || cLegacy.Remedy != "run the 'migrating-fleet-context' agent skill to update" {
 			t.Errorf("clean legacy router = %+v", cLegacy)
 		}
@@ -1273,14 +1273,14 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(rootDrifted, "AGENTS.md"), []byte("# Custom rules\nDo not edit\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cDrifted := checkByName(t, checkScaffold(rootDrifted), "scaffold:router")
+		cDrifted := checkByName(t, checkScaffold(rootDrifted, "v0.6.0"), "scaffold:router")
 		if cDrifted.Status != Warn || cDrifted.Detail != "root AGENTS.md contains unpartitioned domain rules or custom drift" || cDrifted.Remedy != "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md" {
-			t.Errorf("drifted router = %+v", cDrifted)
+			t.Errorf("diverged router = %+v", cDrifted)
 		}
 
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:router")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:router")
 		if cMissing.Status != Fail || cMissing.Detail != "root AGENTS.md is missing" || cMissing.Remedy != "run 'agents init' to scaffold" {
 			t.Errorf("missing router = %+v", cMissing)
 		}
@@ -1289,7 +1289,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 	t.Run("symlink invalid states", func(t *testing.T) {
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:symlink")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:symlink")
 		if cMissing.Status != Fail || cMissing.Detail != "CLAUDE.md symlink is invalid (missing)" || !strings.Contains(cMissing.Remedy, "ln -s AGENTS.md CLAUDE.md") {
 			t.Errorf("missing symlink = %+v", cMissing)
 		}
@@ -1299,7 +1299,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(rootRegular, "CLAUDE.md"), []byte("regular file"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cRegular := checkByName(t, checkScaffold(rootRegular), "scaffold:symlink")
+		cRegular := checkByName(t, checkScaffold(rootRegular, "v0.6.0"), "scaffold:symlink")
 		if cRegular.Status != Fail || cRegular.Detail != "CLAUDE.md symlink is invalid (not_symlink)" {
 			t.Errorf("not symlink = %+v", cRegular)
 		}
@@ -1309,7 +1309,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.Symlink("NONEXISTENT.md", filepath.Join(rootBroken, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		cBroken := checkByName(t, checkScaffold(rootBroken), "scaffold:symlink")
+		cBroken := checkByName(t, checkScaffold(rootBroken, "v0.6.0"), "scaffold:symlink")
 		if cBroken.Status != Fail || cBroken.Detail != "CLAUDE.md symlink is invalid (broken)" {
 			t.Errorf("broken symlink = %+v", cBroken)
 		}
@@ -1317,7 +1317,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 
 	t.Run("domain context missing", func(t *testing.T) {
 		root := t.TempDir()
-		c := checkByName(t, checkScaffold(root), "scaffold:domain")
+		c := checkByName(t, checkScaffold(root, "v0.6.0"), "scaffold:domain")
 		if c.Status != Warn || c.Detail != ".agents/AGENTS.md is missing" || c.Remedy != "run 'agents init' to populate starter template" {
 			t.Errorf("missing domain = %+v", c)
 		}
@@ -1333,7 +1333,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(recDir, "SKILL.md"), []byte(drift.LegacyRecordingSkill), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cLegacy := checkByName(t, checkScaffold(rootLegacy), "scaffold:skill-recording")
+		cLegacy := checkByName(t, checkScaffold(rootLegacy, "v0.6.0"), "scaffold:skill-recording")
 		if cLegacy.Status != OK || cLegacy.Detail != ".agents/skills/recording-what-you-learn/ matches legacy template" {
 			t.Errorf("clean legacy recording = %+v", cLegacy)
 		}
@@ -1347,14 +1347,14 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(customRecDir, "SKILL.md"), []byte("---\nname: recording-what-you-learn\n---\nCustom skill content\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-recording")
+		cCustom := checkByName(t, checkScaffold(rootCustom, "v0.6.0"), "scaffold:skill-recording")
 		if cCustom.Status != OK || cCustom.Detail != ".agents/skills/recording-what-you-learn/ carries repository customizations" {
-			t.Errorf("customized recording = %+v", cCustom)
+			t.Errorf("diverged recording = %+v", cCustom)
 		}
 
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-recording")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:skill-recording")
 		if cMissing.Status != Warn || cMissing.Detail != ".agents/skills/recording-what-you-learn/ is missing" || cMissing.Remedy != "run 'agents init' to populate bundled skill" {
 			t.Errorf("missing recording = %+v", cMissing)
 		}
@@ -1371,7 +1371,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := scaffold.Create(rootOK, false); err != nil {
 			t.Fatal(err)
 		}
-		cOK := checkByName(t, checkScaffold(rootOK), "scaffold:skill-migrating")
+		cOK := checkByName(t, checkScaffold(rootOK, "v0.6.0"), "scaffold:skill-migrating")
 		if cOK.Status != OK || cOK.Detail != ".agents/skills/migrating-fleet-context/ is present" {
 			t.Errorf("ok migrating = %+v", cOK)
 		}
@@ -1391,10 +1391,10 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Fatal(err)
 		}
 		// migrating-fleet-context is 100% agents-owned (design 5.1), so a copy
-		// that does not match the embedded asset is stale, not customized --
+		// that does not match the embedded asset is stale, not a customization --
 		// and a stale migration skill reported `ok` is a skill that passes its
 		// own health check while carrying obsolete instructions.
-		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-migrating")
+		cCustom := checkByName(t, checkScaffold(rootCustom, "v0.6.0"), "scaffold:skill-migrating")
 		if cCustom.Status != Warn || cCustom.Detail != ".agents/skills/migrating-fleet-context/ does not match the installed binary" {
 			t.Errorf("stale migrating = %+v", cCustom)
 		}
@@ -1404,7 +1404,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-migrating")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:skill-migrating")
 		if cMissing.Status != Warn || cMissing.Detail != ".agents/skills/migrating-fleet-context/ is missing" || cMissing.Remedy != "run 'agents update' or 'agents init' to refresh infrastructure skills" {
 			t.Errorf("missing migrating = %+v", cMissing)
 		}

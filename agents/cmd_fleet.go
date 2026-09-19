@@ -92,7 +92,16 @@ func runFleetUpdate(args []string, stdout io.Writer) int {
 	return runFleetUpdateWithWire(args, stdout, wireAll)
 }
 
+// runFleetUpdateWithWire is runFleetUpdateWithVersion with the production wire
+// function and the running binary's own version.
 func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, io.Writer) int) int {
+	return runFleetUpdateWithVersion(args, stdout, wire, version)
+}
+
+// runFleetUpdateWithVersion is the fleet update with the wire function and the
+// running version injected, so the per-repository drift check at the end reads
+// each repository through this binary's own layout support (design §5.3).
+func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string, io.Writer) int, running string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	all := fs.Bool("all", false, "update every registered repository")
@@ -153,7 +162,7 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 			continue
 		}
 		fmt.Fprintf(stdout, "rewired %s\n", fleetPath(e.Path))
-		rep, err := drift.InspectRepo(e.Path)
+		rep, err := drift.InspectRepo(e.Path, running)
 		if err != nil || !isDriftClean(rep) {
 			drifted++
 			fmt.Fprintf(stdout, "notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate\n", fleetPath(e.Path))

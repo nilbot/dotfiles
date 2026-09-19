@@ -74,6 +74,10 @@ type Dependencies struct {
 	// derived from, because every other path here is built by joining onto it,
 	// so nothing existing can report that the root itself is gone.
 	Root string
+	// RunningVersion is the running binary's version, which the scaffold checks
+	// need to decide whether a resolved layout's min_mut_ver_floor admits this
+	// binary (design §5.3). Injected by the caller, never read from a global.
+	RunningVersion string
 }
 
 func DefaultThresholds() Thresholds {
@@ -197,7 +201,7 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 		cacheRoot, _ = deps.TraceCacheDir(repoRoot)
 	}
 	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
-	checks = append(checks, checkScaffold(repoRoot)...)
+	checks = append(checks, checkScaffold(repoRoot, deps.RunningVersion)...)
 	checks = append(checks, checkDocsFreshness(repoRoot, now))
 	checks = append(checks, checkStoreSize(cacheRoot, th.CacheMaxBytes))
 	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
@@ -1003,28 +1007,28 @@ func checkStoreSize(cacheRoot string, maxBytes int64) Check {
 	return Check{Name: "store:size", Status: OK, Detail: fmt.Sprintf("the transcript cache holds %.0f MB", mb)}
 }
 
-func checkScaffold(repoRoot string) []Check {
+func checkScaffold(repoRoot, runningVersion string) []Check {
 	// InspectRepo returns safe zero-value report structures on I/O error
 	// which naturally fall through to Fail/Warn checks below.
-	report, _ := drift.InspectRepo(repoRoot)
+	report, _ := drift.InspectRepo(repoRoot, runningVersion)
 	var checks []Check
 
 	// 1. scaffold:router
 	switch report.RouterState {
-	case drift.RouterCleanCurrent:
+	case drift.RouterCurrent:
 		checks = append(checks, Check{
 			Name:   "scaffold:router",
 			Status: OK,
 			Detail: "root AGENTS.md matches canonical template",
 		})
-	case drift.RouterCleanLegacy:
+	case drift.RouterKnownLegacy:
 		checks = append(checks, Check{
 			Name:   "scaffold:router",
 			Status: Warn,
 			Detail: "root AGENTS.md uses a legacy canonical template",
 			Remedy: "run the 'migrating-fleet-context' agent skill to update",
 		})
-	case drift.RouterDrifted:
+	case drift.RouterDiverged:
 		checks = append(checks, Check{
 			Name:   "scaffold:router",
 			Status: Warn,
@@ -1076,19 +1080,19 @@ func checkScaffold(repoRoot string) []Check {
 
 	// 4. scaffold:skill-recording
 	switch report.Skills["recording-what-you-learn"] {
-	case string(drift.ComponentOK):
+	case string(drift.ComponentCurrent):
 		checks = append(checks, Check{
 			Name:   "scaffold:skill-recording",
 			Status: OK,
 			Detail: ".agents/skills/recording-what-you-learn/ is present",
 		})
-	case string(drift.ComponentCleanLegacy):
+	case string(drift.ComponentKnownLegacy):
 		checks = append(checks, Check{
 			Name:   "scaffold:skill-recording",
 			Status: OK,
 			Detail: ".agents/skills/recording-what-you-learn/ matches legacy template",
 		})
-	case string(drift.ComponentCustomized):
+	case string(drift.ComponentDiverged):
 		checks = append(checks, Check{
 			Name:   "scaffold:skill-recording",
 			Status: OK,
@@ -1105,19 +1109,19 @@ func checkScaffold(repoRoot string) []Check {
 
 	// 5. scaffold:skill-migrating
 	switch report.Skills["migrating-fleet-context"] {
-	case string(drift.ComponentOK):
+	case string(drift.ComponentCurrent):
 		checks = append(checks, Check{
 			Name:   "scaffold:skill-migrating",
 			Status: OK,
 			Detail: ".agents/skills/migrating-fleet-context/ is present",
 		})
-	case string(drift.ComponentCleanLegacy):
+	case string(drift.ComponentKnownLegacy):
 		checks = append(checks, Check{
 			Name:   "scaffold:skill-migrating",
 			Status: OK,
 			Detail: ".agents/skills/migrating-fleet-context/ matches legacy template",
 		})
-	case string(drift.ComponentCustomized):
+	case string(drift.ComponentDiverged):
 		// Unlike recording-what-you-learn, this skill is authoritative and
 		// agents-owned (design 5.1): a local divergence is staleness, not a
 		// customization to respect. Reporting it ok let a skill carrying
