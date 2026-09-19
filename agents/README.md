@@ -175,12 +175,13 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 ### Layout commands
 
 `agents layout` is the read-only view of `.agents/layout.json`. `show` prints the
-resolved layout — `--json` for the normalized object, `--router` for the
-canonical root router and nothing else. `path <role>` prints one
-repository-relative store path (`design`, `plans`, `journal`, `qna`) and nothing
-else. `validate` runs the layout validation rules and exits `0` for a valid,
-supported layout, `1` for problems or a manifest this binary may not mutate, and
-`4` outside a repository with `.agents/`.
+resolved layout — `--json` for the normalized object (prose-free, with any
+problems carried inside the object), `--router` for the canonical root router
+and nothing else. `path <role>` prints one repository-relative store path
+(`design`, `plans`, `journal`, `qna`) and nothing else. `validate` runs the
+layout validation rules and exits `0` for a valid, supported layout, `1` for
+problems or a manifest this binary may not mutate, and `4` outside a repository
+with `.agents/`.
 
 `agents layout validate --json` emits one object:
 

@@ -171,6 +171,33 @@ func TestLayoutShowReportsProblemsAndStillResolves(t *testing.T) {
 	}
 }
 
+// The JSON form is the machine surface, so an invalid manifest must not turn it
+// into prose plus an object: a consumer parsing it fails on exactly the
+// repositories it most needs to hear about. The verdict moves to the exit code
+// and the problems stay inside the object, where the Layout already carries
+// them. Only re-checking the exit code would not have caught the original bug,
+// so this parses the bytes.
+func TestLayoutShowJSONStaysMachineReadableWhenInvalid(t *testing.T) {
+	t.Chdir(newV2RepoForCmd(t, "../escape"))
+	var out bytes.Buffer
+	if code := runLayoutShowWithVersion([]string{"--json"}, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+	}
+	var got layout.Layout
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("show --json is not one JSON object on an invalid manifest: %v\n%s", err, out.String())
+	}
+	if len(got.Problems) == 0 {
+		t.Fatalf("the object carries no problems; the fixture manifest escapes the root:\n%s", out.String())
+	}
+	if !layout.HasProblem(got.Problems, layout.ProblemPathEscapes) {
+		t.Errorf("problems = %v, want %s", got.Problems, layout.ProblemPathEscapes)
+	}
+	if path, ok := layout.Path(got, "qna"); !ok || path != "../escape/qna" {
+		t.Errorf("stores[qna] = %q/%v, want ../escape/qna: the report must still resolve what it can", path, ok)
+	}
+}
+
 // Design 7.1 names the fields the human report carries.
 func TestLayoutShowHumanOutputNamesEveryField(t *testing.T) {
 	t.Chdir(newRepoWithAgents(t))

@@ -161,12 +161,11 @@ func runLayoutShowWithVersion(args []string, stdout io.Writer, running string) i
 		return exitcode.OK
 	}
 
-	// Problems come first and the report follows, so a reader asking what this
-	// repository resolves to is answered even when the manifest is wrong. The
-	// exit code is what reports the problem.
-	if len(l.Problems) > 0 {
-		printProblems(stdout, l.Problems)
-	}
+	// The machine path prints the object and nothing else. The Layout carries
+	// its own `problems` array, so the human problem lines would be redundant
+	// here -- and a line of prose in front of the object is not JSON, which
+	// made every consumer of `show --json` fail on exactly the repositories
+	// they most needed to hear about.
 	if *asJSON {
 		b, err := json.MarshalIndent(l, "", "  ")
 		if err != nil {
@@ -175,6 +174,12 @@ func runLayoutShowWithVersion(args []string, stdout io.Writer, running string) i
 		}
 		stdout.Write(append(b, '\n'))
 	} else {
+		// The human path prints the problems first and the report after, so a
+		// reader asking what this repository resolves to is answered even when
+		// the manifest is wrong. The exit code is what reports the problem.
+		if len(l.Problems) > 0 {
+			printProblems(stdout, l.Problems)
+		}
 		printLayout(stdout, l, running)
 	}
 	if len(l.Problems) > 0 {
