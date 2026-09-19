@@ -378,18 +378,22 @@ func appendMissingLines(path string, want []string) error {
 	return err
 }
 
-// RefreshInfrastructuralSkills refreshes the 100% agents-owned infrastructural skills
-// (migrating-fleet-context) to match AssetsFS, creating the directory if needed.
-// It never overwrites recording-what-you-learn or any user-defined custom skills.
+// RefreshInfrastructuralSkills refreshes the 100% agents-owned infrastructural
+// skill (migrating-fleet-context) to the text for the repository's resolved
+// layout. It never writes recording-what-you-learn or a repository-specific
+// skill (design §0.8).
 //
-// The resolved layout selects the canonical bytes (design §0.8): a v1
-// repository is refreshed to the frozen v1 text, never to the v2 text. A copy
-// that already matches is left unwritten rather than rewritten with identical
-// bytes -- the design promises an unmodified v1 repository is untouched, and
-// cmd_fleet runs this against every registered repository.
-func RefreshInfrastructuralSkills(repoRoot string) error {
-	const skillName = "migrating-fleet-context"
-	assetPath, err := SkillAssetPath(layout.Resolve(repoRoot).Schema, skillName)
+// It reads first and writes only when the bytes differ, so an unmodified v1
+// repository is a literal no-op rather than an identical rewrite: the design
+// promises "byte-identical", and an unconditional write would leave mtime churn
+// in every v1 repository on every `agents update --all --apply`.
+//
+// This is not how a repository becomes v2. A v1 repository's skill copy is the
+// frozen v1 text and does not know `agents layout migrate`; the CLI performs
+// the flip, and this refresh only keeps the agents-owned skill current once the
+// layout is v2.
+func RefreshInfrastructuralSkills(root, layoutVersion string) error {
+	assetPath, err := SkillAssetPath(layoutVersion, "migrating-fleet-context")
 	if err != nil {
 		return err
 	}
@@ -397,9 +401,11 @@ func RefreshInfrastructuralSkills(repoRoot string) error {
 	if err != nil {
 		return err
 	}
-	target := filepath.Join(repoRoot, ".agents", "skills", skillName, "SKILL.md")
+	target := filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
 	if existing, err := os.ReadFile(target); err == nil && bytes.Equal(existing, content) {
 		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err

@@ -166,7 +166,8 @@ func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string
 		// byte-for-byte unchanged. The trackedness pre-flight is off here --
 		// update creates no v2 layout, so a `--local` v1 repository keeps
 		// today's behavior.
-		if _, refusal := layoutRefusal(e.Path, running, false); refusal != "" {
+		l, refusal := layoutRefusal(e.Path, running, false)
+		if refusal != "" {
 			skipped++
 			fmt.Fprintf(stdout, "skip (layout %s): %s\n", refusal, fleetPath(e.Path))
 			continue
@@ -181,7 +182,7 @@ func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string
 			fmt.Fprintln(stdout)
 			continue
 		}
-		if err := scaffold.RefreshInfrastructuralSkills(e.Path); err != nil {
+		if err := scaffold.RefreshInfrastructuralSkills(e.Path, l.Schema); err != nil {
 			failed++
 			fmt.Fprintf(stdout, "failed to refresh skills in %s: %v\n", fleetPath(e.Path), err)
 			continue

@@ -329,6 +329,60 @@ func TestFleetUpdateApplyRefreshesInfrastructuralSkills(t *testing.T) {
 	}
 }
 
+// deleteSkill removes the agents-owned skill copy, so the refresh under test
+// has something to write and its assertion cannot pass on a file that was
+// already there.
+func deleteSkill(t *testing.T, root string) {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(root, ".agents", "skills", "migrating-fleet-context")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A supported v2 repository is wired and its agents-owned skill is rewritten
+// from the v2 asset -- the half of §7.5's update paragraph that Task 7's gate
+// must not swallow -- and the run leaves it current, so no drift notice is
+// printed. docs/ stays absent: a v2 repository has no v1 stores, and nothing in
+// update creates them.
+func TestFleetUpdateRefreshesSupportedV2AndPreservesTheGate(t *testing.T) {
+	root := newV2RepoForCmd(t, ".context")
+	// Complete the fixture into a repository update can leave current: the
+	// user-owned recording skill, the domain file, and the root symlink
+	// (drift's currency predicate weighs all three). The agents-owned copy is
+	// deleted, because writing it is the refresh's job.
+	writeFile(t, filepath.Join(root, ".agents", "skills", "recording-what-you-learn", "SKILL.md"),
+		skillAssetBytes(t, layout.SchemaV2, "recording-what-you-learn"))
+	writeFile(t, filepath.Join(root, ".agents", "AGENTS.md"), "# Domain rules\n")
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	deleteSkill(t, root)
+	saveFleetRegistry(t, registry.Entry{Path: root, Added: time.Unix(1, 0).UTC()})
+
+	wireCalled := false
+	var out bytes.Buffer
+	code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.6.0")
+	if code != exitcode.OK || !wireCalled {
+		t.Fatalf("supported v2 = (%d, wired=%v): %s", code, wireCalled, out.String())
+	}
+	assetPath, err := scaffold.SkillAssetPath(layout.SchemaV2, "migrating-fleet-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := scaffold.AssetsFS.ReadFile(assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("supported v2 skill was not refreshed to the v2 text: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs")); !os.IsNotExist(err) {
+		t.Fatal("fleet update created a docs/ shell")
+	}
+}
+
 func TestFleetUpdateApplySkipsAndReportsUnknownEntry(t *testing.T) {
 	unknown := fleetRepo(t, false)
 	if err := os.Symlink(".agents", filepath.Join(unknown, ".agents")); err != nil {
