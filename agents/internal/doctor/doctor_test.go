@@ -13,6 +13,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
@@ -27,6 +28,183 @@ func checkByName(t *testing.T, checks []Check, name string) Check {
 	}
 	t.Fatalf("missing check %q in %+v", name, checks)
 	return Check{}
+}
+
+// gitOutput runs one git command in root and fails the test on error, so a
+// helper whose failure mode is "silently did nothing" cannot pass.
+func gitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, root, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// initGitRepo creates a work tree git can answer questions in. No commit is
+// made, so a fixture's manifest starts untracked-but-not-ignored -- the window
+// between `layout migrate --apply` and the migration commit (design §0.7).
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "-b", "agents-test"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "T"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		gitOutput(t, root, args...)
+	}
+}
+
+// ignoreAgents appends one ignore rule to the file that spelling belongs in: a
+// "/"-prefixed pattern is machine-local and goes to info/exclude in the common
+// directory, anything else is the repository's tracked .gitignore. The repo and
+// layout packages carry the same helper for their own tests; helpers do not
+// cross a package boundary here.
+func ignoreAgents(t *testing.T, root, pattern string) {
+	t.Helper()
+	target := filepath.Join(root, ".gitignore")
+	if strings.HasPrefix(pattern, "/") {
+		common := gitOutput(t, root, "rev-parse", "--git-common-dir")
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(root, common)
+		}
+		target = filepath.Join(filepath.Clean(common), "info", "exclude")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(pattern + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newScaffoldedRepo is the v1 fixture: a git work tree scaffolded by the
+// writer, which selects the frozen v1 skill texts for a repository with no
+// manifest -- so the fixture is current for the layout it resolves.
+func newScaffoldedRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	initGitRepo(t, root)
+	if err := scaffold.Create(root, false); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// writeManifest renders a manifest through the same writer the tool commits
+// with, so a fixture cannot drift from the canonical encoding.
+func writeManifest(t *testing.T, root string, m layout.Manifest) {
+	t.Helper()
+	data, err := layout.MarshalManifest(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, layout.ManifestRel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newV2Repo is the v2 fixture: a git work tree with an active manifest, the
+// four stores it declares, the v2 router and its symlink, the domain context,
+// and both bundled skills in their v2 texts -- current for the layout it
+// resolves, so a health assertion elsewhere cannot be masked by fixture drift.
+// It deliberately does not call scaffold.Create, which writes the v1 docs/
+// stores a v2 repository never creates.
+func newV2Repo(t *testing.T, storeRoot string) string {
+	t.Helper()
+	root := t.TempDir()
+	initGitRepo(t, root)
+	stores := make(map[string]string, len(layout.Roles()))
+	for _, role := range layout.Roles() {
+		rel := storeRoot + "/" + role
+		stores[role] = rel
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(rel)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManifest(t, root, layout.Manifest{
+		Schema:         layout.SchemaV2,
+		MinMutVerFloor: layout.MinMutVerFloorV2,
+		LayoutStatus:   layout.StatusActive,
+		Stores:         stores,
+	})
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(layout.V2AgentsMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	domain, err := scaffold.AssetsFS.ReadFile("assets/dotagents/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRepoFile(t, root, ".agents/AGENTS.md", domain); err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+		assetPath, err := scaffold.SkillAssetPath(layout.SchemaV2, skill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := scaffold.AssetsFS.ReadFile(assetPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeRepoFile(t, root, ".agents/skills/"+skill+"/SKILL.md", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// writeRepoFile writes one fixture file at a repository-relative path,
+// creating its parent directories.
+func writeRepoFile(t *testing.T, root, relPath string, content []byte) error {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0o644)
+}
+
+// setLayoutStatus rewrites only the manifest's layout_status field, so a test
+// can move a manifest between active and migrating without also inventing a
+// migration journal.
+func setLayoutStatus(t *testing.T, root, status string) {
+	t.Helper()
+	path := filepath.Join(root, layout.ManifestRel)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["layout_status"] = status
+	out, err := json.MarshalIndent(fields, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func executableFile(t *testing.T, dir, name string) string {
@@ -950,16 +1128,17 @@ func TestPointersReportNoCachedRowWhenNothingWasSaved(t *testing.T) {
 // The write-side indicator that replaced the queue depth check.
 //
 // Three states, and the first is the one that matters: a repository with no
-// docs/qna must not be reported as unhealthy. Most repositories have not
+// qna store must not be reported as unhealthy. Most repositories have not
 // adopted this, and a check that fails everywhere teaches people to skim past
-// the whole report.
-func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
+// the whole report. The check is named for the layout role it resolves and its
+// detail begins with the resolved path.
+func TestQNAFreshnessReportsWithoutJudging(t *testing.T) {
 	now := time.Now()
 
 	root := t.TempDir()
-	got := checkDocsFreshness(root, now)
-	if got.Status != OK || !strings.Contains(got.Detail, "no docs/qna") {
-		t.Errorf("a repository without docs/qna = %+v, want a quiet OK", got)
+	got := checkQNAFreshness(root, layout.V1ForRoot(root), now)
+	if got.Name != "layout:qna" || got.Status != OK || !strings.HasPrefix(got.Detail, "docs/qna: ") {
+		t.Errorf("a repository without docs/qna = %+v, want a quiet OK naming the resolved path", got)
 	}
 
 	dir := filepath.Join(root, "docs", "qna")
@@ -971,7 +1150,7 @@ func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
 	}
 	// The README describes the form; it is not an entry, and counting it would
 	// report a store as populated the moment it was created.
-	if got := checkDocsFreshness(root, now); !strings.Contains(got.Detail, "nothing recorded yet") {
+	if got := checkQNAFreshness(root, layout.V1ForRoot(root), now); !strings.Contains(got.Detail, "nothing recorded yet") {
 		t.Errorf("README.md counted as an entry: %+v", got)
 	}
 
@@ -983,8 +1162,9 @@ func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
 	if err := os.Chtimes(entry, old, old); err != nil {
 		t.Fatal(err)
 	}
-	got = checkDocsFreshness(root, now)
-	if got.Status != OK || !strings.Contains(got.Detail, "1 entr") || !strings.Contains(got.Detail, "3 day") {
+	got = checkQNAFreshness(root, layout.V1ForRoot(root), now)
+	if got.Status != OK || !strings.HasPrefix(got.Detail, "docs/qna: ") ||
+		!strings.Contains(got.Detail, "1 entr") || !strings.Contains(got.Detail, "3 day") {
 		t.Errorf("one entry three days old = %+v", got)
 	}
 }
@@ -1062,6 +1242,20 @@ func findCheck(t *testing.T, checks []Check, name string) Check {
 	}
 	t.Fatalf("no %s check was produced; got %+v", name, checks)
 	return Check{}
+}
+
+// findCheckPtr returns the named check, or nil when no check has that name.
+// It is the presence-asserting form: a test that says
+// `got := findCheckPtr(...); if got == nil || got.Status != OK` fails on a
+// missing check instead of panicking on a nil dereference.
+func findCheckPtr(t *testing.T, checks []Check, name string) *Check {
+	t.Helper()
+	for i := range checks {
+		if checks[i].Name == name {
+			return &checks[i]
+		}
+	}
+	return nil
 }
 
 func TestCheckWiringAntigravityNamedGroups(t *testing.T) {
@@ -1215,6 +1409,63 @@ func TestCheckAntigravityTrustAccurateStates(t *testing.T) {
 	})
 }
 
+func TestDoctorLayoutChecksResolveV1AndV2(t *testing.T) {
+	for _, tc := range []struct{ name, root, qna string }{
+		{"v1", newScaffoldedRepo(t), "docs/qna"},
+		{"v2", newV2Repo(t, ".context"), ".context/qna"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// checkScaffold produces the four layout checks that need only the
+			// root and the running version; the freshness indicator is appended
+			// by RunWithDeps, which owns the clock. Compose the two here so this
+			// test covers exactly the layout checks `agents doctor` reports.
+			checks := append(checkScaffold(tc.root, "v0.6.0"),
+				checkQNAFreshness(tc.root, layout.Resolve(tc.root), time.Now()))
+			if got := findCheckPtr(t, checks, "layout:manifest"); got == nil || got.Status != OK {
+				t.Fatalf("layout:manifest = %+v", got)
+			}
+			if got := findCheckPtr(t, checks, "layout:qna"); got == nil || !strings.Contains(got.Detail, tc.qna) {
+				t.Fatalf("layout:qna = %+v, want path %s", got, tc.qna)
+			}
+		})
+	}
+}
+
+func TestDoctorWarnsOnUnsupportedAndMigratingLayouts(t *testing.T) {
+	root := newV2Repo(t, ".context")
+	if got := findCheckPtr(t, checkScaffold(root, "v0.5.99"), "layout:manifest"); got == nil || got.Status != Warn {
+		t.Fatalf("unsupported status = %+v", got)
+	}
+	setLayoutStatus(t, root, layout.StatusMigrating)
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest"); got == nil || got.Status != Warn {
+		t.Fatalf("migrating status = %+v", got)
+	}
+}
+
+func TestDoctorAdvisesOnIgnoredStoresAndTheUncommittedManifestWindow(t *testing.T) {
+	root := newV2Repo(t, ".context")
+	initGitRepo(t, root)
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked"); got == nil || got.Status != OK {
+		t.Fatalf("layout:tracked on a clean v2 repo = %+v", got)
+	}
+	// The untracked-but-not-ignored manifest is the normal window between
+	// `layout migrate --apply` and the migration commit: advisory, never a fail.
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed"); got == nil || got.Status != Warn {
+		t.Fatalf("uncommitted manifest = %+v", got)
+	}
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "layout")
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed"); got == nil || got.Status != OK {
+		t.Fatalf("committed manifest = %+v", got)
+	}
+	// A store matched by an ignore rule will not travel with a clone.
+	ignoreAgents(t, root, ".context/qna/")
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, ".context/qna") {
+		t.Fatalf("ignored store = %+v", got)
+	}
+}
+
 func TestCheckScaffoldGranularChecks(t *testing.T) {
 	t.Run("canonical scaffold all ok", func(t *testing.T) {
 		root := t.TempDir()
@@ -1227,8 +1478,8 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Fatal(err)
 		}
 		checks := checkScaffold(root, "v0.6.0")
-		if len(checks) != 5 {
-			t.Fatalf("got %d checks, want 5", len(checks))
+		if len(checks) != 9 {
+			t.Fatalf("got %d checks, want 9", len(checks))
 		}
 
 		cRouter := checkByName(t, checks, "scaffold:router")

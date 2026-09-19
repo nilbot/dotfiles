@@ -19,9 +19,11 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safeio"
+	"github.com/nilbot/dotfiles/agents/internal/safetext"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
 )
 
@@ -202,7 +204,10 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 	}
 	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
 	checks = append(checks, checkScaffold(repoRoot, deps.RunningVersion)...)
-	checks = append(checks, checkDocsFreshness(repoRoot, now))
+	// The freshness indicator resolves the qna store through the layout (design
+	// §7.4) and measures against the caller's clock, which checkScaffold does
+	// not take, so it is produced here rather than inside the scaffold checks.
+	checks = append(checks, checkQNAFreshness(repoRoot, layout.Resolve(repoRoot), now))
 	checks = append(checks, checkStoreSize(cacheRoot, th.CacheMaxBytes))
 	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
 	return checks, nil
@@ -932,7 +937,7 @@ func checkMachine(thisMachine string) Check {
 	return Check{Name: "machine-id", Status: OK, Detail: "machine identity is readable"}
 }
 
-// checkDocsFreshness is the write-side leading indicator, and the only one.
+// checkQNAFreshness is the write-side leading indicator, and the only one.
 //
 // The capture apparatus this replaced measured itself thoroughly -- draft rate,
 // promotion rate, the age of the oldest pending draft -- and measured retrieval
@@ -946,14 +951,25 @@ func checkMachine(thisMachine string) Check {
 // papered over with a proxy metric that would measure what is easy instead of
 // what matters.
 //
-// Absent docs/qna/ is not applicable rather than a failure: most repositories
-// have not adopted this, and a check that fails everywhere teaches people to
-// ignore the whole report.
-func checkDocsFreshness(repoRoot string, now time.Time) Check {
-	dir := filepath.Join(repoRoot, "docs", "qna")
-	entries, err := os.ReadDir(dir)
+// The store is resolved through the qna role rather than hardcoded to docs/qna
+// (design §7.4), and the detail begins with that resolved repository-relative
+// path so the report names what it read.
+//
+// An absent qna store is not applicable rather than a failure: most
+// repositories have not adopted this, and a check that fails everywhere teaches
+// people to ignore the whole report.
+func checkQNAFreshness(repoRoot string, l layout.Layout, now time.Time) Check {
+	rel, ok := layout.Path(l, layout.RoleQNA)
+	if !ok || rel == "" {
+		// An unknown or invalid manifest resolves no store. Name the document
+		// that was read rather than inventing a path it never declared.
+		return Check{Name: "layout:qna", Status: OK,
+			Detail: layout.ManifestRel + ": no qna store resolves in this repository",
+			Remedy: "run `agents layout validate` and fix the named path"}
+	}
+	entries, err := os.ReadDir(filepath.Join(repoRoot, filepath.FromSlash(rel)))
 	if err != nil {
-		return Check{Name: "docs:qna", Status: OK, Detail: "no docs/qna in this repository"}
+		return Check{Name: "layout:qna", Status: OK, Detail: rel + ": no such store in this repository"}
 	}
 	var newest time.Time
 	count := 0
@@ -967,11 +983,11 @@ func checkDocsFreshness(repoRoot string, now time.Time) Check {
 		}
 	}
 	if count == 0 {
-		return Check{Name: "docs:qna", Status: OK, Detail: "docs/qna is empty; nothing recorded yet"}
+		return Check{Name: "layout:qna", Status: OK, Detail: rel + ": empty store; nothing recorded yet"}
 	}
 	days := int(now.Sub(newest).Hours() / 24)
-	return Check{Name: "docs:qna", Status: OK,
-		Detail: fmt.Sprintf("%d entr(ies); newest written %d day(s) ago", count, days)}
+	return Check{Name: "layout:qna", Status: OK,
+		Detail: fmt.Sprintf("%s: %d entr(ies); newest written %d day(s) ago", rel, count, days)}
 }
 
 // checkStoreSize reports the cache against the caps the hook enforces.
@@ -1141,7 +1157,173 @@ func checkScaffold(repoRoot, runningVersion string) []Check {
 		})
 	}
 
+	// 6-9. The layout checks (design §7.4). Five layout-aware checks exist in
+	// the report: the four below, and layout:qna, which RunWithDeps appends
+	// because it needs the caller's clock.
+	l := layout.Resolve(repoRoot)
+	checks = append(checks, layoutManifestCheck(l, runningVersion))
+	checks = append(checks, layoutStoresCheck(repoRoot, l))
+	checks = append(checks, layoutTrackedCheck(repoRoot, l))
+	checks = append(checks, layoutCommittedCheck(repoRoot, l))
+
 	return checks
+}
+
+// layoutManifestCheck reports what layout the repository resolves and whether
+// this binary may mutate it (design §7.4, §5.3).
+func layoutManifestCheck(l layout.Layout, running string) Check {
+	// An unknown schema is its own warning, not an invalid manifest: the
+	// document may be perfectly well-formed for a binary newer than this one,
+	// and no store is guessed from it (design §5.1, §7.4).
+	if layout.HasProblem(l.Problems, layout.ProblemSchemaUnknown) {
+		return Check{Name: "layout:manifest", Status: Warn,
+			Detail: fmt.Sprintf("manifest schema %q is not known to this binary; no store is resolved", l.Schema),
+			Remedy: "upgrade the agents binary, or correct the manifest schema"}
+	}
+	// A migrating layout is warned about before its problems are weighed: the
+	// status itself is the finding the operator acts on, and a journal that is
+	// not yet complete is a normal intermediate state of `migrate --apply`, not
+	// an invalid manifest. The problems are still named when there are any.
+	if l.LayoutStatus == layout.StatusMigrating {
+		detail := "layout migration is in progress"
+		if len(l.Problems) > 0 {
+			detail += "; manifest problems: " + problemsText(l.Problems)
+		}
+		return Check{Name: "layout:manifest", Status: Warn,
+			Detail: detail,
+			Remedy: "run `agents layout migrate --resume --apply`"}
+	}
+	if len(l.Problems) > 0 {
+		return Check{Name: "layout:manifest", Status: Fail,
+			Detail: "layout manifest is invalid: " + problemsText(l.Problems),
+			Remedy: "run `agents layout validate` and fix the named path"}
+	}
+	if l.Schema == layout.SchemaV1 {
+		return Check{Name: "layout:manifest", Status: OK,
+			Detail: "no manifest; implicit v1 docs/ layout"}
+	}
+	if ok, _ := layout.Support(running, l); !ok {
+		return Check{Name: "layout:manifest", Status: Warn,
+			Detail: fmt.Sprintf("manifest requires agents >= %s; running %s", l.MinMutVerFloor, running),
+			Remedy: "upgrade the agents binary before mutating this repository"}
+	}
+	return Check{Name: "layout:manifest", Status: OK,
+		Detail: fmt.Sprintf("%s stores=%d", layout.SchemaV2, len(l.Stores))}
+}
+
+// layoutStoresCheck reports the stores the resolved layout declares but that
+// are not directories on disk. It never creates anything.
+func layoutStoresCheck(root string, l layout.Layout) Check {
+	var missing []string
+	for _, role := range layout.Roles() {
+		p, ok := layout.Path(l, role)
+		if !ok || p == "" {
+			missing = append(missing, role+"=(unresolved)")
+			continue
+		}
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
+		if err != nil || !info.IsDir() {
+			missing = append(missing, role+"="+p)
+		}
+	}
+	if len(missing) > 0 {
+		return Check{Name: "layout:stores", Status: Warn,
+			Detail: "missing store(s): " + strings.Join(missing, ", "),
+			Remedy: "run `agents init`; on a v2 repository it creates manifest-declared stores"}
+	}
+	return Check{Name: "layout:stores", Status: OK, Detail: "all four roles resolve to directories"}
+}
+
+// layoutTrackedCheck is advisory: an ignored store still exists on this machine,
+// but its content will not travel with a clone. An ignored manifest or
+// .agents/ is the state V16 refuses every mutation in, so it is reported here
+// too (design §0.7, §7.4).
+func layoutTrackedCheck(root string, l layout.Layout) Check {
+	if l.ManifestPath != "" {
+		ignored, err := layout.AgentsIgnored(root)
+		switch {
+		case err != nil && errors.Is(err, repo.ErrNotARepo):
+			// Outside a repository there is no ignore rule to be found.
+		case err != nil:
+			return Check{Name: "layout:tracked", Status: Warn,
+				Detail: safetext.Flatten("cannot determine whether the manifest is ignored: " + err.Error()),
+				Remedy: "run `agents layout validate`; mutation is refused while trackedness is unknown"}
+		case ignored:
+			return Check{Name: "layout:tracked", Status: Warn,
+				Detail: layout.ManifestRel + " or .agents/ is matched by an ignore rule",
+				Remedy: "remove the ignore rule; mutation is refused while the manifest is machine-local"}
+		}
+	}
+	var ignored []string
+	for _, role := range layout.Roles() {
+		p, ok := layout.Path(l, role)
+		if !ok || p == "" {
+			continue
+		}
+		got, err := repo.IsIgnored(root, p)
+		if err != nil {
+			if errors.Is(err, repo.ErrNotARepo) {
+				return Check{Name: "layout:tracked", Status: OK,
+					Detail: "not a git repository; no ignore rule can hide a store"}
+			}
+			return Check{Name: "layout:tracked", Status: Warn,
+				Detail: safetext.Flatten(fmt.Sprintf("cannot determine whether %s is ignored: %v", p, err)),
+				Remedy: "run `agents layout validate`; mutation is refused while trackedness is unknown"}
+		}
+		if got {
+			ignored = append(ignored, role+"="+p)
+		}
+	}
+	if len(ignored) > 0 {
+		return Check{Name: "layout:tracked", Status: Warn,
+			Detail: "store(s) matched by an ignore rule: " + strings.Join(ignored, ", "),
+			Remedy: "remove the ignore rule; content in an ignored store will not travel with a clone"}
+	}
+	return Check{Name: "layout:tracked", Status: OK, Detail: "no declared store is ignored"}
+}
+
+// layoutCommittedCheck is advisory: the untracked-but-not-ignored manifest is
+// the normal window between `layout migrate --apply` and the migration commit.
+// A clone in that window resolves v1, which is a fact to state, not to fail on.
+func layoutCommittedCheck(root string, l layout.Layout) Check {
+	if l.Schema == layout.SchemaV1 {
+		return Check{Name: "layout:committed", Status: OK, Detail: "no manifest to commit"}
+	}
+	tracked, err := repo.IsTracked(root, layout.ManifestRel)
+	if err != nil {
+		if errors.Is(err, repo.ErrNotARepo) {
+			return Check{Name: "layout:committed", Status: OK, Detail: "not a git repository"}
+		}
+		return Check{Name: "layout:committed", Status: Warn,
+			Detail: safetext.Flatten("cannot determine whether the manifest is committed: " + err.Error())}
+	}
+	if !tracked {
+		return Check{Name: "layout:committed", Status: Warn,
+			Detail: "manifest is not committed; a clone would fall back to v1",
+			Remedy: "commit .agents/layout.json with the migration commit"}
+	}
+	return Check{Name: "layout:committed", Status: OK, Detail: "manifest is tracked"}
+}
+
+// problemsText renders resolved-layout problems as one line.
+//
+// Problem.Detail can carry multi-line git stderr from the fail-closed
+// trackedness path, and a doctor detail is one line: design §7.1 promises
+// `layout validate` prints one line per problem, and a second line here would
+// read as a check nobody wrote.
+func problemsText(problems []layout.Problem) string {
+	parts := make([]string, 0, len(problems))
+	for _, p := range problems {
+		text := p.Code
+		if p.Path != "" {
+			text += " " + p.Path
+		}
+		if p.Detail != "" {
+			text += " (" + p.Detail + ")"
+		}
+		parts = append(parts, text)
+	}
+	return safetext.Flatten(strings.Join(parts, "; "))
 }
 
 func checkGitleaks(lookPath func(string) (string, error)) Check {
