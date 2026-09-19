@@ -3,12 +3,16 @@ package layout
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 // Per-move state (design §0.5). "moving" is written immediately before
@@ -655,6 +659,456 @@ func markdownLinks(line string) []markdownLink {
 		}
 		out = append(out, markdownLink{target: target, start: start, end: end})
 		i = j
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// Apply, resume, and abort: the reconciliation engine (design §0.5, §9.3, §9.4)
+// ---------------------------------------------------------------------------
+
+// reconcileHook is the crash-matrix seam (design §10): nil in production, set by
+// tests to fail once between two writes. It exists so the crash boundaries are
+// enumerable rather than asserted -- every write in the engine sits between two
+// named hook calls, and TestResumeCrashMatrix walks the names. Nothing on a
+// production path assigns it (R4): a seam that armed itself would make a real
+// migration fail on an error no operator caused.
+var reconcileHook func(step string, moveIndex int) error
+
+// hook fires the crash seam when a test armed one.
+func hook(step string, moveIndex int) error {
+	if reconcileHook == nil {
+		return nil
+	}
+	return reconcileHook(step, moveIndex)
+}
+
+// MoveError is a per-move refusal: both paths, the reason, and the remedy.
+// There is no --force; the operator resolves the filesystem and re-runs.
+type MoveError struct {
+	Move   Move
+	Reason string
+	Remedy string
+}
+
+func (e *MoveError) Error() string {
+	return fmt.Sprintf("%s -> %s: %s\n  remedy: %s", e.Move.From, e.Move.To, e.Reason, e.Remedy)
+}
+
+// ResidueError is a named blocker, not a crash: the layout completed but docs/
+// retained entries that are neither a v1 source store nor the declared archive.
+// The CLI prints one line per entry and returns Advisory.
+type ResidueError struct{ Entries []string }
+
+func (e *ResidueError) Error() string {
+	return fmt.Sprintf("docs/ still holds %d entr(y/ies) after the migration: %s",
+		len(e.Entries), strings.Join(e.Entries, ", "))
+}
+
+// ApplyMigration is plan-if-absent plus reconcile: it creates the backup tag,
+// freezes the plan into the journal, and then runs the same reconciliation
+// resume runs. There is no second code path to drift out of step.
+func ApplyMigration(root string, p Plan, backupTag string) error {
+	if len(p.Blockers) > 0 {
+		return fmt.Errorf("plan has %d blocker(s)", len(p.Blockers))
+	}
+	if backupTag == "" {
+		return errors.New("--backup-tag is required with --apply")
+	}
+	if out, err := repo.Git(root, "tag", "-a", backupTag, "-m", "pre-layout-v2 backup"); err != nil {
+		return fmt.Errorf("git tag: %v: %s", err, out)
+	}
+	// The journal exists before the first store is touched: the phase, the frozen
+	// v1 source, the backup tag, and one content identity per move. That write is
+	// what makes a crash recoverable at all (design §9.3 step 2).
+	m := p.To.Manifest
+	m.LayoutStatus = StatusMigrating
+	m.Migration = &Migration{
+		From: MigrationFrom{
+			Schema:  p.From.Schema,
+			Stores:  cloneStores(p.From.Stores),
+			Archive: p.From.Archive,
+		},
+		StartedAt:       time.Now().UTC().Format(time.RFC3339),
+		BackupTag:       backupTag,
+		CreatedManifest: true,
+		Phase:           PhasePlanned,
+		Moves:           append([]Move(nil), p.Moves...),
+	}
+	if err := WriteManifest(root, m); err != nil {
+		return err
+	}
+	return reconcileMigration(root)
+}
+
+// ResumeMigration reconciles an existing journal. It never re-plans: the frozen
+// plan in the manifest is the only authority on what moves where.
+func ResumeMigration(root string) error {
+	l := Resolve(root)
+	if l.LayoutStatus != StatusMigrating || l.Migration == nil {
+		return errors.New("no migrating layout to resume")
+	}
+	if len(l.Problems) > 0 {
+		return fmt.Errorf("manifest or journal is invalid: %d problem(s); run `agents layout validate`", len(l.Problems))
+	}
+	return reconcileMigration(root)
+}
+
+// AbortMigration deletes a manifest this migration created while nothing has
+// moved. Every later phase refuses: there the remedy is --resume --apply, not a
+// delete that would strand moved trees. Aborting is a mutation, so the CLI
+// applies the same version guard as every other write before calling this; a
+// binary below min_mut_ver_floor never reaches it, and the safe-by-construction
+// state is what lets the human delete the manifest by hand instead.
+//
+// Every refusal names the phase and the retry (R3): the phase is the state that
+// makes the delete safe, so an operator who cannot see it cannot tell a refusal
+// from a bug. The only write is the manifest's removal -- no store, no
+// .gitattributes, no tag is touched -- and the backup tag is left as the record.
+func AbortMigration(root string) error {
+	l := Resolve(root)
+	if l.LayoutStatus != StatusMigrating || l.Migration == nil {
+		return errors.New("no migrating layout to abort")
+	}
+	m := *l.Migration
+	if m.Phase != PhasePlanned {
+		return fmt.Errorf("abort refused: phase is %s, not %s; run `agents layout migrate --resume --apply`", m.Phase, PhasePlanned)
+	}
+	if !m.CreatedManifest {
+		return fmt.Errorf("abort refused: phase is %s but this run did not create the manifest; restore it from the backup tag %s, or run `agents layout migrate --resume --apply`", m.Phase, m.BackupTag)
+	}
+	for _, mv := range m.Moves {
+		if mv.State != MovePending {
+			return fmt.Errorf("abort refused: phase is %s but move %s is %s, not %s; run `agents layout migrate --resume --apply`",
+				m.Phase, mv.From, mv.State, MovePending)
+		}
+	}
+	return os.Remove(filepath.Join(root, ManifestRel))
+}
+
+// reconcileMigration is the single mutation engine for apply and resume. Each
+// iteration advances exactly one phase, and every step is idempotent, so a crash
+// between any two writes is recoverable by running the same function again.
+func reconcileMigration(root string) error {
+	for {
+		l := Resolve(root)
+		if l.Migration == nil {
+			return errors.New("no migration journal")
+		}
+		m := l.Manifest
+		switch l.Migration.Phase {
+		case PhasePlanned:
+			if err := runMoves(root, &m); err != nil {
+				return err
+			}
+		case PhaseMoved:
+			if err := pruneSources(root, &m); err != nil {
+				return err
+			}
+		case PhasePruned:
+			if err := reconcileGitattributes(root); err != nil {
+				return err
+			}
+			if err := writeV2Router(root); err != nil {
+				return err
+			}
+			m.Migration.Phase = PhaseRouter
+			if err := WriteManifest(root, m); err != nil {
+				return err
+			}
+		case PhaseRouter:
+			m.LayoutStatus = StatusActive
+			m.Migration = nil
+			if err := WriteManifest(root, m); err != nil {
+				return err
+			}
+			// The layout is complete; the anti-shell promise may not be. A named
+			// blocker with an Advisory exit, never a clean success.
+			if residue := docsResidue(root, m.Archive); len(residue) > 0 {
+				return &ResidueError{Entries: residue}
+			}
+			return nil
+		default:
+			return fmt.Errorf("manifest phase %q is not one of %s|%s|%s|%s",
+				l.Migration.Phase, PhasePlanned, PhaseMoved, PhasePruned, PhaseRouter)
+		}
+	}
+}
+
+// runMoves reconciles every move against the filesystem, in journal order but
+// independently: a later move that already landed does not imply an earlier one
+// did, and no prefix of the list is assumed (design §0.5).
+//
+// The classification is filesystem-first, and the journal's `state` is only a
+// hint. Source present and destination absent is a move still to make; source
+// absent and destination present is a move that landed, verified against the
+// digest the journal recorded; both present is a copy or a divergence and
+// neither present is a loss, and both refuse rather than guess.
+func runMoves(root string, m *Manifest) error {
+	for i := range m.Migration.Moves {
+		mv := &m.Migration.Moves[i]
+		src := filepath.Join(root, mv.From)
+		dst := filepath.Join(root, mv.To)
+		srcPresent, dstPresent := pathExists(src), pathExists(dst)
+
+		switch {
+		case srcPresent && !dstPresent:
+			if err := hook("before-move", i); err != nil {
+				return err
+			}
+			// The source is re-verified against the identity the journal froze
+			// before anything moves (design §9.3 step 3). The destination check
+			// below is the other half: it catches a tree that changed while the
+			// rename ran; this one catches a tree that changed between the plan
+			// and the apply, while the recovery is still only a restore.
+			got, _, _, err := digestTree(root, mv.From)
+			if err != nil {
+				return fmt.Errorf("%s: %w", mv.From, err)
+			}
+			if got != mv.Digest {
+				return &MoveError{Move: *mv, Reason: fmt.Sprintf(
+					"before the move, %s has %s but the journal recorded %s: the tree changed under the migration",
+					mv.From, got, mv.Digest), Remedy: moveRemedy(m, mv)}
+			}
+			mv.State = MoveMoving
+			if err := WriteManifest(root, *m); err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				return err
+			}
+			if out, err := repo.Git(root, "mv", mv.From, mv.To); err != nil {
+				return fmt.Errorf("git mv %s -> %s: %v: %s", mv.From, mv.To, err, out)
+			}
+			if err := hook("after-move", i); err != nil {
+				return err
+			}
+			// The recorded identity is verified on both sides of the move: a
+			// rename is atomic on one filesystem, so a mismatch here means the
+			// tree changed under the migration and the journal must not record
+			// `done`.
+			got, _, _, err = digestTree(root, mv.To)
+			if err != nil {
+				return fmt.Errorf("%s: %w", mv.To, err)
+			}
+			if got != mv.Digest {
+				return &MoveError{Move: *mv, Reason: fmt.Sprintf(
+					"after `git mv`, %s has %s but the journal recorded %s: the tree changed under the migration",
+					mv.To, got, mv.Digest), Remedy: moveRemedy(m, mv)}
+			}
+			if err := hook("before-journal", i); err != nil {
+				return err
+			}
+			if err := stageRename(root, mv); err != nil {
+				return err
+			}
+			mv.State = MoveDone
+			if err := WriteManifest(root, *m); err != nil {
+				return err
+			}
+			if err := hook("after-journal", i); err != nil {
+				return err
+			}
+
+		case !srcPresent && dstPresent:
+			got, _, _, err := digestTree(root, mv.To)
+			if err != nil {
+				return fmt.Errorf("%s: %w", mv.To, err)
+			}
+			if got != mv.Digest {
+				return &MoveError{Move: *mv, Reason: fmt.Sprintf(
+					"digest mismatch: the journal recorded %s (%d file(s)) but %s has %s",
+					mv.Digest, mv.Files, mv.To, got), Remedy: moveRemedy(m, mv)}
+			}
+			if err := stageRename(root, mv); err != nil {
+				return err
+			}
+			if mv.State != MoveDone {
+				mv.State = MoveDone
+				if err := WriteManifest(root, *m); err != nil {
+					return err
+				}
+			}
+
+		case srcPresent && dstPresent:
+			fromDigest, _, _, err := digestTree(root, mv.From)
+			if err != nil {
+				return err
+			}
+			toDigest, _, _, err := digestTree(root, mv.To)
+			if err != nil {
+				return err
+			}
+			reason := fmt.Sprintf("both %s and %s exist", mv.From, mv.To)
+			if fromDigest == toDigest {
+				reason += "; their contents are identical, which is a copy, not a move"
+			} else {
+				reason += fmt.Sprintf("; their contents differ (%s vs %s)", fromDigest, toDigest)
+			}
+			// The journal's own digest is named as well: it is the reference the
+			// two paths are being judged against, and it tells the operator which
+			// side still matches what was planned.
+			reason += fmt.Sprintf("; the journal recorded %s for %s", mv.Digest, mv.From)
+			return &MoveError{Move: *mv, Reason: reason, Remedy: moveRemedy(m, mv)}
+
+		default:
+			return &MoveError{Move: *mv, Reason: fmt.Sprintf("neither %s nor %s exists: the tree was lost or already reconciled", mv.From, mv.To), Remedy: moveRemedy(m, mv)}
+		}
+	}
+	if err := hook("phase-moved", 0); err != nil {
+		return err
+	}
+	m.Migration.Phase = PhaseMoved
+	return WriteManifest(root, *m)
+}
+
+// stageRename makes the index agree with the working tree for one move. `git mv`
+// is itself two operations -- a filesystem rename and an index update -- so a
+// crash between them leaves the tree moved and the index stale, still naming the
+// old path. `git add -A` over both paths is idempotent and repeatable, and
+// rename detection happens at diff/commit time, so the displayed rename and the
+// recorded history are unaffected.
+//
+// The source path is passed only when the index or the worktree still has it.
+// Measured with git 2.54.0: `git add -A -- <from> <to>` exits 128 with
+// "pathspec ... did not match any files" once `git mv` has completed its index
+// update as well as its rename, which is exactly the state a successful move
+// leaves behind -- so the unconditional two-path form would make resume fail on
+// the very crash it exists to recover from.
+func stageRename(root string, mv *Move) error {
+	paths := []string{mv.To}
+	if pathExists(filepath.Join(root, mv.From)) {
+		paths = append([]string{mv.From}, paths...)
+	} else if tracked, err := repo.IsTracked(root, mv.From); err != nil {
+		return fmt.Errorf("git ls-files --error-unmatch -- %s: %w", mv.From, err)
+	} else if tracked {
+		paths = append([]string{mv.From}, paths...)
+	}
+	if out, err := repo.Git(root, append([]string{"add", "-A", "--"}, paths...)...); err != nil {
+		return fmt.Errorf("git add -A -- %s: %v: %s", strings.Join(paths, " "), err, out)
+	}
+	return nil
+}
+
+// moveRemedy is the per-refusal remedy line, and one function serves every row
+// because the operator's question is the same in all of them: which of these two
+// paths is the tree I mean to keep?
+//
+// It names both paths, and it offers the non-destructive recovery first: the
+// source is the tracked side, so `git restore --source=<tag> -- <source>` brings
+// the tagged tree back (design §9.4). `rm -rf` is mentioned only for a path the
+// operator has already confirmed by hand is the stray copy -- never as the first
+// action and never as the whole instruction. In the both-present and
+// digest-mismatch rows the destination can hold real work, and error text that
+// prescribes deleting it is data loss by instruction (R1).
+func moveRemedy(m *Manifest, mv *Move) string {
+	tag := m.Migration.BackupTag
+	return fmt.Sprintf(
+		"source %s, destination %s: the source is the tracked side, so `git restore --source=%s -- %s` "+
+			"brings the tagged tree back. Remove a path only once you have already confirmed by hand that it "+
+			"is the stray copy -- `git rm -r -- <path>` when it is tracked, `rm -rf <path>` when it is not; "+
+			"the destination can hold real work, so never delete either side on this tool's word alone. "+
+			"Then re-run `agents layout migrate --resume --apply`",
+		mv.From, mv.To, tag, mv.From)
+}
+
+// pruneSources removes directories the moves emptied. ENOENT and ENOTEMPTY are
+// not failures: the first is a re-run of this step, the second means the
+// directory still holds something, which the residue check reports rather than
+// deletes. The archive is never a move source, so a docs/ that holds it is left
+// standing by the same rule (design §9.5).
+func pruneSources(root string, m *Manifest) error {
+	if err := hook("phase-pruned", 0); err != nil {
+		return err
+	}
+	for _, mv := range m.Migration.Moves {
+		_ = os.Remove(filepath.Join(root, filepath.Dir(mv.From))) // empty directories only
+	}
+	if entries, err := os.ReadDir(filepath.Join(root, "docs")); err == nil && len(entries) == 0 {
+		if err := os.Remove(filepath.Join(root, "docs")); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	m.Migration.Phase = PhasePruned
+	return WriteManifest(root, *m)
+}
+
+// writeV2Router is idempotent: a router already equal to the v2 text is left
+// alone, so re-running after a crash writes nothing new.
+func writeV2Router(root string) error {
+	if err := hook("phase-router", 0); err != nil {
+		return err
+	}
+	path := filepath.Join(root, "AGENTS.md")
+	if current, err := os.ReadFile(path); err == nil && string(current) == V2AgentsMD {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return os.WriteFile(path, []byte(V2AgentsMD), 0o644)
+}
+
+// manifestLinguistLine keeps the manifest visible in PR review. `.agents/**` is
+// collapsed by scaffold's blanket rule, and gitattributes is last-match-wins, so
+// this one line is what stops the single .agents/ file a reviewer has to read
+// from being hidden (design §10, Attributes). It is spelled here exactly as
+// scaffold's v2GitattributesLines spells it, and a test in this package and a
+// test in scaffold both pin the string.
+const manifestLinguistLine = ".agents/layout.json -linguist-generated"
+
+// reconcileGitattributes adds the manifest's linguist exception to the
+// repository's tracked .gitattributes. scaffold writes it for a repository
+// created as v2; a migrated repository becomes v2 here, and this is its only
+// writer.
+//
+// It is the same idempotent shape scaffold's appendMissingLines uses -- append
+// only what is not already present -- because scaffold cannot be imported from
+// this package (scaffold imports layout) and because a reconcile that duplicated
+// the line would rewrite the file on every resume. It runs at the `pruned`
+// phase, after the last abortable state, so a migration that ends in `--abort`
+// leaves the still-v1 repository's attributes untouched (R2).
+func reconcileGitattributes(root string) error {
+	path := filepath.Join(root, ".gitattributes")
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	for _, line := range strings.Split(string(existing), "\n") {
+		if strings.TrimSpace(line) == manifestLinguistLine {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	var b strings.Builder
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString(manifestLinguistLine + "\n")
+	_, err = f.WriteString(b.String())
+	return err
+}
+
+// pathExists reports whether anything -- file, directory, or symlink -- is at
+// path. It asks Lstat, not Stat: a store that is a symlink is present, and the
+// planner has already refused it.
+func pathExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
+}
+
+// cloneStores copies the frozen source map into the journal, so a later
+// mutation of the plan cannot rewrite what resume compares against.
+func cloneStores(stores map[string]string) map[string]string {
+	out := make(map[string]string, len(stores))
+	for role, path := range stores {
+		out[role] = path
 	}
 	return out
 }

@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 // The migration fixtures build a v1 repository through scaffold itself, so the
@@ -1309,5 +1312,819 @@ func TestPlanMigrationRefusesWhenTrackednessCannotBeAsked(t *testing.T) {
 	}
 	if p.Counts.Blocked != len(p.Blockers) {
 		t.Fatalf("counts = %+v", p.Counts)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Apply, resume, and abort (design §0.5, §9.3, §9.4)
+// ---------------------------------------------------------------------------
+
+// trackedBlobs maps every index entry under dir to its blob oid, as
+// `git ls-files -s` reports it. It is half of the blob-identity gate of design
+// §9.3: `git mv` renames the index entry and leaves the oid alone, so comparing
+// two of these maps proves the migration moved blobs instead of rewriting them,
+// and reading the index at all proves the index reconciliation ran.
+func trackedBlobs(t *testing.T, root, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, line := range strings.Split(gitOutput(t, root, "ls-files", "-s", "--", dir), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		meta, rel, ok := strings.Cut(line, "\t")
+		if !ok {
+			t.Fatalf("unexpected `git ls-files -s` line %q", line)
+		}
+		fields := strings.Fields(meta)
+		if len(fields) != 3 {
+			t.Fatalf("unexpected `git ls-files -s` metadata %q", meta)
+		}
+		out[filepath.ToSlash(rel)] = fields[1]
+	}
+	return out
+}
+
+// crashAt arms the reconciliation crash seam (R4) to fail once at one boundary.
+// Failing once, and not always, is what makes every row of the crash matrix a
+// crash followed by a resume rather than a permanently broken run.
+func crashAt(t *testing.T, step string, moveIndex int) {
+	t.Helper()
+	fired := false
+	reconcileHook = func(gotStep string, gotIndex int) error {
+		if fired || gotStep != step || gotIndex != moveIndex {
+			return nil
+		}
+		fired = true
+		return fmt.Errorf("injected crash at %s/%d", step, moveIndex)
+	}
+	t.Cleanup(func() { reconcileHook = nil })
+}
+
+// planV2 plans the content-vault migration every v1 fixture in this file
+// accepts, failing the test on a refusal: the accepted plan is the precondition
+// of the apply/resume tests, never the thing under test.
+func planV2(t *testing.T, root string) Plan {
+	t.Helper()
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("plan = (%+v, %v)", p, err)
+	}
+	return p
+}
+
+// countGitattributeLine counts exact lines in the repository's tracked
+// .gitattributes, so a reconcile that appends its line twice is caught.
+func countGitattributeLine(t *testing.T, root, want string) int {
+	t.Helper()
+	attrs, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, line := range strings.Split(string(attrs), "\n") {
+		if strings.TrimSpace(line) == want {
+			n++
+		}
+	}
+	return n
+}
+
+func TestApplyMigrationMovesBlobsAndNeverCopies(t *testing.T) {
+	root := newGitV1RepoWithContent(t) // docs/design/a-design.md, docs/plans/a-plan.md
+	before := trackedBlobs(t, root, "docs")
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("plan = (%+v, %v)", p, err)
+	}
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err != nil {
+		t.Fatal(err)
+	}
+	after := trackedBlobs(t, root, ".context")
+	for rel, blob := range before {
+		want := strings.Replace(rel, "docs/", ".context/", 1)
+		if after[want] != blob {
+			t.Fatalf("blob for %s did not move to %s (got %q, want %q)", rel, want, after[want], blob)
+		}
+	}
+	// N in / N out: a copy would leave the same blobs in two places, and a
+	// rewrite would leave an extra entry behind.
+	if len(after) != len(before) {
+		t.Fatalf("moved %d blob(s), want %d: %v", len(after), len(before), after)
+	}
+	if left := trackedBlobs(t, root, "docs"); len(left) != 0 {
+		t.Fatalf("the index still tracks something under docs/: %v", left)
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs")); !os.IsNotExist(err) {
+		t.Fatal("docs/ shell survived a migration with no archive")
+	}
+	router, _ := os.ReadFile(filepath.Join(root, "AGENTS.md"))
+	if string(router) != V2AgentsMD {
+		t.Fatal("v2 router was not written")
+	}
+	if out := gitOutput(t, root, "tag", "--list", "pre-layout-v2-test"); strings.TrimSpace(out) == "" {
+		t.Fatal("backup tag was not created")
+	}
+	l := Resolve(root)
+	if l.LayoutStatus != StatusActive || l.Migration != nil || len(l.Problems) != 0 {
+		t.Fatalf("resolved layout after apply = %+v", l)
+	}
+}
+
+// A crash can interrupt the two halves of `git mv` itself -- the working-tree
+// rename and the index update -- and then the tree is where the journal says and
+// the index is not. Resume must reconcile the index without being told.
+func TestResumeReconcilesAnIndexTheMoveDidNotUpdate(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	mv := p.Moves[0]
+	before := trackedBlobs(t, root, mv.From)
+	mkdirAll(t, root, filepath.Dir(mv.To))
+	if err := os.Rename(filepath.Join(root, mv.From), filepath.Join(root, mv.To)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err != nil {
+		t.Fatal(err)
+	}
+	if left := trackedBlobs(t, root, mv.From); len(left) != 0 {
+		t.Fatalf("the index still tracks the moved source: %v", left)
+	}
+	after := trackedBlobs(t, root, mv.To)
+	for rel, blob := range before {
+		want := strings.Replace(rel, "docs/", ".context/", 1)
+		if after[want] != blob {
+			t.Fatalf("blob for %s did not land at %s (got %q, want %q)", rel, want, after[want], blob)
+		}
+	}
+}
+
+func TestResumeCompletesAJournaledCrash(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p, _ := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	// Simulate a crash after the manifest was written and the first move ran.
+	m := p.To.Manifest
+	m.LayoutStatus = StatusMigrating
+	m.Migration = &Migration{
+		From:      MigrationFrom{Schema: p.From.Schema, Stores: p.From.Stores, Archive: p.From.Archive},
+		StartedAt: "2026-09-18T00:00:00Z", BackupTag: "pre-layout-v2-test",
+		CreatedManifest: true, Phase: PhasePlanned, Moves: p.Moves,
+	}
+	if err := WriteManifest(root, m); err != nil {
+		t.Fatal(err)
+	}
+	// The engine creates the destination root before its `git mv`; a move
+	// simulated by hand has to create it too, or git refuses with ENOENT.
+	mkdirAll(t, root, filepath.Dir(p.Moves[0].To))
+	if out, err := repo.Git(root, "mv", p.Moves[0].From, p.Moves[0].To); err != nil {
+		t.Fatalf("git mv: %v\n%s", err, out)
+	}
+	if err := ResumeMigration(root); err != nil {
+		t.Fatal(err)
+	}
+	l := Resolve(root)
+	if l.LayoutStatus != StatusActive || l.Migration != nil || len(l.Problems) != 0 {
+		t.Fatalf("resumed layout = %+v", l)
+	}
+}
+
+// A journal left at `router` is the crash window between the router write and
+// the active manifest (design §0.5's phase table): resume finishes it without
+// redoing any move.
+func TestResumeCompletesARouterPhaseJournal(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	for _, mv := range p.Moves {
+		mkdirAll(t, root, filepath.Dir(mv.To))
+		if out, err := repo.Git(root, "mv", mv.From, mv.To); err != nil {
+			t.Fatalf("git mv: %v\n%s", err, out)
+		}
+	}
+	writeFile(t, filepath.Join(root, "AGENTS.md"), V2AgentsMD)
+	m := p.To.Manifest
+	m.LayoutStatus = StatusMigrating
+	m.Migration = &Migration{
+		From:      MigrationFrom{Schema: p.From.Schema, Stores: p.From.Stores, Archive: p.From.Archive},
+		StartedAt: "2026-09-18T00:00:00Z", BackupTag: "pre-layout-v2-test",
+		CreatedManifest: true, Phase: PhaseRouter, Moves: p.Moves,
+	}
+	if err := WriteManifest(root, m); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResumeMigration(root); err != nil {
+		t.Fatal(err)
+	}
+	l := Resolve(root)
+	if l.LayoutStatus != StatusActive || l.Migration != nil || len(l.Problems) != 0 {
+		t.Fatalf("resumed layout = %+v", l)
+	}
+}
+
+// Apply is plan-if-absent plus reconcile: the journal exists before the first
+// move, and it records everything resume needs — the frozen v1 source, the
+// backup tag, and one identity per move (design §0.5).
+func TestApplyMigrationFreezesTheJournalBeforeTheFirstMove(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("plan = (%+v, %v)", p, err)
+	}
+	crashAt(t, "before-move", 0)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	l := Resolve(root)
+	if l.LayoutStatus != StatusMigrating || l.Migration == nil {
+		t.Fatalf("journal missing after a crash before the first move: %+v", l)
+	}
+	if l.Migration.Phase != PhasePlanned || !l.Migration.CreatedManifest || l.Migration.BackupTag != "pre-layout-v2-test" {
+		t.Fatalf("journal = %+v", l.Migration)
+	}
+	if l.Migration.From.Schema != SchemaV1 || len(l.Migration.From.Stores) != 4 {
+		t.Fatalf("the journal must record the v1 source explicitly: %+v", l.Migration.From)
+	}
+	for _, m := range l.Migration.Moves {
+		if m.State != MovePending || m.Digest == "" || m.Files == 0 || m.Bytes == 0 {
+			t.Fatalf("move = %+v, want pending with a recorded identity", m)
+		}
+	}
+	if moved := trackedBlobs(t, root, ".context"); len(moved) != 0 {
+		t.Fatalf("the crash before the first move still moved something: %v", moved)
+	}
+}
+
+// The design §10 requirement "crash fixture at every move boundary" is this
+// table: every move × every write boundary, every phase boundary, and one
+// non-prefix case. The boundary list is derived from the moves, so adding a
+// role adds coverage instead of leaving a silent gap. Design §0.5 names three
+// instants per move; `after-move` and `before-journal` are the two halves of its
+// middle instant, kept separate so the index-reconciliation seam (where `git mv`
+// has renamed the tree but the index is not yet updated) is its own row.
+func TestResumeCrashMatrix(t *testing.T) {
+	steps := []string{"before-move", "after-move", "before-journal", "after-journal"}
+	phases := []string{"moved", "pruned", "router"}
+	moves := 4
+	covered := 0
+
+	run := func(t *testing.T, step string, moveIndex int) {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		p, err := PlanMigration(root, MigrateOptions{
+			Template: TemplateContentVault,
+			Running:  "v0.6.0", RouterState: "current",
+		})
+		if err != nil || len(p.Blockers) > 0 {
+			t.Fatalf("plan = (%+v, %v)", p, err)
+		}
+		before := trackedBlobs(t, root, "docs")
+		crashAt(t, step, moveIndex)
+		if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+			t.Fatal("the injected crash must abort apply")
+		}
+		if err := ResumeMigration(root); err != nil {
+			t.Fatalf("resume after %s/%d: %v", step, moveIndex, err)
+		}
+		l := Resolve(root)
+		if l.LayoutStatus != StatusActive || l.Migration != nil || len(l.Problems) != 0 {
+			t.Fatalf("resumed layout = %+v", l)
+		}
+		after := trackedBlobs(t, root, ".context")
+		for rel, blob := range before {
+			want := strings.Replace(rel, "docs/", ".context/", 1)
+			if after[want] != blob {
+				t.Fatalf("blob for %s did not land at %s", rel, want)
+			}
+		}
+	}
+
+	for i := 0; i < moves; i++ {
+		for _, step := range steps {
+			covered++
+			t.Run(fmt.Sprintf("%s/%d", step, i), func(t *testing.T) { run(t, step, i) })
+		}
+	}
+	for _, phase := range phases {
+		covered++
+		t.Run("phase-"+phase, func(t *testing.T) { run(t, "phase-"+phase, 0) })
+	}
+	if covered != moves*len(steps)+len(phases) {
+		t.Fatalf("crash matrix covers %d boundaries, want %d", covered, moves*len(steps)+len(phases))
+	}
+}
+
+// A later move already done while an earlier one is pending proves no "prefix of
+// the list" assumption is baked into resume.
+func TestResumeHandlesANonPrefixCrash(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("plan = (%+v, %v)", p, err)
+	}
+	crashAt(t, "before-move", 0)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	// The destination root is created by the engine before its `git mv`, so a
+	// hand-simulated later move has to create it too: `git mv docs/qna
+	// .context/qna` fails with ENOENT while .context/ does not exist.
+	mkdirAll(t, root, filepath.Dir(p.Moves[3].To))
+	if out, err := repo.Git(root, "mv", p.Moves[3].From, p.Moves[3].To); err != nil {
+		t.Fatalf("git mv: %v\n%s", err, out)
+	}
+	if err := ResumeMigration(root); err != nil {
+		t.Fatal(err)
+	}
+	if l := Resolve(root); l.LayoutStatus != StatusActive {
+		t.Fatalf("layout = %+v", l)
+	}
+}
+
+func TestResumeRefusesAmbiguousAndLostMoves(t *testing.T) {
+	crashed := func(t *testing.T, step string, moveIndex int) (string, Plan) {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		p, err := PlanMigration(root, MigrateOptions{
+			Template: TemplateContentVault,
+			Running:  "v0.6.0", RouterState: "current",
+		})
+		if err != nil || len(p.Blockers) > 0 {
+			t.Fatalf("plan = (%+v, %v)", p, err)
+		}
+		crashAt(t, step, moveIndex)
+		if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+			t.Fatal("the injected crash must abort apply")
+		}
+		return root, p
+	}
+
+	t.Run("both-present-equal-digests-is-a-copy", func(t *testing.T) {
+		root, p := crashed(t, "after-move", 0)
+		// Restore the source from HEAD: the same tree now exists twice.
+		gitOutput(t, root, "checkout", "HEAD", "--", p.Moves[0].From)
+		err := ResumeMigration(root)
+		if err == nil {
+			t.Fatal("a copy must be refused")
+		}
+		for _, want := range []string{p.Moves[0].From, p.Moves[0].To, "copy, not a move", "--resume --apply"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refusal %q does not name %q", err, want)
+			}
+		}
+	})
+
+	t.Run("both-present-different-digests-names-the-mismatch", func(t *testing.T) {
+		root, p := crashed(t, "after-move", 0)
+		gitOutput(t, root, "checkout", "HEAD", "--", p.Moves[0].From)
+		writeFile(t, filepath.Join(root, p.Moves[0].From, "extra.md"), "diverged\n")
+		err := ResumeMigration(root)
+		if err == nil || !strings.Contains(err.Error(), p.Moves[0].Digest) {
+			t.Fatalf("refusal = %v, want the recorded digest named", err)
+		}
+	})
+
+	t.Run("neither-present-is-lost", func(t *testing.T) {
+		root, p := crashed(t, "before-move", 0)
+		if err := os.RemoveAll(filepath.Join(root, p.Moves[0].From)); err != nil {
+			t.Fatal(err)
+		}
+		err := ResumeMigration(root)
+		if err == nil {
+			t.Fatal("a lost source must be refused")
+		}
+		for _, want := range []string{p.Moves[0].From, p.Moves[0].To, "git restore --source=pre-layout-v2-test", "--resume --apply"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("refusal %q does not name %q", err, want)
+			}
+		}
+	})
+}
+
+// The post-move digest verification is reachable in production only when the
+// tree changes under the migration; the hook puts a test in exactly that state.
+func TestApplyRefusesWhenTheTreeChangesUnderTheMove(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("plan = (%+v, %v)", p, err)
+	}
+	reconcileHook = func(step string, moveIndex int) error {
+		if step == "after-move" && moveIndex == 0 {
+			writeFile(t, filepath.Join(root, p.Moves[0].To, "intruder.md"), "changed under the migration\n")
+		}
+		return nil
+	}
+	t.Cleanup(func() { reconcileHook = nil })
+	err = ApplyMigration(root, p, "pre-layout-v2-test")
+	if err == nil || !strings.Contains(err.Error(), "changed under the migration") {
+		t.Fatalf("refusal = %v, want the post-move digest mismatch", err)
+	}
+}
+
+// The source is re-verified before anything moves (§9.3 step 3), so a store
+// that changed between the plan and the apply is refused while it is still where
+// the journal says it is -- the recovery is the restore, not a moved tree.
+func TestApplyRefusesASourceThatChangedUnderTheMigration(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	writeFile(t, filepath.Join(root, p.Moves[0].From, "intruder.md"), "changed under the migration\n")
+	err := ApplyMigration(root, p, "pre-layout-v2-test")
+	if err == nil || !strings.Contains(err.Error(), "changed under the migration") {
+		t.Fatalf("refusal = %v, want the pre-move digest mismatch", err)
+	}
+	var me *MoveError
+	if !errors.As(err, &me) {
+		t.Fatalf("refusal %v is not a *MoveError", err)
+	}
+	if me.Move.From != p.Moves[0].From {
+		t.Fatalf("refusal names %s, want the unchanged store %s", me.Move.From, p.Moves[0].From)
+	}
+	if _, statErr := os.Lstat(filepath.Join(root, p.Moves[0].To)); !os.IsNotExist(statErr) {
+		t.Fatal("a refused pre-move check must not have moved the tree")
+	}
+	if moved := trackedBlobs(t, root, ".context"); len(moved) != 0 {
+		t.Fatalf("a refused apply moved blobs: %v", moved)
+	}
+}
+
+// R1: every refusal names both paths and offers the non-destructive restore.
+// The plan's own test asserts four substrings, which a remedy can satisfy while
+// still leading with `rm -rf <destination>` -- data loss by instruction in the
+// both-present and digest-mismatch rows, where the destination can hold real
+// work. This test pins the shape of the remedy, not just its vocabulary.
+func TestMoveRefusalRemedyNamesBothPathsAndDoesNotLeadWithADelete(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	crashAt(t, "after-move", 0)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	// Put the source back, which is the copy case: both trees exist.
+	gitOutput(t, root, "checkout", "HEAD", "--", p.Moves[0].From)
+	err := ResumeMigration(root)
+	if err == nil {
+		t.Fatal("a copy must be refused")
+	}
+	var me *MoveError
+	if !errors.As(err, &me) {
+		t.Fatalf("refusal %v is not a *MoveError", err)
+	}
+	for _, want := range []string{me.Move.From, me.Move.To} {
+		if !strings.Contains(me.Remedy, want) {
+			t.Fatalf("remedy %q does not name %q", me.Remedy, want)
+		}
+	}
+	restore := "git restore --source=pre-layout-v2-test -- " + me.Move.From
+	if !strings.Contains(me.Remedy, restore) {
+		t.Fatalf("remedy %q does not offer %q", me.Remedy, restore)
+	}
+	rm := strings.Index(me.Remedy, "rm -rf")
+	if rm < 0 {
+		t.Fatalf("remedy %q says nothing about removing a stray path", me.Remedy)
+	}
+	if i := strings.Index(me.Remedy, restore); i > rm {
+		t.Fatalf("the remedy leads with the delete: %q", me.Remedy)
+	}
+	if !strings.Contains(me.Remedy[:rm], "already confirmed") {
+		t.Fatalf("the delete is not fenced behind an explicit confirmation: %q", me.Remedy)
+	}
+	if tail := strings.TrimSuffix(me.Remedy, "`"); !strings.HasSuffix(tail, "agents layout migrate --resume --apply") {
+		t.Fatalf("the remedy does not end with the retry: %q", me.Remedy)
+	}
+	// The same shape must hold on the lost row, where the restore is the whole
+	// remedy and there is nothing to delete at all.
+	lost := newGitV1RepoWithContent(t)
+	lp := planV2(t, lost)
+	crashAt(t, "before-move", 0)
+	if err := ApplyMigration(lost, lp, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	if err := os.RemoveAll(filepath.Join(lost, lp.Moves[0].From)); err != nil {
+		t.Fatal(err)
+	}
+	err = ResumeMigration(lost)
+	if err == nil {
+		t.Fatal("a lost source must be refused")
+	}
+	if !errors.As(err, &me) {
+		t.Fatalf("refusal %v is not a *MoveError", err)
+	}
+	if !strings.Contains(me.Remedy, "git restore --source=pre-layout-v2-test -- "+me.Move.From) {
+		t.Fatalf("lost row remedy %q does not offer the restore", me.Remedy)
+	}
+}
+
+// R2: a migrated v2 repository must receive the manifest's linguist exception.
+// scaffold writes it for a repository created as v2, and this migration is the
+// only writer for one that becomes v2; without it `.agents/**` keeps the one
+// file a reviewer has to read collapsed in every diff (design §10, Attributes).
+func TestApplyAddsTheManifestLinguistExceptionOnce(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	if n := countGitattributeLine(t, root, manifestLinguistLine); n != 0 {
+		t.Fatalf("a v1 repository already carries the manifest exception %d time(s)", n)
+	}
+	// Crash at the router boundary: the exception is written by then, and the
+	// resume re-enters the same phase, which is the duplicate-append case.
+	crashAt(t, "phase-router", 0)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	if n := countGitattributeLine(t, root, manifestLinguistLine); n != 1 {
+		t.Fatalf("the crashed reconcile wrote the exception %d time(s), want 1", n)
+	}
+	if err := ResumeMigration(root); err != nil {
+		t.Fatal(err)
+	}
+	if n := countGitattributeLine(t, root, manifestLinguistLine); n != 1 {
+		t.Fatalf("the resumed reconcile duplicated the manifest exception: %d line(s)", n)
+	}
+	if n := countGitattributeLine(t, root, ".agents/** linguist-generated=true"); n != 1 {
+		t.Fatalf("the blanket .agents/ rule = %d line(s), want the one scaffold wrote", n)
+	}
+	// The exception must be effective, not merely present: gitattributes is
+	// last-match-wins, and the blanket rule scaffold wrote above it would
+	// otherwise keep the manifest hidden.
+	if out := gitOutput(t, root, "check-attr", "linguist-generated", "--", ManifestRel); !strings.Contains(out, "unset") {
+		t.Fatalf("git check-attr = %q, want the manifest unset (visible)", out)
+	}
+	if out := gitOutput(t, root, "check-attr", "linguist-generated", "--", ".agents/AGENTS.md"); !strings.Contains(out, "true") {
+		t.Fatalf("git check-attr on .agents/AGENTS.md = %q, want the blanket rule still true", out)
+	}
+}
+
+// R3: abort is the only delete, and it is limited to the state that proves
+// nothing moved. It removes the manifest this run created, leaves the backup tag
+// as the record, and touches no store.
+func TestAbortDeletesOnlyTheManifestThisRunCreated(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	crashAt(t, "before-move", 0)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	before := snapshotTree(t, root)
+	indexBefore := gitOutput(t, root, "ls-files", "-s")
+	storesBefore := trackedBlobs(t, root, "docs")
+	if err := AbortMigration(root); err != nil {
+		t.Fatal(err)
+	}
+	after := snapshotTree(t, root)
+	delete(before, ManifestRel)
+	if !reflect.DeepEqual(before, after) {
+		t.Fatalf("abort touched more than the manifest:\nbefore: %v\nafter:  %v", before, after)
+	}
+	if !reflect.DeepEqual(storesBefore, trackedBlobs(t, root, "docs")) {
+		t.Fatal("abort changed a store's index entries")
+	}
+	if got := gitOutput(t, root, "ls-files", "-s"); got != indexBefore {
+		t.Fatalf("abort changed the index:\nbefore: %q\nafter:  %q", indexBefore, got)
+	}
+	if n := countGitattributeLine(t, root, manifestLinguistLine); n != 0 {
+		t.Fatalf("a repository that ended the run as v1 carries the v2 exception: %d line(s)", n)
+	}
+	// A second abort has nothing to abort: the state it is limited to is gone.
+	if err := AbortMigration(root); err == nil {
+		t.Fatal("abort must refuse once the manifest is gone")
+	}
+}
+
+func TestAbortIsLimitedToANothingMovedMigration(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("plan = (%+v, %v)", p, err)
+	}
+	crashAt(t, "before-move", 0)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	if err := AbortMigration(root); err != nil {
+		t.Fatalf("abort with nothing moved = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ManifestRel)); !os.IsNotExist(err) {
+		t.Fatal("abort must delete the manifest it created")
+	}
+	if out := gitOutput(t, root, "tag", "--list", "pre-layout-v2-test"); strings.TrimSpace(out) == "" {
+		t.Fatal("abort must leave the backup tag")
+	}
+
+	root2 := newGitV1RepoWithContent(t)
+	p2, _ := PlanMigration(root2, MigrateOptions{
+		Template: TemplateContentVault,
+		Running:  "v0.6.0", RouterState: "current",
+	})
+	crashAt(t, "after-move", 0)
+	if err := ApplyMigration(root2, p2, "pre-layout-v2-test"); err == nil {
+		t.Fatal("the injected crash must abort apply")
+	}
+	err = AbortMigration(root2)
+	if err == nil {
+		t.Fatal("abort after a move has landed must refuse")
+	}
+	for _, want := range []string{"phase", "--resume --apply"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q does not name %q", err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root2, ManifestRel)); err != nil {
+		t.Fatalf("a refused abort must leave the journal in place: %v", err)
+	}
+}
+
+// The archive is never moved, rewritten, or walked (design §9.5). docs/ is not
+// an empty shell while it holds the archive, so the migration leaves both where
+// they are and reports no residue.
+func TestApplyKeepsTheDeclaredArchiveWhereItIs(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	mkdirAll(t, root, "docs/archive/plans")
+	writeFile(t, filepath.Join(root, "docs/archive/plans/2020-old-plan.md"), "archived\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "archive")
+	archiveBefore := trackedBlobs(t, root, "docs/archive")
+	if len(archiveBefore) == 0 {
+		t.Fatal("the fixture archive is not tracked")
+	}
+	p := planV2(t, root)
+	if p.Archive != "docs/archive" {
+		t.Fatalf("archive = %q, want the derived docs/archive", p.Archive)
+	}
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := trackedBlobs(t, root, "docs/archive"); !reflect.DeepEqual(got, archiveBefore) {
+		t.Fatalf("the archive's blobs changed: %v -> %v", archiveBefore, got)
+	}
+	if out := gitOutput(t, root, "status", "--porcelain", "--", "docs/archive"); strings.TrimSpace(out) != "" {
+		t.Fatalf("the archive was touched:\n%s", out)
+	}
+	l := Resolve(root)
+	if l.LayoutStatus != StatusActive || l.Migration != nil || l.Archive != "docs/archive" {
+		t.Fatalf("layout = %+v", l)
+	}
+}
+
+// docs/ can gain an entry between the plan and the apply. The layout still
+// completes, but the anti-shell promise does not: that is a named blocker and an
+// advisory exit, never a silent success (design §9.5).
+func TestApplyReportsDocsResidueAsANamedBlocker(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	writeFile(t, filepath.Join(root, "docs/notes.md"), "residue\n")
+	err := ApplyMigration(root, p, "pre-layout-v2-test")
+	var re *ResidueError
+	if !errors.As(err, &re) {
+		t.Fatalf("apply = %v, want a *ResidueError", err)
+	}
+	if len(re.Entries) != 1 || re.Entries[0] != "docs/notes.md" {
+		t.Fatalf("residue = %v", re.Entries)
+	}
+	if !strings.Contains(err.Error(), "docs/notes.md") {
+		t.Fatalf("refusal %q does not name the entry", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "docs/notes.md")); statErr != nil {
+		t.Fatal("the residue must be reported, never deleted")
+	}
+	// The journal is gone: the moves and the router are complete, and only the
+	// residue stands between this repository and a clean v2 layout.
+	l := Resolve(root)
+	if l.LayoutStatus != StatusActive || l.Migration != nil {
+		t.Fatalf("layout = %+v", l)
+	}
+}
+
+// R5: phases and per-move states are two frozen vocabularies (design §0.5), and
+// the validator must accept exactly the four phases the planner and the engine
+// write. Pinning both the constants' values and validPhase's answers is what
+// makes a rename a deliberate schema change instead of a silent divergence
+// between a literal in the validator and the constant the journal carries.
+func TestMigrationVocabularyIsTheFourPhasesAndThreeStates(t *testing.T) {
+	phaseValues := map[string]string{
+		PhasePlanned: "planned",
+		PhaseMoved:   "moved",
+		PhasePruned:  "pruned",
+		PhaseRouter:  "router",
+	}
+	if len(phaseValues) != 4 {
+		t.Fatalf("the phase constants collide on a value: %v", phaseValues)
+	}
+	for constant, want := range phaseValues {
+		if constant != want {
+			t.Errorf("phase constant value = %q, want %q", constant, want)
+		}
+		if !validPhase(constant) {
+			t.Errorf("validPhase(%q) = false: the validator rejects a phase the engine writes", constant)
+		}
+	}
+	stateValues := map[string]string{
+		MovePending: "pending",
+		MoveMoving:  "moving",
+		MoveDone:    "done",
+	}
+	if len(stateValues) != 3 {
+		t.Fatalf("the move-state constants collide on a value: %v", stateValues)
+	}
+	for constant, want := range stateValues {
+		if constant != want {
+			t.Errorf("move-state constant value = %q, want %q", constant, want)
+		}
+		if validPhase(constant) {
+			t.Errorf("validPhase(%q) = true: a per-move state is not a phase", constant)
+		}
+	}
+	for _, notAPhase := range []string{"", "planned ", "Moved", "active", "migrating", "done"} {
+		if validPhase(notAPhase) {
+			t.Errorf("validPhase(%q) = true, want false", notAPhase)
+		}
+	}
+}
+
+// The engine writes only the frozen vocabulary, and it advances rather than
+// jumps: a phase never goes backwards, and a move never returns to an earlier
+// state. Every boundary of a complete apply is sampled through the crash seam.
+func TestReconcileWritesOnlyTheFrozenVocabulary(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	ranks := map[string]int{PhasePlanned: 0, PhaseMoved: 1, PhasePruned: 2, PhaseRouter: 3}
+	states := map[string]bool{}
+	phases := map[string]bool{}
+	samples := 0
+	lastRank := 0
+	reconcileHook = func(step string, moveIndex int) error {
+		l := Resolve(root)
+		if l.Migration == nil {
+			return nil
+		}
+		rank, ok := ranks[l.Migration.Phase]
+		if !ok {
+			t.Errorf("the engine wrote phase %q, which is not in the vocabulary", l.Migration.Phase)
+			return nil
+		}
+		if rank < lastRank {
+			t.Errorf("phase went backwards: %s (%d) after rank %d", l.Migration.Phase, rank, lastRank)
+		}
+		lastRank = rank
+		phases[l.Migration.Phase] = true
+		for _, mv := range l.Migration.Moves {
+			switch mv.State {
+			case MovePending, MoveMoving, MoveDone:
+				states[mv.State] = true
+			default:
+				t.Errorf("the engine wrote move state %q, which is not in the vocabulary", mv.State)
+			}
+		}
+		samples++
+		return nil
+	}
+	t.Cleanup(func() { reconcileHook = nil })
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err != nil {
+		t.Fatal(err)
+	}
+	if samples == 0 {
+		t.Fatal("no boundary was observed: the seam is not wired into the engine")
+	}
+	for _, want := range []string{PhasePlanned, PhaseMoved, PhasePruned} {
+		if !phases[want] {
+			t.Errorf("the engine never recorded phase %q", want)
+		}
+	}
+	for _, want := range []string{MovePending, MoveMoving, MoveDone} {
+		if !states[want] {
+			t.Errorf("the engine never recorded move state %q", want)
+		}
+	}
+}
+
+// R4: the crash seam is a test-only knob. A complete apply runs with it nil and
+// leaves it nil -- nothing on a production path arms it.
+func TestApplyNeverArmsTheCrashSeam(t *testing.T) {
+	if reconcileHook != nil {
+		t.Fatal("another test left the crash seam armed")
+	}
+	root := newGitV1RepoWithContent(t)
+	p := planV2(t, root)
+	if err := ApplyMigration(root, p, "pre-layout-v2-test"); err != nil {
+		t.Fatal(err)
+	}
+	if reconcileHook != nil {
+		t.Fatal("a production path armed the crash seam")
 	}
 }

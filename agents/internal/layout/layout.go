@@ -429,11 +429,13 @@ func sortedProblems(ps []Problem) []Problem {
 }
 
 // validPhase reports whether a migrating journal records one of the four
-// phases from design §0.5. The names are spelled out here rather than through
-// the exported Phase* constants, which land with the planner that writes them.
+// phases from design §0.5. It compares against the exported Phase* constants
+// the planner and the reconciliation engine write, so the validator and the
+// writers cannot drift: with the names spelled out here, a renamed phase was a
+// silent "phase not recognised" on every journal this build wrote itself.
 func validPhase(phase string) bool {
 	switch phase {
-	case "planned", "moved", "pruned", "router":
+	case PhasePlanned, PhaseMoved, PhasePruned, PhaseRouter:
 		return true
 	default:
 		return false
