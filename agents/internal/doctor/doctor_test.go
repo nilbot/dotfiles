@@ -119,6 +119,22 @@ func writeManifest(t *testing.T, root string, m layout.Manifest) {
 	}
 }
 
+// v2Manifest is the active v2 manifest every v2 fixture starts from: the four
+// roles under storeRoot, the release floor, and no journal -- the state §9.3
+// step 7 leaves behind when a migration completes.
+func v2Manifest(storeRoot string) layout.Manifest {
+	stores := make(map[string]string, len(layout.Roles()))
+	for _, role := range layout.Roles() {
+		stores[role] = storeRoot + "/" + role
+	}
+	return layout.Manifest{
+		Schema:         layout.SchemaV2,
+		MinMutVerFloor: layout.MinMutVerFloorV2,
+		LayoutStatus:   layout.StatusActive,
+		Stores:         stores,
+	}
+}
+
 // newV2Repo is the v2 fixture: a git work tree with an active manifest, the
 // four stores it declares, the v2 router and its symlink, the domain context,
 // and both bundled skills in their v2 texts -- current for the layout it
@@ -129,20 +145,13 @@ func newV2Repo(t *testing.T, storeRoot string) string {
 	t.Helper()
 	root := t.TempDir()
 	initGitRepo(t, root)
-	stores := make(map[string]string, len(layout.Roles()))
+	manifest := v2Manifest(storeRoot)
 	for _, role := range layout.Roles() {
-		rel := storeRoot + "/" + role
-		stores[role] = rel
-		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(rel)), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(manifest.Stores[role])), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeManifest(t, root, layout.Manifest{
-		Schema:         layout.SchemaV2,
-		MinMutVerFloor: layout.MinMutVerFloorV2,
-		LayoutStatus:   layout.StatusActive,
-		Stores:         stores,
-	})
+	writeManifest(t, root, manifest)
 	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(layout.V2AgentsMD), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -183,10 +192,9 @@ func writeRepoFile(t *testing.T, root, relPath string, content []byte) error {
 	return os.WriteFile(path, content, 0o644)
 }
 
-// setLayoutStatus rewrites only the manifest's layout_status field, so a test
-// can move a manifest between active and migrating without also inventing a
-// migration journal.
-func setLayoutStatus(t *testing.T, root, status string) {
+// editManifest rewrites the manifest through one in-place edit, leaving every
+// field the edit does not touch as the fixture wrote it.
+func editManifest(t *testing.T, root string, edit func(fields map[string]any)) {
 	t.Helper()
 	path := filepath.Join(root, layout.ManifestRel)
 	data, err := os.ReadFile(path)
@@ -197,7 +205,7 @@ func setLayoutStatus(t *testing.T, root, status string) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	fields["layout_status"] = status
+	edit(fields)
 	out, err := json.MarshalIndent(fields, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +213,44 @@ func setLayoutStatus(t *testing.T, root, status string) {
 	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// setLayoutStatus rewrites only the manifest's layout_status field, so a test
+// can move a manifest between active and migrating without touching anything
+// else. The resulting journalless manifest is deliberately not a state §9.3 can
+// write; that is what makes it a V14 case, not a migration in progress.
+func setLayoutStatus(t *testing.T, root, status string) {
+	t.Helper()
+	editManifest(t, root, func(fields map[string]any) { fields["layout_status"] = status })
+}
+
+// setMigratingWithJournal rewrites the manifest into the state §9.3 step 2
+// writes before any store is touched: layout_status migrating together with the
+// full journal. It is the realistic in-progress migration, so the only thing
+// layout:manifest has to report about it is the status.
+func setMigratingWithJournal(t *testing.T, root string) {
+	t.Helper()
+	editManifest(t, root, func(fields map[string]any) {
+		fields["layout_status"] = layout.StatusMigrating
+		fields["migration"] = map[string]any{
+			"from": map[string]any{
+				"schema": layout.SchemaV1,
+				"stores": map[string]string{
+					"design": "docs/design", "plans": "docs/plans",
+					"journal": "docs/journal", "qna": "docs/qna",
+				},
+			},
+			"started_at":       "2026-09-19T00:00:00Z",
+			"backup_tag":       "agents-layout-backup",
+			"created_manifest": true,
+			"phase":            "planned",
+			"moves": []map[string]any{{
+				"role": "qna", "from": "docs/qna", "to": ".context/qna",
+				"state": "pending", "files": 1, "bytes": 1,
+				"digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			}},
+		}
+	})
 }
 
 func executableFile(t *testing.T, dir, name string) string {
@@ -1005,8 +1051,21 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating"} {
+	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating", "layout:manifest", "layout:stores", "layout:tracked", "layout:committed", "layout:qna"} {
 		_ = checkByName(t, checks, name)
+	}
+	// Exactly one producer: checkScaffold emits the four checks that need only
+	// the root and the version, and RunWithDeps appends the freshness
+	// indicator, which needs the clock. A second layout:qna row would mean the
+	// check was wired into both.
+	qnaRows := 0
+	for _, c := range checks {
+		if c.Name == "layout:qna" {
+			qnaRows++
+		}
+	}
+	if qnaRows != 1 {
+		t.Fatalf("layout:qna appears %d time(s), want exactly 1", qnaRows)
 	}
 	if got := checkByName(t, checks, "trace-index"); got.Status != Warn || !strings.Contains(got.Detail, "1") {
 		t.Fatalf("skipped trace = %+v", got)
@@ -1436,9 +1495,148 @@ func TestDoctorWarnsOnUnsupportedAndMigratingLayouts(t *testing.T) {
 	if got := findCheckPtr(t, checkScaffold(root, "v0.5.99"), "layout:manifest"); got == nil || got.Status != Warn {
 		t.Fatalf("unsupported status = %+v", got)
 	}
-	setLayoutStatus(t, root, layout.StatusMigrating)
-	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest"); got == nil || got.Status != Warn {
-		t.Fatalf("migrating status = %+v", got)
+	if got := findCheckPtr(t, checkScaffold(root, "dev"), "layout:manifest"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, "release version") {
+		t.Fatalf("unreleased binary = %+v, want a warn that names the missing release", got)
+	}
+	setMigratingWithJournal(t, root)
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, "planned") {
+		t.Fatalf("migrating status = %+v, want a warn naming the recorded phase", got)
+	}
+}
+
+// A manifest that breaks a V-rule is invalid whatever its layout_status says
+// (design §5.2): §9.3 step 2 writes `migrating` and the journal together, so a
+// journalless migrating manifest is a broken manifest, not a migration in
+// progress. This is the branch whose ordering the review corrected.
+func TestDoctorFailsOnAnInvalidManifest(t *testing.T) {
+	t.Run("a role is missing", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		editManifest(t, root, func(fields map[string]any) {
+			delete(fields["stores"].(map[string]any), "qna")
+		})
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Fail || !strings.Contains(got.Detail, "role_missing") {
+			t.Fatalf("manifest missing a role = %+v, want fail naming role_missing", got)
+		}
+	})
+
+	t.Run("a store path escapes the root", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		editManifest(t, root, func(fields map[string]any) {
+			fields["stores"].(map[string]any)["journal"] = "../outside/journal"
+		})
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Fail || !strings.Contains(got.Detail, "path_escapes") {
+			t.Fatalf("escaping store path = %+v, want fail naming path_escapes", got)
+		}
+	})
+
+	t.Run("a migrating status does not excuse a broken journal", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		setLayoutStatus(t, root, layout.StatusMigrating)
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Fail || !strings.Contains(got.Detail, "migration_missing") {
+			t.Fatalf("journalless migrating manifest = %+v, want fail naming migration_missing", got)
+		}
+	})
+
+	t.Run("an unknown schema warns rather than failing", func(t *testing.T) {
+		root := t.TempDir()
+		if err := writeRepoFile(t, root, layout.ManifestRel, []byte(`{"schema":"agents.layout/v9"}`)); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "agents.layout/v9") {
+			t.Fatalf("unknown schema = %+v, want warn naming the schema", got)
+		}
+	})
+
+	t.Run("a manifest with no schema says so", func(t *testing.T) {
+		root := t.TempDir()
+		if err := writeRepoFile(t, root, layout.ManifestRel, []byte(`{"layout_status":"active","stores":{}}`)); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "declares no schema") ||
+			strings.Contains(got.Detail, `""`) {
+			t.Fatalf("schema-less manifest = %+v, want a warn that does not print an empty quoted schema", got)
+		}
+	})
+}
+
+func TestDoctorWarnsWhenTheManifestOrAgentsIsIgnored(t *testing.T) {
+	for _, pattern := range []string{"/.agents/", "/.agents/**", ".agents/"} {
+		t.Run(pattern, func(t *testing.T) {
+			root := newV2Repo(t, ".context")
+			ignoreAgents(t, root, pattern)
+			got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked")
+			if got == nil || got.Status != Warn || !strings.Contains(got.Detail, layout.ManifestRel) {
+				t.Fatalf("ignored manifest with rule %q = %+v, want warn naming the manifest", pattern, got)
+			}
+			// Committing past an ignore rule needs -f, so the remedy is the
+			// rule's removal, not the migration commit.
+			committed := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed")
+			if committed == nil || committed.Status != Warn || !strings.Contains(committed.Remedy, "remove the ignore rule") {
+				t.Fatalf("ignored manifest committed-check = %+v, want the rule-removal remedy", committed)
+			}
+		})
+	}
+}
+
+// A v1 `--local` repository ignores /.agents/ by design, and there is no
+// manifest for that rule to hide; a v2 repository with the same rule has a
+// machine-local manifest, which is what V16 refuses.
+func TestDoctorDoesNotWarnAboutAV1LocalLayout(t *testing.T) {
+	v1 := newScaffoldedRepo(t)
+	ignoreAgents(t, v1, "/.agents/")
+	if got := findCheckPtr(t, checkScaffold(v1, "v0.6.0"), "layout:tracked"); got == nil || got.Status != OK {
+		t.Fatalf("v1 --local layout:tracked = %+v, want ok", got)
+	}
+
+	v2 := newV2Repo(t, ".context")
+	ignoreAgents(t, v2, "/.agents/")
+	if got := findCheckPtr(t, checkScaffold(v2, "v0.6.0"), "layout:tracked"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, layout.ManifestRel) {
+		t.Fatalf("v2 machine-local manifest layout:tracked = %+v, want warn", got)
+	}
+}
+
+func TestDoctorWarnsOnAMissingDeclaredStore(t *testing.T) {
+	root := newV2Repo(t, ".context")
+	if err := os.RemoveAll(filepath.Join(root, ".context", "journal")); err != nil {
+		t.Fatal(err)
+	}
+	got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:stores")
+	if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "journal=.context/journal") {
+		t.Fatalf("missing declared store = %+v, want warn naming journal=.context/journal", got)
+	}
+}
+
+// Outside a repository there is no index to be absent from, so the advisory is
+// a quiet ok rather than a warning the operator cannot act on.
+func TestDoctorLayoutCommittedOutsideGitRepository(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, v2Manifest(".context"))
+
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed"); got == nil ||
+		got.Status != OK || !strings.Contains(got.Detail, "not a git repository") {
+		t.Fatalf("layout:committed outside a repository = %+v, want ok", got)
+	}
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked"); got == nil || got.Status != OK {
+		t.Fatalf("layout:tracked outside a repository = %+v, want ok", got)
+	}
+}
+
+func TestQNAFreshnessNamesTheManifestWhenNoStoreResolves(t *testing.T) {
+	root := t.TempDir()
+	if err := writeRepoFile(t, root, layout.ManifestRel, []byte(`{"schema":"agents.layout/v9"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got := checkQNAFreshness(root, layout.Resolve(root), time.Now())
+	if got.Name != "layout:qna" || got.Status != OK || !strings.HasPrefix(got.Detail, layout.ManifestRel+": ") {
+		t.Fatalf("unresolved qna store = %+v, want an ok that names the manifest it read", got)
 	}
 }
 

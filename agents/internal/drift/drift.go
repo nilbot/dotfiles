@@ -64,7 +64,7 @@ func InspectRepo(root, runningVersion string) (DriftReport, error) {
 		} else {
 			report.Unsupported = "invalid"
 		}
-		report.UnsupportedDetail = problemsText(l.Problems)
+		report.UnsupportedDetail = ProblemsText(l.Problems)
 	} else if ok, reason := layout.Support(runningVersion, l); !ok {
 		if reason == "migrating" {
 			report.LayoutStatus = layout.StatusMigrating
@@ -279,10 +279,14 @@ func misplacedDocsV2(root string, l layout.Layout) []string {
 	return misplaced
 }
 
-// problemsText renders a layout's validation problems as one line, so an
+// ProblemsText renders a layout's validation problems as one line, so an
 // invalid manifest's `unsupported_detail` names every rule it broke rather
 // than only the first.
-func problemsText(problems []layout.Problem) string {
+//
+// Exported because `doctor` prints the same list in its own one-line detail.
+// The two callers differ only in what they add around it, and doctor's private
+// copy of this renderer was a copy that drifted.
+func ProblemsText(problems []layout.Problem) string {
 	parts := make([]string, 0, len(problems))
 	for _, p := range problems {
 		text := p.Code
