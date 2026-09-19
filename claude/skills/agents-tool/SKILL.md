@@ -42,10 +42,11 @@ working is the failure this code exists to prevent.
 repository with no `AGENTS.md` and no `docs/`, `--template content-vault`
 creates an `agents.layout/v2` layout under `.context/`, `--template code-repo`
 keeps the four stores under `docs/`, `--stores <role>=<path>` overrides an
-individual role, and `--archive <path>` records the immutable archive (with no
-`--archive`, an existing `docs/archive` is inherited). A repository that already
-has a v1 layout is refused, because adopting it is the migration command's job
-rather than init's.
+individual role, and `--archive <path>` records the immutable archive. A
+repository that already has a v1 layout — which is what an existing `docs/`
+means — is refused rather than adopted, because adoption is the migration
+command's job. That refusal is also why `--archive` is supplied explicitly: a
+repository with a `docs/archive` already has a v1 layout.
 
 ## Recording is not this tool's job any more
 
