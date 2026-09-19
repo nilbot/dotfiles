@@ -1,6 +1,7 @@
 package layout
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,6 +111,67 @@ func TestValidateReportsAnIgnoredManifestAndSkipsAPlainDirectory(t *testing.T) {
 	}
 	if got := Validate(t.TempDir(), l); hasProblem(got, ProblemLocalAgents) {
 		t.Fatalf("a plain fixture directory must stay valid: %v", got)
+	}
+}
+
+// The repository root contains every repository-relative path. Without that, a
+// store declared "." passes validation with zero problems -- V10 and V12 never
+// see it -- and a migration would treat the root as a movable store tree.
+func TestValidateSeesTheRepositoryRootAsContainingEveryStore(t *testing.T) {
+	root := t.TempDir()
+	if got := Validate(root, mk(storesWith(RoleDesign, "."))); !hasProblem(got, ProblemPathOverlap) {
+		t.Fatalf("problems = %v, want %s for a store declared at the repository root", got, ProblemPathOverlap)
+	}
+	l := mk(storesWith(RoleDesign, "context/design"))
+	l.Archive = "."
+	if got := Validate(root, l); !hasProblem(got, ProblemArchiveOverlap) {
+		t.Fatalf("problems = %v, want %s for an archive declared at the repository root", got, ProblemArchiveOverlap)
+	}
+}
+
+// V9 is about where a store resolves, not how it is spelled: a leading "./" or
+// an interior ".." that stays inside the root must not smuggle knowledge into
+// .agents/. Problem.Path keeps the raw spelling, because that is what the
+// operator wrote and what the CLI has to print back.
+func TestValidateSeesThroughASpellingThatHidesAgents(t *testing.T) {
+	for _, spelling := range []string{"./.agents", "./.agents/design", "context/../.agents/design"} {
+		t.Run(spelling, func(t *testing.T) {
+			got := Validate(t.TempDir(), mk(storesWith(RoleDesign, spelling)))
+			for _, p := range got {
+				if p.Code != ProblemPathInAgents {
+					continue
+				}
+				if p.Path != spelling {
+					t.Fatalf("path_in_agents reports %q, want the raw spelling %q", p.Path, spelling)
+				}
+				return
+			}
+			t.Fatalf("problems = %v, want %s for %q", got, ProblemPathInAgents, spelling)
+		})
+	}
+}
+
+// Validate's problems are printed by the CLI, so the same layout must render
+// the same lines on every run: the walk over stores, and the Details that name
+// two roles, must not depend on map iteration order.
+func TestValidateProblemOrderIsStable(t *testing.T) {
+	root := t.TempDir()
+	l := mk(map[string]string{
+		"specs":     "context/specs",
+		RoleDesign:  "context",
+		RolePlans:   "context/plans",
+		RoleJournal: "context/journal",
+		RoleQNA:     "Context/Journal",
+	})
+	l.Archive = "context/qna"
+	first := fmt.Sprintf("%v", Validate(root, l))
+	if len(Validate(root, l)) == 0 {
+		t.Fatal("the fixture must produce problems to compare")
+	}
+	for i := 0; i < 32; i++ {
+		if got := fmt.Sprintf("%v", Validate(root, l)); got != first {
+			t.Fatalf("run %d differs:\n%s\n%s", i, first, got)
+		}
 	}
 }
 

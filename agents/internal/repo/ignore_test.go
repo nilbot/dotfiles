@@ -152,6 +152,10 @@ func TestIsTrackedDistinguishesUntrackedFromStaged(t *testing.T) {
 // A git failure is an error, never a silent "not ignored"/"not tracked": that
 // switch is what makes mutation fail closed (design §0.7). A corrupt index is
 // the portable way to produce one.
+//
+// The failure must also not classify as ErrNotARepo: that is the one error V16
+// skips, so a broken repository reported as an absent one would read as "there
+// is nothing here to check".
 func TestIsTrackedFailsClosedOnAGitError(t *testing.T) {
 	root := newTempGitRepo(t)
 	writeFile(t, filepath.Join(root, ".agents/layout.json"), "{}")
@@ -159,7 +163,26 @@ func TestIsTrackedFailsClosedOnAGitError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".git", "index"), []byte("corrupt"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := IsTracked(root, ".agents/layout.json"); err == nil {
+	_, err := IsTracked(root, ".agents/layout.json")
+	if err == nil {
 		t.Fatal("a git error must surface as an error, not as a trackedness answer")
+	}
+	if errors.Is(err, ErrNotARepo) {
+		t.Fatalf("a corrupt index is not a missing repository: %v", err)
+	}
+}
+
+// The same switch for the ignore question, with a failure that is not a missing
+// repository: a broken .git/config fails check-ignore with exit 128 and a
+// message that is not git's not-a-repository refusal.
+func TestIsIgnoredFailsClosedOnAGitError(t *testing.T) {
+	root := newTempGitRepo(t)
+	writeFile(t, filepath.Join(root, ".git", "config"), "not a config\n")
+	_, err := IsIgnored(root, ".agents/layout.json")
+	if err == nil {
+		t.Fatal("a git error must surface as an error, not as a trackedness answer")
+	}
+	if errors.Is(err, ErrNotARepo) {
+		t.Fatalf("a broken git config is not a missing repository: %v", err)
 	}
 }

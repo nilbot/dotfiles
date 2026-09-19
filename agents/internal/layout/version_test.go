@@ -22,6 +22,25 @@ func TestSupportRefusesBelowFloorAndAllowsV1Control(t *testing.T) {
 	}
 }
 
+// The three refusals the floor test does not reach: a floor that cannot be
+// parsed, a schema this build does not know, and a migration in progress.
+func TestSupportRefusesInvalidFloorUnknownSchemaAndAMigration(t *testing.T) {
+	bad := mk(storesWith(RoleDesign, "context/design"))
+	bad.MinMutVerFloor = "not-a-version"
+	if ok, reason := Support("v0.6.0", bad); ok || reason != "invalid" {
+		t.Fatalf("an unparseable floor = (%v, %q), want invalid", ok, reason)
+	}
+	unknown := Layout{Manifest: Manifest{Schema: "agents.layout/v9", LayoutStatus: StatusActive}}
+	if ok, reason := Support("v0.6.0", unknown); ok || reason != "unknown_schema" {
+		t.Fatalf("an unknown schema = (%v, %q), want unknown_schema", ok, reason)
+	}
+	migrating := mk(storesWith(RoleDesign, "context/design"))
+	migrating.LayoutStatus = StatusMigrating
+	if ok, reason := Support("v0.6.0", migrating); ok || reason != "migrating" {
+		t.Fatalf("a migrating layout = (%v, %q), want migrating", ok, reason)
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	cases := []struct {
 		a, b string

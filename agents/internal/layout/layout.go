@@ -8,8 +8,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nilbot/dotfiles/agents/internal/repo"
@@ -293,13 +295,12 @@ func Validate(root string, l Layout) []Problem {
 		return nil
 	}
 	var ps []Problem
-	validRoles := map[string]bool{RoleDesign: true, RolePlans: true, RoleJournal: true, RoleQNA: true}
-	for role := range l.Stores {
-		if !validRoles[role] {
+	for _, role := range storeRoles(l.Stores) {
+		if !validRole(role) {
 			ps = append(ps, Problem{Code: ProblemRoleUnknown, Path: role})
 		}
 	}
-	for _, role := range roleNames {
+	for _, role := range Roles() {
 		if _, ok := l.Stores[role]; !ok {
 			ps = append(ps, Problem{Code: ProblemRoleMissing, Path: role})
 		}
@@ -322,12 +323,18 @@ func Validate(root string, l Layout) []Problem {
 		ps = append(ps, Problem{Code: ProblemMinMutVerFloor, Detail: l.MinMutVerFloor})
 	}
 	seen := map[string]string{}
-	for role, path := range l.Stores {
+	for _, role := range storeRoles(l.Stores) {
+		path := l.Stores[role]
 		if p := validateRel(root, path); p != nil {
 			ps = append(ps, *p)
 			continue
 		}
-		if path == ".agents" || strings.HasPrefix(path, ".agents/") {
+		// The membership test normalizes the spelling, because ".agents",
+		// "./.agents" and "context/../.agents" all resolve under .agents/, and
+		// V9 is about where the store resolves, not how it is written.
+		// Problem.Path stays the raw value the manifest wrote, so the operator
+		// sees what they wrote.
+		if norm := filepath.ToSlash(filepath.Clean(path)); norm == ".agents" || strings.HasPrefix(norm, ".agents/") {
 			ps = append(ps, Problem{Code: ProblemPathInAgents, Path: path})
 		}
 		// Both sides of every comparison are trimmed, because `context` and
@@ -354,8 +361,8 @@ func Validate(root string, l Layout) []Problem {
 		if p := validateRel(root, l.Archive); p != nil {
 			ps = append(ps, *p)
 		}
-		for role, path := range l.Stores {
-			if pathPrefix(path, l.Archive) || pathPrefix(l.Archive, path) {
+		for _, role := range storeRoles(l.Stores) {
+			if path := l.Stores[role]; pathPrefix(path, l.Archive) || pathPrefix(l.Archive, path) {
 				ps = append(ps, Problem{Code: ProblemArchiveOverlap, Path: l.Archive, Detail: role})
 			}
 		}
@@ -370,6 +377,54 @@ func Validate(root string, l Layout) []Problem {
 	} else if ignored {
 		ps = append(ps, Problem{Code: ProblemLocalAgents, Path: ManifestRel})
 	}
+	return sortedProblems(ps)
+}
+
+// storeRoles names every store in a fixed order: the four known roles in their
+// canonical order, then any roles the manifest invented, sorted. Validate walks
+// stores in this order rather than map order because V4, V10, V11, and V12 all
+// name both roles in Detail, and a map walk would print a different (though
+// equivalent) diagnostic on every run.
+func storeRoles(stores map[string]string) []string {
+	roles := make([]string, 0, len(stores))
+	for _, role := range Roles() {
+		if _, ok := stores[role]; ok {
+			roles = append(roles, role)
+		}
+	}
+	var unknown []string
+	for role := range stores {
+		if !validRole(role) {
+			unknown = append(unknown, role)
+		}
+	}
+	slices.Sort(unknown)
+	return append(roles, unknown...)
+}
+
+// validRole reports whether role is one of the four roles a v2 manifest may
+// declare (design §5.2, V1).
+func validRole(role string) bool {
+	switch role {
+	case RoleDesign, RolePlans, RoleJournal, RoleQNA:
+		return true
+	default:
+		return false
+	}
+}
+
+// sortedProblems orders a problem list by code, path, and detail, so a caller
+// that prints it produces the same lines for the same layout on every run.
+func sortedProblems(ps []Problem) []Problem {
+	slices.SortFunc(ps, func(a, b Problem) int {
+		if c := strings.Compare(a.Code, b.Code); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.Path, b.Path); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Detail, b.Detail)
+	})
 	return ps
 }
 
@@ -409,7 +464,15 @@ func validateRel(root, path string) *Problem {
 	for _, part := range parts {
 		cur = filepath.Join(cur, part)
 		info, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			// The ordinary case: a manifest is validated before its stores
+			// exist, so the walk stops at the first component that is not there.
+			break
+		}
 		if err != nil {
+			// The component exists but cannot be inspected. It is not known to
+			// be a symlink, and no V-rule names "unreadable", so the walk stops
+			// rather than claim anything about it.
 			break
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -422,6 +485,12 @@ func validateRel(root, path string) *Problem {
 func pathPrefix(parent, child string) bool {
 	parent = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(parent)), "/")
 	child = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(child)), "/")
+	if parent == "." {
+		// The repository root contains every repository-relative path, "." as
+		// much as "context/plans". Without this, a store or archive declared
+		// "." would slip past V10 and V12 entirely.
+		return true
+	}
 	return parent == child || strings.HasPrefix(child, parent+"/")
 }
 

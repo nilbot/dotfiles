@@ -155,13 +155,42 @@ func gitPath(dir, arg string) (string, error) {
 
 var errExitOne = errors.New("git answered no (exit 1)")
 
+// notARepoRefusal is git's own refusal to answer outside a worktree. It is the
+// one git failure that means "this directory has no repository"; every other
+// failure is operational and must stay an error. discoverRoot and gitFailure
+// classify on the same message.
+const notARepoRefusal = "fatal: not a git repository (or any of the parent directories):"
+
+// gitFailure is a git invocation that failed for a reason other than "no" (exit
+// 1). stderr is kept because only git's message tells the two apart.
+type gitFailure struct {
+	err    error
+	stderr string
+}
+
+func (e *gitFailure) Error() string { return e.err.Error() }
+
+func (e *gitFailure) Unwrap() error { return e.err }
+
+// refusedAsNotARepo reports whether git refused because there is no repository
+// here, rather than because something about this repository is broken.
+func (e *gitFailure) refusedAsNotARepo() bool {
+	return strings.HasPrefix(strings.TrimSpace(e.stderr), notARepoRefusal)
+}
+
 // runExit is run plus the exit status, so a caller can tell "git answered no"
 // (exit 1) from "git failed" (128 and anything else). Reading both as "no" is
 // how an unresolvable question becomes a silent pass.
+//
+// A failure carries git's stderr, so its caller can classify it: collapsing
+// every failure to ErrNotARepo would make a dubious-ownership refusal, a
+// corrupt .git, or a missing git binary read as "nothing to track".
 func runExit(dir string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	cmd.Stdout = io.Discard
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.Env = sanitizeEnv(os.Environ())
 	err := cmd.Run()
 	if err == nil {
@@ -171,6 +200,18 @@ func runExit(dir string, args ...string) error {
 	if errors.As(err, &ee) && ee.ExitCode() == 1 {
 		return errExitOne
 	}
+	return &gitFailure{err: err, stderr: stderr.String()}
+}
+
+// classifyGitFailure turns a failed git question into the error its caller may
+// act on: ErrNotARepo only when git itself said the directory is not a
+// repository, and the failure unchanged otherwise. "Could not determine" must
+// never be read as "not ignored" (design §0.7).
+func classifyGitFailure(err error) error {
+	var gf *gitFailure
+	if errors.As(err, &gf) && gf.refusedAsNotARepo() {
+		return ErrNotARepo
+	}
 	return err
 }
 
@@ -179,16 +220,13 @@ func runExit(dir string, args ...string) error {
 // misses /.agents without a slash, /.agents/**, a tracked .gitignore entry, and
 // core.excludesFile.
 func IsIgnored(dir, relPath string) (bool, error) {
-	if _, err := gitPath(dir, "--git-common-dir"); err != nil {
-		return false, ErrNotARepo
-	}
 	switch err := runExit(dir, "check-ignore", "-q", "--no-index", "--", relPath); {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, errExitOne):
 		return false, nil
 	default:
-		return false, err
+		return false, classifyGitFailure(err)
 	}
 }
 
@@ -196,16 +234,13 @@ func IsIgnored(dir, relPath string) (bool, error) {
 // untracked-but-not-ignored window between `layout migrate --apply` and the
 // migration commit, which is permitted and only carries a doctor advisory.
 func IsTracked(dir, relPath string) (bool, error) {
-	if _, err := gitPath(dir, "--git-common-dir"); err != nil {
-		return false, ErrNotARepo
-	}
 	switch err := runExit(dir, "ls-files", "--error-unmatch", "--", relPath); {
 	case err == nil:
 		return true, nil
 	case errors.Is(err, errExitOne):
 		return false, nil
 	default:
-		return false, err
+		return false, classifyGitFailure(err)
 	}
 }
 
@@ -246,7 +281,7 @@ func discoverRoot(cwd string) (string, error) {
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		message := strings.TrimSpace(stderr.String())
-		if strings.HasPrefix(message, "fatal: not a git repository (or any of the parent directories):") {
+		if strings.HasPrefix(message, notARepoRefusal) {
 			return "", ErrNotARepo
 		}
 		return "", fmt.Errorf("discover Git repository: %w", err)
