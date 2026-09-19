@@ -228,10 +228,11 @@ existing v1 repository is `agents layout migrate`'s job, not init's.
 `agents.layout/v2` manifest. The dry run is the default — `--dry-run` is an
 accepted explicit synonym — and writes nothing. `--apply` performs it and
 requires `--backup-tag <name>`, an annotated tag created at HEAD before the
-first write, so the rollback point exists even without a branch. `--template`
-supplies the target store map from a template's defaults and
-`--stores <role>=<path>` overrides one role; with no template, `--stores` must
-name all four roles.
+first write, so the rollback point exists even without a branch; a name that
+already exists or is not a valid ref is malformed, as is `--backup-tag` with
+`--resume` or `--abort`, where it cannot take effect. `--template` supplies the
+target store map from a template's defaults and `--stores <role>=<path>`
+overrides one role; with no template, `--stores` must name all four roles.
 
 Planning refuses, naming every reason in one report, when the router is diverged
 or missing, a source store is missing or a symlink, a target path already
@@ -258,11 +259,23 @@ refuses and names the phase and the remedy.
 | `--abort --apply` refused, or no `migrating` manifest | `1` |
 | any: not inside a repository with `.agents/` | `4` |
 
-`agents layout migrate --json` emits the plan as one object: `repo`, `dry_run`,
-`phase`, `from`, `to`, `router`, `archive`, `moves`, `link_candidates`,
-`blockers`, and `counts`. `phase` is `planned` for a dry run or a fresh
-`--apply`, and the journal phase a `--resume` continued from — a resume reports
-the journal's own plan, never a re-planned one.
+`--resume --apply` follows the same rows as `--apply` with one exception: link
+candidates are reported only by the run that planned them, so a resume that
+completes a migration planned with candidates exits `0` where the fresh
+`--apply` exited `1`. The candidates are a property of the pre-move source tree:
+a fresh `--apply` scans the stores before moving them, and a resume completes a
+move list whose source tree no longer exists and is never re-planned.
+
+`agents layout migrate --json` emits exactly one object on every path. For a
+plan it is `repo`, `dry_run`, `phase`, `from`, `to`, `router`, `archive`,
+`moves`, `link_candidates`, `blockers`, and `counts`; `phase` is `planned` for a
+dry run or a fresh `--apply`, and the journal phase a `--resume` continued from
+— a resume reports the journal's own plan, never a re-planned one. `dry_run` is
+true whenever nothing was applied, including a plan refused for its blockers.
+For a refusal that precedes a plan (the preconditions, the `migrating` routing,
+a source that is not v1, malformed flags) it is a refusal object carrying
+`repo`, `dry_run`, `phase`, and the `error` sentence the human surface prints,
+so a machine consumer never has to skip prose.
 
 ---
 

@@ -160,7 +160,10 @@ agents layout migrate --template content-vault --dry-run
 
 `--apply` requires `--backup-tag <name>`, an annotated tag created at HEAD
 before the first write; that tag is the rollback point, so name it something the
-human will recognise. The plan is refused, with every reason named in one
+human will recognise. A name that already exists is refused before anything is
+written — pick another, or resume the migration it belongs to — and
+`--backup-tag` with `--resume` or `--abort` is refused, because neither creates
+a tag. The plan is refused, with every reason named in one
 report, when the router is diverged or missing, a store is missing or a symlink,
 a target exists, `docs/` holds residue, or the binary is below the target's
 `min_mut_ver_floor`. A resume runs with the moved stores staged, which is why a
@@ -177,3 +180,11 @@ Exit `0` when applied with no link candidates, `1` for a dry-run plan, blockers,
 remaining link candidates, or a refused abort, `3` for malformed flags, `4`
 outside a repository with `.agents/`, and `5` when a move failed mid-way — in
 which case the manifest stays `migrating` and the next step is to resume it.
+A resume cannot report link candidates — they are a property of the pre-move
+source tree, and the journal does not record them — so it can exit `0` on a
+migration the planning run would have reported with candidates.
+
+`--json` emits one object on every path: the plan, or — when the command refuses
+before there is a plan — a refusal object with `repo`, `dry_run`, `phase`, and
+the `error` sentence a reader would see. Parse the object rather than reading
+prose, and read the exit code for the disposition.

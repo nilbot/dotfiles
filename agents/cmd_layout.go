@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path"
 	"sort"
 	"strings"
@@ -30,22 +32,31 @@ import (
 // `path` outside a repository with .agents/; `show` shares it so that all
 // three answer the same way about the same state.
 func layoutRepo(stdout io.Writer) (string, int) {
+	root, code, message := layoutRepoMessage()
+	if message != "" {
+		fmt.Fprintln(stdout, message)
+	}
+	return root, code
+}
+
+// layoutRepoMessage is layoutRepo without the writer: the same resolution and
+// the same sentence for a refusal, so a surface whose refusals must be one
+// JSON object can place that text inside the object instead of in front of it.
+// It exists so the two spellings cannot answer differently about one directory.
+func layoutRepoMessage() (string, int, string) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stdout, "agents layout: %v\n", err)
-		return "", exitcode.Malformed
+		return "", exitcode.Malformed, fmt.Sprintf("agents layout: %v", err)
 	}
 	rc, err := repo.Discover(cwd)
 	if err != nil {
-		fmt.Fprintln(stdout, "agents layout: not inside a git repository with .agents/; nothing to report")
-		return "", exitcode.Skip
+		return "", exitcode.Skip, "agents layout: not inside a git repository with .agents/; nothing to report"
 	}
 	info, err := os.Stat(repo.AgentsDir(rc.Root))
 	if err != nil || !info.IsDir() {
-		fmt.Fprintln(stdout, "agents layout: this repository has no .agents/; run `agents init` first")
-		return "", exitcode.Skip
+		return rc.Root, exitcode.Skip, "agents layout: this repository has no .agents/; run `agents init` first"
 	}
-	return rc.Root, exitcode.OK
+	return rc.Root, exitcode.OK, ""
 }
 
 // printProblems writes one line per problem, in the shape drift and doctor
@@ -383,7 +394,13 @@ func runLayoutMigrate(args []string, stdout io.Writer) int {
 //     recovery it exists for impossible.
 func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string) int {
 	fs := flag.NewFlagSet("layout migrate", flag.ContinueOnError)
-	fs.SetOutput(stdout)
+	// The flag package's own message ("flag provided but not defined: -x") is a
+	// report like any other: the human surface prints it, and a --json
+	// invocation carries it as the refusal object's error rather than as prose
+	// in front of the object. Captured rather than streamed to stdout for that
+	// reason.
+	var flagErrors bytes.Buffer
+	fs.SetOutput(&flagErrors)
 	template := fs.String("template", "", "store defaults for the target layout: code-repo, content-vault, or custom")
 	var stores storeFlags
 	fs.Var(&stores, "stores", "override one role's store path: role=path (repeatable)")
@@ -393,42 +410,53 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 	resume := fs.Bool("resume", false, "continue a `migrating` journal (requires --apply)")
 	abort := fs.Bool("abort", false, "delete a planned manifest (requires --apply)")
 	backupTag := fs.String("backup-tag", "", "annotated tag to create at HEAD before the first write")
-	asJSON := fs.Bool("json", false, "emit the plan as one JSON object")
+	asJSON := fs.Bool("json", false, "emit the report as one JSON object")
 	if err := fs.Parse(args); err != nil {
+		// The flag package stops at the first bad flag, so *asJSON may not have
+		// been reached yet even though the invocation asked for JSON. The
+		// pre-scan is what keeps a malformed --json invocation to one object.
+		refuseMigrate(stdout, jsonIntent(args), migrateRepoHint(),
+			"agents layout migrate: "+strings.TrimSpace(flagErrors.String()))
 		return exitcode.Malformed
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(stdout, "agents layout migrate: unexpected operand")
+		refuseMigrate(stdout, *asJSON, migrateRepoHint(), "agents layout migrate: unexpected operand")
 		return exitcode.Malformed
 	}
 	present := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { present[f.Name] = true })
 	layoutFlags := present["template"] || present["stores"] || present["archive"]
 
+	// refuseFlag is every malformed invocation's exit: the same sentence on the
+	// human surface, the same sentence inside the refusal object on --json, and
+	// the repository resolved best effort because these checks run before
+	// layoutRepo.
+	refuseFlag := func(message string) int {
+		refuseMigrate(stdout, *asJSON, migrateRepoHint(), message)
+		return exitcode.Malformed
+	}
+
 	// Design §7.2 and ruling R3. `--backup-tag` is required with every --apply
-	// that can move something: a resume continues a journal that already
-	// records its own tag and an abort moves nothing at all, so both are
-	// exempt, and every other --apply is refused without one. The tag is what
-	// makes rollback possible even when the operator forgot a branch.
+	// that can move something -- a resume continues a journal that already
+	// recorded its tag and an abort moves nothing at all -- and it is refused
+	// with a resume or an abort for the same reason it is required with the
+	// others: accepting a name that cannot take effect invites the operator to
+	// believe a tag was created.
 	switch {
 	case *resume && *abort:
-		fmt.Fprintln(stdout, "agents layout migrate: --resume and --abort are mutually exclusive")
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: --resume and --abort are mutually exclusive")
 	case *resume && !*apply:
-		fmt.Fprintln(stdout, "agents layout migrate: --resume requires --apply; continuing a journal is a mutation")
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: --resume requires --apply; continuing a journal is a mutation")
 	case *abort && !*apply:
-		fmt.Fprintln(stdout, "agents layout migrate: --abort requires --apply; deleting the manifest is a mutation")
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: --abort requires --apply; deleting the manifest is a mutation")
 	case (*resume || *abort) && layoutFlags:
-		fmt.Fprintln(stdout, "agents layout migrate: --resume and --abort take the target from the manifest, so --template, --stores, and --archive cannot be combined with them")
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: --resume and --abort take the target from the manifest, so --template, --stores, and --archive cannot be combined with them")
+	case (*resume || *abort) && present["backup-tag"]:
+		return refuseFlag("agents layout migrate: --backup-tag cannot take effect with --resume or --abort: a resume continues a journal that already recorded its tag, and an abort moves nothing and leaves the tag in place")
 	case *dryRun && (*apply || *resume || *abort):
-		fmt.Fprintln(stdout, "agents layout migrate: --dry-run and --apply are mutually exclusive")
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: --dry-run and --apply are mutually exclusive")
 	case *apply && !*resume && !*abort && *backupTag == "":
-		fmt.Fprintln(stdout, "agents layout migrate: --backup-tag <name> is required with --apply: the tool creates the annotated tag at HEAD before the first write, so the rollback point exists even without a branch")
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: --backup-tag <name> is required with --apply: the tool creates the annotated tag at HEAD before the first write, so the rollback point exists even without a branch")
 	}
 	// The CLI rejects an unknown template itself: a name this binary does not
 	// recognise is a typo, and letting it fall through to targetLayout's
@@ -436,18 +464,19 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 	switch *template {
 	case "", layout.TemplateCodeRepo, layout.TemplateContentVault, layout.TemplateCustom:
 	default:
-		fmt.Fprintf(stdout, "agents layout migrate: unknown template %q: the templates are %s, %s, and %s, or no --template at all with all four --stores\n",
-			safetext.Flatten(*template), layout.TemplateCodeRepo, layout.TemplateContentVault, layout.TemplateCustom)
-		return exitcode.Malformed
+		return refuseFlag(fmt.Sprintf("agents layout migrate: unknown template %q: the templates are %s, %s, and %s, or no --template at all with all four --stores",
+			safetext.Flatten(*template), layout.TemplateCodeRepo, layout.TemplateContentVault, layout.TemplateCustom))
 	}
 	overrides, err := parseStores(stores)
 	if err != nil {
-		fmt.Fprintf(stdout, "agents layout migrate: %v\n", err)
-		return exitcode.Malformed
+		return refuseFlag("agents layout migrate: " + err.Error())
 	}
 
-	root, code := layoutRepo(stdout)
+	root, code, message := layoutRepoMessage()
 	if code != exitcode.OK {
+		// The family's own sentence, unchanged: the same state must not be
+		// described two ways by two members of `agents layout`.
+		refuseMigrate(stdout, *asJSON, root, message)
 		return code
 	}
 	l := layout.Resolve(root)
@@ -465,8 +494,9 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 		case *abort:
 			return runMigrateAbort(stdout, root, l, running, *asJSON)
 		default:
-			fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: %s is layout_status migrating at phase %s; the journal is the plan now -- run `agents layout migrate --resume --apply` to continue it, or `agents layout migrate --abort --apply` while nothing has moved\n",
-				layout.ManifestRel, journalPhase(l))
+			refuseMigrate(stdout, *asJSON, root, fmt.Sprintf(
+				"agents layout migrate: refusing to plan: %s is layout_status migrating at phase %s; the journal is the plan now -- run `agents layout migrate --resume --apply` to continue it, or `agents layout migrate --abort --apply` while nothing has moved",
+				layout.ManifestRel, journalPhase(l)))
 			return exitcode.Advisory
 		}
 	}
@@ -474,28 +504,39 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 	// rather than whatever the tree looks like, because a repository with no
 	// journal is not a repository with a dirty tree.
 	if *resume {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to resume: no migrating manifest; --resume continues the journal a migration froze and never re-plans, and this repository resolves %s -- run `agents layout migrate --dry-run` to plan a migration\n",
-			safetext.Flatten(l.Schema))
+		refuseMigrate(stdout, *asJSON, root, fmt.Sprintf(
+			"agents layout migrate: refusing to resume: no migrating manifest; --resume continues the journal a migration froze and never re-plans, and this repository resolves %s -- run `agents layout migrate --dry-run` to plan a migration",
+			safetext.Flatten(l.Schema)))
 		return exitcode.Advisory
 	}
 	if *abort {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to abort: no migrating manifest; --abort deletes the journal this migration created while nothing has moved, and this repository resolves %s\n",
-			safetext.Flatten(l.Schema))
+		refuseMigrate(stdout, *asJSON, root, fmt.Sprintf(
+			"agents layout migrate: refusing to abort: no migrating manifest; --abort deletes the journal this migration created while nothing has moved, and this repository resolves %s",
+			safetext.Flatten(l.Schema)))
 		return exitcode.Advisory
 	}
 	// An active v2 layout, an unreadable manifest, or a schema from the future
 	// has nothing to plan: the source of a migration is a valid v1 layout.
 	if l.Schema != layout.SchemaV1 || len(l.Problems) > 0 {
-		printProblems(stdout, l.Problems)
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: the migration source must be a valid %s layout, and this repository resolves %s\n",
+		refusal := fmt.Sprintf("agents layout migrate: refusing to plan: the migration source must be a valid %s layout, and this repository resolves %s",
 			layout.SchemaV1, orNone(l.Schema))
+		if len(l.Problems) > 0 {
+			if *asJSON {
+				refusal = problemsSentence(l.Problems) + " " + refusal
+			} else {
+				// One line per problem, the shape every other surface of the
+				// family prints them in, with the verdict after them.
+				printProblems(stdout, l.Problems)
+			}
+		}
+		refuseMigrate(stdout, *asJSON, root, refusal)
 		return exitcode.Advisory
 	}
 
 	// Design §9.1's three git preconditions, in ruling R2's order. They run for
 	// the dry run as well as for --apply, because a dry run that would fail on
 	// apply is not a useful plan.
-	if code := migratePreconditions(root, stdout); code != exitcode.OK {
+	if code := migratePreconditions(stdout, root, *asJSON); code != exitcode.OK {
 		return code
 	}
 	// The planner does not read the router; the CLI asks drift for the state it
@@ -510,32 +551,47 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 		Running: running, RouterState: routerState,
 	})
 	if err != nil {
-		fmt.Fprintf(stdout, "agents layout migrate: %v\n", err)
+		// A source that cannot be read at all: a refusal, but one with no plan
+		// behind it, so it takes the refusal object.
+		refuseMigrate(stdout, *asJSON, root, "agents layout migrate: "+err.Error())
 		return exitcode.NoRecord
 	}
 
 	if !*apply {
 		if *asJSON {
 			emitPlanJSON(stdout, p)
-			// The plan is ready and nothing has been written: advisory by
-			// design §7.2, whichever surface printed it.
-			return exitcode.Advisory
+		} else {
+			printPlanReport(stdout, p, "dry run", true)
+			fmt.Fprintln(stdout)
+			printApplyHint(stdout, *template, stores, *archive)
 		}
-		printPlanReport(stdout, p, "dry run", true)
-		fmt.Fprintln(stdout)
-		printApplyHint(stdout, *template, stores, *archive)
+		// The plan is ready and nothing has been written: advisory by design
+		// §7.2, whichever surface printed it.
 		return exitcode.Advisory
 	}
-	// The report describes the invocation, not the planner's default: this run
-	// applies.
-	p.DryRun = false
 	if len(p.Blockers) > 0 {
+		// A blocked plan is a plan, not an application: nothing ran, so dry_run
+		// stays true. `false` beside blockers is the shape migrate.go warns
+		// reads as already applied.
 		if *asJSON {
-			return emitPlanJSON(stdout, p)
+			emitPlanJSON(stdout, p)
+		} else {
+			printPlanReport(stdout, p, "apply", true)
 		}
-		printPlanReport(stdout, p, "apply", true)
 		return exitcode.Advisory
 	}
+	// A tag name this run cannot use is malformed input, not a mid-flight
+	// failure: `git tag -a` is ApplyMigration's first act, so a collision or an
+	// invalid ref would fail with nothing moved -- and the table's `5` promises
+	// a manifest left `migrating`, which that path cannot produce. Asked
+	// read-only, before anything is printed or written.
+	if err := backupTagAvailable(root, *backupTag); err != nil {
+		refuseMigrate(stdout, *asJSON, root, "agents layout migrate: "+err.Error())
+		return exitcode.Malformed
+	}
+	// The report describes the invocation, not the planner's default: from here
+	// the run applies.
+	p.DryRun = false
 	if !*asJSON {
 		printPlanReport(stdout, p, "apply", true)
 	}
@@ -551,9 +607,70 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 		return exitcode.Advisory
 	}
 	if *asJSON {
-		return emitPlanJSON(stdout, p)
+		emitPlanJSON(stdout, p)
 	}
 	return exitcode.OK
+}
+
+// jsonIntent reports whether an invocation asked for JSON, read from the raw
+// arguments rather than from the parsed flag: fs.Parse stops at the first bad
+// flag, so on a parse error the flag's own value may not have been reached yet.
+// Only the exact spelling counts; `--json=false` parses on its own and is then
+// authoritative.
+func jsonIntent(args []string) bool {
+	for _, a := range args {
+		if a == "--json" || a == "-json" {
+			return true
+		}
+	}
+	return false
+}
+
+// migrateRepoHint is the repository root a refusal happened in, best effort and
+// silent. The flag refusals run before layoutRepo, and a refusal about a
+// malformed invocation must not be turned into "not a repository" by a second
+// resolution that prints; a --json consumer still gets whatever root resolved.
+func migrateRepoHint() string {
+	root, _, _ := layoutRepoMessage()
+	return root
+}
+
+// migrateRefusal is the `--json` shape of a refusal that has no plan behind it:
+// malformed flags, the three preconditions, a source that is not v1, the
+// routing refusal for a `migrating` manifest, and a repository that is not one.
+// It carries only what is known on those paths and invents no plan fields --
+// moves, blockers, and counts belong to a repository that planned -- and its
+// `error` is the same sentence the human surface prints, so R1's phase and
+// remedy survive the machine surface.
+type migrateRefusal struct {
+	Repo   string `json:"repo"`
+	DryRun bool   `json:"dry_run"`
+	Phase  string `json:"phase"`
+	Error  string `json:"error"`
+}
+
+// refuseMigrate writes one refusal: the sentence on the human surface, and one
+// parseable object carrying it on --json. Every --json path emits exactly one
+// object, refusals included.
+func refuseMigrate(w io.Writer, asJSON bool, root, message string) {
+	if !asJSON {
+		fmt.Fprintln(w, message)
+		return
+	}
+	emitObject(w, migrateRefusal{
+		Repo: root, DryRun: true, Phase: layout.PhasePlanned,
+		Error: safetext.Flatten(message),
+	})
+}
+
+// problemsSentence is printProblems' text as one sentence, for the surfaces
+// that must stay one parseable object.
+func problemsSentence(ps []layout.Problem) string {
+	var lines []string
+	for _, p := range ps {
+		lines = append(lines, safetext.Flatten(drift.ProblemsText([]layout.Problem{p})))
+	}
+	return strings.Join(lines, " ")
 }
 
 // migratePreconditions enforces the three design §9.1 checks the planner cannot
@@ -565,38 +682,76 @@ func runLayoutMigrateWithVersion(args []string, stdout io.Writer, running string
 // dirtiness it also causes is reported, which is the message that tells the
 // operator what to finish. Every refusal is Advisory: each is a state to
 // resolve, not malformed input and not a crash.
-func migratePreconditions(root string, stdout io.Writer) int {
+func migratePreconditions(stdout io.Writer, root string, asJSON bool) int {
 	op, err := repo.InProgress(root)
 	if err != nil {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: cannot tell whether a git operation is in progress: %v\n", err)
+		refuseMigrate(stdout, asJSON, root, fmt.Sprintf("agents layout migrate: refusing to plan: cannot tell whether a git operation is in progress: %v", err))
 		return exitcode.Advisory
 	}
 	if op != "" {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: a `git %s` is in progress, and it moves or discards HEAD on its own; the migration's rollback point is a tag at HEAD, which that would strand -- finish or abort it first\n",
-			safetext.Flatten(op))
+		refuseMigrate(stdout, asJSON, root, fmt.Sprintf(
+			"agents layout migrate: refusing to plan: a `git %s` is in progress, and it moves or discards HEAD on its own; the migration's rollback point is a tag at HEAD, which that would strand -- finish or abort it first",
+			safetext.Flatten(op)))
 		return exitcode.Advisory
 	}
 	status, err := repo.Git(root, "status", "--porcelain")
 	if err != nil {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: cannot read the working tree state: %v\n", err)
+		refuseMigrate(stdout, asJSON, root, fmt.Sprintf("agents layout migrate: refusing to plan: cannot read the working tree state: %v", err))
 		return exitcode.Advisory
 	}
 	if strings.TrimSpace(status) != "" {
-		fmt.Fprintln(stdout, "agents layout migrate: refusing to plan: working tree is not clean; commit or stash the changes first, because the migration moves tracked stores and restores them from the backup tag")
+		refuseMigrate(stdout, asJSON, root, "agents layout migrate: refusing to plan: working tree is not clean; commit or stash the changes first, because the migration moves tracked stores and restores them from the backup tag")
 		return exitcode.Advisory
 	}
 	branch, err := repo.Git(root, "branch", "--show-current")
 	if err != nil {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: cannot read the current branch: %v\n", err)
+		refuseMigrate(stdout, asJSON, root, fmt.Sprintf("agents layout migrate: refusing to plan: cannot read the current branch: %v", err))
 		return exitcode.Advisory
 	}
 	branch = strings.TrimSpace(branch)
+	// A detached HEAD passes deliberately. The branch rule exists so the
+	// rollback point is not on a trunk that a later push would carry, and the
+	// annotated tag this migration creates at HEAD is that rollback point
+	// wherever HEAD is: `git checkout <sha>` is a legitimate way to run it
+	// (design §9.6's branch isolation is one shape of rollback, not the only
+	// one). Refusing here would also refuse a bisect's detached HEAD, which the
+	// in-progress check above already catches by name.
 	if branch == "master" || branch == "main" {
-		fmt.Fprintf(stdout, "agents layout migrate: refusing to plan: the current branch is %s, a protected trunk; create a migration branch first (`git switch -c layout-v2`)\n",
-			safetext.Flatten(branch))
+		refuseMigrate(stdout, asJSON, root, fmt.Sprintf(
+			"agents layout migrate: refusing to plan: the current branch is %s, a protected trunk; create a migration branch first (`git switch -c layout-v2`)",
+			safetext.Flatten(branch)))
 		return exitcode.Advisory
 	}
 	return exitcode.OK
+}
+
+// backupTagAvailable refuses a --backup-tag name this run cannot use: one that
+// is not a valid ref, one that already exists, and one whose state cannot be
+// read. Every one of them is malformed input (3) rather than a mid-flight
+// failure (5), because ApplyMigration's first act is `git tag -a` and each of
+// these fails there with nothing moved -- a state the table reserves for a
+// manifest left `migrating`.
+//
+// `git rev-parse --verify --quiet refs/tags/<name>` is exact. `git tag --list
+// <name>` treats its argument as a glob, so a name holding a `*` would answer
+// about a different tag. Exit 1 is git's "no such ref"; anything else -- a
+// broken repository, an unreadable ref store -- is an error the caller must not
+// read as "free to use".
+func backupTagAvailable(root, name string) error {
+	if out, err := repo.Git(root, "check-ref-format", "refs/tags/"+name); err != nil {
+		return fmt.Errorf("--backup-tag %q is not a valid tag name: %s", name, strings.TrimSpace(out))
+	}
+	out, err := repo.Git(root, "rev-parse", "--verify", "--quiet", "refs/tags/"+name)
+	switch {
+	case err == nil:
+		return fmt.Errorf("--backup-tag %q already exists; choose another name, or continue the migration it belongs to with `agents layout migrate --resume --apply`", name)
+	default:
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return nil
+		}
+		return fmt.Errorf("cannot tell whether --backup-tag %q already exists: %v: %s", name, err, strings.TrimSpace(out))
+	}
 }
 
 // runMigrateResume continues a `migrating` journal. It never re-plans (design
@@ -604,12 +759,13 @@ func migratePreconditions(root string, stdout io.Writer) int {
 // the target comes from the manifest.
 func runMigrateResume(w io.Writer, root string, l layout.Layout, running string, asJSON bool) int {
 	if l.Migration == nil {
-		fmt.Fprintf(w, "agents layout migrate: refusing to resume: %s is layout_status migrating with no journal to continue; run `agents layout validate`\n", layout.ManifestRel)
+		refuseMigrate(w, asJSON, root, fmt.Sprintf("agents layout migrate: refusing to resume: %s is layout_status migrating with no journal to continue; run `agents layout validate`", layout.ManifestRel))
 		return exitcode.Advisory
 	}
 	if ok, reason := versionGate(running, l); !ok {
-		fmt.Fprintf(w, "agents layout migrate: refusing to resume: this binary (running %s) may not write this layout (%s, min_mut_ver_floor %s); resume with a binary at or above the floor\n",
-			safetext.Flatten(running), safetext.Flatten(reason), orNone(l.MinMutVerFloor))
+		refuseMigrate(w, asJSON, root, fmt.Sprintf(
+			"agents layout migrate: refusing to resume: this binary (running %s) may not write this layout (%s, min_mut_ver_floor %s); resume with a binary at or above the floor",
+			safetext.Flatten(running), safetext.Flatten(reason), orNone(l.MinMutVerFloor)))
 		return exitcode.Advisory
 	}
 	p := journalPlan(root, l, running)
@@ -618,9 +774,10 @@ func runMigrateResume(w io.Writer, root string, l layout.Layout, running string,
 		return reportJournalFailure(w, p, mode, err, asJSON)
 	}
 	if asJSON {
-		return emitPlanJSON(w, p)
+		emitPlanJSON(w, p)
+	} else {
+		printPlanReport(w, p, mode, false)
 	}
-	printPlanReport(w, p, mode, false)
 	return exitcode.OK
 }
 
@@ -631,20 +788,26 @@ func runMigrateResume(w io.Writer, root string, l layout.Layout, running string,
 // state proves nothing moved.
 func runMigrateAbort(w io.Writer, root string, l layout.Layout, running string, asJSON bool) int {
 	if l.Migration == nil {
-		fmt.Fprintf(w, "agents layout migrate: refusing to abort: %s is layout_status migrating with no journal; run `agents layout validate`\n", layout.ManifestRel)
+		refuseMigrate(w, asJSON, root, fmt.Sprintf("agents layout migrate: refusing to abort: %s is layout_status migrating with no journal; run `agents layout validate`", layout.ManifestRel))
 		return exitcode.Advisory
 	}
 	// Abort's whole permission is that the permitted state proves nothing has
 	// moved (design §0.5). A manifest that does not validate cannot prove it, so
 	// it is not read for a phase at all.
 	if len(l.Problems) > 0 {
-		printProblems(w, l.Problems)
-		fmt.Fprintf(w, "agents layout migrate: refusing to abort: the manifest is invalid, so the state that makes a delete safe cannot be proven; run `agents layout validate`, then `agents layout migrate --resume --apply`\n")
+		refusal := "agents layout migrate: refusing to abort: the manifest is invalid, so the state that makes a delete safe cannot be proven; run `agents layout validate`, then `agents layout migrate --resume --apply`"
+		if asJSON {
+			refusal = problemsSentence(l.Problems) + " " + refusal
+		} else {
+			printProblems(w, l.Problems)
+		}
+		refuseMigrate(w, asJSON, root, refusal)
 		return exitcode.Advisory
 	}
 	if ok, reason := versionGate(running, l); !ok {
-		fmt.Fprintf(w, "agents layout migrate: refusing to abort: this binary (running %s) may not write this layout (%s, min_mut_ver_floor %s); a binary at or above the floor may abort, or delete %s by hand -- the permitted state proves nothing moved\n",
-			safetext.Flatten(running), safetext.Flatten(reason), orNone(l.MinMutVerFloor), layout.ManifestRel)
+		refuseMigrate(w, asJSON, root, fmt.Sprintf(
+			"agents layout migrate: refusing to abort: this binary (running %s) may not write this layout (%s, min_mut_ver_floor %s); a binary at or above the floor may abort, or delete %s by hand -- the permitted state proves nothing moved",
+			safetext.Flatten(running), safetext.Flatten(reason), orNone(l.MinMutVerFloor), layout.ManifestRel))
 		return exitcode.Advisory
 	}
 	p := journalPlan(root, l, running)
@@ -657,6 +820,9 @@ func runMigrateAbort(w io.Writer, root string, l layout.Layout, running string, 
 	}
 	if err != nil {
 		if asJSON {
+			// The engine refused, so nothing was applied; dry_run says so even
+			// though the plan describes a journal that exists.
+			p.DryRun = true
 			emitWithBlocker(w, p, "abort_refused", err.Error())
 		} else {
 			planLine(w, "abort", "refused: %s", safetext.Flatten(err.Error()))
@@ -664,9 +830,10 @@ func runMigrateAbort(w io.Writer, root string, l layout.Layout, running string, 
 		return exitcode.Advisory
 	}
 	if asJSON {
-		return emitPlanJSON(w, p)
+		emitPlanJSON(w, p)
+	} else {
+		planLine(w, "abort", "removed %s; the backup tag %s remains the record", layout.ManifestRel, safetext.Flatten(l.Migration.BackupTag))
 	}
-	planLine(w, "abort", "removed %s; the backup tag %s remains the record", layout.ManifestRel, safetext.Flatten(l.Migration.BackupTag))
 	return exitcode.OK
 }
 
@@ -943,12 +1110,15 @@ func journalPhase(l layout.Layout) string {
 	return safetext.Flatten(l.Migration.Phase)
 }
 
-// emitPlanJSON writes the plan as one object and nothing else, the way every
-// other --json surface in this family does: a consumer parses the bytes before
-// it reads the exit code. The three list fields are normalized to arrays, so a
-// plan without blockers or links is `[]` rather than `null` and a consumer can
-// count them without a nil check.
-func emitPlanJSON(w io.Writer, p layout.Plan) int {
+// emitPlanJSON writes the plan as one object and nothing else. It deliberately
+// returns nothing: the exit code is the invocation's disposition from ruling
+// R4's table, and a helper that returned its own success let a blocked --apply
+// report `0` on the machine surface while the human surface reported `1`.
+//
+// The three list fields are normalized to arrays, so a plan without blockers or
+// links is `[]` rather than `null` and a consumer can count them without a nil
+// check.
+func emitPlanJSON(w io.Writer, p layout.Plan) {
 	if p.Moves == nil {
 		p.Moves = []layout.Move{}
 	}
@@ -958,18 +1128,25 @@ func emitPlanJSON(w io.Writer, p layout.Plan) int {
 	if p.Blockers == nil {
 		p.Blockers = []layout.Blocker{}
 	}
-	b, err := json.MarshalIndent(p, "", "  ")
+	emitObject(w, p)
+}
+
+// emitObject writes one JSON object and a newline. A marshal failure cannot
+// happen for these shapes; if it ever did, the consumer still receives one
+// object rather than half a document plus prose.
+func emitObject(w io.Writer, v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
-		fmt.Fprintf(w, "agents layout migrate: %v\n", err)
-		return exitcode.NoRecord
+		b, _ = json.Marshal(map[string]string{"error": err.Error()})
 	}
 	w.Write(append(b, '\n'))
-	return exitcode.OK
 }
 
 // emitWithBlocker adds one blocker to a journal plan and emits it, so a failed
 // or refused journal verb still answers a --json consumer with one parseable
 // object carrying the reason, rather than with prose the consumer cannot read.
+// It returns nothing for the same reason emitPlanJSON does: the caller owns the
+// table's exit code.
 func emitWithBlocker(w io.Writer, p layout.Plan, code, detail string) {
 	p.Blockers = append(append([]layout.Blocker{}, p.Blockers...), layout.Blocker{
 		Code: code, Detail: safetext.Flatten(detail),

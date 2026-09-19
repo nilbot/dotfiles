@@ -878,20 +878,38 @@ Full semantics are in §9 and the migration playbook. Surface rules:
   created. It deletes the manifest and keeps the backup tag. Any other phase
   refuses, names the phase, and points at `--resume --apply` (§0.5).
 - `--backup-tag <name>` is required with every `--apply` that can move something
-  (that is, every `--apply` except `--resume` and `--abort`). The tool creates
-  the annotated tag at HEAD before the first write, so the rollback point exists
-  even if the operator forgot to create a branch.
+  (that is, every `--apply` except `--resume` and `--abort`), and is refused with
+  those two: a resume continues a journal that already recorded its tag, an abort
+  moves nothing and leaves the tag, and a name that cannot take effect must not
+  read as one that did. A name that is not a valid ref, or that already exists,
+  is malformed input (3): `git tag -a` is the first write, so it would fail with
+  nothing moved. The tool creates the annotated tag at HEAD before the first
+  write, so the rollback point exists even if the operator forgot to create a
+  branch.
 - `--template` is optional. When present, its creation defaults supply the
   store map; `--stores role=path` overrides individual roles. When absent (or
   `custom`), `--stores` must supply all four roles.
-- `--json` emits one object: `repo`, `dry_run`, `phase`, `from`, `to`, `router`,
-  `archive`, `moves`, `link_candidates`, `blockers`, `counts`. `phase` is the
-  migration phase the report describes: `planned` for a dry run or a fresh
-  `--apply`, and the journal phase a `--resume` continued from.
+- `--json` emits one object, on every path: the plan (`repo`, `dry_run`, `phase`,
+  `from`, `to`, `router`, `archive`, `moves`, `link_candidates`, `blockers`,
+  `counts`), or — for a refusal that precedes a plan, such as the preconditions
+  or the `migrating` routing — a refusal object carrying `repo`, `dry_run`,
+  `phase`, and the `error` sentence the human surface prints, so a consumer
+  never has to skip prose. `phase` is the migration phase the report describes:
+  `planned` for a dry run or a fresh `--apply`, and the journal phase a
+  `--resume` continued from. `dry_run` is true whenever nothing was applied,
+  including a plan refused for its blockers.
 - Exit codes: 0 applied and no link candidates, or `--abort` completed; 1 dry-run
   plan ready, applied with link candidates, blockers (including `docs_residue`),
   or a refused `--abort`; 3 malformed flags; 4 not a repository with `.agents/`;
   5 apply failed mid-way and the manifest remains `migrating` for resume.
+  `--resume --apply` follows the same rows as `--apply` with one exception: link
+  candidates are reported only by the run that planned them, so a resume that
+  completes a migration planned with candidates exits 0, where the fresh
+  `--apply` that planned it exited 1.
+- The candidates are a property of the pre-move source tree. A fresh `--apply`
+  scans the stores before moving them; a resume completes a move list whose
+  source tree no longer exists, and §0.5 forbids re-planning, so the journal
+  records no candidates and the resume reports none rather than inventing them.
 
 ### 7.3 Drift report changes
 

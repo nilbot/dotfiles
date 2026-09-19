@@ -649,6 +649,60 @@ func migratingManifest(t *testing.T, root, phase, moveState string, createdManif
 	gitOutput(t, root, "commit", "-m", "migrating journal")
 }
 
+// newLinkedV1Repo is newGitV1RepoWithContent plus one markdown link from the
+// plans store into the design store, so a plan has a link candidate to report
+// (design §9.5) and an apply has the post-move advisory to return.
+func newLinkedV1Repo(t *testing.T) string {
+	t.Helper()
+	root := newGitV1RepoWithContent(t)
+	writeFile(t, filepath.Join(root, "docs/plans/linked.md"), "See [a design](../design/a-design.md).\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "a link into a moving store")
+	return root
+}
+
+// newResidueJournalRepo is a repository whose journal is at `router` -- every
+// move done, the v2 router written, the journal not yet retired -- with a
+// tracked stray left in docs/. It is the only state in which docs_residue can
+// appear after a plan was accepted: the planner refuses the entry up front, and
+// this fixture is what a stray created mid-flight looks like on disk.
+func newResidueJournalRepo(t *testing.T) string {
+	t.Helper()
+	root := newGitV1RepoWithContent(t)
+	p, err := layout.PlanMigration(root, layout.MigrateOptions{
+		Template: layout.TemplateContentVault, Running: "v0.6.0",
+		RouterState: string(drift.RouterCurrent),
+	})
+	if err != nil || len(p.Blockers) > 0 {
+		t.Fatalf("fixture plan = (%v, %v)", p.Blockers, err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".context"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	moves := make([]layout.Move, len(p.Moves))
+	for i, m := range p.Moves {
+		gitOutput(t, root, "mv", m.From, m.To)
+		m.State = layout.MoveDone
+		moves[i] = m
+	}
+	writeFile(t, filepath.Join(root, "docs/scratch.md"), "stray\n")
+	writeManifestForCmd(t, root, layout.Manifest{
+		Schema: layout.SchemaV2, MinMutVerFloor: layout.MinMutVerFloorV2,
+		LayoutStatus: layout.StatusMigrating, Archive: p.To.Archive, Stores: p.To.Stores,
+		Migration: &layout.Migration{
+			From:            layout.MigrationFrom{Schema: p.From.Schema, Stores: p.From.Stores, Archive: p.From.Archive},
+			StartedAt:       "2026-09-19T00:00:00Z",
+			BackupTag:       "pre-layout-v2-test",
+			CreatedManifest: true,
+			Phase:           layout.PhaseRouter,
+			Moves:           moves,
+		},
+	})
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "journal at router")
+	return root
+}
+
 // plannedJournalRepo is the state ApplyMigration leaves when it crashes after
 // writing the journal and before the first move: status migrating, phase
 // planned, every move pending, and a real content identity per move, taken from
@@ -880,7 +934,11 @@ func TestLayoutMigrateRefusesMalformedFlagCombinations(t *testing.T) {
 		{"--abort"},                        // --abort requires --apply
 		{"--resume", "--apply", "--abort"}, // mutually exclusive
 		{"--resume", "--apply", "--template", "content-vault"},  // resume takes the target from the manifest
+		{"--resume", "--apply", "--archive", "docs/archive"},    // nor an archive override
 		{"--abort", "--apply", "--stores", "design=x"},          // abort takes no layout flags
+		{"--abort", "--apply", "--archive", "docs/archive"},     // nor an archive
+		{"--resume", "--apply", "--backup-tag", "x"},            // the journal already recorded its tag
+		{"--abort", "--apply", "--backup-tag", "x"},             // abort moves nothing and leaves the tag
 		{"--dry-run", "--apply", "--template", "content-vault"}, // dry run and apply are exclusive
 		{"--template", "no-such-template"},                      // an unknown template is a typo, not a layout
 		{"--template", "content-vault", "--stores", "design"},   // not role=path
@@ -890,6 +948,89 @@ func TestLayoutMigrateRefusesMalformedFlagCombinations(t *testing.T) {
 		if code := runLayoutMigrateWithVersion(args, &out, "v0.6.0"); code != exitcode.Malformed {
 			t.Errorf("%v exit = %d, want Malformed:\n%s", args, code, out.String())
 		}
+	}
+}
+
+// Ruling R4's `5` promises a manifest left `migrating`, and a tag name that is
+// already taken cannot produce that: `git tag -a` is ApplyMigration's first act,
+// so the collision fails with nothing moved. It is malformed input, refused
+// before anything is printed or written.
+func TestLayoutMigrateApplyRefusesATakenBackupTag(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	gitOutput(t, root, "tag", "-a", "pre-layout-v2-test", "-m", "someone else's tag")
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runLayoutMigrateWithVersion([]string{
+		"--template", "content-vault", "--apply", "--backup-tag", "pre-layout-v2-test",
+	}, &out, "v0.6.0"); code != exitcode.Malformed {
+		t.Fatalf("taken tag = %d, want Malformed:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "already exists") || !strings.Contains(out.String(), "--resume --apply") {
+		t.Errorf("the refusal must name the tag and the remedy:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(layout.ManifestRel))); !os.IsNotExist(err) {
+		t.Error("a refused apply wrote a manifest")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".context")); !os.IsNotExist(err) {
+		t.Error("a refused apply moved a store")
+	}
+}
+
+// The whole happy path with no template: --stores supplies all four roles and
+// --archive records the place that must survive the migration (design §9.5).
+// docs/ stays standing because it holds the archive, and the residue check must
+// not report it as a shell.
+func TestLayoutMigrateApplyWithExplicitStoresAndArchive(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	writeFile(t, filepath.Join(root, "docs/archive/old.md"), "archived\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "an archive")
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runLayoutMigrateWithVersion([]string{
+		"--stores", "design=.context/design", "--stores", "plans=.context/plans",
+		"--stores", "journal=.context/journal", "--stores", "qna=.context/qna",
+		"--archive", "docs/archive",
+		"--apply", "--backup-tag", "pre-layout-v2-test",
+	}, &out, "v0.6.0"); code != exitcode.OK {
+		t.Fatalf("explicit stores and archive = %d, want OK:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "keeps docs/archive") {
+		t.Errorf("the report does not say the archive stays:\n%s", out.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs/archive/old.md")); err != nil {
+		t.Errorf("the archive moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".context/design/a-design.md")); err != nil {
+		t.Errorf("the design store did not move: %v", err)
+	}
+	l := layout.Resolve(root)
+	if l.LayoutStatus != layout.StatusActive || l.Archive != "docs/archive" {
+		t.Errorf("status/archive = %q/%q", l.LayoutStatus, l.Archive)
+	}
+	out.Reset()
+	if code := runLayoutValidateWithVersion(nil, &out, "v0.6.0"); code != exitcode.OK {
+		t.Errorf("validate after apply = %d, want OK: %s", code, out.String())
+	}
+}
+
+// A detached HEAD passes the branch precondition deliberately: the rule exists
+// so the rollback point is not on a trunk a push would carry, and the annotated
+// tag this migration creates at HEAD is that rollback point wherever HEAD is.
+// The plan must proceed, and the report must say where it is.
+func TestLayoutMigratePlansOnADetachedHead(t *testing.T) {
+	root := newGitV1RepoWithContent(t)
+	gitOutput(t, root, "checkout", "--detach", "HEAD")
+	t.Chdir(root)
+	var out bytes.Buffer
+	if code := runLayoutMigrateWithVersion([]string{"--template", "content-vault", "--dry-run"}, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("detached HEAD = %d, want the plan rather than a branch refusal:\n%s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "move    docs/design") {
+		t.Errorf("the plan was not printed:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "branch (detached HEAD), tree clean") {
+		t.Errorf("the git line does not report the detached HEAD:\n%s", out.String())
 	}
 }
 
@@ -930,10 +1071,7 @@ func TestLayoutMigrateApplyMovesTheStoresAndValidates(t *testing.T) {
 // not a failure: the layout is done and the migrating-fleet-context skill owns
 // the rewrite (design §9.5).
 func TestLayoutMigrateApplyWithLinkCandidatesIsAdvisory(t *testing.T) {
-	root := newGitV1RepoWithContent(t)
-	writeFile(t, filepath.Join(root, "docs/plans/linked.md"), "See [a design](../design/a-design.md).\n")
-	gitOutput(t, root, "add", "-A")
-	gitOutput(t, root, "commit", "-m", "a link into a moving store")
+	root := newLinkedV1Repo(t)
 	t.Chdir(root)
 	var out bytes.Buffer
 	if code := runLayoutMigrateWithVersion([]string{
@@ -1084,42 +1222,7 @@ func TestLayoutMigrateMoveErrorLeavesTheManifestMigrating(t *testing.T) {
 // the moves did complete -- and the residue is a named advisory blocker, one
 // line per entry (design §9.5).
 func TestLayoutMigrateResidueAfterTheMovesLeavesTheLayoutActive(t *testing.T) {
-	root := newGitV1RepoWithContent(t)
-	p, err := layout.PlanMigration(root, layout.MigrateOptions{
-		Template: layout.TemplateContentVault, Running: "v0.6.0",
-		RouterState: string(drift.RouterCurrent),
-	})
-	if err != nil || len(p.Blockers) > 0 {
-		t.Fatalf("fixture plan = (%v, %v)", p.Blockers, err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, ".context"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	moves := make([]layout.Move, len(p.Moves))
-	for i, m := range p.Moves {
-		gitOutput(t, root, "mv", m.From, m.To)
-		m.State = layout.MoveDone
-		moves[i] = m
-	}
-	// The journal is at `router`: every move is done and the v2 router is
-	// written, so the only step left is retiring the journal -- which is where
-	// apply re-checks docs/ and reports the shell it could not remove.
-	writeFile(t, filepath.Join(root, "docs/scratch.md"), "stray\n")
-	writeManifestForCmd(t, root, layout.Manifest{
-		Schema: layout.SchemaV2, MinMutVerFloor: layout.MinMutVerFloorV2,
-		LayoutStatus: layout.StatusMigrating, Archive: p.To.Archive, Stores: p.To.Stores,
-		Migration: &layout.Migration{
-			From:            layout.MigrationFrom{Schema: p.From.Schema, Stores: p.From.Stores, Archive: p.From.Archive},
-			StartedAt:       "2026-09-19T00:00:00Z",
-			BackupTag:       "pre-layout-v2-test",
-			CreatedManifest: true,
-			Phase:           layout.PhaseRouter,
-			Moves:           moves,
-		},
-	})
-	gitOutput(t, root, "add", "-A")
-	gitOutput(t, root, "commit", "-m", "journal at router")
-
+	root := newResidueJournalRepo(t)
 	t.Chdir(root)
 	var out bytes.Buffer
 	if code := runLayoutMigrateWithVersion([]string{"--resume", "--apply"}, &out, "v0.6.0"); code != exitcode.Advisory {
@@ -1225,71 +1328,254 @@ func TestMainRegistersLayoutMigrate(t *testing.T) {
 
 // Ruling R4's table is the exit code of the invocation, not of the surface that
 // printed it: --json changes the shape of the report, never the disposition.
-// Every row that can be reached through a journal is pinned here, because the
-// first implementation returned the emit helper's own OK on all of them.
+// This walks every row of the table that can carry a plan, and asserts the
+// bytes are exactly one parseable object beside the code -- a blocked --apply
+// once returned OK here while the human surface returned Advisory.
+//
+// `dry_run` is part of the row too: it is true whenever nothing was applied,
+// including a blocked plan, and false only for a run that reached the engine.
 func TestLayoutMigrateJSONKeepsTheTableExitCodes(t *testing.T) {
-	// A move error: NoRecord, and the object carries the remedy as a blocker so
-	// a --json consumer can read it without the prose.
-	root := newGitV1RepoWithContent(t)
-	t.Chdir(root)
-	migratingManifest(t, root, layout.PhasePlanned, layout.MovePending, true)
-	var out bytes.Buffer
-	if code := runLayoutMigrateWithVersion([]string{"--resume", "--apply", "--json"}, &out, "v0.6.0"); code != exitcode.NoRecord {
-		t.Errorf("move error --json exit = %d, want NoRecord:\n%s", code, out.String())
+	blocked := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		writeFile(t, filepath.Join(root, "docs/scratch.md"), "stray\n")
+		gitOutput(t, root, "add", "-A")
+		gitOutput(t, root, "commit", "-m", "stray")
+		return root
 	}
-	var failed layout.Plan
-	if err := json.Unmarshal(out.Bytes(), &failed); err != nil {
-		t.Fatalf("move error --json is not one JSON object on its own: %v\n%s", err, out.String())
+	planned := func(t *testing.T) string { root, _ := plannedJournalRepo(t); return root }
+	migrating := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		migratingManifest(t, root, layout.PhasePlanned, layout.MovePending, true)
+		return root
 	}
-	if len(failed.Blockers) != 1 || !strings.Contains(failed.Blockers[0].Detail, "remedy") {
-		t.Errorf("the object does not carry the remedy:\n%s", out.String())
+	moved := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		migratingManifest(t, root, layout.PhaseMoved, layout.MoveDone, true)
+		return root
+	}
+	apply := []string{"--template", "content-vault", "--apply", "--backup-tag", "pre-layout-v2-test", "--json"}
+
+	cases := []struct {
+		name  string
+		root  func(t *testing.T) string
+		args  []string
+		want  int
+		check func(t *testing.T, p layout.Plan)
+	}{
+		{
+			name: "dry run", root: newGitV1RepoWithContent,
+			args: []string{"--template", "content-vault", "--dry-run", "--json"},
+			want: exitcode.Advisory,
+			check: func(t *testing.T, p layout.Plan) {
+				if !p.DryRun || p.Phase != layout.PhasePlanned || p.Counts.Move != 4 {
+					t.Errorf("dry run = dry_run %v, phase %q, moves %d", p.DryRun, p.Phase, p.Counts.Move)
+				}
+			},
+		},
+		{
+			name: "blocked apply", root: blocked, args: apply,
+			want: exitcode.Advisory,
+			check: func(t *testing.T, p layout.Plan) {
+				if !p.DryRun || p.Phase != layout.PhasePlanned {
+					t.Errorf("a blocked plan is a plan, not an application: dry_run %v, phase %q", p.DryRun, p.Phase)
+				}
+				if p.Counts.Blocked == 0 || len(p.Blockers) == 0 {
+					t.Errorf("the blockers are not in the object: %+v", p.Blockers)
+				}
+			},
+		},
+		{
+			name: "clean apply", root: newGitV1RepoWithContent, args: apply,
+			want: exitcode.OK,
+			check: func(t *testing.T, p layout.Plan) {
+				if p.DryRun || p.Phase != layout.PhasePlanned || p.Counts.Links != 0 {
+					t.Errorf("clean apply = dry_run %v, phase %q, links %d", p.DryRun, p.Phase, p.Counts.Links)
+				}
+			},
+		},
+		{
+			name: "applied with link candidates", root: newLinkedV1Repo, args: apply,
+			want: exitcode.Advisory,
+			check: func(t *testing.T, p layout.Plan) {
+				if p.DryRun || p.Counts.Links == 0 {
+					t.Errorf("link candidates = dry_run %v, links %d", p.DryRun, p.Counts.Links)
+				}
+			},
+		},
+		{
+			name: "resume completes", root: planned,
+			args: []string{"--resume", "--apply", "--json"},
+			want: exitcode.OK,
+			check: func(t *testing.T, p layout.Plan) {
+				if p.DryRun || p.Phase != layout.PhasePlanned || len(p.Moves) != 4 {
+					t.Errorf("resume = dry_run %v, phase %q, moves %d", p.DryRun, p.Phase, len(p.Moves))
+				}
+			},
+		},
+		{
+			name: "resume move error", root: migrating,
+			args: []string{"--resume", "--apply", "--json"},
+			want: exitcode.NoRecord,
+			check: func(t *testing.T, p layout.Plan) {
+				if len(p.Blockers) != 1 || p.Blockers[0].Code != "move_error" || !strings.Contains(p.Blockers[0].Detail, "remedy") {
+					t.Errorf("blockers = %+v, want one move_error carrying the remedy", p.Blockers)
+				}
+			},
+		},
+		{
+			name: "resume residue", root: newResidueJournalRepo,
+			args: []string{"--resume", "--apply", "--json"},
+			want: exitcode.Advisory,
+			check: func(t *testing.T, p layout.Plan) {
+				if len(p.Blockers) != 1 || p.Blockers[0].Code != "docs_residue" || !strings.Contains(p.Blockers[0].Detail, "docs/scratch.md") {
+					t.Errorf("blockers = %+v, want one docs_residue naming the entry", p.Blockers)
+				}
+			},
+		},
+		{
+			name: "refused abort", root: moved,
+			args: []string{"--abort", "--apply", "--json"},
+			want: exitcode.Advisory,
+			check: func(t *testing.T, p layout.Plan) {
+				if !p.DryRun {
+					t.Error("a refused abort applied nothing: dry_run must stay true")
+				}
+				if len(p.Blockers) != 1 || p.Blockers[0].Code != "abort_refused" {
+					t.Errorf("blockers = %+v, want one abort_refused", p.Blockers)
+				}
+			},
+		},
+		{
+			name: "abort", root: migrating,
+			args: []string{"--abort", "--apply", "--json"},
+			want: exitcode.OK,
+			check: func(t *testing.T, p layout.Plan) {
+				if p.DryRun || p.Phase != layout.PhasePlanned {
+					t.Errorf("abort = dry_run %v, phase %q", p.DryRun, p.Phase)
+				}
+			},
+		},
 	}
 
-	// A refused abort: Advisory, and the object names the refusal. The fixture
-	// is past `planned` -- the journal that just refused the resume is still
-	// abortable by design, so the refusal needs a journal that is not.
-	moved := newGitV1RepoWithContent(t)
-	t.Chdir(moved)
-	migratingManifest(t, moved, layout.PhaseMoved, layout.MoveDone, true)
-	out.Reset()
-	if code := runLayoutMigrateWithVersion([]string{"--abort", "--apply", "--json"}, &out, "v0.6.0"); code != exitcode.Advisory {
-		t.Errorf("refused abort --json exit = %d, want Advisory:\n%s", code, out.String())
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Chdir(c.root(t))
+			var out bytes.Buffer
+			code := runLayoutMigrateWithVersion(c.args, &out, "v0.6.0")
+			if code != c.want {
+				t.Fatalf("exit = %d, want %d:\n%s", code, c.want, out.String())
+			}
+			var got layout.Plan
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("--json is not exactly one JSON object: %v\n%s", err, out.String())
+			}
+			c.check(t, got)
+		})
 	}
-	if err := json.Unmarshal(out.Bytes(), &failed); err != nil {
-		t.Fatalf("refused abort --json is not one JSON object: %v\n%s", err, out.String())
+}
+
+// Every refusal that precedes a plan emits exactly one parseable object too, so
+// a consumer never gets prose it has to skip. The object carries the
+// repository, `dry_run: true`, the phase a run would have started from, and the
+// same sentence the human surface prints -- which is how R1's phase and remedy
+// survive the machine surface.
+func TestLayoutMigrateJSONRefusalsAreOneObject(t *testing.T) {
+	dirty := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		writeFile(t, filepath.Join(root, "docs/design/scratch.md"), "dirty\n")
+		return root
 	}
-	if len(failed.Blockers) != 1 || failed.Blockers[0].Code != "abort_refused" {
-		t.Errorf("abort blockers = %+v, want one abort_refused", failed.Blockers)
+	onMain := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		gitOutput(t, root, "switch", "-c", "main")
+		return root
+	}
+	merging := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		gitOutput(t, root, "switch", "-c", "side")
+		writeFile(t, filepath.Join(root, "side.txt"), "side\n")
+		gitOutput(t, root, "add", "side.txt")
+		gitOutput(t, root, "commit", "-m", "side")
+		gitOutput(t, root, "switch", "agents-test")
+		writeFile(t, filepath.Join(root, "agents-side.txt"), "agents\n")
+		gitOutput(t, root, "add", "agents-side.txt")
+		gitOutput(t, root, "commit", "-m", "agents")
+		gitOutput(t, root, "merge", "--no-ff", "--no-commit", "side")
+		return root
+	}
+	migrating := func(t *testing.T) string {
+		t.Helper()
+		root, _ := plannedJournalRepo(t)
+		return root
+	}
+	taken := func(t *testing.T) string {
+		t.Helper()
+		root := newGitV1RepoWithContent(t)
+		gitOutput(t, root, "tag", "-a", "pre-layout-v2-test", "-m", "someone else's tag")
+		return root
+	}
+	noRepo := func(t *testing.T) string { return t.TempDir() }
+
+	cases := []struct {
+		name    string
+		root    func(t *testing.T) string
+		args    []string
+		want    int
+		wantErr string
+	}{
+		{"dirty tree", dirty, []string{"--template", "content-vault", "--dry-run", "--json"}, exitcode.Advisory, "not clean"},
+		{"protected branch", onMain, []string{"--template", "content-vault", "--dry-run", "--json"}, exitcode.Advisory, "main"},
+		{"merge in progress", merging, []string{"--template", "content-vault", "--dry-run", "--json"}, exitcode.Advisory, "merge"},
+		{"not a v1 source", func(t *testing.T) string { return newV2RepoForCmd(t, ".context") },
+			[]string{"--template", "content-vault", "--dry-run", "--json"}, exitcode.Advisory, "valid agents.layout/v1"},
+		{"migrating manifest", migrating, []string{"--dry-run", "--template", "content-vault", "--json"},
+			exitcode.Advisory, "phase planned"},
+		{"no migrating manifest", newGitV1RepoWithContent, []string{"--resume", "--apply", "--json"},
+			exitcode.Advisory, "no migrating manifest"},
+		{"missing backup tag", newGitV1RepoWithContent, []string{"--template", "content-vault", "--apply", "--json"},
+			exitcode.Malformed, "--backup-tag"},
+		{"tag with resume", newGitV1RepoWithContent, []string{"--resume", "--apply", "--backup-tag", "x", "--json"},
+			exitcode.Malformed, "--backup-tag"},
+		{"taken backup tag", taken, []string{"--template", "content-vault", "--apply", "--backup-tag", "pre-layout-v2-test", "--json"},
+			exitcode.Malformed, "already exists"},
+		{"unparseable flag", newGitV1RepoWithContent, []string{"--no-such-flag", "--json"},
+			exitcode.Malformed, "not defined"},
+		{"not a repository", noRepo, []string{"--dry-run", "--json"}, exitcode.Skip, "not inside a git repository"},
 	}
 
-	// Applied, but links remain: Advisory, not OK.
-	linked := newGitV1RepoWithContent(t)
-	writeFile(t, filepath.Join(linked, "docs/plans/linked.md"), "See [a design](../design/a-design.md).\n")
-	gitOutput(t, linked, "add", "-A")
-	gitOutput(t, linked, "commit", "-m", "a link into a moving store")
-	t.Chdir(linked)
-	out.Reset()
-	if code := runLayoutMigrateWithVersion([]string{
-		"--template", "content-vault", "--apply", "--backup-tag", "pre-layout-v2-test", "--json",
-	}, &out, "v0.6.0"); code != exitcode.Advisory {
-		t.Errorf("applied with link candidates --json exit = %d, want Advisory:\n%s", code, out.String())
-	}
-	var applied layout.Plan
-	if err := json.Unmarshal(out.Bytes(), &applied); err != nil {
-		t.Fatalf("apply --json is not one JSON object: %v\n%s", err, out.String())
-	}
-	if applied.DryRun || applied.Phase != layout.PhasePlanned || applied.Counts.Links == 0 {
-		t.Errorf("applied payload = dry_run %v, phase %q, links %d", applied.DryRun, applied.Phase, applied.Counts.Links)
-	}
-
-	// Applied cleanly: OK.
-	clean := newGitV1RepoWithContent(t)
-	t.Chdir(clean)
-	out.Reset()
-	if code := runLayoutMigrateWithVersion([]string{
-		"--template", "content-vault", "--apply", "--backup-tag", "pre-layout-v2-test", "--json",
-	}, &out, "v0.6.0"); code != exitcode.OK {
-		t.Errorf("clean apply --json exit = %d, want OK:\n%s", code, out.String())
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Chdir(c.root(t))
+			var out bytes.Buffer
+			code := runLayoutMigrateWithVersion(c.args, &out, "v0.6.0")
+			if code != c.want {
+				t.Fatalf("exit = %d, want %d:\n%s", code, c.want, out.String())
+			}
+			var got struct {
+				Repo   string `json:"repo"`
+				DryRun bool   `json:"dry_run"`
+				Phase  string `json:"phase"`
+				Error  string `json:"error"`
+			}
+			if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+				t.Fatalf("--json is not exactly one JSON object: %v\n%s", err, out.String())
+			}
+			if !got.DryRun || got.Phase != layout.PhasePlanned {
+				t.Errorf("refusal object = dry_run %v, phase %q, want true/%q", got.DryRun, got.Phase, layout.PhasePlanned)
+			}
+			if !strings.Contains(got.Error, c.wantErr) {
+				t.Errorf("the refusal does not carry %q in its error:\n%s", c.wantErr, out.String())
+			}
+			if strings.Contains(got.Error, "\n") {
+				t.Errorf("the refusal error is prose with newlines rather than one sentence:\n%q", got.Error)
+			}
+		})
 	}
 }
 
