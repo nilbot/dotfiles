@@ -144,7 +144,7 @@ func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string
 		fmt.Fprintf(stdout, "skip (unknown): %s -- could not inspect .agents/; left unchanged\n", fleetPath(e.Path))
 	}
 	failed := 0
-	drifted := 0
+	diverged := 0
 	for _, e := range present {
 		var detail bytes.Buffer
 		if code := wire(e.Path, &detail); code != exitcode.OK {
@@ -163,8 +163,8 @@ func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string
 		}
 		fmt.Fprintf(stdout, "rewired %s\n", fleetPath(e.Path))
 		rep, err := drift.InspectRepo(e.Path, running)
-		if err != nil || !isDriftClean(rep) {
-			drifted++
+		if err != nil || !drift.IsCurrent(rep) {
+			diverged++
 			fmt.Fprintf(stdout, "notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate\n", fleetPath(e.Path))
 		}
 	}
@@ -174,7 +174,7 @@ func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string
 		return exitcode.Advisory
 	}
 	fmt.Fprintf(stdout, "rewired %d registered repo(s)\n", len(present))
-	if drifted > 0 {
+	if diverged > 0 {
 		return exitcode.Advisory
 	}
 	return exitcode.OK

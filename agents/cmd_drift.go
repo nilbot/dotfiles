@@ -62,7 +62,7 @@ func runDriftWithVersion(args []string, stdout io.Writer, running string) int {
 				continue
 			}
 			reports = append(reports, rep)
-			if !isDriftClean(rep) {
+			if !drift.IsCurrent(rep) {
 				allClean = false
 			}
 		}
@@ -121,25 +121,17 @@ func runDriftWithVersion(args []string, stdout io.Writer, running string) int {
 			return exitcode.NoRecord
 		}
 		stdout.Write(append(b, '\n'))
-		if isDriftClean(report) {
+		if drift.IsCurrent(report) {
 			return exitcode.OK
 		}
 		return exitcode.Advisory
 	}
 
 	printDriftReport(stdout, report)
-	if isDriftClean(report) {
+	if drift.IsCurrent(report) {
 		return exitcode.OK
 	}
 	return exitcode.Advisory
-}
-
-// isDriftClean is this package's name for the currency predicate, which lives
-// in internal/drift next to the report it judges (design §0.2). It is strict
-// currency: every embedded asset must be current, and an unsupported or
-// migrating layout is not current.
-func isDriftClean(report drift.DriftReport) bool {
-	return drift.IsCurrent(report)
 }
 
 func printDriftReport(w io.Writer, rep drift.DriftReport) {

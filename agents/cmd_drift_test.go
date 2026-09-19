@@ -135,7 +135,7 @@ func TestCmdDriftJSONOutput(t *testing.T) {
 	}
 }
 
-func TestCmdDriftJSONOutputDrifted(t *testing.T) {
+func TestCmdDriftJSONOutputDiverged(t *testing.T) {
 	dir := newTestRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
@@ -189,17 +189,17 @@ func TestCmdDriftAllFleetInspection(t *testing.T) {
 	if err := scaffold.Create(cleanDir, false); err != nil {
 		t.Fatal(err)
 	}
-	driftedDir := newTestRepo(t)
-	if err := scaffold.Create(driftedDir, false); err != nil {
+	divergedDir := newTestRepo(t)
+	if err := scaffold.Create(divergedDir, false); err != nil {
 		t.Fatal(err)
 	}
-	f, _ := os.OpenFile(filepath.Join(driftedDir, "AGENTS.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f, _ := os.OpenFile(filepath.Join(divergedDir, "AGENTS.md"), os.O_APPEND|os.O_WRONLY, 0o644)
 	f.WriteString("\n## Drift\n")
 	f.Close()
 
 	saveFleetRegistry(t,
 		registry.Entry{Path: cleanDir, Added: time.Unix(1, 0).UTC()},
-		registry.Entry{Path: driftedDir, Added: time.Unix(2, 0).UTC()},
+		registry.Entry{Path: divergedDir, Added: time.Unix(2, 0).UTC()},
 	)
 
 	var out bytes.Buffer
@@ -208,7 +208,7 @@ func TestCmdDriftAllFleetInspection(t *testing.T) {
 		t.Fatalf("runDrift --all exit=%d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
 	}
 	body := out.String()
-	if !strings.Contains(body, cleanDir) || !strings.Contains(body, driftedDir) {
+	if !strings.Contains(body, cleanDir) || !strings.Contains(body, divergedDir) {
 		t.Fatalf("output missing registered repos: %s", body)
 	}
 	if !strings.Contains(body, "current") || !strings.Contains(body, "diverged") {

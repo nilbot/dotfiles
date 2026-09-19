@@ -319,7 +319,7 @@ func TestMigrationSkillMatchesEmbeddedAsset(t *testing.T) {
 // restore it without a second tool. That is a second copy of DefaultAgentsMD,
 // and the two ship in the same binary -- so nothing except this test stops a
 // change to one from silently leaving the other behind, telling every migrated
-// v1 repository to adopt a router the tool then reports as drifted.
+// v1 repository to adopt a router the tool then reports as diverged.
 //
 // It reads the v1 asset rather than the repository copy: dotfiles is a v1
 // repository today, but the binding is to the v1 canonical text, and the v2

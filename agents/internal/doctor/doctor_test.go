@@ -1268,14 +1268,14 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Errorf("clean legacy router = %+v", cLegacy)
 		}
 
-		// Drifted
-		rootDrifted := t.TempDir()
-		if err := os.WriteFile(filepath.Join(rootDrifted, "AGENTS.md"), []byte("# Custom rules\nDo not edit\n"), 0o644); err != nil {
+		// Diverged
+		rootDiverged := t.TempDir()
+		if err := os.WriteFile(filepath.Join(rootDiverged, "AGENTS.md"), []byte("# Custom rules\nDo not edit\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cDrifted := checkByName(t, checkScaffold(rootDrifted, "v0.6.0"), "scaffold:router")
-		if cDrifted.Status != Warn || cDrifted.Detail != "root AGENTS.md contains unpartitioned domain rules or custom drift" || cDrifted.Remedy != "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md" {
-			t.Errorf("diverged router = %+v", cDrifted)
+		cDiverged := checkByName(t, checkScaffold(rootDiverged, "v0.6.0"), "scaffold:router")
+		if cDiverged.Status != Warn || cDiverged.Detail != "root AGENTS.md contains unpartitioned domain rules or custom drift" || cDiverged.Remedy != "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md" {
+			t.Errorf("diverged router = %+v", cDiverged)
 		}
 
 		// Missing
@@ -1338,7 +1338,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Errorf("clean legacy recording = %+v", cLegacy)
 		}
 
-		// Customized
+		// Diverged
 		rootCustom := t.TempDir()
 		customRecDir := filepath.Join(rootCustom, ".agents", "skills", "recording-what-you-learn")
 		if err := os.MkdirAll(customRecDir, 0o755); err != nil {
@@ -1376,7 +1376,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Errorf("ok migrating = %+v", cOK)
 		}
 
-		// Customized
+		// Diverged
 		rootCustom := t.TempDir()
 		gitInitCustom := exec.Command("git", "init", "-b", "main")
 		gitInitCustom.Dir = rootCustom
@@ -1387,7 +1387,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Fatal(err)
 		}
 		skillPath := filepath.Join(rootCustom, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-		if err := os.WriteFile(skillPath, []byte("# customized migration skill\n"), 0o644); err != nil {
+		if err := os.WriteFile(skillPath, []byte("# diverged migration skill\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		// migrating-fleet-context is 100% agents-owned (design 5.1), so a copy

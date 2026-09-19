@@ -265,12 +265,12 @@ func TestFleetUpdateApplySuccess(t *testing.T) {
 	}
 }
 
-func TestFleetUpdateApplyDriftAdvisoryOnDriftedRepo(t *testing.T) {
-	drifted := cleanFleetRepo(t)
-	if err := os.WriteFile(filepath.Join(drifted, "AGENTS.md"), []byte("# Drifted Agent Context\n"), 0o644); err != nil {
+func TestFleetUpdateApplyDriftAdvisoryOnDivergedRepo(t *testing.T) {
+	diverged := cleanFleetRepo(t)
+	if err := os.WriteFile(filepath.Join(diverged, "AGENTS.md"), []byte("# Diverged Agent Context\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	saveFleetRegistry(t, registry.Entry{Path: drifted, Added: time.Unix(1, 0).UTC()})
+	saveFleetRegistry(t, registry.Entry{Path: diverged, Added: time.Unix(1, 0).UTC()})
 
 	var called []string
 	var out bytes.Buffer
@@ -281,10 +281,10 @@ func TestFleetUpdateApplyDriftAdvisoryOnDriftedRepo(t *testing.T) {
 	if code != exitcode.Advisory {
 		t.Fatalf("exit=%d want Advisory; output=%q", code, out.String())
 	}
-	if len(called) != 1 || called[0] != drifted {
-		t.Fatalf("calls=%q want [%s]", called, drifted)
+	if len(called) != 1 || called[0] != diverged {
+		t.Fatalf("calls=%q want [%s]", called, diverged)
 	}
-	wantNotice := fmt.Sprintf("notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate", strconv.QuoteToASCII(drifted))
+	wantNotice := fmt.Sprintf("notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate", strconv.QuoteToASCII(diverged))
 	if !strings.Contains(out.String(), wantNotice) {
 		t.Fatalf("output missing drift notice %q; got: %q", wantNotice, out.String())
 	}

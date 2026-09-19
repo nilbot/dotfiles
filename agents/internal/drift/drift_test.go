@@ -54,6 +54,16 @@ func skillAssetBytes(t *testing.T, schema, skill string) []byte {
 // pinned to the manifest's own archive rather than a hardcoded docs/archive.
 func writeV2Layout(t *testing.T, dir, storeRoot string) {
 	t.Helper()
+	writeV2LayoutWithArchive(t, dir, storeRoot, storeRoot+"/archive")
+}
+
+// writeV2LayoutWithArchive is writeV2Layout with the archive path chosen by the
+// caller. A test that pins the archive exclusion needs an archive the walk
+// would otherwise visit -- one nested inside a declared store -- which V12
+// rejects as archive_overlap but which the walker, a separate concern from
+// validation, still has to handle.
+func writeV2LayoutWithArchive(t *testing.T, dir, storeRoot, archive string) {
+	t.Helper()
 	for _, role := range layout.Roles() {
 		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(storeRoot), role), 0o755); err != nil {
 			t.Fatal(err)
@@ -70,7 +80,7 @@ func writeV2Layout(t *testing.T, dir, storeRoot string) {
     "journal": %q,
     "qna": %q
   }
-}`, layout.SchemaV2, storeRoot+"/archive",
+}`, layout.SchemaV2, archive,
 		storeRoot+"/design", storeRoot+"/plans", storeRoot+"/journal", storeRoot+"/qna")
 	path := filepath.Join(dir, ".agents", "layout.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -94,7 +104,7 @@ func writeFile(t *testing.T, path, body string) {
 	}
 }
 
-func TestInspectCleanCurrentRepo(t *testing.T) {
+func TestInspectCurrentRepo(t *testing.T) {
 	dir := newRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
@@ -321,22 +331,110 @@ func TestInspectV1MisplacedDocsStillWalkDocsAndExcludeArchive(t *testing.T) {
 }
 
 // The v2 archive may be anywhere, so the exclusion is the manifest's archive
-// path. The positive control is in the same test: a live misplaced plan inside
-// a declared store is still reported.
+// path -- and it is load-bearing only where the walk would otherwise reach the
+// archive. This fixture therefore nests the archive INSIDE the journal store:
+// V12 rejects that as archive_overlap (so `unsupported` is `invalid`, which is
+// a separate concern and does not stop the walk), and without the exclusion the
+// two archived markup files below are exactly what the classifier would report.
+// The live plan is the control: the same shape outside the archive must appear,
+// or this test could not tell "exclusion works" from "walker is broken".
 func TestInspectV2MisplacedDocsExcludesTheManifestArchive(t *testing.T) {
 	dir := t.TempDir()
-	writeV2Layout(t, dir, ".context")
-	writeFile(t, filepath.Join(dir, ".context/archive/plans/old-plan.md"), "# archived\n")
-	writeFile(t, filepath.Join(dir, ".context/archive/specs/old-design.md"), "# archived\n")
+	writeV2LayoutWithArchive(t, dir, ".context", ".context/journal/archive")
+	writeFile(t, filepath.Join(dir, ".context/journal/archive/old-plan.md"), "# archived\n")
+	writeFile(t, filepath.Join(dir, ".context/journal/archive/old-design.md"), "# archived\n")
 	writeFile(t, filepath.Join(dir, ".context/journal/live-plan.md"), "# live\n")
+
 	rep, _ := InspectRepo(dir, "v0.6.0")
+	if rep.Unsupported != "invalid" {
+		t.Fatalf("unsupported = %q, want invalid: a store nested in the archive is V12", rep.Unsupported)
+	}
 	for _, m := range rep.MisplacedDocs {
-		if strings.HasPrefix(m, ".context/archive/") {
+		if strings.HasPrefix(m, ".context/journal/archive/") {
 			t.Errorf("the manifest's archive was walked: %s", m)
 		}
 	}
+	if slices.Contains(rep.MisplacedDocs, ".context/journal/archive/old-plan.md") ||
+		slices.Contains(rep.MisplacedDocs, ".context/journal/archive/old-design.md") {
+		t.Fatalf("archived documents reported as misplaced: %v", rep.MisplacedDocs)
+	}
 	if !slices.Contains(rep.MisplacedDocs, ".context/journal/live-plan.md") {
 		t.Fatalf("live misplaced plan not reported: %v", rep.MisplacedDocs)
+	}
+}
+
+// Both misplacement axes on v2: a -plan.md outside the plans store and a
+// -design.md outside the design store. The journals and the qna store are the
+// non-owning stores here; the files' own stores stay clean.
+func TestInspectV2FlagsBothDocumentKindsOutsideTheirStores(t *testing.T) {
+	dir := t.TempDir()
+	writeV2Layout(t, dir, ".context")
+	writeFile(t, filepath.Join(dir, ".context/qna/stray-design.md"), "# stray\n")
+	writeFile(t, filepath.Join(dir, ".context/plans/valid-plan.md"), "# fine\n")
+	writeFile(t, filepath.Join(dir, ".context/design/valid-design.md"), "# fine\n")
+
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	if !slices.Contains(rep.MisplacedDocs, ".context/qna/stray-design.md") {
+		t.Fatalf("a -design.md outside the design store was not reported: %v", rep.MisplacedDocs)
+	}
+	if slices.Contains(rep.MisplacedDocs, ".context/plans/valid-plan.md") ||
+		slices.Contains(rep.MisplacedDocs, ".context/design/valid-design.md") {
+		t.Fatalf("documents in their own stores were reported: %v", rep.MisplacedDocs)
+	}
+}
+
+// An unknown schema is not guessed at: the report says `unknown`, names the
+// reason, and resolves no stores (design §7.3, §5.1).
+func TestInspectUnknownSchemaIsUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".agents/layout.json"),
+		`{"schema":"agents.layout/v9","layout_status":"active","stores":{}}`)
+
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	if rep.LayoutVersion != "unknown" {
+		t.Fatalf("layout_version = %q, want unknown", rep.LayoutVersion)
+	}
+	if rep.Unsupported != "unknown_schema" {
+		t.Fatalf("unsupported = %q, want unknown_schema", rep.Unsupported)
+	}
+	if !strings.Contains(rep.UnsupportedDetail, "schema_unknown") {
+		t.Fatalf("unsupported_detail does not name the problem: %q", rep.UnsupportedDetail)
+	}
+	if len(rep.Stores) != 0 {
+		t.Fatalf("an unknown schema must not resolve stores: %v", rep.Stores)
+	}
+	if isCurrent(rep) {
+		t.Fatal("an unknown schema must not report current")
+	}
+}
+
+// A v2 manifest that breaks a validation rule is `invalid`, and the detail
+// names the rule and the offending role rather than only the first problem.
+func TestInspectInvalidManifestIsUnsupportedWithDetail(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ".agents/layout.json"), `{
+  "schema": "agents.layout/v2",
+  "min_mut_ver_floor": "0.6.0",
+  "layout_status": "active",
+  "stores": {
+    "design": ".context/design",
+    "plans": ".context/plans",
+    "journal": ".context/journal"
+  }
+}`)
+
+	rep, _ := InspectRepo(dir, "v0.6.0")
+	if rep.LayoutVersion != "v2" {
+		t.Fatalf("layout_version = %q, want v2", rep.LayoutVersion)
+	}
+	if rep.Unsupported != "invalid" {
+		t.Fatalf("unsupported = %q, want invalid", rep.Unsupported)
+	}
+	if !strings.Contains(rep.UnsupportedDetail, "role_missing") || !strings.Contains(rep.UnsupportedDetail, "qna") {
+		t.Fatalf("unsupported_detail does not name the broken rule: %q", rep.UnsupportedDetail)
+	}
+	if isCurrent(rep) {
+		t.Fatal("an invalid manifest must not report current")
 	}
 }
 
@@ -422,7 +520,7 @@ func TestInspectLegacyRouterRepo(t *testing.T) {
 	}
 }
 
-func TestInspectDriftedRepo(t *testing.T) {
+func TestInspectDivergedRepo(t *testing.T) {
 	dir := newRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
