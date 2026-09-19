@@ -58,11 +58,24 @@ func runInitWithVersion(args []string, stdout io.Writer, running string) int {
 		return exitcode.Advisory
 	}
 
+	// Decision 6, design §0.7: --local's one mechanism is an ignore rule for the
+	// whole .agents/ directory, and on a v2 repository that rule hides the
+	// manifest -- the file that says which stores are the repository's. A clone
+	// would then resolve v1 while the tracked stores sat at the v2 paths, so the
+	// flag is refused rather than writing machine state that breaks the
+	// repository everywhere else. The wiring paths --local exists to keep out of
+	// the tree are already excluded for every layout.
+	if *local && l.Schema == layout.SchemaV2 {
+		fmt.Fprintln(stdout, "agents init: --local is not supported with an agents.layout/v2 layout (design §0.7, Decision 6): the /.agents/ exclude rule would make .agents/layout.json machine-local, so a clone would resolve v1 while the stores sat at the v2 paths; run `agents init` without --local")
+		return exitcode.Advisory
+	}
+
 	// Scaffold from the layout just resolved, never from the implicit v1: that
 	// is what stops `init` recreating docs/{design,plans,journal,qna} in the v2
 	// repository the guard has approved, which is the anti-shell guarantee of
 	// design §1.2. A manifest already in the repository is its own declaration,
-	// so CreateWithLayout writes nothing for it (design §7.5).
+	// so CreateWithLayout writes no layout for it (design §7.5); it still writes
+	// the machine exclude file, which is not layout data.
 	if err := scaffold.CreateWithLayout(rc.Root, *local, l); err != nil {
 		fmt.Fprintf(stdout, "agents init: %v\n", err)
 		return exitcode.NoRecord

@@ -368,7 +368,8 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 // The guard approves a supported v2 layout, and the binary that may write it
 // must then write *that* layout: `init` used to create the v1 docs/ shell even
 // here, which is the same anti-shell failure design §1.2 records for v0.5.1.
-// The manifest declares the stores, so init creates nothing (design §7.5).
+// The manifest declares the stores, so init creates no layout (design §7.5).
+// The machine exclude file is not layout, and is written anyway.
 func TestInitOnSupportedV2WritesNoV1Shell(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	root := newV2RepoForCmd(t, ".context")
@@ -386,14 +387,20 @@ func TestInitOnSupportedV2WritesNoV1Shell(t *testing.T) {
 	// declared stores and their READMEs, the router, .gitattributes. `init`
 	// still wires harnesses -- that is its other job, and the only thing it may
 	// add to a repository whose layout the manifest already declares.
+	//
+	// .git is machine state, not the tree this asserts about: the exclude file
+	// there is expected to change, and the assertions below cover it.
 	after := snapshotTree(t, root)
 	for rel, want := range before {
+		if isGitDirEntry(rel) {
+			continue
+		}
 		if got, ok := after[rel]; !ok || got != want {
 			t.Fatalf("init changed %s", rel)
 		}
 	}
 	for rel := range after {
-		if _, existed := before[rel]; existed {
+		if _, existed := before[rel]; existed || isGitDirEntry(rel) {
 			continue
 		}
 		// Machine wiring is the one thing `init` may add here; it is what this
@@ -409,6 +416,76 @@ func TestInitOnSupportedV2WritesNoV1Shell(t *testing.T) {
 		}
 		t.Fatalf("init created %s in a repository whose layout it must not write", rel)
 	}
+
+	// The machine wiring init just wrote is excluded, so `git add .` in this
+	// repository cannot commit one machine's settings.json -- and the manifest
+	// is not hidden, because that rule is only --local's.
+	exclude := readExcludeFile(t, root)
+	for _, want := range []string{
+		"/.claude/settings.json", "/.codex/hooks.json",
+		"/.agents/hooks.json", "/.agents/.agents-wire.lock",
+	} {
+		if !hasExcludeLine(exclude, want) {
+			t.Errorf("exclude file is missing %q:\n%s", want, exclude)
+		}
+	}
+	if hasExcludeLine(exclude, "/.agents/") {
+		t.Errorf("init hid the whole .agents/ directory, manifest included:\n%s", exclude)
+	}
+}
+
+// Decision 6, design §0.7: --local's one mechanism is an ignore rule for the
+// whole .agents/ directory, and on a v2 repository that rule hides the manifest
+// -- the file that says which stores are the repository's. A clone would then
+// resolve v1 while the tracked stores sat at the v2 paths, so the command
+// refuses instead of writing machine state that breaks the repository elsewhere.
+func TestInitRefusesLocalOnASupportedV2Repository(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	root := newV2RepoForCmd(t, ".context")
+	t.Chdir(root)
+	before := snapshotTree(t, root)
+
+	var out bytes.Buffer
+	if code := runInitWithVersion([]string{"--local"}, &out, "v0.6.0"); code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+	}
+	if !strings.Contains(out.String(), "--local is not supported") {
+		t.Fatalf("the refusal must name the flag: %s", out.String())
+	}
+	if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
+		t.Fatal("--local init wrote into a supported v2 repository")
+	}
+	if exclude := readExcludeFile(t, root); hasExcludeLine(exclude, "/.agents/") {
+		t.Fatalf("--local wrote the .agents/ rule that hides the manifest:\n%s", exclude)
+	}
+}
+
+func isGitDirEntry(rel string) bool {
+	return rel == ".git" || strings.HasPrefix(rel, ".git"+string(filepath.Separator))
+}
+
+// readExcludeFile reads the repository's machine exclude file, empty when git
+// has not created it yet: the assertions are about which rules are present.
+func readExcludeFile(t *testing.T, root string) string {
+	t.Helper()
+	path, err := repo.InfoExcludePath(root)
+	if err != nil {
+		t.Fatalf("resolve info/exclude for %s: %v", root, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func hasExcludeLine(exclude, want string) bool {
+	for _, line := range strings.Split(exclude, "\n") {
+		if strings.TrimSpace(line) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // A manifest this binary may not write is refused before anything is written:

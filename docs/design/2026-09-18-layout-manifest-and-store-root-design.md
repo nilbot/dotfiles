@@ -943,7 +943,10 @@ present. In v0.6.0 it also accepts `--template`, `--stores`, and `--archive`;
 any of them creates a v2 layout, with the template supplying creation defaults.
 On a v2
 repository with an active supported manifest, `init` is a no-op for an intact
-layout and creates only missing *manifest-declared* stores. It never creates
+active supported v2 layout and creates nothing at all — not a store, not the
+router, not the linguist attribute — because the manifest is the authority and an
+absent store is a migration blocker the operator resolves with the tool, not a
+scaffolding gap `init` fills. It never creates
 `docs/{design,plans,journal,qna}` in a v2 repository.
 
 If a manifest is absent but a v1 layout already exists (`AGENTS.md` or `docs/`

@@ -168,9 +168,11 @@ func Create(root string, local bool) error {
 // design §1.2 exists to prevent.
 //
 // A layout whose manifest is already in the repository is that manifest's own
-// declaration, so this returns without writing anything for it (design §7.5).
-// It deliberately does not create a store the manifest declares and the tree
-// lacks: the manifest is the authority, and a half-created store is Task 10's
+// declaration, so this writes no layout for it (design §7.5): the machine
+// exclude file is still updated, because it is machine state about wiring rather
+// than layout data, but no store, router, or gitattributes line is added. It
+// deliberately does not create a store the manifest declares and the tree lacks:
+// the manifest is the authority, and a half-created store is Task 10's
 // `store_missing` blocker rather than init's remedy. Support and validity are
 // the caller's gate (layoutRefusal); ManifestPath is what tells a manifest read
 // back from the repository apart from a layout a caller constructed in order to
@@ -188,12 +190,36 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 		}
 	}
 
+	// The machine exclude file is written before the layout question is asked,
+	// and for every layout: it is machine state about wiring, not layout data
+	// (design §0.7 -- info/exclude is "never read as a layout input, never
+	// written from layout data"). Suppressing it under the §7.5 no-op below
+	// would leave a supported v2 repository with untracked .claude/, .codex/,
+	// .agents/hooks.json and .agents/.agents-wire.lock, so a `git add .` there
+	// would commit one machine's settings.json.
+	lines := excludeLines
+	if local {
+		// --local: the whole directory stays out of the repo, for repos where
+		// committing agent artifacts is not acceptable. Same layout either way.
+		lines = append(append([]string{}, excludeLines...), "/.agents/")
+	}
+	// Ask git where the exclude file is rather than assuming <root>/.git/info:
+	// in a linked worktree .git is a regular file and that path cannot exist.
+	exclude, err := repo.InfoExcludePath(root)
+	if err != nil {
+		return err
+	}
+	if err := appendMissingLines(exclude, lines); err != nil {
+		return err
+	}
+
 	// design §7.5: a manifest already in this repository is the authority, so
 	// `init` is a no-op for it -- not even a declared store the tree lacks, and
 	// not a missing router either. A half-created store is the migration
 	// command's `store_missing` blocker; a missing router is what `drift` and
 	// `doctor` report. Adding either here would be this function inventing a
-	// layout the manifest does not describe.
+	// layout the manifest does not describe. This suppresses the layout writes
+	// only; the exclude write above has already happened.
 	if l.Schema == layout.SchemaV2 && l.ManifestPath != "" &&
 		l.LayoutStatus == layout.StatusActive && len(l.Problems) == 0 {
 		return nil
@@ -272,23 +298,7 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 	if l.Schema == layout.SchemaV2 {
 		attributes = v2GitattributesLines
 	}
-	if err := appendMissingLines(filepath.Join(root, ".gitattributes"), attributes); err != nil {
-		return err
-	}
-
-	lines := excludeLines
-	if local {
-		// --local: the whole directory stays out of the repo, for repos where
-		// committing agent artifacts is not acceptable. Same layout either way.
-		lines = append(append([]string{}, excludeLines...), "/.agents/")
-	}
-	// Ask git where the exclude file is rather than assuming <root>/.git/info:
-	// in a linked worktree .git is a regular file and that path cannot exist.
-	exclude, err := repo.InfoExcludePath(root)
-	if err != nil {
-		return err
-	}
-	return appendMissingLines(exclude, lines)
+	return appendMissingLines(filepath.Join(root, ".gitattributes"), attributes)
 }
 
 func writeIfAbsentFromFS(path string, fs embed.FS, assetPath string) error {

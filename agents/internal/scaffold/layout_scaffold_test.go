@@ -165,10 +165,16 @@ func TestCreateWithLayoutV2IsIdempotent(t *testing.T) {
 }
 
 // A manifest already in the repository is the authority for which stores exist:
-// CreateWithLayout adds nothing to it, not even a store the manifest declares
+// CreateWithLayout adds no layout to it, not even a store the manifest declares
 // and the tree lacks. A missing store is the migration command's `store_missing`
 // blocker, not init's remedy, and inventing one here would be the same
 // "create a shell the layout does not describe" failure the v1 docs/ shell was.
+//
+// The machine exclude file is the exception, and the assertions below are the
+// point of it: it is machine state about wiring, not layout data (design §0.7),
+// so a repository whose layout is already declared still gets its .claude/,
+// .codex/ and .agents/hooks.json paths excluded -- otherwise `git add .` there
+// would commit one machine's settings.json.
 func TestCreateWithLayoutLeavesAManifestBackedRepositoryAlone(t *testing.T) {
 	root := t.TempDir()
 	initGitRepo(t, root)
@@ -183,7 +189,7 @@ func TestCreateWithLayoutLeavesAManifestBackedRepositoryAlone(t *testing.T) {
 	}
 
 	if after := snapshotTree(t, root); !reflect.DeepEqual(before, after) {
-		t.Fatal("CreateWithLayout wrote into a repository whose manifest is on disk")
+		t.Fatal("CreateWithLayout wrote layout into a repository whose manifest is on disk")
 	}
 	for _, role := range layout.Roles() {
 		store, _ := layout.Path(want, role)
@@ -193,6 +199,19 @@ func TestCreateWithLayoutLeavesAManifestBackedRepositoryAlone(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "AGENTS.md")); !os.IsNotExist(err) {
 		t.Error("wrote a router into a repository whose layout the manifest already declares")
+	}
+
+	// Every machine-wiring path is excluded, including the ones the no-op case
+	// would otherwise leave untracked. Not "/.agents/": this call is not
+	// --local, and on a v2 repository that rule would hide the manifest.
+	exclude := readExclude(t, root)
+	for _, line := range excludeLines {
+		if !hasLine(exclude, line) {
+			t.Errorf("exclude file is missing %q:\n%s", line, exclude)
+		}
+	}
+	if hasLine(exclude, "/.agents/") {
+		t.Errorf("a plain scaffold excluded all of .agents/, hiding the manifest:\n%s", exclude)
 	}
 }
 
