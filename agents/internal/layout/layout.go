@@ -7,8 +7,12 @@ package layout
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 const (
@@ -226,6 +230,7 @@ func Resolve(root string) Layout {
 	default:
 		l.Problems = append(l.Problems, Problem{Code: ProblemManifestJSON, Path: ManifestRel, Detail: "stores must be a JSON object"})
 	}
+	l.Problems = append(l.Problems, Validate(root, l)...)
 	return l
 }
 
@@ -258,6 +263,166 @@ func duplicateStoreRoles(raw json.RawMessage) []string {
 		}
 	}
 	return dup
+}
+
+// AgentsIgnored reports whether this repository's .agents/ is excluded from
+// version control, which is what makes a manifest here machine-local (design
+// §0.7, Decision 6).
+//
+// It asks about both paths. Measured with git: a directory rule (`.agents/`,
+// `.agents`, `/.agents`) matches the directory, but `/.agents/**` matches only
+// the manifest path — so a single query misses a real spelling of the same
+// intent. The union is the question; either match means mutation is refused.
+func AgentsIgnored(root string) (bool, error) {
+	for _, rel := range []string{ManifestRel, ".agents"} {
+		ignored, err := repo.IsIgnored(root, rel)
+		if err != nil {
+			return false, err
+		}
+		if ignored {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Validate reports every v2 rule the layout breaks. v1 is grandfathered: its
+// paths are synthesized by this package, not read from repository input.
+func Validate(root string, l Layout) []Problem {
+	if l.Schema == SchemaV1 {
+		return nil
+	}
+	var ps []Problem
+	validRoles := map[string]bool{RoleDesign: true, RolePlans: true, RoleJournal: true, RoleQNA: true}
+	for role := range l.Stores {
+		if !validRoles[role] {
+			ps = append(ps, Problem{Code: ProblemRoleUnknown, Path: role})
+		}
+	}
+	for _, role := range roleNames {
+		if _, ok := l.Stores[role]; !ok {
+			ps = append(ps, Problem{Code: ProblemRoleMissing, Path: role})
+		}
+	}
+	if l.LayoutStatus != StatusActive && l.LayoutStatus != StatusMigrating {
+		ps = append(ps, Problem{Code: ProblemStatusUnknown, Detail: l.LayoutStatus})
+	}
+	if l.LayoutStatus == StatusMigrating {
+		switch {
+		case l.Migration == nil || l.Migration.From.Schema == "" ||
+			len(l.Migration.From.Stores) == 0 || len(l.Migration.Moves) == 0:
+			ps = append(ps, Problem{Code: ProblemMigration, Path: ManifestRel, Detail: "journal incomplete"})
+		case !validPhase(l.Migration.Phase):
+			ps = append(ps, Problem{Code: ProblemMigration, Path: ManifestRel, Detail: "phase " + l.Migration.Phase})
+		}
+	}
+	if l.MinMutVerFloor == "" {
+		ps = append(ps, Problem{Code: ProblemMinMutVerFloor, Detail: "required"})
+	} else if _, err := parseVersion(l.MinMutVerFloor); err != nil {
+		ps = append(ps, Problem{Code: ProblemMinMutVerFloor, Detail: l.MinMutVerFloor})
+	}
+	seen := map[string]string{}
+	for role, path := range l.Stores {
+		if p := validateRel(root, path); p != nil {
+			ps = append(ps, *p)
+			continue
+		}
+		if path == ".agents" || strings.HasPrefix(path, ".agents/") {
+			ps = append(ps, Problem{Code: ProblemPathInAgents, Path: path})
+		}
+		// Both sides of every comparison are trimmed, because `context` and
+		// `context/` are the same path: V4's rule is that two roles resolve to
+		// the same place, and the trimmed spelling is what the manifest's
+		// canonical form carries. Trimming only the current path would make the
+		// verdict depend on map iteration order.
+		path = strings.TrimSuffix(path, "/")
+		for otherRole, otherPath := range seen {
+			otherPath = strings.TrimSuffix(otherPath, "/")
+			if path == otherPath {
+				ps = append(ps, Problem{Code: ProblemDuplicatePath, Path: path, Detail: role + "=" + otherRole})
+			}
+			if pathPrefix(path, otherPath) || pathPrefix(otherPath, path) {
+				ps = append(ps, Problem{Code: ProblemPathOverlap, Path: path, Detail: role + "=" + otherRole})
+			}
+			if path != otherPath && strings.EqualFold(path, otherPath) {
+				ps = append(ps, Problem{Code: ProblemPathCase, Path: path, Detail: otherPath})
+			}
+		}
+		seen[role] = path
+	}
+	if l.Archive != "" {
+		if p := validateRel(root, l.Archive); p != nil {
+			ps = append(ps, *p)
+		}
+		for role, path := range l.Stores {
+			if pathPrefix(path, l.Archive) || pathPrefix(l.Archive, path) {
+				ps = append(ps, Problem{Code: ProblemArchiveOverlap, Path: l.Archive, Detail: role})
+			}
+		}
+	}
+	if ignored, err := AgentsIgnored(root); err != nil {
+		if !errors.Is(err, repo.ErrNotARepo) {
+			// Fail closed: an unresolvable trackedness question must not read as a
+			// pass. Outside a repository there is nothing to commit, so plain
+			// fixture directories stay valid.
+			ps = append(ps, Problem{Code: ProblemLocalAgents, Path: ManifestRel, Detail: err.Error()})
+		}
+	} else if ignored {
+		ps = append(ps, Problem{Code: ProblemLocalAgents, Path: ManifestRel})
+	}
+	return ps
+}
+
+// validPhase reports whether a migrating journal records one of the four
+// phases from design §0.5. The names are spelled out here rather than through
+// the exported Phase* constants, which land with the planner that writes them.
+func validPhase(phase string) bool {
+	switch phase {
+	case "planned", "moved", "pruned", "router":
+		return true
+	default:
+		return false
+	}
+}
+
+// validateRel enforces: relative, non-empty, no "..", inside root, and no
+// symlink component. The returned code is specific; callers that validate a
+// non-store path remap it to their own problem code.
+func validateRel(root, path string) *Problem {
+	if path == "" {
+		return &Problem{Code: ProblemPathEmpty, Detail: "empty"}
+	}
+	if filepath.IsAbs(path) {
+		return &Problem{Code: ProblemPathAbsolute, Path: path}
+	}
+	clean := filepath.Clean(path)
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return &Problem{Code: ProblemPathEscapes, Path: path}
+	}
+	abs := filepath.Join(root, clean)
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return &Problem{Code: ProblemPathEscapes, Path: path}
+	}
+	parts := strings.Split(filepath.ToSlash(clean), "/")
+	cur := root
+	for _, part := range parts {
+		cur = filepath.Join(cur, part)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			break
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return &Problem{Code: ProblemPathSymlink, Path: path}
+		}
+	}
+	return nil
+}
+
+func pathPrefix(parent, child string) bool {
+	parent = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(parent)), "/")
+	child = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(child)), "/")
+	return parent == child || strings.HasPrefix(child, parent+"/")
 }
 
 // Path returns the store that role resolves to, and whether the layout has one.

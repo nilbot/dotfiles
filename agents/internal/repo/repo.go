@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +151,62 @@ func gitPath(dir, arg string) (string, error) {
 		out = resolved
 	}
 	return out, nil
+}
+
+var errExitOne = errors.New("git answered no (exit 1)")
+
+// runExit is run plus the exit status, so a caller can tell "git answered no"
+// (exit 1) from "git failed" (128 and anything else). Reading both as "no" is
+// how an unresolvable question becomes a silent pass.
+func runExit(dir string, args ...string) error {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Stdout = io.Discard
+	cmd.Env = sanitizeEnv(os.Environ())
+	err := cmd.Run()
+	if err == nil {
+		return nil
+	}
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return errExitOne
+	}
+	return err
+}
+
+// IsIgnored reports whether a git ignore rule matches relPath. It is the only
+// trackedness check in this release (design §0.7): hand-reading info/exclude
+// misses /.agents without a slash, /.agents/**, a tracked .gitignore entry, and
+// core.excludesFile.
+func IsIgnored(dir, relPath string) (bool, error) {
+	if _, err := gitPath(dir, "--git-common-dir"); err != nil {
+		return false, ErrNotARepo
+	}
+	switch err := runExit(dir, "check-ignore", "-q", "--no-index", "--", relPath); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, errExitOne):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// IsTracked reports whether relPath is in the index. It answers the
+// untracked-but-not-ignored window between `layout migrate --apply` and the
+// migration commit, which is permitted and only carries a doctor advisory.
+func IsTracked(dir, relPath string) (bool, error) {
+	if _, err := gitPath(dir, "--git-common-dir"); err != nil {
+		return false, ErrNotARepo
+	}
+	switch err := runExit(dir, "ls-files", "--error-unmatch", "--", relPath); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, errExitOne):
+		return false, nil
+	default:
+		return false, err
+	}
 }
 
 func Discover(cwd string) (*Context, error) {
