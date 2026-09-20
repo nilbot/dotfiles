@@ -353,6 +353,27 @@ jobs:
       - name: check converges after apply
         run: ./bootstrap check dotfiles
 
+  # The macOS counterpart to `linux-dotfiles`, and NOT what
+  # `test (macos-latest, bootstrap.d)` was: that job ran the suite with the
+  # platform passed in as a value and brew/chsh recorded into a fake planner,
+  # never the program itself. This runs the real program on the real OS, which
+  # is the part of that leg nothing else replaced.
+  #
+  # `plan` only, deliberately. The `dotfiles` profile is preflight + config +
+  # verify -- no sudo, no network, no package manager, no login-shell change --
+  # so it is safe on a disposable runner, and plan reports intent without
+  # writing anything, which is what makes it a dry run worth having on macOS.
+  macos-dotfiles:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+      - name: plan
+        run: ./bootstrap plan dotfiles
+
   # Stage zero for real. `apply workstation` rather than `apply dotfiles`,
   # because phase.For gives the dotfiles profile only {preflight, config,
   # verify} and stageZero is called from Packages -- there is no per-phase flag,
@@ -486,7 +507,7 @@ jobs:
   # repository-settings change.
   gate:
     if: always()
-    needs: [test, secrets, hygiene, docs, linux-dotfiles, linux-stage-zero]
+    needs: [test, secrets, hygiene, docs, linux-dotfiles, macos-dotfiles, linux-stage-zero]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -497,10 +518,12 @@ jobs:
           echo "hygiene: ${{ needs.hygiene.result }}"
           echo "docs:    ${{ needs.docs.result }}"
           echo "linux-dotfiles: ${{ needs.linux-dotfiles.result }}"
+          echo "macos-dotfiles: ${{ needs.macos-dotfiles.result }}"
           echo "linux-stage-zero: ${{ needs.linux-stage-zero.result }}"
           [ "${{ needs.test.result }}"    = "success" ] || exit 1
           [ "${{ needs.secrets.result }}" = "success" ] || exit 1
           [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
           [ "${{ needs.docs.result }}"    = "success" ] || exit 1
           [ "${{ needs.linux-dotfiles.result }}" = "success" ] || exit 1
+          [ "${{ needs.macos-dotfiles.result }}" = "success" ] || exit 1
           [ "${{ needs.linux-stage-zero.result }}" = "success" ] || exit 1
