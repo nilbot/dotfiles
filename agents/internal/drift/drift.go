@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nilbot/dotfiles/agents/internal/scaffold"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 )
 
 // DriftReport encapsulates the deterministic drift inspection findings for a repository.
@@ -19,19 +19,59 @@ type DriftReport struct {
 	DomainState   string            `json:"domain_state"`   // "ok" | "missing"
 	Skills        map[string]string `json:"skills"`         // embedded skill_name -> ComponentState
 	LocalSkills   []string          `json:"local_skills"`   // repo-specific skills: listed, never judged
-	DocsStores    map[string]bool   `json:"docs_stores"`    // design, plans, journal, qna
+	DocsStores    map[string]bool   `json:"docs_stores"`    // deprecated role presence; removed no earlier than v0.8.0
 	MisplacedDocs []string          `json:"misplaced_docs"` // e.g. plans living in docs/journal/
 	Diff          string            `json:"diff,omitempty"` // Unified diff against canonical router
+
+	LayoutVersion     string            `json:"layout_version"`               // "v1" | "v2" | "unknown"
+	MinMutVerFloor    string            `json:"min_mut_ver_floor,omitempty"`  // manifest value; empty on v1
+	LayoutStatus      string            `json:"layout_status,omitempty"`      // "active" | "migrating"
+	Stores            map[string]string `json:"stores"`                       // resolved role -> repository-relative path
+	Unsupported       string            `json:"unsupported,omitempty"`        // "" | unknown_schema | below_floor | unreleased | invalid
+	UnsupportedDetail string            `json:"unsupported_detail,omitempty"` // human-readable reason
 }
 
 // InspectRepo performs deterministic inspection of the repository context layout and contents.
-func InspectRepo(root string) (DriftReport, error) {
+//
+// runningVersion is the version of the running binary, compared against the
+// resolved layout's min_mut_ver_floor: reads are always permitted, but a report
+// on a layout this binary may not mutate says why (design §7.3).
+func InspectRepo(root, runningVersion string) (DriftReport, error) {
 	report := DriftReport{
 		RepoPath:      root,
 		Skills:        make(map[string]string),
 		LocalSkills:   []string{},
 		DocsStores:    map[string]bool{"design": false, "plans": false, "journal": false, "qna": false},
 		MisplacedDocs: []string{},
+	}
+
+	// The resolved layout is the one source of physical paths (design §5.1).
+	// Resolved once: it selects the canonical router and skill text, the stores
+	// the presence check and the misplacement walk read, and the support
+	// verdict. The currency predicate and the state names stay layout-blind.
+	l := layout.Resolve(root)
+	report.LayoutVersion = "v1"
+	if l.Schema == layout.SchemaV2 {
+		report.LayoutVersion = "v2"
+	} else if l.Schema != layout.SchemaV1 {
+		report.LayoutVersion = "unknown"
+	}
+	report.MinMutVerFloor = l.MinMutVerFloor
+	report.LayoutStatus = l.LayoutStatus
+	if len(l.Problems) > 0 {
+		if layout.HasProblem(l.Problems, layout.ProblemSchemaUnknown) {
+			report.Unsupported = "unknown_schema"
+		} else {
+			report.Unsupported = "invalid"
+		}
+		report.UnsupportedDetail = ProblemsText(l.Problems)
+	} else if ok, reason := layout.Support(runningVersion, l); !ok {
+		if reason == "migrating" {
+			report.LayoutStatus = layout.StatusMigrating
+		} else {
+			report.Unsupported = reason
+			report.UnsupportedDetail = fmt.Sprintf("requires agents >= %s", l.MinMutVerFloor)
+		}
 	}
 
 	// 1. Router inspection (AGENTS.md)
@@ -45,13 +85,13 @@ func InspectRepo(root string) (DriftReport, error) {
 		}
 	} else {
 		digest := DigestBytes(agentsData)
-		if digest == CanonicalRouterDigest() {
-			report.RouterState = RouterCleanCurrent
+		if digest == CanonicalRouterDigestFor(l) {
+			report.RouterState = RouterCurrent
 		} else if IsLegacyRouterDigest(digest) {
-			report.RouterState = RouterCleanLegacy
+			report.RouterState = RouterKnownLegacy
 		} else {
-			report.RouterState = RouterDrifted
-			report.Diff = unifiedDiff("canonical/AGENTS.md", "repo/AGENTS.md", scaffold.DefaultAgentsMD, string(agentsData))
+			report.RouterState = RouterDiverged
+			report.Diff = unifiedDiff("canonical/AGENTS.md", "repo/AGENTS.md", canonicalRouterText(l), string(agentsData))
 		}
 	}
 
@@ -100,13 +140,13 @@ func InspectRepo(root string) (DriftReport, error) {
 			}
 		} else {
 			h := DigestBytes(data)
-			canDigest, err := CanonicalSkillDigest(skillName)
+			canDigest, err := CanonicalSkillDigestFor(skillName, l)
 			if err == nil && h == canDigest {
-				report.Skills[skillName] = string(ComponentOK)
+				report.Skills[skillName] = string(ComponentCurrent)
 			} else if IsLegacySkillDigest(skillName, h) {
-				report.Skills[skillName] = string(ComponentCleanLegacy)
+				report.Skills[skillName] = string(ComponentKnownLegacy)
 			} else {
-				report.Skills[skillName] = string(ComponentCustomized)
+				report.Skills[skillName] = string(ComponentDiverged)
 			}
 		}
 	}
@@ -134,15 +174,37 @@ func InspectRepo(root string) (DriftReport, error) {
 	}
 	sort.Strings(report.LocalSkills)
 
-	// 5. Docs stores inspection
-	for store := range report.DocsStores {
-		dir := filepath.Join(root, "docs", store)
-		if sInfo, err := os.Stat(dir); err == nil && sInfo.IsDir() {
-			report.DocsStores[store] = true
+	// 5. Stores inspection. The resolved layout's role -> path map is the
+	// answer design §7.3 reports as `stores`; docs_stores stays populated
+	// beside it as the deprecated presence alias for v1 consumers, on both
+	// layouts, until v0.8.0 at the earliest.
+	report.Stores = make(map[string]string, len(l.Stores))
+	for role, path := range l.Stores {
+		report.Stores[role] = path
+		sInfo, err := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
+		if err == nil && sInfo.IsDir() {
+			report.DocsStores[role] = true
 		}
 	}
 
 	// 6. Misplaced docs inspection
+	if l.Schema == layout.SchemaV2 {
+		report.MisplacedDocs = append(report.MisplacedDocs, misplacedDocsV2(root, l)...)
+	} else {
+		report.MisplacedDocs = append(report.MisplacedDocs, misplacedDocsV1(root)...)
+	}
+	sort.Strings(report.MisplacedDocs)
+
+	return report, nil
+}
+
+// misplacedDocsV1 is the v1 walker, unchanged: docs/ is the only tree, and
+// docs/archive/ is immutable by repository rule, so nothing in it can be
+// "misplaced": a report here is an instruction to move a file that must not
+// move. Excluding it keeps this classifier and the migrating-fleet-context
+// skill agreeing on one definition.
+func misplacedDocsV1(root string) []string {
+	var misplaced []string
 	docsRoot := filepath.Join(root, "docs")
 	if dInfo, err := os.Stat(docsRoot); err == nil && dInfo.IsDir() {
 		_ = filepath.WalkDir(docsRoot, func(path string, d fs.DirEntry, err error) error {
@@ -156,27 +218,125 @@ func InspectRepo(root string) (DriftReport, error) {
 			relSlash := filepath.ToSlash(rel)
 			name := d.Name()
 
-			// docs/archive/ is immutable by repository rule, so nothing in it
-			// can be "misplaced": a report here is an instruction to move a
-			// file that must not move. Excluding it keeps this classifier and
-			// the migrating-fleet-context skill agreeing on one definition.
 			if strings.HasPrefix(relSlash, "docs/archive/") {
 				return nil
 			}
 
 			if strings.HasSuffix(name, "-plan.md") && !strings.HasPrefix(relSlash, "docs/plans/") {
-				report.MisplacedDocs = append(report.MisplacedDocs, relSlash)
+				misplaced = append(misplaced, relSlash)
 			}
 			if strings.HasSuffix(name, "-design.md") && !strings.HasPrefix(relSlash, "docs/design/") {
-				report.MisplacedDocs = append(report.MisplacedDocs, relSlash)
+				misplaced = append(misplaced, relSlash)
 			}
 			return nil
 		})
 	}
-	sort.Strings(report.MisplacedDocs)
-
-	return report, nil
+	return misplaced
 }
+
+// misplacedDocsV2 walks the declared stores, never the vault: a `*-plan.md`
+// note in a content vault is not an agents plan artifact (design §7.3). The
+// archive is excluded by the manifest's own path, because a v2 repository may
+// put it anywhere; a file inside a store that is not that store's own kind is
+// misplaced.
+func misplacedDocsV2(root string, l layout.Layout) []string {
+	var misplaced []string
+	archive := ""
+	if l.Archive != "" {
+		archive = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(l.Archive)), "/")
+	}
+	for role, storePath := range l.Stores {
+		if storePath == "" {
+			continue
+		}
+		storeRoot := filepath.Join(root, filepath.FromSlash(storePath))
+		sInfo, err := os.Stat(storeRoot)
+		if err != nil || !sInfo.IsDir() {
+			continue
+		}
+		_ = filepath.WalkDir(storeRoot, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return nil
+			}
+			relSlash := filepath.ToSlash(rel)
+			if archive != "" && (relSlash == archive || strings.HasPrefix(relSlash, archive+"/")) {
+				return nil
+			}
+			name := d.Name()
+			if strings.HasSuffix(name, "-plan.md") && role != layout.RolePlans {
+				misplaced = append(misplaced, relSlash)
+			}
+			if strings.HasSuffix(name, "-design.md") && role != layout.RoleDesign {
+				misplaced = append(misplaced, relSlash)
+			}
+			return nil
+		})
+	}
+	return misplaced
+}
+
+// ProblemsText renders a layout's validation problems as one line, so an
+// invalid manifest's `unsupported_detail` names every rule it broke rather
+// than only the first.
+//
+// Exported because `doctor` prints the same list in its own one-line detail.
+// The two callers differ only in what they add around it, and doctor's private
+// copy of this renderer was a copy that drifted.
+func ProblemsText(problems []layout.Problem) string {
+	parts := make([]string, 0, len(problems))
+	for _, p := range problems {
+		text := p.Code
+		if p.Path != "" {
+			text += " " + p.Path
+		}
+		if p.Detail != "" {
+			text += " (" + p.Detail + ")"
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// isCurrent is the currency predicate (design §0.2, §7.3): strict equality
+// between the repository's embedded assets and the running binary's canonical
+// assets for the resolved layout, and nothing else. It does not consider
+// ownership, layout preference, or health -- `doctor` asks those questions.
+func isCurrent(report DriftReport) bool {
+	if report.Unsupported != "" || report.LayoutStatus == layout.StatusMigrating {
+		return false
+	}
+	if report.RouterState != RouterCurrent {
+		return false
+	}
+	if report.SymlinkState != "ok" {
+		return false
+	}
+	if report.DomainState != "ok" {
+		return false
+	}
+	for _, state := range report.Skills {
+		if state != string(ComponentCurrent) {
+			return false
+		}
+	}
+	for _, ok := range report.DocsStores {
+		if !ok {
+			return false
+		}
+	}
+	if len(report.MisplacedDocs) > 0 {
+		return false
+	}
+	return true
+}
+
+// IsCurrent is the exported spelling of isCurrent, for package main where the
+// `drift` and fleet commands decide their exit codes from it.
+func IsCurrent(report DriftReport) bool { return isCurrent(report) }
 
 func unifiedDiff(oldName, newName, oldText, newText string) string {
 	if oldText == newText {

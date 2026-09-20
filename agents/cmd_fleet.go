@@ -92,7 +92,16 @@ func runFleetUpdate(args []string, stdout io.Writer) int {
 	return runFleetUpdateWithWire(args, stdout, wireAll)
 }
 
+// runFleetUpdateWithWire is runFleetUpdateWithVersion with the production wire
+// function and the running binary's own version.
 func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, io.Writer) int) int {
+	return runFleetUpdateWithVersion(args, stdout, wire, version)
+}
+
+// runFleetUpdateWithVersion is the fleet update with the wire function and the
+// running version injected, so the per-repository drift check at the end reads
+// each repository through this binary's own layout support (design §5.3).
+func runFleetUpdateWithVersion(args []string, stdout io.Writer, wire func(string, io.Writer) int, running string) int {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(stdout)
 	all := fs.Bool("all", false, "update every registered repository")
@@ -115,10 +124,24 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 	}
 	present, missing, unknown := r.ReconcileDetailed()
 	if !*apply {
-		fmt.Fprintf(stdout, "would rewire %d registered repo(s); re-run with --apply\n", len(present))
+		// The listing names every repository and every reason before anyone
+		// applies, so the first time an operator learns a repository will be
+		// skipped is not the apply that would have written to it. The count is
+		// what the run would rewrite: a repository skipped for its layout is no
+		// more rewired than a missing one, and the dry run already counts that
+		// way.
+		rewritable := 0
+		var listed strings.Builder
 		for _, e := range present {
-			fmt.Fprintf(stdout, "  %s\n", fleetPath(e.Path))
+			if _, refusal := layoutRefusal(e.Path, running, false); refusal != "" {
+				fmt.Fprintf(&listed, "  skip (layout %s): %s\n", refusal, fleetPath(e.Path))
+				continue
+			}
+			rewritable++
+			fmt.Fprintf(&listed, "  %s\n", fleetPath(e.Path))
 		}
+		fmt.Fprintf(stdout, "would rewire %d registered repo(s); re-run with --apply\n", rewritable)
+		fmt.Fprint(stdout, listed.String())
 		for _, e := range missing {
 			fmt.Fprintf(stdout, "  skip (missing): %s\n", fleetPath(e.Path))
 		}
@@ -135,8 +158,20 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 		fmt.Fprintf(stdout, "skip (unknown): %s -- could not inspect .agents/; left unchanged\n", fleetPath(e.Path))
 	}
 	failed := 0
-	drifted := 0
+	skipped := 0
+	diverged := 0
 	for _, e := range present {
+		// Before wiring and before the skill refresh (design §6.3): a
+		// repository whose manifest this binary may not write is named and left
+		// byte-for-byte unchanged. The trackedness pre-flight is off here --
+		// update creates no v2 layout, so a `--local` v1 repository keeps
+		// today's behavior.
+		l, refusal := layoutRefusal(e.Path, running, false)
+		if refusal != "" {
+			skipped++
+			fmt.Fprintf(stdout, "skip (layout %s): %s\n", refusal, fleetPath(e.Path))
+			continue
+		}
 		var detail bytes.Buffer
 		if code := wire(e.Path, &detail); code != exitcode.OK {
 			failed++
@@ -147,25 +182,33 @@ func runFleetUpdateWithWire(args []string, stdout io.Writer, wire func(string, i
 			fmt.Fprintln(stdout)
 			continue
 		}
-		if err := scaffold.RefreshInfrastructuralSkills(e.Path); err != nil {
+		if err := scaffold.RefreshInfrastructuralSkills(e.Path, l.Schema); err != nil {
 			failed++
 			fmt.Fprintf(stdout, "failed to refresh skills in %s: %v\n", fleetPath(e.Path), err)
 			continue
 		}
 		fmt.Fprintf(stdout, "rewired %s\n", fleetPath(e.Path))
-		rep, err := drift.InspectRepo(e.Path)
-		if err != nil || !isDriftClean(rep) {
-			drifted++
+		rep, err := drift.InspectRepo(e.Path, running)
+		if err != nil || !drift.IsCurrent(rep) {
+			diverged++
 			fmt.Fprintf(stdout, "notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate\n", fleetPath(e.Path))
 		}
 	}
 
-	if failed > 0 || len(missing) > 0 || len(unknown) > 0 {
-		fmt.Fprintf(stdout, "%d repo(s) failed; %d registered repo(s) missing; %d could not be inspected\n", failed, len(missing), len(unknown))
+	if failed > 0 || skipped > 0 || len(missing) > 0 || len(unknown) > 0 {
+		// The counts line keeps its exact text and appears only when one of its
+		// own three counts is non-zero; a skip-only run reports the skip count
+		// alone rather than three zeroes.
+		if failed > 0 || len(missing) > 0 || len(unknown) > 0 {
+			fmt.Fprintf(stdout, "%d repo(s) failed; %d registered repo(s) missing; %d could not be inspected\n", failed, len(missing), len(unknown))
+		}
+		if skipped > 0 {
+			fmt.Fprintf(stdout, "%d repo(s) skipped: this binary must not write their layout\n", skipped)
+		}
 		return exitcode.Advisory
 	}
 	fmt.Fprintf(stdout, "rewired %d registered repo(s)\n", len(present))
-	if drifted > 0 {
+	if diverged > 0 {
 		return exitcode.Advisory
 	}
 	return exitcode.OK

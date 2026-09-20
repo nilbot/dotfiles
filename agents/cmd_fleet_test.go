@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/registry"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
@@ -264,12 +265,12 @@ func TestFleetUpdateApplySuccess(t *testing.T) {
 	}
 }
 
-func TestFleetUpdateApplyDriftAdvisoryOnDriftedRepo(t *testing.T) {
-	drifted := cleanFleetRepo(t)
-	if err := os.WriteFile(filepath.Join(drifted, "AGENTS.md"), []byte("# Drifted Agent Context\n"), 0o644); err != nil {
+func TestFleetUpdateApplyDriftAdvisoryOnDivergedRepo(t *testing.T) {
+	diverged := cleanFleetRepo(t)
+	if err := os.WriteFile(filepath.Join(diverged, "AGENTS.md"), []byte("# Diverged Agent Context\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	saveFleetRegistry(t, registry.Entry{Path: drifted, Added: time.Unix(1, 0).UTC()})
+	saveFleetRegistry(t, registry.Entry{Path: diverged, Added: time.Unix(1, 0).UTC()})
 
 	var called []string
 	var out bytes.Buffer
@@ -280,10 +281,10 @@ func TestFleetUpdateApplyDriftAdvisoryOnDriftedRepo(t *testing.T) {
 	if code != exitcode.Advisory {
 		t.Fatalf("exit=%d want Advisory; output=%q", code, out.String())
 	}
-	if len(called) != 1 || called[0] != drifted {
-		t.Fatalf("calls=%q want [%s]", called, drifted)
+	if len(called) != 1 || called[0] != diverged {
+		t.Fatalf("calls=%q want [%s]", called, diverged)
 	}
-	wantNotice := fmt.Sprintf("notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate", strconv.QuoteToASCII(drifted))
+	wantNotice := fmt.Sprintf("notice: %s has context drift; run 'migrating-fleet-context' agent skill to migrate", strconv.QuoteToASCII(diverged))
 	if !strings.Contains(out.String(), wantNotice) {
 		t.Fatalf("output missing drift notice %q; got: %q", wantNotice, out.String())
 	}
@@ -307,7 +308,15 @@ func TestFleetUpdateApplyRefreshesInfrastructuralSkills(t *testing.T) {
 	if code != exitcode.OK {
 		t.Fatalf("exit=%d want OK; output=%q", code, out.String())
 	}
-	expectedContent, err := scaffold.AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
+	// This repository has no manifest, so it resolves v1 and the canonical text
+	// for the refresh is the frozen v1 asset, not the flat (v2) one. Resolve it
+	// the way the code under test does rather than hardcoding a path: the
+	// assertion still proves the exact bytes written.
+	assetPath, err := scaffold.SkillAssetPath(layout.Resolve(repo).Schema, "migrating-fleet-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedContent, err := scaffold.AssetsFS.ReadFile(assetPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +326,60 @@ func TestFleetUpdateApplyRefreshesInfrastructuralSkills(t *testing.T) {
 	}
 	if string(gotContent) != string(expectedContent) {
 		t.Fatalf("migrating-fleet-context was not refreshed")
+	}
+}
+
+// deleteSkill removes the agents-owned skill copy, so the refresh under test
+// has something to write and its assertion cannot pass on a file that was
+// already there.
+func deleteSkill(t *testing.T, root string) {
+	t.Helper()
+	if err := os.RemoveAll(filepath.Join(root, ".agents", "skills", "migrating-fleet-context")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A supported v2 repository is wired and its agents-owned skill is rewritten
+// from the v2 asset -- the half of §7.5's update paragraph that Task 7's gate
+// must not swallow -- and the run leaves it current, so no drift notice is
+// printed. docs/ stays absent: a v2 repository has no v1 stores, and nothing in
+// update creates them.
+func TestFleetUpdateRefreshesSupportedV2AndPreservesTheGate(t *testing.T) {
+	root := newV2RepoForCmd(t, ".context")
+	// Complete the fixture into a repository update can leave current: the
+	// user-owned recording skill, the domain file, and the root symlink
+	// (drift's currency predicate weighs all three). The agents-owned copy is
+	// deleted, because writing it is the refresh's job.
+	writeFile(t, filepath.Join(root, ".agents", "skills", "recording-what-you-learn", "SKILL.md"),
+		skillAssetBytes(t, layout.SchemaV2, "recording-what-you-learn"))
+	writeFile(t, filepath.Join(root, ".agents", "AGENTS.md"), "# Domain rules\n")
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	deleteSkill(t, root)
+	saveFleetRegistry(t, registry.Entry{Path: root, Added: time.Unix(1, 0).UTC()})
+
+	wireCalled := false
+	var out bytes.Buffer
+	code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.6.0")
+	if code != exitcode.OK || !wireCalled {
+		t.Fatalf("supported v2 = (%d, wired=%v): %s", code, wireCalled, out.String())
+	}
+	assetPath, err := scaffold.SkillAssetPath(layout.SchemaV2, "migrating-fleet-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := scaffold.AssetsFS.ReadFile(assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("supported v2 skill was not refreshed to the v2 text: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "docs")); !os.IsNotExist(err) {
+		t.Fatal("fleet update created a docs/ shell")
 	}
 }
 
@@ -337,6 +400,131 @@ func TestFleetUpdateApplySkipsAndReportsUnknownEntry(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), strconv.QuoteToASCII(unknown)) || !strings.Contains(out.String(), "could not inspect") {
 		t.Fatalf("unknown entry not reported: %q", out.String())
+	}
+}
+
+// An unsupported repository is skipped before wiring and before the migration
+// skill refresh, so fleet update cannot downgrade a v2 repository's skill.
+func TestFleetUpdateSkipsUnsupportedAndDoesNotRefreshSkill(t *testing.T) {
+	root := newV2RepoForCmd(t, ".context")
+	skill := filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately not the canonical v2 text: this is what an older, pre-v2
+	// binary last wrote, and a refresh that ran would replace it.
+	original := []byte("v0.5.1-era migrating-fleet-context text\n")
+	if err := os.WriteFile(skill, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// saveFleetRegistry points XDG_STATE_HOME at a temp directory, so this
+	// entry never reaches the machine's own fleet cache.
+	saveFleetRegistry(t, registry.Entry{Path: root, Added: time.Unix(1, 0).UTC()})
+
+	wireCalled := false
+	var out bytes.Buffer
+	code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.99")
+	if code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+	}
+	if wireCalled {
+		t.Fatal("an unsupported repository must be skipped before wiring")
+	}
+	after, err := os.ReadFile(skill)
+	if err != nil {
+		t.Fatalf("the skipped repository's migration skill was removed: %v", err)
+	}
+	if !bytes.Equal(original, after) {
+		t.Fatal("an unsupported repository's migration skill was downgraded")
+	}
+	if !strings.Contains(out.String(), "skip (layout below_floor): "+strconv.QuoteToASCII(root)) {
+		t.Fatalf("skip reason missing or unnamed: %s", out.String())
+	}
+}
+
+// A dry run names every repository and every reason before anyone applies, so
+// the first time an operator learns a repository will be skipped is not the
+// apply that would have written to it.
+func TestFleetUpdateSkipsUnsupportedInDryRun(t *testing.T) {
+	unsupported := newV2RepoForCmd(t, ".context")
+	supported := cleanFleetRepo(t)
+	saveFleetRegistry(t,
+		registry.Entry{Path: unsupported, Added: time.Unix(1, 0).UTC()},
+		registry.Entry{Path: supported, Added: time.Unix(2, 0).UTC()},
+	)
+
+	wireCalled := false
+	var out bytes.Buffer
+	code := runFleetUpdateWithVersion([]string{"--all"}, &out,
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.99")
+	if code != exitcode.Advisory {
+		t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+	}
+	if wireCalled {
+		t.Fatal("a dry run must not wire")
+	}
+	if !strings.Contains(out.String(), "skip (layout below_floor): "+strconv.QuoteToASCII(unsupported)) {
+		t.Fatalf("dry run did not name the unsupported repository: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "  "+strconv.QuoteToASCII(supported)) {
+		t.Fatalf("dry run did not list the supported repository: %s", out.String())
+	}
+	// The count names what the run would rewrite. A skipped repository is not
+	// one of them, exactly as a missing entry is not.
+	if !strings.Contains(out.String(), "would rewire 1 registered repo(s)") {
+		t.Fatalf("dry run counted a repository it would skip: %s", out.String())
+	}
+}
+
+// The gate skips every reason a manifest refuses, not only the version floor:
+// an invalid manifest and a migration in flight are equally unsafe to wire, and
+// equally unsafe to refresh the migration skill in.
+func TestFleetUpdateSkipsInvalidAndMigratingRepositories(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want string
+		root func(*testing.T) string
+	}{
+		{"invalid", "skip (layout manifest invalid:", func(t *testing.T) string {
+			return newManifestRepoForCmd(t, "{ not json")
+		}},
+		{"migrating", "skip (layout migrating): ", newMigratingRepoForCmd},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := tc.root(t)
+			saveFleetRegistry(t, registry.Entry{Path: root, Added: time.Unix(1, 0).UTC()})
+			wireCalled := false
+			var out bytes.Buffer
+			code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
+				func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.6.0")
+			if code != exitcode.Advisory {
+				t.Fatalf("exit = %d, want Advisory: %s", code, out.String())
+			}
+			if wireCalled {
+				t.Fatal("a repository skipped for its manifest must not be wired")
+			}
+			if !strings.Contains(out.String(), tc.want) {
+				t.Fatalf("skip reason missing %q: %s", tc.want, out.String())
+			}
+			if !strings.Contains(out.String(), strconv.QuoteToASCII(root)) {
+				t.Fatalf("skip line does not name the repository %s: %s", root, out.String())
+			}
+		})
+	}
+}
+
+// The v1 control: no manifest, so the guard has no opinion and the repository
+// is wired exactly as before, even for a binary that predates the floor.
+func TestFleetUpdateStillWiresV1PositiveControl(t *testing.T) {
+	root := cleanFleetRepo(t) // existing helper
+	saveFleetRegistry(t, registry.Entry{Path: root, Added: time.Unix(1, 0).UTC()})
+	wireCalled := false
+	var out bytes.Buffer
+	code := runFleetUpdateWithVersion([]string{"--all", "--apply"}, &out,
+		func(string, io.Writer) int { wireCalled = true; return exitcode.OK }, "v0.5.99")
+	if code != exitcode.OK || !wireCalled {
+		t.Fatalf("v1 control = (%d, wired=%v): %s", code, wireCalled, out.String())
 	}
 }
 

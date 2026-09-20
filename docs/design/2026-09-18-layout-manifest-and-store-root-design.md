@@ -1,10 +1,12 @@
 # Design: Layout Manifest and Store-Root Freedom for Agent Context (`agents.layout/v2`)
 
 **Date:** 2026-09-18
-**Status:** **Approved 2026-09-19 (review gate 1); not approved for
-execution.** The human review closed on 2026-09-19; the §0 decisions are the
-approved resolutions. No implementation, release, or repository migration may
-start until gates 2–4 of §12 are met.
+**Status:** **Approved 2026-09-19 (review gate 1); execution approved
+2026-09-19 (gate 2).** The human review closed on 2026-09-19 and the §0
+decisions are the approved resolutions; the implementation plan was approved
+for execution the same day. Implementation proceeds against this design.
+Release and repository migration do not: gates 3–4 of §12 remain open, so
+paperbubble stays frozen and no fleet repository is migrated.
 **Applies to:** `agents` CLI (`layout`, `scaffold`, `drift`, `doctor`, `init`,
 `update`), the root router (`AGENTS.md` / `CLAUDE.md`), `.agents/AGENTS.md`,
 `.agents/skills/`, and the physical location of the four documentation stores.
@@ -21,7 +23,8 @@ else in that design stands.
 ## 0. Decisions (resolved in review, approved 2026-09-19)
 
 Every question below has a resolution recorded in review on 2026-09-18, and the
-resolutions were **approved by a human on 2026-09-19** (design §12, gate 1).
+resolutions were **approved by a human on 2026-09-19** (design §12, gate 1),
+with execution approved the same day (gate 2).
 The plan and playbook are written against these resolutions and change with
 them. §0.1 records how each question was resolved;
 §0.2–§0.4 are the resolutions recorded in the first review, and §0.5–§0.8 the
@@ -66,8 +69,10 @@ These questions came from the first read of this document on 2026-09-18. They
 are recorded here rather than resolved one by one, because several of them can
 invalidate the recommendations above. **All ten have a recorded resolution as of
 2026-09-18, and the resolutions were confirmed by the human approval of
-2026-09-19 (§12, gate 1), so the queue is closed.** Implementation still waits
-for gate 2. Q1, Q2, Q3, Q8, Q9, and Q10 were resolved in the first pass — the
+2026-09-19 (§12, gate 1), so the queue is closed.** Execution was approved the
+same day (gate 2), so implementation is running against these resolutions;
+changing one still returns to review before it is built. Q1, Q2, Q3, Q8, Q9,
+and Q10 were resolved in the first pass — the
 ledger records each, and Q3, Q8, and Q9 have their own sections in
 §0.2–§0.4; Q4–Q7 were resolved in the second pass and are recorded in
 §0.5–§0.8. The measurements behind the second pass, and the two plan
@@ -873,20 +878,38 @@ Full semantics are in §9 and the migration playbook. Surface rules:
   created. It deletes the manifest and keeps the backup tag. Any other phase
   refuses, names the phase, and points at `--resume --apply` (§0.5).
 - `--backup-tag <name>` is required with every `--apply` that can move something
-  (that is, every `--apply` except `--resume` and `--abort`). The tool creates
-  the annotated tag at HEAD before the first write, so the rollback point exists
-  even if the operator forgot to create a branch.
+  (that is, every `--apply` except `--resume` and `--abort`), and is refused with
+  those two: a resume continues a journal that already recorded its tag, an abort
+  moves nothing and leaves the tag, and a name that cannot take effect must not
+  read as one that did. A name that is not a valid ref, or that already exists,
+  is malformed input (3): `git tag -a` is the first write, so it would fail with
+  nothing moved. The tool creates the annotated tag at HEAD before the first
+  write, so the rollback point exists even if the operator forgot to create a
+  branch.
 - `--template` is optional. When present, its creation defaults supply the
   store map; `--stores role=path` overrides individual roles. When absent (or
   `custom`), `--stores` must supply all four roles.
-- `--json` emits one object: `repo`, `dry_run`, `phase`, `from`, `to`, `router`,
-  `archive`, `moves`, `link_candidates`, `blockers`, `counts`. `phase` is the
-  migration phase the report describes: `planned` for a dry run or a fresh
-  `--apply`, and the journal phase a `--resume` continued from.
+  `from`, `to`, `router`, `archive` (omitted when the repository declares
+  none), `moves`, `link_candidates`, `blockers`,
+  `counts`), or — for a refusal that precedes a plan, such as the preconditions
+  or the `migrating` routing — a refusal object carrying `repo`, `dry_run`,
+  `phase`, and the `error` sentence the human surface prints, so a consumer
+  never has to skip prose. `phase` is the migration phase the report describes:
+  `planned` for a dry run or a fresh `--apply`, and the journal phase a
+  `--resume` continued from. `dry_run` is true whenever nothing was applied,
+  including a plan refused for its blockers.
 - Exit codes: 0 applied and no link candidates, or `--abort` completed; 1 dry-run
   plan ready, applied with link candidates, blockers (including `docs_residue`),
   or a refused `--abort`; 3 malformed flags; 4 not a repository with `.agents/`;
   5 apply failed mid-way and the manifest remains `migrating` for resume.
+  `--resume --apply` follows the same rows as `--apply` with one exception: link
+  candidates are reported only by the run that planned them, so a resume that
+  completes a migration planned with candidates exits 0, where the fresh
+  `--apply` that planned it exited 1.
+- The candidates are a property of the pre-move source tree. A fresh `--apply`
+  scans the stores before moving them; a resume completes a move list whose
+  source tree no longer exists, and §0.5 forbids re-planning, so the journal
+  records no candidates and the resume reports none rather than inventing them.
 
 ### 7.3 Drift report changes
 
@@ -938,7 +961,10 @@ present. In v0.6.0 it also accepts `--template`, `--stores`, and `--archive`;
 any of them creates a v2 layout, with the template supplying creation defaults.
 On a v2
 repository with an active supported manifest, `init` is a no-op for an intact
-layout and creates only missing *manifest-declared* stores. It never creates
+active supported v2 layout and creates nothing at all — not a store, not the
+router, not the linguist attribute — because the manifest is the authority and an
+absent store is a migration blocker the operator resolves with the tool, not a
+scaffolding gap `init` fills. It never creates
 `docs/{design,plans,journal,qna}` in a v2 repository.
 
 If a manifest is absent but a v1 layout already exists (`AGENTS.md` or `docs/`
@@ -981,7 +1007,7 @@ Adding commands and flags updates, in the same change set:
 ### 8.1 Two canonical routers
 
 `scaffold.DefaultAgentsMD` remains the v1 canonical router, byte-for-byte.
-`scaffold.V2AgentsMD` is the manifest-pointing router in §4.4. `drift` selects
+`layout.V2AgentsMD` is the manifest-pointing router in §4.4. `drift` selects
 the canonical digest by the resolved layout:
 
 - v1 → `DefaultAgentsMD`;
@@ -1143,6 +1169,32 @@ The planner reads the v1 layout, resolves the requested v2 layout, and produces
 one action per store directory — the whole directory, including its `README.md`
 and any nested content. It reports, but never performs, link candidates.
 
+The link scan is **target-driven, over the whole repository**, and that scope is
+load-bearing. A markdown link breaks when the file it *points at* stops being
+where it was, which is true whether or not the file *containing* it moves:
+
+- a link inside a moved store, including one pointing into the kept archive, has
+  to be re-spelled from the store's new directory;
+- a link in prose that does **not** move — a repository-root `README.md`, a
+  `.agents/AGENTS.md`, a vault note — and points *into* a moving store breaks
+  just as completely, and a scan restricted to the move sources would never see
+  it.
+
+So the planner walks every markdown file the repository tracks, resolves each
+relative target against the file's own directory, and reports a candidate
+whenever that target lands under a moving store. `Old` is the repository-relative
+target as written, and `New` is where it has to resolve after the migration: for
+a link written inside a move source, `New` is recomputed relative to the source's
+new directory, so a link into the archive is re-spelled to a path that still
+resolves; for a link written anywhere else, only the target moves, and `New` is
+the target's new repository-relative path. Files under the archive are never
+scanned, because nothing there is ever rewritten (§9.5), and the archive is not a
+move source.
+
+A file that is not moved keeps its own path; a link candidate therefore changes
+its *target*, never the file. The rewrite stays the skill's job — the CLI still
+only reports.
+
 Human output:
 
 ```
@@ -1160,7 +1212,7 @@ layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   keep    .agents/AGENTS.md  (user-owned; prose reviewed by the skill)
   remove  docs/ after the moves (no archive, no other tracked content)
 
-  links   0 markdown links point into the moved stores
+  links   0 markdown links the move breaks; the skill rewrites them
   result  4 move, 1 keep, 0 blocked, 0 link(s)
 
   apply   agents layout migrate --template content-vault \
@@ -1244,7 +1296,13 @@ the record. Any later phase refuses, names the phase, and points at
 ### 9.5 Archive, links, and `docs/` removal
 
 - The archive path is recorded in the manifest and excluded from every walk,
-  every move list, and every link rewrite.
+  every move list, and every link rewrite. Excluded from every *link rewrite*
+  means no file under the archive is ever edited, and the archive is never a move
+  source; it does not mean a link *pointing at* the archive is ignored. A link
+  from a moved store into the archive is reported like any other, precisely
+  because the archive stays where it is and the store does not — leaving it alone
+  would turn a working link into a dangling one, which is the outcome the
+  candidate list exists to prevent.
 - Migration never moves a file out of the archive and never writes into it. The
   rule is content-blind: an archive holding meta artifacts, vault content, or
   both is treated identically, because the contract is about the place and not
@@ -1262,8 +1320,11 @@ the record. Any later phase refuses, names the phase, and points at
   manifest records `"archive": "docs/archive"`. `docs/` is not an empty shell;
   it holds the archive.
 - Link candidates are reported by the CLI and rewritten by the
-  `migrating-fleet-context` skill. The fixture test counts links before and
-  after, asserts equal counts, and asserts every rewritten target resolves.
+  `migrating-fleet-context` skill, wherever the containing file lives: inside a
+  moved store, or in tracked prose that did not move. The fixture test counts
+  links before and after, asserts equal counts, and asserts every rewritten
+  target resolves — including a link written in a moved store that points into
+  the archive, and a link written outside every store that points into one.
 
 ### 9.6 Rollback
 
@@ -1332,11 +1393,13 @@ No implementation starts until:
    reviewed and **approved by a human** — **closed 2026-09-19**; the review
    queue Q1–Q10 has recorded resolutions (all ten, 2026-09-18) and this
    approval is what confirms §0;
-2. the plan is approved for execution;
+2. the plan is approved for execution — **closed 2026-09-19**; implementation
+   runs task by task against the plan, and any change to an approved decision
+   returns to review before it is built;
 3. v0.6.0 is released, and every fleet machine is confirmed to resolve that
    binary on `PATH`;
 4. the paperbubble dry run is presented and the human approves the `--apply`.
 
-Gate 1 closed on 2026-09-19; gates 2–4 remain open.
+Gates 1 and 2 closed on 2026-09-19; gates 3–4 remain open.
 
 Until then, paperbubble stays frozen and no fleet repository is migrated.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 	"github.com/nilbot/dotfiles/agents/internal/trace"
@@ -27,6 +28,229 @@ func checkByName(t *testing.T, checks []Check, name string) Check {
 	}
 	t.Fatalf("missing check %q in %+v", name, checks)
 	return Check{}
+}
+
+// gitOutput runs one git command in root and fails the test on error, so a
+// helper whose failure mode is "silently did nothing" cannot pass.
+func gitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v in %s: %v\n%s", args, root, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// initGitRepo creates a work tree git can answer questions in. No commit is
+// made, so a fixture's manifest starts untracked-but-not-ignored -- the window
+// between `layout migrate --apply` and the migration commit (design §0.7).
+func initGitRepo(t *testing.T, root string) {
+	t.Helper()
+	for _, args := range [][]string{
+		{"init", "-b", "agents-test"},
+		{"config", "user.email", "t@example.com"},
+		{"config", "user.name", "T"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		gitOutput(t, root, args...)
+	}
+}
+
+// ignoreAgents appends one ignore rule to the file that spelling belongs in: a
+// "/"-prefixed pattern is machine-local and goes to info/exclude in the common
+// directory, anything else is the repository's tracked .gitignore. The repo and
+// layout packages carry the same helper for their own tests; helpers do not
+// cross a package boundary here.
+func ignoreAgents(t *testing.T, root, pattern string) {
+	t.Helper()
+	target := filepath.Join(root, ".gitignore")
+	if strings.HasPrefix(pattern, "/") {
+		common := gitOutput(t, root, "rev-parse", "--git-common-dir")
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(root, common)
+		}
+		target = filepath.Join(filepath.Clean(common), "info", "exclude")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(pattern + "\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// newScaffoldedRepo is the v1 fixture: a git work tree scaffolded by the
+// writer, which selects the frozen v1 skill texts for a repository with no
+// manifest -- so the fixture is current for the layout it resolves.
+func newScaffoldedRepo(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	initGitRepo(t, root)
+	if err := scaffold.Create(root, false); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// writeManifest renders a manifest through the same writer the tool commits
+// with, so a fixture cannot drift from the canonical encoding.
+func writeManifest(t *testing.T, root string, m layout.Manifest) {
+	t.Helper()
+	data, err := layout.MarshalManifest(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, layout.ManifestRel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// v2Manifest is the active v2 manifest every v2 fixture starts from: the four
+// roles under storeRoot, the release floor, and no journal -- the state §9.3
+// step 7 leaves behind when a migration completes.
+func v2Manifest(storeRoot string) layout.Manifest {
+	stores := make(map[string]string, len(layout.Roles()))
+	for _, role := range layout.Roles() {
+		stores[role] = storeRoot + "/" + role
+	}
+	return layout.Manifest{
+		Schema:         layout.SchemaV2,
+		MinMutVerFloor: layout.MinMutVerFloorV2,
+		LayoutStatus:   layout.StatusActive,
+		Stores:         stores,
+	}
+}
+
+// newV2Repo is the v2 fixture: a git work tree with an active manifest, the
+// four stores it declares, the v2 router and its symlink, the domain context,
+// and both bundled skills in their v2 texts -- current for the layout it
+// resolves, so a health assertion elsewhere cannot be masked by fixture drift.
+// It deliberately does not call scaffold.Create, which writes the v1 docs/
+// stores a v2 repository never creates.
+func newV2Repo(t *testing.T, storeRoot string) string {
+	t.Helper()
+	root := t.TempDir()
+	initGitRepo(t, root)
+	manifest := v2Manifest(storeRoot)
+	for _, role := range layout.Roles() {
+		if err := os.MkdirAll(filepath.Join(root, filepath.FromSlash(manifest.Stores[role])), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManifest(t, root, manifest)
+	if err := os.WriteFile(filepath.Join(root, "AGENTS.md"), []byte(layout.V2AgentsMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("AGENTS.md", filepath.Join(root, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	domain, err := scaffold.AssetsFS.ReadFile("assets/dotagents/AGENTS.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeRepoFile(t, root, ".agents/AGENTS.md", domain); err != nil {
+		t.Fatal(err)
+	}
+	for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+		assetPath, err := scaffold.SkillAssetPath(layout.SchemaV2, skill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := scaffold.AssetsFS.ReadFile(assetPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := writeRepoFile(t, root, ".agents/skills/"+skill+"/SKILL.md", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
+}
+
+// writeRepoFile writes one fixture file at a repository-relative path,
+// creating its parent directories.
+func writeRepoFile(t *testing.T, root, relPath string, content []byte) error {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, content, 0o644)
+}
+
+// editManifest rewrites the manifest through one in-place edit, leaving every
+// field the edit does not touch as the fixture wrote it.
+func editManifest(t *testing.T, root string, edit func(fields map[string]any)) {
+	t.Helper()
+	path := filepath.Join(root, layout.ManifestRel)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	edit(fields)
+	out, err := json.MarshalIndent(fields, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setLayoutStatus rewrites only the manifest's layout_status field, so a test
+// can move a manifest between active and migrating without touching anything
+// else. The resulting journalless manifest is deliberately not a state §9.3 can
+// write; that is what makes it a V14 case, not a migration in progress.
+func setLayoutStatus(t *testing.T, root, status string) {
+	t.Helper()
+	editManifest(t, root, func(fields map[string]any) { fields["layout_status"] = status })
+}
+
+// setMigratingWithJournal rewrites the manifest into the state §9.3 step 2
+// writes before any store is touched: layout_status migrating together with the
+// full journal. It is the realistic in-progress migration, so the only thing
+// layout:manifest has to report about it is the status.
+func setMigratingWithJournal(t *testing.T, root string) {
+	t.Helper()
+	editManifest(t, root, func(fields map[string]any) {
+		fields["layout_status"] = layout.StatusMigrating
+		fields["migration"] = map[string]any{
+			"from": map[string]any{
+				"schema": layout.SchemaV1,
+				"stores": map[string]string{
+					"design": "docs/design", "plans": "docs/plans",
+					"journal": "docs/journal", "qna": "docs/qna",
+				},
+			},
+			"started_at":       "2026-09-19T00:00:00Z",
+			"backup_tag":       "agents-layout-backup",
+			"created_manifest": true,
+			"phase":            "planned",
+			"moves": []map[string]any{{
+				"role": "qna", "from": "docs/qna", "to": ".context/qna",
+				"state": "pending", "files": 1, "bytes": 1,
+				"digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			}},
+		}
+	})
 }
 
 func executableFile(t *testing.T, dir, name string) string {
@@ -827,8 +1051,21 @@ func TestRunWithDependenciesReportsSkippedTraceAndAllSignals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating"} {
+	for _, name := range []string{"binary", "wiring:claude-code", "wiring:codex", "wiring:antigravity", "trust:codex", "trust:antigravity", "recording:claude-code", "recording:codex", "recording:antigravity", "gitleaks", "git-hooks:global", "git-attributes", "machine-id", "trace-index", "pointers:unverified", "scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating", "layout:manifest", "layout:stores", "layout:tracked", "layout:committed", "layout:qna"} {
 		_ = checkByName(t, checks, name)
+	}
+	// Exactly one producer: checkScaffold emits the four checks that need only
+	// the root and the version, and RunWithDeps appends the freshness
+	// indicator, which needs the clock. A second layout:qna row would mean the
+	// check was wired into both.
+	qnaRows := 0
+	for _, c := range checks {
+		if c.Name == "layout:qna" {
+			qnaRows++
+		}
+	}
+	if qnaRows != 1 {
+		t.Fatalf("layout:qna appears %d time(s), want exactly 1", qnaRows)
 	}
 	if got := checkByName(t, checks, "trace-index"); got.Status != Warn || !strings.Contains(got.Detail, "1") {
 		t.Fatalf("skipped trace = %+v", got)
@@ -950,16 +1187,17 @@ func TestPointersReportNoCachedRowWhenNothingWasSaved(t *testing.T) {
 // The write-side indicator that replaced the queue depth check.
 //
 // Three states, and the first is the one that matters: a repository with no
-// docs/qna must not be reported as unhealthy. Most repositories have not
+// qna store must not be reported as unhealthy. Most repositories have not
 // adopted this, and a check that fails everywhere teaches people to skim past
-// the whole report.
-func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
+// the whole report. The check is named for the layout role it resolves and its
+// detail begins with the resolved path.
+func TestQNAFreshnessReportsWithoutJudging(t *testing.T) {
 	now := time.Now()
 
 	root := t.TempDir()
-	got := checkDocsFreshness(root, now)
-	if got.Status != OK || !strings.Contains(got.Detail, "no docs/qna") {
-		t.Errorf("a repository without docs/qna = %+v, want a quiet OK", got)
+	got := checkQNAFreshness(root, layout.V1ForRoot(root), now)
+	if got.Name != "layout:qna" || got.Status != OK || !strings.HasPrefix(got.Detail, "docs/qna: ") {
+		t.Errorf("a repository without docs/qna = %+v, want a quiet OK naming the resolved path", got)
 	}
 
 	dir := filepath.Join(root, "docs", "qna")
@@ -971,7 +1209,7 @@ func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
 	}
 	// The README describes the form; it is not an entry, and counting it would
 	// report a store as populated the moment it was created.
-	if got := checkDocsFreshness(root, now); !strings.Contains(got.Detail, "nothing recorded yet") {
+	if got := checkQNAFreshness(root, layout.V1ForRoot(root), now); !strings.Contains(got.Detail, "nothing recorded yet") {
 		t.Errorf("README.md counted as an entry: %+v", got)
 	}
 
@@ -983,8 +1221,9 @@ func TestDocsFreshnessReportsWithoutJudging(t *testing.T) {
 	if err := os.Chtimes(entry, old, old); err != nil {
 		t.Fatal(err)
 	}
-	got = checkDocsFreshness(root, now)
-	if got.Status != OK || !strings.Contains(got.Detail, "1 entr") || !strings.Contains(got.Detail, "3 day") {
+	got = checkQNAFreshness(root, layout.V1ForRoot(root), now)
+	if got.Status != OK || !strings.HasPrefix(got.Detail, "docs/qna: ") ||
+		!strings.Contains(got.Detail, "1 entr") || !strings.Contains(got.Detail, "3 day") {
 		t.Errorf("one entry three days old = %+v", got)
 	}
 }
@@ -1062,6 +1301,20 @@ func findCheck(t *testing.T, checks []Check, name string) Check {
 	}
 	t.Fatalf("no %s check was produced; got %+v", name, checks)
 	return Check{}
+}
+
+// findCheckPtr returns the named check, or nil when no check has that name.
+// It is the presence-asserting form: a test that says
+// `got := findCheckPtr(...); if got == nil || got.Status != OK` fails on a
+// missing check instead of panicking on a nil dereference.
+func findCheckPtr(t *testing.T, checks []Check, name string) *Check {
+	t.Helper()
+	for i := range checks {
+		if checks[i].Name == name {
+			return &checks[i]
+		}
+	}
+	return nil
 }
 
 func TestCheckWiringAntigravityNamedGroups(t *testing.T) {
@@ -1215,6 +1468,281 @@ func TestCheckAntigravityTrustAccurateStates(t *testing.T) {
 	})
 }
 
+func TestDoctorLayoutChecksResolveV1AndV2(t *testing.T) {
+	for _, tc := range []struct{ name, root, qna string }{
+		{"v1", newScaffoldedRepo(t), "docs/qna"},
+		{"v2", newV2Repo(t, ".context"), ".context/qna"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// checkScaffold produces the four layout checks that need only the
+			// root and the running version; the freshness indicator is appended
+			// by RunWithDeps, which owns the clock. Compose the two here so this
+			// test covers exactly the layout checks `agents doctor` reports.
+			checks := append(checkScaffold(tc.root, "v0.6.0"),
+				checkQNAFreshness(tc.root, layout.Resolve(tc.root), time.Now()))
+			if got := findCheckPtr(t, checks, "layout:manifest"); got == nil || got.Status != OK {
+				t.Fatalf("layout:manifest = %+v", got)
+			}
+			if got := findCheckPtr(t, checks, "layout:qna"); got == nil || !strings.Contains(got.Detail, tc.qna) {
+				t.Fatalf("layout:qna = %+v, want path %s", got, tc.qna)
+			}
+		})
+	}
+}
+
+func TestDoctorWarnsOnUnsupportedAndMigratingLayouts(t *testing.T) {
+	root := newV2Repo(t, ".context")
+	if got := findCheckPtr(t, checkScaffold(root, "v0.5.99"), "layout:manifest"); got == nil || got.Status != Warn {
+		t.Fatalf("unsupported status = %+v", got)
+	}
+	if got := findCheckPtr(t, checkScaffold(root, "dev"), "layout:manifest"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, "release version") {
+		t.Fatalf("unreleased binary = %+v, want a warn that names the missing release", got)
+	}
+	setMigratingWithJournal(t, root)
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, "planned") {
+		t.Fatalf("migrating status = %+v, want a warn naming the recorded phase", got)
+	}
+}
+
+// A manifest that breaks a V-rule is invalid whatever its layout_status says
+// (design §5.2): §9.3 step 2 writes `migrating` and the journal together, so a
+// journalless migrating manifest is a broken manifest, not a migration in
+// progress. This is the branch whose ordering the review corrected.
+func TestDoctorFailsOnAnInvalidManifest(t *testing.T) {
+	t.Run("a role is missing", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		editManifest(t, root, func(fields map[string]any) {
+			delete(fields["stores"].(map[string]any), "qna")
+		})
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Fail || !strings.Contains(got.Detail, "role_missing") {
+			t.Fatalf("manifest missing a role = %+v, want fail naming role_missing", got)
+		}
+	})
+
+	t.Run("a store path escapes the root", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		editManifest(t, root, func(fields map[string]any) {
+			fields["stores"].(map[string]any)["journal"] = "../outside/journal"
+		})
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Fail || !strings.Contains(got.Detail, "path_escapes") {
+			t.Fatalf("escaping store path = %+v, want fail naming path_escapes", got)
+		}
+	})
+
+	t.Run("a migrating status does not excuse a broken journal", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		setLayoutStatus(t, root, layout.StatusMigrating)
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Fail || !strings.Contains(got.Detail, "migration_missing") {
+			t.Fatalf("journalless migrating manifest = %+v, want fail naming migration_missing", got)
+		}
+	})
+
+	t.Run("an unknown schema warns rather than failing", func(t *testing.T) {
+		root := t.TempDir()
+		if err := writeRepoFile(t, root, layout.ManifestRel, []byte(`{"schema":"agents.layout/v9"}`)); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "agents.layout/v9") {
+			t.Fatalf("unknown schema = %+v, want warn naming the schema", got)
+		}
+	})
+
+	t.Run("a manifest with no schema says so", func(t *testing.T) {
+		root := t.TempDir()
+		if err := writeRepoFile(t, root, layout.ManifestRel, []byte(`{"layout_status":"active","stores":{}}`)); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:manifest")
+		if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "declares no schema") ||
+			strings.Contains(got.Detail, `""`) {
+			t.Fatalf("schema-less manifest = %+v, want a warn that does not print an empty quoted schema", got)
+		}
+	})
+}
+
+func TestDoctorWarnsWhenTheManifestOrAgentsIsIgnored(t *testing.T) {
+	for _, pattern := range []string{"/.agents/", "/.agents/**", ".agents/"} {
+		t.Run(pattern, func(t *testing.T) {
+			root := newV2Repo(t, ".context")
+			ignoreAgents(t, root, pattern)
+			got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked")
+			if got == nil || got.Status != Warn || !strings.Contains(got.Detail, layout.ManifestRel) {
+				t.Fatalf("ignored manifest with rule %q = %+v, want warn naming the manifest", pattern, got)
+			}
+			// Committing past an ignore rule needs -f, so the remedy is the
+			// rule's removal, not the migration commit.
+			committed := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed")
+			if committed == nil || committed.Status != Warn || !strings.Contains(committed.Remedy, "remove the ignore rule") {
+				t.Fatalf("ignored manifest committed-check = %+v, want the rule-removal remedy", committed)
+			}
+		})
+	}
+}
+
+// A v1 `--local` repository ignores /.agents/ by design, and there is no
+// manifest for that rule to hide; a v2 repository with the same rule has a
+// machine-local manifest, which is what V16 refuses.
+func TestDoctorDoesNotWarnAboutAV1LocalLayout(t *testing.T) {
+	v1 := newScaffoldedRepo(t)
+	ignoreAgents(t, v1, "/.agents/")
+	if got := findCheckPtr(t, checkScaffold(v1, "v0.6.0"), "layout:tracked"); got == nil || got.Status != OK {
+		t.Fatalf("v1 --local layout:tracked = %+v, want ok", got)
+	}
+
+	v2 := newV2Repo(t, ".context")
+	ignoreAgents(t, v2, "/.agents/")
+	if got := findCheckPtr(t, checkScaffold(v2, "v0.6.0"), "layout:tracked"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, layout.ManifestRel) {
+		t.Fatalf("v2 machine-local manifest layout:tracked = %+v, want warn", got)
+	}
+}
+
+func TestDoctorWarnsOnAMissingDeclaredStore(t *testing.T) {
+	root := newV2Repo(t, ".context")
+	if err := os.RemoveAll(filepath.Join(root, ".context", "journal")); err != nil {
+		t.Fatal(err)
+	}
+	got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:stores")
+	if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "journal=.context/journal") {
+		t.Fatalf("missing declared store = %+v, want warn naming journal=.context/journal", got)
+	}
+	// Design §7.5 makes `agents init` a no-op on this active supported v2
+	// manifest, so the old remedy printed a command that created no store. The
+	// Detail alone cannot catch that: it names the gap either way.
+	if want := "create the named store directory and its README.md by hand, or re-run the scaffold that owns it; `agents init` creates no store on an active v2 layout"; got.Remedy != want {
+		t.Errorf("missing declared store remedy = %q, want %q", got.Remedy, want)
+	}
+}
+
+// scaffoldRemedyV2 is the contract these tests hold the four layout-aware
+// scaffold remedies to. Each is an action that works on a v2 repository, where
+// §7.5 makes `agents init` write nothing at all; none of them may name it.
+var scaffoldRemedyV2 = map[string]string{
+	"scaffold:router":          "run `agents layout show --router > AGENTS.md` to restore the canonical router",
+	"scaffold:domain":          "create .agents/AGENTS.md with this repository's domain prose; the `agents init` starter template is a v1 convenience",
+	"scaffold:skill-recording": "populate .agents/skills/recording-what-you-learn/ with this layout's canonical text, or run the 'migrating-fleet-context' agent skill",
+	"layout:stores":            "create the named store directory and its README.md by hand, or re-run the scaffold that owns it; `agents init` creates no store on an active v2 layout",
+}
+
+// scaffoldRemedyV1 is the text each of the same four checks has always
+// printed. A v1 repository has no manifest and `agents init` really does these
+// writes there, so the v2 branch must leave every one of these bytes alone.
+var scaffoldRemedyV1 = map[string]string{
+	"scaffold:router":          "run 'agents init' to scaffold",
+	"scaffold:domain":          "run 'agents init' to populate starter template",
+	"scaffold:skill-recording": "run 'agents init' to populate bundled skill",
+	"layout:stores":            "run `agents init`; on a v2 repository it creates manifest-declared stores",
+}
+
+// The four remedies that told a v2 operator to run `agents init` were the one
+// printed recovery for states init cannot repair. These assertions pin the text
+// for both schemas, so a remedy cannot silently regress to a command that
+// writes nothing -- and cannot drift into the v2 text on a v1 repository
+// either.
+func TestDoctorScaffoldRemediesNameAnActionThatWorks(t *testing.T) {
+	assertRemedies := func(t *testing.T, checks []Check, want map[string]string) {
+		t.Helper()
+		for name, remedy := range want {
+			got := findCheckPtr(t, checks, name)
+			if got == nil {
+				t.Fatalf("missing check %q", name)
+			}
+			if got.Remedy != remedy {
+				t.Errorf("%s remedy = %q, want %q", name, got.Remedy, remedy)
+			}
+		}
+	}
+
+	// The reviewer's measurement, reproduced: a real v2 repository missing all
+	// four artifacts, each of which init left unrestored.
+	t.Run("v2 names actions init cannot take", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		for _, rel := range []string{
+			"AGENTS.md",
+			".agents/AGENTS.md",
+			".agents/skills/recording-what-you-learn",
+			".context/journal",
+		} {
+			if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertRemedies(t, checkScaffold(root, "v0.6.0"), scaffoldRemedyV2)
+	})
+
+	// A v1 repository reaches all four writes, so its text stays as it is.
+	t.Run("v1 keeps the remedies it has always printed", func(t *testing.T) {
+		root := newScaffoldedRepo(t)
+		for _, rel := range []string{
+			"AGENTS.md",
+			".agents/AGENTS.md",
+			".agents/skills/recording-what-you-learn",
+			"docs/journal",
+		} {
+			if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertRemedies(t, checkScaffold(root, "v0.6.0"), scaffoldRemedyV1)
+	})
+}
+
+// Outside a repository there is no index to be absent from, so the advisory is
+// a quiet ok rather than a warning the operator cannot act on.
+func TestDoctorLayoutCommittedOutsideGitRepository(t *testing.T) {
+	root := t.TempDir()
+	writeManifest(t, root, v2Manifest(".context"))
+
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed"); got == nil ||
+		got.Status != OK || !strings.Contains(got.Detail, "not a git repository") {
+		t.Fatalf("layout:committed outside a repository = %+v, want ok", got)
+	}
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked"); got == nil || got.Status != OK {
+		t.Fatalf("layout:tracked outside a repository = %+v, want ok", got)
+	}
+}
+
+func TestQNAFreshnessNamesTheManifestWhenNoStoreResolves(t *testing.T) {
+	root := t.TempDir()
+	if err := writeRepoFile(t, root, layout.ManifestRel, []byte(`{"schema":"agents.layout/v9"}`)); err != nil {
+		t.Fatal(err)
+	}
+	got := checkQNAFreshness(root, layout.Resolve(root), time.Now())
+	if got.Name != "layout:qna" || got.Status != OK || !strings.HasPrefix(got.Detail, layout.ManifestRel+": ") {
+		t.Fatalf("unresolved qna store = %+v, want an ok that names the manifest it read", got)
+	}
+}
+
+func TestDoctorAdvisesOnIgnoredStoresAndTheUncommittedManifestWindow(t *testing.T) {
+	root := newV2Repo(t, ".context")
+	initGitRepo(t, root)
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked"); got == nil || got.Status != OK {
+		t.Fatalf("layout:tracked on a clean v2 repo = %+v", got)
+	}
+	// The untracked-but-not-ignored manifest is the normal window between
+	// `layout migrate --apply` and the migration commit: advisory, never a fail.
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed"); got == nil || got.Status != Warn {
+		t.Fatalf("uncommitted manifest = %+v", got)
+	}
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "layout")
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:committed"); got == nil || got.Status != OK {
+		t.Fatalf("committed manifest = %+v", got)
+	}
+	// A store matched by an ignore rule will not travel with a clone.
+	ignoreAgents(t, root, ".context/qna/")
+	if got := findCheckPtr(t, checkScaffold(root, "v0.6.0"), "layout:tracked"); got == nil ||
+		got.Status != Warn || !strings.Contains(got.Detail, ".context/qna") {
+		t.Fatalf("ignored store = %+v", got)
+	}
+}
+
 func TestCheckScaffoldGranularChecks(t *testing.T) {
 	t.Run("canonical scaffold all ok", func(t *testing.T) {
 		root := t.TempDir()
@@ -1226,9 +1754,9 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := scaffold.Create(root, false); err != nil {
 			t.Fatal(err)
 		}
-		checks := checkScaffold(root)
-		if len(checks) != 5 {
-			t.Fatalf("got %d checks, want 5", len(checks))
+		checks := checkScaffold(root, "v0.6.0")
+		if len(checks) != 9 {
+			t.Fatalf("got %d checks, want 9", len(checks))
 		}
 
 		cRouter := checkByName(t, checks, "scaffold:router")
@@ -1257,30 +1785,30 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		}
 	})
 
-	t.Run("router legacy and drifted and missing", func(t *testing.T) {
+	t.Run("router legacy and diverged and missing", func(t *testing.T) {
 		// Clean legacy
 		rootLegacy := t.TempDir()
 		if err := os.WriteFile(filepath.Join(rootLegacy, "AGENTS.md"), []byte(drift.LegacySingleBulletRouter), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cLegacy := checkByName(t, checkScaffold(rootLegacy), "scaffold:router")
+		cLegacy := checkByName(t, checkScaffold(rootLegacy, "v0.6.0"), "scaffold:router")
 		if cLegacy.Status != Warn || cLegacy.Detail != "root AGENTS.md uses a legacy canonical template" || cLegacy.Remedy != "run the 'migrating-fleet-context' agent skill to update" {
 			t.Errorf("clean legacy router = %+v", cLegacy)
 		}
 
-		// Drifted
-		rootDrifted := t.TempDir()
-		if err := os.WriteFile(filepath.Join(rootDrifted, "AGENTS.md"), []byte("# Custom rules\nDo not edit\n"), 0o644); err != nil {
+		// Diverged
+		rootDiverged := t.TempDir()
+		if err := os.WriteFile(filepath.Join(rootDiverged, "AGENTS.md"), []byte("# Custom rules\nDo not edit\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cDrifted := checkByName(t, checkScaffold(rootDrifted), "scaffold:router")
-		if cDrifted.Status != Warn || cDrifted.Detail != "root AGENTS.md contains unpartitioned domain rules or custom drift" || cDrifted.Remedy != "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md" {
-			t.Errorf("drifted router = %+v", cDrifted)
+		cDiverged := checkByName(t, checkScaffold(rootDiverged, "v0.6.0"), "scaffold:router")
+		if cDiverged.Status != Warn || cDiverged.Detail != "root AGENTS.md contains unpartitioned domain rules or custom drift" || cDiverged.Remedy != "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md" {
+			t.Errorf("diverged router = %+v", cDiverged)
 		}
 
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:router")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:router")
 		if cMissing.Status != Fail || cMissing.Detail != "root AGENTS.md is missing" || cMissing.Remedy != "run 'agents init' to scaffold" {
 			t.Errorf("missing router = %+v", cMissing)
 		}
@@ -1289,7 +1817,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 	t.Run("symlink invalid states", func(t *testing.T) {
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:symlink")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:symlink")
 		if cMissing.Status != Fail || cMissing.Detail != "CLAUDE.md symlink is invalid (missing)" || !strings.Contains(cMissing.Remedy, "ln -s AGENTS.md CLAUDE.md") {
 			t.Errorf("missing symlink = %+v", cMissing)
 		}
@@ -1299,7 +1827,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(rootRegular, "CLAUDE.md"), []byte("regular file"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cRegular := checkByName(t, checkScaffold(rootRegular), "scaffold:symlink")
+		cRegular := checkByName(t, checkScaffold(rootRegular, "v0.6.0"), "scaffold:symlink")
 		if cRegular.Status != Fail || cRegular.Detail != "CLAUDE.md symlink is invalid (not_symlink)" {
 			t.Errorf("not symlink = %+v", cRegular)
 		}
@@ -1309,7 +1837,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.Symlink("NONEXISTENT.md", filepath.Join(rootBroken, "CLAUDE.md")); err != nil {
 			t.Fatal(err)
 		}
-		cBroken := checkByName(t, checkScaffold(rootBroken), "scaffold:symlink")
+		cBroken := checkByName(t, checkScaffold(rootBroken, "v0.6.0"), "scaffold:symlink")
 		if cBroken.Status != Fail || cBroken.Detail != "CLAUDE.md symlink is invalid (broken)" {
 			t.Errorf("broken symlink = %+v", cBroken)
 		}
@@ -1317,7 +1845,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 
 	t.Run("domain context missing", func(t *testing.T) {
 		root := t.TempDir()
-		c := checkByName(t, checkScaffold(root), "scaffold:domain")
+		c := checkByName(t, checkScaffold(root, "v0.6.0"), "scaffold:domain")
 		if c.Status != Warn || c.Detail != ".agents/AGENTS.md is missing" || c.Remedy != "run 'agents init' to populate starter template" {
 			t.Errorf("missing domain = %+v", c)
 		}
@@ -1333,12 +1861,12 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(recDir, "SKILL.md"), []byte(drift.LegacyRecordingSkill), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cLegacy := checkByName(t, checkScaffold(rootLegacy), "scaffold:skill-recording")
+		cLegacy := checkByName(t, checkScaffold(rootLegacy, "v0.6.0"), "scaffold:skill-recording")
 		if cLegacy.Status != OK || cLegacy.Detail != ".agents/skills/recording-what-you-learn/ matches legacy template" {
 			t.Errorf("clean legacy recording = %+v", cLegacy)
 		}
 
-		// Customized
+		// Diverged
 		rootCustom := t.TempDir()
 		customRecDir := filepath.Join(rootCustom, ".agents", "skills", "recording-what-you-learn")
 		if err := os.MkdirAll(customRecDir, 0o755); err != nil {
@@ -1347,14 +1875,14 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(customRecDir, "SKILL.md"), []byte("---\nname: recording-what-you-learn\n---\nCustom skill content\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-recording")
+		cCustom := checkByName(t, checkScaffold(rootCustom, "v0.6.0"), "scaffold:skill-recording")
 		if cCustom.Status != OK || cCustom.Detail != ".agents/skills/recording-what-you-learn/ carries repository customizations" {
-			t.Errorf("customized recording = %+v", cCustom)
+			t.Errorf("diverged recording = %+v", cCustom)
 		}
 
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-recording")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:skill-recording")
 		if cMissing.Status != Warn || cMissing.Detail != ".agents/skills/recording-what-you-learn/ is missing" || cMissing.Remedy != "run 'agents init' to populate bundled skill" {
 			t.Errorf("missing recording = %+v", cMissing)
 		}
@@ -1371,12 +1899,12 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 		if err := scaffold.Create(rootOK, false); err != nil {
 			t.Fatal(err)
 		}
-		cOK := checkByName(t, checkScaffold(rootOK), "scaffold:skill-migrating")
+		cOK := checkByName(t, checkScaffold(rootOK, "v0.6.0"), "scaffold:skill-migrating")
 		if cOK.Status != OK || cOK.Detail != ".agents/skills/migrating-fleet-context/ is present" {
 			t.Errorf("ok migrating = %+v", cOK)
 		}
 
-		// Customized
+		// Diverged
 		rootCustom := t.TempDir()
 		gitInitCustom := exec.Command("git", "init", "-b", "main")
 		gitInitCustom.Dir = rootCustom
@@ -1387,14 +1915,14 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 			t.Fatal(err)
 		}
 		skillPath := filepath.Join(rootCustom, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-		if err := os.WriteFile(skillPath, []byte("# customized migration skill\n"), 0o644); err != nil {
+		if err := os.WriteFile(skillPath, []byte("# diverged migration skill\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		// migrating-fleet-context is 100% agents-owned (design 5.1), so a copy
-		// that does not match the embedded asset is stale, not customized --
+		// that does not match the embedded asset is stale, not a customization --
 		// and a stale migration skill reported `ok` is a skill that passes its
 		// own health check while carrying obsolete instructions.
-		cCustom := checkByName(t, checkScaffold(rootCustom), "scaffold:skill-migrating")
+		cCustom := checkByName(t, checkScaffold(rootCustom, "v0.6.0"), "scaffold:skill-migrating")
 		if cCustom.Status != Warn || cCustom.Detail != ".agents/skills/migrating-fleet-context/ does not match the installed binary" {
 			t.Errorf("stale migrating = %+v", cCustom)
 		}
@@ -1404,7 +1932,7 @@ func TestCheckScaffoldGranularChecks(t *testing.T) {
 
 		// Missing
 		rootMissing := t.TempDir()
-		cMissing := checkByName(t, checkScaffold(rootMissing), "scaffold:skill-migrating")
+		cMissing := checkByName(t, checkScaffold(rootMissing, "v0.6.0"), "scaffold:skill-migrating")
 		if cMissing.Status != Warn || cMissing.Detail != ".agents/skills/migrating-fleet-context/ is missing" || cMissing.Remedy != "run 'agents update' or 'agents init' to refresh infrastructure skills" {
 			t.Errorf("missing migrating = %+v", cMissing)
 		}

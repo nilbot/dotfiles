@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nilbot/dotfiles/agents/internal/drift"
+	"github.com/nilbot/dotfiles/agents/internal/exitcode"
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
@@ -185,15 +188,27 @@ func TestHarnessSkillCoversAgentCommands(t *testing.T) {
 func TestMigrationSkillCoversItsSpecifiedProtocol(t *testing.T) {
 	root := task18RepoRoot(t)
 	rel := filepath.Join(".agents", "skills", "migrating-fleet-context", "SKILL.md")
-	data, err := os.ReadFile(filepath.Join(root, rel))
+	repoCopy, err := os.ReadFile(filepath.Join(root, rel))
 	if err != nil {
 		t.Fatalf("the migration skill is missing: %v", err)
 	}
-	text := string(data)
 
-	// Required by the amended design section 7. Each entry names the section
-	// that requires it, so a future edit that drops one can find out why.
-	required := []struct{ substr, why string }{
+	// The test reads three texts: the repository copy, the v1 asset it must
+	// equal, and the v2 asset the layout-era requirements live in (design §0.8,
+	// §8.2). No single text can satisfy both tables: the legacy vocabulary is
+	// v1's canonical vocabulary and the forbidden list below is v2's.
+	v1 := skillAssetBytes(t, layout.SchemaV1, "migrating-fleet-context")
+	v2 := skillAssetBytes(t, layout.SchemaV2, "migrating-fleet-context")
+	if string(repoCopy) != v1 {
+		t.Fatal("the repository copy is not the v1 canonical text")
+	}
+
+	// Required by the amended design section 7, asserted against the v1 asset
+	// because every row is true of the frozen v0.5.1 prose -- the repository
+	// copy is that text, and dotfiles is a v1 repository. Each entry names the
+	// section that requires it, so a future edit that drops one can find out
+	// why.
+	legacyRequired := []struct{ substr, why string }{
 		{"agents ls", "7.1.2 target discovery over the registered fleet"},
 		{"agents drift --json", "7.1.2 single-repository inspection"},
 		{"agents drift --all --json", "7.6 fleet inspection, which returns an array"},
@@ -210,75 +225,345 @@ func TestMigrationSkillCoversItsSpecifiedProtocol(t *testing.T) {
 		{"traceability", "7.5 evidence for zero rule dropping"},
 		{"gh pr create", "7.1.9 the migration ends in a pull request"},
 	}
-	lower := strings.ToLower(text)
-	for _, r := range required {
-		if !strings.Contains(lower, strings.ToLower(r.substr)) {
-			t.Errorf("%s does not mention %q, required by %s", rel, r.substr, r.why)
+
+	// The layout-era requirements, asserted against the v2 asset. None of these
+	// commands or states exists in v0.5.1, so they belong to the text Task 3
+	// authored; a v1 copy that lost the rows above and gained these would be
+	// wrong in both directions, which is why the two tables are scoped.
+	layoutRequired := []struct{ substr, why string }{
+		{"agents layout show", "manifest-first resolution"},
+		{"agents layout migrate", "the deterministic migration command"},
+		{"--dry-run", "plan first, apply only after approval"},
+		{"--apply", "the only mutation path"},
+		{"--resume", "resumable migration"},
+		{"--abort", "the nothing-moved escape from a planned migration"},
+		{"min_mut_ver_floor", "below-floor refusal"},
+		{"layout_status", "migrating vs active"},
+		{"unsupported", "stop instead of guessing"},
+		{"archive", "immutable archive handling"},
+		{"--local", "v2 is unavailable where .agents/ is ignored"},
+		{"the other layout's canonical text", "a copy from another layout is replaced with this layout's canonical text, never merged"},
+		{"cannot perform the flip", "the v1 text is frozen; only `agents layout migrate` flips a layout"},
+	}
+	for _, tc := range []struct {
+		name     string
+		text     string
+		required []struct{ substr, why string }
+	}{
+		{"v1", v1, legacyRequired},
+		{"v2", v2, layoutRequired},
+	} {
+		lower := strings.ToLower(tc.text)
+		for _, r := range tc.required {
+			if !strings.Contains(lower, strings.ToLower(r.substr)) {
+				t.Errorf("the %s asset does not mention %q, required by %s", tc.name, r.substr, r.why)
+			}
 		}
 	}
 
-	// Forbidden: the unconditional symlink replacement. On the pre-2026-08-19
-	// topology (AGENTS.md -> CLAUDE.md, content in CLAUDE.md) this deletes the
-	// only real file and leaves AGENTS.md -> CLAUDE.md -> AGENTS.md, a symlink
-	// loop with every line of repository context gone. playground/desktop_pet
-	// was in exactly that state on 2026-09-01.
-	if strings.Contains(text, "rm -f CLAUDE.md") {
-		t.Errorf("%s still carries the unconditional `rm -f CLAUDE.md`; design 7.4 requires "+
-			"stat-ing both root paths and preserving content before the symlink", rel)
+	// The v2 text uses the v0.6.0 state vocabulary; the old backticked names are
+	// forbidden there. The v1 text keeps them -- that is its canonical
+	// vocabulary and this release does not touch it (design §0.3, §2.1). Both
+	// directions are asserted here so a reader sees the scoping in one place;
+	// the byte pin in TestFrozenV1AssetsEqualTheRecordedV051Bytes already
+	// freezes the v1 side transitively.
+	for _, old := range []string{"`clean_current`", "`clean_legacy`", "`drifted`", "`customized`"} {
+		if !strings.Contains(v1, old) {
+			t.Errorf("the v1 skill lost the v0.5.1 state name %s; v1 is frozen and keeps its canonical vocabulary", old)
+		}
+		if strings.Contains(v2, old) {
+			t.Errorf("the v2 skill still uses the v0.5.1 state name %s", old)
+		}
 	}
 
-	// Forbidden: a command that relocates out of the immutable archive. Prose
-	// forbidding the move is fine and expected; a `git mv` with an archive
-	// source is not.
-	for _, line := range strings.Split(text, "\n") {
-		if strings.Contains(line, "git mv") && strings.Contains(line, "docs/archive/") {
-			t.Errorf("%s relocates out of docs/archive/, which is immutable: %q", rel, strings.TrimSpace(line))
+	// Forbidden in both texts: the unconditional symlink replacement. On the
+	// pre-2026-08-19 topology (AGENTS.md -> CLAUDE.md, content in CLAUDE.md)
+	// this deletes the only real file and leaves AGENTS.md -> CLAUDE.md ->
+	// AGENTS.md, a symlink loop with every line of repository context gone.
+	// playground/desktop_pet was in exactly that state on 2026-09-01.
+	//
+	// Forbidden in both texts: a command that relocates out of the immutable
+	// archive. Prose forbidding the move is fine and expected; a `git mv` with
+	// an archive source is not.
+	for _, tc := range []struct{ name, text string }{{"v1", v1}, {"v2", v2}} {
+		if strings.Contains(tc.text, "rm -f CLAUDE.md") {
+			t.Errorf("the %s skill still carries the unconditional `rm -f CLAUDE.md`; design 7.4 requires "+
+				"stat-ing both root paths and preserving content before the symlink", tc.name)
+		}
+		for _, line := range strings.Split(tc.text, "\n") {
+			if strings.Contains(line, "git mv") && strings.Contains(line, "docs/archive/") {
+				t.Errorf("the %s skill relocates out of docs/archive/, which is immutable: %q", tc.name, strings.TrimSpace(line))
+			}
 		}
 	}
 }
 
-// The skill exists twice: the repository's own copy and the embedded asset the
-// binary scaffolds into every other repository. Nothing bound them together,
-// so they could diverge silently and the fleet would be migrated by whichever
-// copy the reader happened to open.
+// skillAssetBytes resolves one embedded skill asset for a resolved layout and
+// returns its bytes. The flat path holds the v2 text; v1/SKILL.md holds the
+// frozen v1 text (design §0.8).
+func skillAssetBytes(t *testing.T, schema, skill string) string {
+	t.Helper()
+	path, err := scaffold.SkillAssetPath(schema, skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := scaffold.AssetsFS.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// The v2 recording skill resolves its stores through the binary rather than
+// naming them, which is what lets one text serve a repository whose stores are
+// anywhere (design §8.3). This is the v2 half of the prose gate; the v1 half is
+// TestFrozenV1SkillAssetsStillSpeakV1Paths.
+func TestRecordingSkillNamesRolesNotDocsPaths(t *testing.T) {
+	text := skillAssetBytes(t, layout.SchemaV2, "recording-what-you-learn")
+	for _, want := range []string{
+		"agents layout path qna", "agents layout path journal", ".agents/layout.json",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the v2 recording skill does not name %q", want)
+		}
+	}
+	if strings.Contains(text, "docs/") {
+		t.Error("the v2 recording skill hardcodes a docs/ path")
+	}
+}
+
+// The other half of the gate: the v1 assets must keep speaking v1, so a v1
+// repository never silently loses the paths its layout uses. The repository
+// copy of each skill is this frozen text (TestMigrationSkillMatchesEmbeddedAsset
+// pins the migrating one), so "no v2 prose in the v1 asset" is also "no v2
+// prose in dotfiles".
+func TestFrozenV1SkillAssetsStillSpeakV1Paths(t *testing.T) {
+	for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+		v1 := skillAssetBytes(t, layout.SchemaV1, skill)
+		if !strings.Contains(v1, "docs/") {
+			t.Errorf("the frozen v1 %s asset no longer names the v1 docs/ paths", skill)
+		}
+		if strings.Contains(v1, "agents layout path") {
+			t.Errorf("the frozen v1 %s asset carries v2-only prose", skill)
+		}
+	}
+}
+
+// The v1 constants are not merely legacy: they are the v1 canonical text, so the
+// pin doubles as the freeze. Nobody "improves" a v1 repository by accident.
+//
+// TestSkillAssetsSplitByLayout asserts the split (the halves differ); this test
+// owns the byte pin against the recorded v0.5.1 constants, so the two cannot
+// assert the same thing in two places.
+func TestFrozenV1AssetsEqualTheRecordedV051Bytes(t *testing.T) {
+	for _, tc := range []struct{ skill, want string }{
+		{"recording-what-you-learn", drift.LegacyRecordingSkillV051},
+		{"migrating-fleet-context", drift.LegacyMigratingSkillV051},
+	} {
+		path, err := scaffold.SkillAssetPath(layout.SchemaV1, tc.skill)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := scaffold.AssetsFS.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != tc.want {
+			t.Fatalf("the v1 asset for %s no longer equals the recorded v0.5.1 bytes; v1 is frozen", tc.skill)
+		}
+	}
+}
+
+// The split itself: the flat assets are the v2 texts and v1/SKILL.md is the
+// frozen v0.5.1 bytes.
+func TestSkillAssetsSplitByLayout(t *testing.T) {
+	v1Recording := skillAssetBytes(t, layout.SchemaV1, "recording-what-you-learn")
+	v2Recording := skillAssetBytes(t, layout.SchemaV2, "recording-what-you-learn")
+	v1Migrating := skillAssetBytes(t, layout.SchemaV1, "migrating-fleet-context")
+	v2Migrating := skillAssetBytes(t, layout.SchemaV2, "migrating-fleet-context")
+
+	if v1Recording == v2Recording || v1Migrating == v2Migrating {
+		t.Fatal("the flat (v2) and v1 assets must differ after the split")
+	}
+	// The frozen half is byte-identical to the recorded v0.5.1 bytes; that pin
+	// lives in TestFrozenV1AssetsEqualTheRecordedV051Bytes.
+	//
+	// The v2 half is the new prose.
+	if strings.Contains(v2Recording, "docs/") {
+		t.Error("the v2 recording text still hardcodes a docs/ path")
+	}
+	for _, want := range []string{"agents layout path qna", "agents layout path journal", ".agents/layout.json"} {
+		if !strings.Contains(v2Recording, want) {
+			t.Errorf("the v2 recording text does not name %q", want)
+		}
+	}
+	for _, want := range []string{
+		"agents layout migrate", "--dry-run", "--apply", "--resume", "--abort",
+		"--local", "min_mut_ver_floor", "layout_status",
+		"the other layout's canonical text", "cannot perform the flip",
+		// Design §8.4 names both of these as part of the v2 text's surface.
+		"agents layout show", "agents layout path",
+	} {
+		if !strings.Contains(v2Migrating, want) {
+			t.Errorf("the v2 migrating text does not name %q", want)
+		}
+	}
+}
+
+// The canonical text is selected by the resolved layout, so the same bytes are
+// current in one layout and known_legacy in the other (design §0.8, §8.2). The
+// known_legacy half is what Task 13's catalog wiring adds: before it, a copy
+// from the other layout reported diverged -- the 2026-09-01 accident, where a
+// recognizable shared copy had no exit.
+//
+// The v2 fixture goes through newV2RepoForCmd rather than the drift package's
+// unexported writeV2Layout, which package main cannot see; it resolves v2 for
+// the same reason (a complete, active manifest).
+func TestSkillCurrencyIsSelectedByResolvedLayout(t *testing.T) {
+	v1Text := skillAssetBytes(t, layout.SchemaV1, "recording-what-you-learn")
+	v2Text := skillAssetBytes(t, layout.SchemaV2, "recording-what-you-learn")
+	if v1Text == v2Text {
+		t.Fatal("the v1 and v2 texts must differ after the Task 3 split; the selection is untestable otherwise")
+	}
+	write := func(root, text string) {
+		t.Helper()
+		writeFile(t, filepath.Join(root, ".agents/skills/recording-what-you-learn/SKILL.md"), text)
+	}
+
+	v1 := t.TempDir()
+	write(v1, v1Text)
+	if rep, _ := drift.InspectRepo(v1, "v0.6.0"); rep.Skills["recording-what-you-learn"] != "current" {
+		t.Fatalf("v1 repo + v1 text = %q, want current", rep.Skills["recording-what-you-learn"])
+	}
+	write(v1, v2Text)
+	if rep, _ := drift.InspectRepo(v1, "v0.6.0"); rep.Skills["recording-what-you-learn"] != "known_legacy" {
+		t.Fatalf("v1 repo + v2 text = %q, want known_legacy", rep.Skills["recording-what-you-learn"])
+	}
+
+	v2 := newV2RepoForCmd(t, ".context")
+	write(v2, v1Text)
+	if rep, _ := drift.InspectRepo(v2, "v0.6.0"); rep.Skills["recording-what-you-learn"] != "known_legacy" {
+		t.Fatalf("v2 repo + v1 text = %q, want known_legacy", rep.Skills["recording-what-you-learn"])
+	}
+	write(v2, v2Text)
+	if rep, _ := drift.InspectRepo(v2, "v0.6.0"); rep.Skills["recording-what-you-learn"] != "current" {
+		t.Fatalf("v2 repo + v2 text = %q, want current", rep.Skills["recording-what-you-learn"])
+	}
+}
+
+// The v2 prose resolves roles through the binary, and on a v1 repository the
+// binary answers the v1 paths. This is the positive control that lets one text
+// serve both layouts; without it "the v2 skill also works on v1" is an assertion
+// (design §8.3). The text is not installed here: what is under test is the
+// fallback's answer, not the copy.
+func TestV2RecordingSkillFallbackResolvesV1Paths(t *testing.T) {
+	t.Chdir(newRepoWithAgents(t))
+	for role, want := range map[string]string{"qna": "docs/qna", "journal": "docs/journal"} {
+		var out bytes.Buffer
+		if code := runLayoutPathWithVersion([]string{role}, &out, "v0.6.0"); code != exitcode.OK ||
+			strings.TrimSpace(out.String()) != want {
+			t.Fatalf("layout path %s on a v1 fixture = (%d, %q), want %q", role, code, out.String(), want)
+		}
+	}
+}
+
+// Every layout's canonical text is in the other layout's legacy catalog
+// (design §8.2: the catalogs are closed over both). Without that, a repository
+// carrying the other layout's copy reports diverged -- an unclassifiable local
+// edit rather than a recognizable shared copy -- and the skill's replacement
+// rule has no state to act on.
+//
+// The union is layout-blind on purpose: each layout's effective legacy set is
+// the union minus its own canonical text, which is exactly what the two
+// assertions below pin (this layout's canonical is absent; the other's is
+// present). The currency predicate stays layout-blind too.
+func TestChangedSkillAssetsHaveLegacyDigests(t *testing.T) {
+	for _, schema := range []string{layout.SchemaV1, layout.SchemaV2} {
+		other := layout.SchemaV2
+		if schema == layout.SchemaV2 {
+			other = layout.SchemaV1
+		}
+		for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+			current, err := drift.CanonicalSkillDigestFor(skill, layout.Layout{Manifest: layout.Manifest{Schema: schema}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			otherCanonical, err := drift.CanonicalSkillDigestFor(skill, layout.Layout{Manifest: layout.Manifest{Schema: other}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy := drift.LegacySkillDigests(skill)
+			if len(legacy) == 0 {
+				t.Fatalf("%s/%s has no legacy digest; the other layout's copies would report diverged", schema, skill)
+			}
+			// The union contains this layout's canonical text too, because it
+			// is the *other* layout's catalog entry for this skill: a v2
+			// repository carrying the v1 text must report known_legacy, and
+			// vice versa. Canonical-first precedence shadows that entry, so
+			// carrying this layout's own text still classifies current rather
+			// than known_legacy -- pinned end to end by
+			// TestSkillCurrencyIsSelectedByResolvedLayout.
+			contains := func(want string) bool {
+				for _, d := range legacy {
+					if d == want {
+						return true
+					}
+				}
+				return false
+			}
+			if !contains(current) {
+				t.Fatalf("%s/%s: this layout's canonical text is missing from the union; the other layout's catalog would not recognize a shared copy", schema, skill)
+			}
+			// Each layout's effective legacy set is the union minus its own
+			// canonical text, so the other layout's canonical text must be there:
+			// a repository that flips layout without the skill reports
+			// known_legacy, never diverged.
+			if !contains(otherCanonical) {
+				t.Fatalf("%s/%s: the other layout's canonical text is missing from the legacy catalog", schema, skill)
+			}
+		}
+	}
+}
+
+// A v1 repository's copy is the v1 asset, not the flat one: that is what keeps
+// this release a no-op for dotfiles and every other v1 repository.
 func TestMigrationSkillMatchesEmbeddedAsset(t *testing.T) {
 	root := task18RepoRoot(t)
-	repoCopy, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+	l := layout.Resolve(root)
+	asset, err := scaffold.SkillAssetPath(l.Schema, "migrating-fleet-context")
 	if err != nil {
-		t.Fatalf("repository copy: %v", err)
+		t.Fatal(err)
 	}
-	asset, err := os.ReadFile(filepath.Join(root, "agents", "internal", "scaffold",
-		"assets", "skills", "migrating-fleet-context", "SKILL.md"))
+	want, err := scaffold.AssetsFS.ReadFile(asset)
 	if err != nil {
-		t.Fatalf("embedded asset: %v", err)
+		t.Fatal(err)
 	}
-	if !bytes.Equal(repoCopy, asset) {
-		t.Errorf(".agents/skills/migrating-fleet-context/SKILL.md and its embedded asset differ; "+
-			"they are scaffolded into every other repository from the asset, so they must be identical "+
-			"(repo copy %d bytes, asset %d bytes)", len(repoCopy), len(asset))
+	got, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md"))
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf(".agents/skills/migrating-fleet-context/SKILL.md is not the %s asset", l.Schema)
 	}
 }
 
-// The skill pastes the canonical router so a migrating agent can restore it
-// without a second tool. That is a second copy of DefaultAgentsMD, and the two
-// ship in the same binary -- so nothing except this test stops a change to one
-// from silently leaving the other behind, telling every migrated repository to
-// adopt a router the tool then reports as drifted.
+// The skill's v1 text pastes the canonical router so a migrating agent can
+// restore it without a second tool. That is a second copy of DefaultAgentsMD,
+// and the two ship in the same binary -- so nothing except this test stops a
+// change to one from silently leaving the other behind, telling every migrated
+// v1 repository to adopt a router the tool then reports as diverged.
+//
+// It reads the v1 asset rather than the repository copy: dotfiles is a v1
+// repository today, but the binding is to the v1 canonical text, and the v2
+// text deliberately pastes no router at all (it restores the bytes from
+// `agents layout show --router`).
 func TestMigrationSkillPastesTheCanonicalRouter(t *testing.T) {
-	root := task18RepoRoot(t)
-	data, err := os.ReadFile(filepath.Join(root, ".agents", "skills",
-		"migrating-fleet-context", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("the migration skill is missing: %v", err)
-	}
+	data := skillAssetBytes(t, layout.SchemaV1, "migrating-fleet-context")
 
 	const fence = "```markdown\n# Agent context\n"
-	i := strings.Index(string(data), fence)
+	i := strings.Index(data, fence)
 	if i < 0 {
 		t.Fatal("the skill no longer pastes a canonical router block; if that is deliberate, " +
 			"delete this test, and if it is not, restore the block")
 	}
-	body := string(data)[i+len("```markdown\n"):]
+	body := data[i+len("```markdown\n"):]
 	j := strings.Index(body, "\n```")
 	if j < 0 {
 		t.Fatal("unterminated router code fence in the skill")
@@ -298,17 +583,20 @@ func TestMigrationSkillPastesTheCanonicalRouter(t *testing.T) {
 //
 // Bare dates describing an era ("the pre-2026-08-19 topology") are fine; a dated
 // *filename* is a path into this repository and is not.
+//
+// Both layout assets are read, not the repository copy: whichever text a
+// repository receives depends on its resolved layout (design §0.8), so gating
+// only the v1 asset would leave the text every v2 repository gets unchecked.
+// The recording skill is deliberately not scanned here: its "where this comes
+// from" section cites the design document by name in both of its texts.
 func TestMigrationSkillNamesNoRepoLocalDocuments(t *testing.T) {
-	root := task18RepoRoot(t)
-	rel := filepath.Join(".agents", "skills", "migrating-fleet-context", "SKILL.md")
-	data, err := os.ReadFile(filepath.Join(root, rel))
-	if err != nil {
-		t.Fatalf("the migration skill is missing: %v", err)
-	}
 	datedDoc := regexp.MustCompile(`[0-9]{4}-[0-9]{2}-[0-9]{2}-[A-Za-z0-9-]+\.md`)
-	for _, m := range datedDoc.FindAllString(string(data), -1) {
-		t.Errorf("%s names %q, a document that exists only in this repository; "+
-			"the skill ships into repositories that have no copy of it", rel, m)
+	for _, schema := range []string{layout.SchemaV1, layout.SchemaV2} {
+		data := skillAssetBytes(t, schema, "migrating-fleet-context")
+		for _, m := range datedDoc.FindAllString(data, -1) {
+			t.Errorf("the %s migrating skill names %q, a document that exists only in this repository; "+
+				"the skill ships into repositories that have no copy of it", schema, m)
+		}
 	}
 }
 

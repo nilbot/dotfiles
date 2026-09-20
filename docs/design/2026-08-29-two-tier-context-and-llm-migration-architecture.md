@@ -42,6 +42,30 @@ triage). Neither was in the plan either; see the journal for where each entered.
 
 ---
 
+## Amendment 2 — 2026-09-19
+
+The four `docs/{design,plans,journal,qna}` paths this document hardcodes are now
+the **v1 default** rather than a fixed law. When a repository has no
+`.agents/layout.json`, `agents/internal/layout` resolves the four roles to those
+paths exactly as written below; when it has one, that manifest is the authority
+on where the roles (`design`, `plans`, `journal`, `qna`) live. The assumption in
+§2, §3, §4, §5, §6 and §7 that the stores always sit under `docs/` is amended
+accordingly: the layout is resolved per repository, and every `docs/...` store
+path in those sections is the v1 resolution of the role it names.
+
+Nothing else in this design changes. Two-tier context, the router and symlink
+topology, the digest-based drift classifier, the doctor checks, the Model A
+migration skill with its traceability and preservation requirements, and archive
+immutability all stand as written.
+
+The design that amends it — schema, role→path stores, validation rules, version
+floor, and the migration mechanics — is
+[layout manifest and store-root freedom](2026-09-18-layout-manifest-and-store-root-design.md).
+Read the two together. This amendment is a pointer, not a rewrite: the body above
+remains the record of what was true on 2026-08-29.
+
+---
+
 ## 1. Executive Summary & Problem Formulation
 
 ### 1.1 The Deterministic Migration Dilemma

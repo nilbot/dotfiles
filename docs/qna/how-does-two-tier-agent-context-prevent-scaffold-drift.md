@@ -50,12 +50,35 @@ it is the record, and this file is only the pointer to it.
   are defined in `.agents/AGENTS.md`.
 ```
 
+That block is the preamble of the v1 canonical router, verbatim — not the whole
+of it. A repository with `.agents/layout.json` (schema `agents.layout/v2`) gets
+the manifest-pointing router instead, which names the manifest rather than the
+four `docs/` paths, because the v2 stores may live anywhere. Use
+`agents layout show --router` for the complete bytes of whichever router the
+resolved layout uses; it prints nothing and exits non-zero when a manifest is
+present but did not resolve, so a restore never silently falls back to v1 bytes.
+`agents layout path <role>` resolves one store without a second copy of the map
+in prose.
+
+A v1 repository becomes v2 through `agents layout migrate`, not by hand: the dry
+run is the default and prints the plan, `--apply --backup-tag <name>` moves each
+store with `git mv` and writes the manifest, and a run that stopped mid-way is
+continued with `--resume --apply` — `--apply` freezes the journal before it
+touches the first store, and `--resume` continues that frozen plan rather than
+planning again (a dry run writes nothing at all). The command deliberately stops at the mechanical half: it reports
+the markdown links the move breaks, in every markdown file `git ls-files`
+tracks rather than only the stores — a link in a root `README.md` pointing into a
+store, or a link from a moved store into the archive that stays behind, breaks
+just as completely — and the rewrite, the rule extraction, and the router
+reconciliation stay with the `migrating-fleet-context` skill below, under human
+approval.
+
 ### 4. LLM Sorter as Drift Reconciliation
 
 When external contributors add domain rules directly to root `AGENTS.md`, the repository enters an unpartitioned drift state.
 
-Rather than failing or clobbering, the LLM migration engine (`agents migrate` / fleet skill):
-1. Detects drift against canonical `DefaultAgentsMD`.
+Rather than failing or clobbering, the LLM migration engine (the `migrating-fleet-context` skill, driven by the operator):
+1. Detects drift against the canonical router for the resolved layout — `DefaultAgentsMD` on a v1 repository, the manifest-pointing router on v2.
 2. Extracts human-authored rules and appends them to `.agents/AGENTS.md`.
-3. Restores root `AGENTS.md` to canonical form.
+3. Restores root `AGENTS.md` to canonical form, taking the bytes from `agents layout show --router` rather than embedding a second copy of the text.
 4. Presents an interactive diff for explicit human approval.

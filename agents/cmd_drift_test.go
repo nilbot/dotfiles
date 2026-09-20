@@ -24,6 +24,14 @@ func newTestRepo(t *testing.T) string {
 		{"config", "user.email", "t@example.com"},
 		{"config", "user.name", "T"},
 		{"config", "commit.gpgsign", "false"},
+		// Disable git's background maintenance for this fixture. Measured on
+		// macOS CI: a `maintenance.lock` under .git/ appeared and vanished
+		// while snapshotTree walked the tree, so the walk failed with ENOENT
+		// on a file git had just removed. Nothing in these tests needs git to
+		// maintain the repository, so the race is removed at its source rather
+		// than swallowed inside the snapshot.
+		{"config", "maintenance.auto", "false"},
+		{"config", "gc.auto", "0"},
 	} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
@@ -46,8 +54,8 @@ func TestCmdDriftCleanRepo(t *testing.T) {
 		t.Fatalf("runDrift exit=%d, want OK (%d); output:\n%s", code, exitcode.OK, out.String())
 	}
 	body := out.String()
-	if !strings.Contains(body, "clean_current") {
-		t.Errorf("output missing clean_current: %s", body)
+	if !strings.Contains(body, "current") {
+		t.Errorf("output missing current: %s", body)
 	}
 	if !strings.Contains(body, "recording-what-you-learn:") {
 		t.Errorf("output missing recording skill: %s", body)
@@ -57,12 +65,12 @@ func TestCmdDriftCleanRepo(t *testing.T) {
 	}
 }
 
-func TestCmdDriftDriftedRepo(t *testing.T) {
+func TestCmdDriftDivergedRepo(t *testing.T) {
 	dir := newTestRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
 	}
-	// Append custom rule to root AGENTS.md to trigger drift
+	// Append custom rule to root AGENTS.md to trigger divergence
 	agentsPath := filepath.Join(dir, "AGENTS.md")
 	f, err := os.OpenFile(agentsPath, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
@@ -79,8 +87,8 @@ func TestCmdDriftDriftedRepo(t *testing.T) {
 		t.Fatalf("runDrift exit=%d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
 	}
 	body := out.String()
-	if !strings.Contains(body, "drifted") {
-		t.Errorf("output missing 'drifted': %s", body)
+	if !strings.Contains(body, "diverged") {
+		t.Errorf("output missing 'diverged': %s", body)
 	}
 	if !strings.Contains(body, "--- canonical/AGENTS.md") || !strings.Contains(body, "+## Custom Domain Rules") {
 		t.Errorf("output missing unified diff: %s", body)
@@ -115,8 +123,8 @@ func TestCmdDriftJSONOutput(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("failed to parse JSON output: %v\n%s", err, out.Bytes())
 	}
-	if r.RouterState != "clean_current" {
-		t.Errorf("r.RouterState = %q, want clean_current", r.RouterState)
+	if r.RouterState != "current" {
+		t.Errorf("r.RouterState = %q, want current", r.RouterState)
 	}
 	if r.SymlinkState != "ok" {
 		t.Errorf("r.SymlinkState = %q, want ok", r.SymlinkState)
@@ -124,18 +132,18 @@ func TestCmdDriftJSONOutput(t *testing.T) {
 	if r.DomainState != "ok" {
 		t.Errorf("r.DomainState = %q, want ok", r.DomainState)
 	}
-	if r.Skills["recording-what-you-learn"] != "ok" {
-		t.Errorf("skill recording = %q, want ok", r.Skills["recording-what-you-learn"])
+	if r.Skills["recording-what-you-learn"] != "current" {
+		t.Errorf("skill recording = %q, want current", r.Skills["recording-what-you-learn"])
 	}
-	if r.Skills["migrating-fleet-context"] != "ok" {
-		t.Errorf("skill migrating = %q, want ok", r.Skills["migrating-fleet-context"])
+	if r.Skills["migrating-fleet-context"] != "current" {
+		t.Errorf("skill migrating = %q, want current", r.Skills["migrating-fleet-context"])
 	}
 	if !r.DocsStores["design"] || !r.DocsStores["plans"] || !r.DocsStores["journal"] || !r.DocsStores["qna"] {
 		t.Errorf("docs stores = %+v, want all true", r.DocsStores)
 	}
 }
 
-func TestCmdDriftJSONOutputDrifted(t *testing.T) {
+func TestCmdDriftJSONOutputDiverged(t *testing.T) {
 	dir := newTestRepo(t)
 	if err := scaffold.Create(dir, false); err != nil {
 		t.Fatal(err)
@@ -159,8 +167,8 @@ func TestCmdDriftJSONOutputDrifted(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("failed to parse JSON output: %v\n%s", err, out.Bytes())
 	}
-	if r.RouterState != "drifted" {
-		t.Errorf("r.RouterState = %q, want drifted", r.RouterState)
+	if r.RouterState != "diverged" {
+		t.Errorf("r.RouterState = %q, want diverged", r.RouterState)
 	}
 	if r.Diff == "" {
 		t.Error("r.Diff is empty, want unified diff")
@@ -189,17 +197,17 @@ func TestCmdDriftAllFleetInspection(t *testing.T) {
 	if err := scaffold.Create(cleanDir, false); err != nil {
 		t.Fatal(err)
 	}
-	driftedDir := newTestRepo(t)
-	if err := scaffold.Create(driftedDir, false); err != nil {
+	divergedDir := newTestRepo(t)
+	if err := scaffold.Create(divergedDir, false); err != nil {
 		t.Fatal(err)
 	}
-	f, _ := os.OpenFile(filepath.Join(driftedDir, "AGENTS.md"), os.O_APPEND|os.O_WRONLY, 0o644)
+	f, _ := os.OpenFile(filepath.Join(divergedDir, "AGENTS.md"), os.O_APPEND|os.O_WRONLY, 0o644)
 	f.WriteString("\n## Drift\n")
 	f.Close()
 
 	saveFleetRegistry(t,
 		registry.Entry{Path: cleanDir, Added: time.Unix(1, 0).UTC()},
-		registry.Entry{Path: driftedDir, Added: time.Unix(2, 0).UTC()},
+		registry.Entry{Path: divergedDir, Added: time.Unix(2, 0).UTC()},
 	)
 
 	var out bytes.Buffer
@@ -208,10 +216,10 @@ func TestCmdDriftAllFleetInspection(t *testing.T) {
 		t.Fatalf("runDrift --all exit=%d, want Advisory (%d); output:\n%s", code, exitcode.Advisory, out.String())
 	}
 	body := out.String()
-	if !strings.Contains(body, cleanDir) || !strings.Contains(body, driftedDir) {
+	if !strings.Contains(body, cleanDir) || !strings.Contains(body, divergedDir) {
 		t.Fatalf("output missing registered repos: %s", body)
 	}
-	if !strings.Contains(body, "clean_current") || !strings.Contains(body, "drifted") {
+	if !strings.Contains(body, "current") || !strings.Contains(body, "diverged") {
 		t.Fatalf("output missing router states: %s", body)
 	}
 }
@@ -238,7 +246,7 @@ func TestCmdDriftAllFleetJSON(t *testing.T) {
 	if len(reports) != 1 {
 		t.Fatalf("got %d reports, want 1", len(reports))
 	}
-	if reports[0].RepoPath != cleanDir || reports[0].RouterState != "clean_current" {
+	if reports[0].RepoPath != cleanDir || reports[0].RouterState != "current" {
 		t.Errorf("unexpected report: %+v", reports[0])
 	}
 }

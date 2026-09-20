@@ -30,14 +30,25 @@ if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), DefaultAgentsMD); err 
 `agents init` is strictly idempotent: on an already-scaffolded repository, it touches
 no tracked root files.
 
-### 2. `wire` and `update` only touch machine-local harness JSON
+### 2. `wire` and `update` never write the root instruction files
 
-Neither `agents wire` nor `agents update --all --apply` ever inspects or modifies
-`AGENTS.md`. Their scope is restricted to generated, machine-local, git-excluded files:
+Neither `agents wire` nor `agents update --all --apply` ever modifies `AGENTS.md`
+or `CLAUDE.md`. `update` does read them: it inspects every registered repository
+through the same drift classifier `agents drift` runs, which compares root
+`AGENTS.md` against the canonical router for the resolved layout. Reading is how
+it reports divergence; writing is not something it does to those files. Its own
+writes are restricted to generated, machine-local, git-excluded files:
 - `.claude/settings.json`
 - `.codex/hooks.json`
 - `.agents/hooks.json`
 - `.claude/skills` and `.codex/skills` symlinks
+
+The one tracked file `update` writes is the `agents`-owned
+`migrating-fleet-context` skill under `.agents/skills/`, refreshed to the
+canonical text for the repository's **resolved layout**: a v1 repository (no
+`.agents/layout.json`) keeps the frozen v1 text, a v2 repository gets the
+manifest-aware text. It is `agents`-owned, so that refresh is not a rewrite of
+human-authored content — and it does not touch the root instructions.
 
 ### 3. Why automatic template migration is rejected
 

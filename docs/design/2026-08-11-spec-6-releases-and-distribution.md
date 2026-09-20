@@ -7,6 +7,75 @@
 
 ---
 
+## Amendment 1 — 2026-09-20
+
+**§5.1 changed: the release workflow no longer re-runs the verification matrix.**
+It requires, through the API, that the tagged commit already has a successful
+`verify` run on `master`, and then builds that commit.
+
+`needs: verify` re-ran all 11 jobs of `verify.yml` and then rebuilt the same tree.
+Measured on the v0.5.0 and v0.5.1 release runs (`33498693632`, `33499733625`): 12
+jobs, 13.8 to 14.1 job-minutes, 3.3 to 3.6 minutes wall clock, of which the 11
+re-verified jobs are ~13.2 job-minutes (**94%**) and the job that actually
+packages and publishes is 0.8. The re-run proved nothing the `master` push run
+had not already proved about the same tree, and it made the release depend on the
+flakiest legs of the matrix — two macOS runners and two container jobs — at the
+one moment a human is driving the gate.
+
+The tagged commit is the evidence. Every release tag points at a commit that was
+pushed to `master`; that push ran `verify.yml`, and its `gate` job is the check a
+pull request is gated on. All seven existing tags already satisfy this: each
+resolves to a commit with exactly one successful `master` push run. So a green
+run for that commit *is* the "green CI build for the tagging SHA" a release
+needs, and reading it costs one API call instead of eleven jobs. The release
+still builds from the tagged tree, because the version is not knowable earlier:
+`-X main.version` and the archive names (`agents_<version>_<os>_<arch>.tar.gz`)
+both come from the tag, so an archive built by the `master` push run could not
+carry the version it would be released under without guessing it or changing how
+the binary is stamped. The build is also the small term (0.8 of 14.0
+job-minutes), so the release builds and then asserts what it built, rather than
+transporting bytes between runs.
+
+### Implementation constraints, each of which silently breaks the guard
+
+- `head_sha` must be the **full 40-character** commit SHA. An abbreviated SHA
+  returns HTTP 200 with `total_count: 0`, which reads as "not verified" for a
+  commit that is. Verified against this repository: `a82681b` returns 0, and
+  `a82681bd4975f48a813fab75ef97ec870e17e59b` returns 1.
+- The workflow declares `permissions:`, and an unlisted scope is `none`, so the
+  guard needs `actions: read` beside `contents: write`.
+- The tag is peeled through `GET /repos/{owner}/{repo}/commits/{tag}`;
+  `/git/ref/tags/{tag}` returns the tag object for the annotated tag that §5.1's
+  `git tag -a` produces.
+- The query also requires `event=push` and `branch=master`, so a green
+  pull-request run for the same commit does not satisfy it: a release comes from
+  the mainline, not from a branch that merely has green CI.
+- No green `master` run means no build, no release and no formula sync. The
+  failure is fail-closed and names the commit and the condition.
+
+### `workflow_dispatch` resolves and checks out the tag
+
+The version came from the `tag` input while `actions/checkout` defaulted to the
+dispatched ref, so a manual run packaged the default branch's tree under the
+requested version number. The amendment checks out the tag the run resolved. The
+dispatch form also gains a `dry_run` input that stops before the release is
+created and before the formula is synced, so the whole path can be rehearsed
+against an already-released tag.
+
+### §4 and §4.2 corrected
+
+§4 said "three tier-1 cross-compilation targets … (Apple Silicon only)" and §4.2
+said the archives contain `LICENSE`. `script/package-release.sh` has built four
+targets since the pipeline landed — `darwin/arm64`, `darwin/amd64`,
+`linux/arm64`, `linux/amd64` — and Intel macOS is not optional: the tap's syntax
+job runs `brew readall --os=all --arch=all`, which evaluates every
+macOS/architecture pair, and a formula with no `darwin/amd64` URL fails it
+([qna](../qna/why-does-brew-readall-fail-when-macos-intel-is-omitted.md)). The
+repository has no `LICENSE` file, and the archives contain `agents` and
+`README.md`.
+
+---
+
 ## 1. Executive Summary
 
 This specification defines the build, packaging, release, and distribution pipeline for the `agents` binary, enabling external collaborators and automated environments to install and execute `agents` as a standalone tool without requiring a local clone of the operator's `dotfiles` repository.
@@ -56,16 +125,19 @@ Top-level flags `--version` and `-v` are intercepted in `agents/main.go` and inv
 
 ## 4. Release Construction & Platforms
 
-Three tier-1 cross-compilation targets covering macOS (Apple Silicon only) and Linux fleets:
+### 4.1 Cross-compilation targets
+
+Four cross-compilation targets covering the macOS and Linux fleets (Amendment 1):
 1. `darwin/arm64` (Apple Silicon macOS)
-2. `linux/arm64` (ARM64 Linux)
-3. `linux/amd64` (x86_64 Linux)
+2. `darwin/amd64` (Intel macOS; the tap's `brew readall` requires it)
+3. `linux/arm64` (ARM64 Linux)
+4. `linux/amd64` (x86_64 Linux)
 
 ### 4.2 Packaging Format
 
 Release archives are generated per platform:
 - Archive name: `agents_<version>_<os>_<arch>.tar.gz`
-- Contents: `agents` binary, `README.md`, `LICENSE`
+- Contents: `agents` binary, `README.md`
 - Manifest: `checksums.txt` containing SHA-256 hashes of all archives.
 
 ---
@@ -74,8 +146,18 @@ Release archives are generated per platform:
 
 ### 5.1 GitHub Actions Workflow (`.github/workflows/release.yml`)
 
-- Triggered on tag push matching `v*` (e.g. `git tag v0.2.0 && git push origin v0.2.0`).
-- Runs verification tests, builds binaries across all 4 targets, generates `checksums.txt`, and publishes a GitHub Release with assets attached.
+- Triggered on tag push matching `v*` (e.g.
+  `git tag -a v0.6.0 -m "…" && git push origin v0.6.0`), and by
+  `workflow_dispatch` with a `tag` input for recovery and rehearsal.
+- Requires a successful `verify` run on `master` for the tagged commit, read
+  through the API rather than re-run (Amendment 1), then checks out that tag,
+  builds binaries across all 4 targets, generates `checksums.txt`, and publishes
+  a GitHub Release with assets attached.
+- Requires `.github/release-notes/<tag>.md` to exist and be non-empty, and passes
+  it as the release body, so a release cannot ship an empty body.
+- Asserts before publishing that the built binary reports the tag version and the
+  guarded commit, so the uploaded archives are provably built from the commit
+  whose green run was read.
 
 ### 5.2 Homebrew Formula (`Formula/agents.rb`)
 

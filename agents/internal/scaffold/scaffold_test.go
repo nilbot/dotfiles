@@ -1,12 +1,16 @@
 package scaffold
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nilbot/dotfiles/agents/internal/layout"
 )
 
 // newRepo builds a real git repository. An earlier version of these tests just
@@ -543,6 +547,54 @@ func TestCreatePreservesExistingCustomAssets(t *testing.T) {
 	}
 }
 
+// The selector itself: both skills resolve under both layouts, to distinct
+// paths, and every path is readable from AssetsFS (the v1/ subdirectories are
+// embedded recursively by `//go:embed assets/*`).
+func TestSkillAssetPathsResolvePerLayout(t *testing.T) {
+	for _, schema := range []string{layout.SchemaV1, layout.SchemaV2} {
+		for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
+			path, err := SkillAssetPath(schema, skill)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := AssetsFS.ReadFile(path); err != nil {
+				t.Fatalf("%s/%s: %q: %v", schema, skill, path, err)
+			}
+		}
+	}
+	v1, _ := SkillAssetPath(layout.SchemaV1, "recording-what-you-learn")
+	v2, _ := SkillAssetPath(layout.SchemaV2, "recording-what-you-learn")
+	if v1 == v2 {
+		t.Fatal("the v1 and v2 texts must be distinct assets")
+	}
+}
+
+func TestSkillAssetPathRejectsUnknownSchemaAndSkill(t *testing.T) {
+	if _, err := SkillAssetPath("agents.layout/v9", "recording-what-you-learn"); err == nil {
+		t.Error("an unknown schema must not resolve to some default asset")
+	}
+	if _, err := SkillAssetPath(layout.SchemaV2, "no-such-skill"); err == nil {
+		t.Error("an unknown skill must not resolve")
+	}
+}
+
+// canonicalV1SkillBytes resolves a skill's canonical text for the v1 layout.
+// These fixtures have no manifest, so v1 is the resolved layout and the frozen
+// v1 text is canonical (design §0.8) -- asserting against the flat asset would
+// pin the v2 text as the expectation for a v1 repository.
+func canonicalV1SkillBytes(t *testing.T, skillName string) []byte {
+	t.Helper()
+	assetPath, err := SkillAssetPath(layout.SchemaV1, skillName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := AssetsFS.ReadFile(assetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return content
+}
+
 func TestRefreshInfrastructuralSkills(t *testing.T) {
 	dir := newRepo(t)
 	if err := Create(dir, false); err != nil {
@@ -571,15 +623,15 @@ func TestRefreshInfrastructuralSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RefreshInfrastructuralSkills(dir); err != nil {
+	if err := RefreshInfrastructuralSkills(dir, layout.SchemaV1); err != nil {
 		t.Fatalf("RefreshInfrastructuralSkills failed: %v", err)
 	}
 
 	// migrating-fleet-context should be overwritten with canonical embedded asset
-	expectedMigrating, err := AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	// -- the v1 asset, because this fixture has no manifest and resolves v1: a
+	// v1 repository must be left with the text its own layout uses, never the
+	// v2 text.
+	expectedMigrating := canonicalV1SkillBytes(t, "migrating-fleet-context")
 	gotMigrating, err := os.ReadFile(migratingPath)
 	if err != nil {
 		t.Fatal(err)
@@ -610,18 +662,110 @@ func TestRefreshInfrastructuralSkills(t *testing.T) {
 func TestRefreshInfrastructuralSkillsCreatesMissingDirectory(t *testing.T) {
 	dir := newRepo(t)
 	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-	if err := RefreshInfrastructuralSkills(dir); err != nil {
+	if err := RefreshInfrastructuralSkills(dir, layout.SchemaV1); err != nil {
 		t.Fatalf("RefreshInfrastructuralSkills failed on missing directory: %v", err)
 	}
-	expectedMigrating, err := AssetsFS.ReadFile("assets/skills/migrating-fleet-context/SKILL.md")
-	if err != nil {
-		t.Fatal(err)
-	}
+	expectedMigrating := canonicalV1SkillBytes(t, "migrating-fleet-context")
 	gotMigrating, err := os.ReadFile(migratingPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(gotMigrating) != string(expectedMigrating) {
 		t.Fatalf("migrating-fleet-context was not written correctly")
+	}
+}
+
+// TestRefreshInfrastructuralSkillsLeavesMatchingCopyUnwritten pins the no-op
+// half of the refresh contract: an unmodified v1 repository must be untouched,
+// not rewritten with identical bytes. The mtime check is what distinguishes
+// "wrote the same bytes" from "did not write", which the design's byte-identical
+// promise and cmd_fleet's run-on-every-repository call site both require.
+func TestRefreshInfrastructuralSkillsLeavesMatchingCopyUnwritten(t *testing.T) {
+	dir := newRepo(t)
+	if err := Create(dir, false); err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+
+	// A v1 repository's fresh copy is already canonical, so refreshing it must
+	// be a no-op.
+	want := canonicalV1SkillBytes(t, "migrating-fleet-context")
+	if got, err := os.ReadFile(migratingPath); err != nil || string(got) != string(want) {
+		t.Fatalf("Create did not install the v1 canonical text: err=%v", err)
+	}
+
+	past := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(migratingPath, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshInfrastructuralSkills(dir, layout.SchemaV1); err != nil {
+		t.Fatalf("RefreshInfrastructuralSkills failed: %v", err)
+	}
+	info, err := os.Stat(migratingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(past) {
+		t.Error("refresh rewrote an already-canonical copy; an unmodified repository must be a literal no-op")
+	}
+}
+
+// Refresh writes the text for the resolved layout, only when it differs, and
+// touches only the agents-owned skill. On a v1 repository it is a literal
+// no-op -- no write at all, so no mtime churn -- which is what lets v0.6.0
+// leave the fleet alone (design §0.8, §7.5).
+func TestRefreshInfrastructuralSkillsIsLayoutSelectedAndUserSkillSafe(t *testing.T) {
+	root := newRepo(t)
+	if err := Create(root, false); err != nil {
+		t.Fatal(err)
+	}
+	migrating := filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
+
+	// The v1 text is already in place, so refresh must not write. An identical
+	// rewrite is indistinguishable by content, so the observable is the mtime.
+	frozen := time.Unix(1000000000, 0)
+	if err := os.Chtimes(migrating, frozen, frozen); err != nil {
+		t.Fatal(err)
+	}
+	if err := RefreshInfrastructuralSkills(root, layout.SchemaV1); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(migrating)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.ModTime().Equal(frozen) {
+		t.Fatal("refresh rewrote identical bytes on a v1 repository")
+	}
+
+	// The same root, resolved v2: the agents-owned copy becomes the v2 text.
+	// This is the post-flip half of §7.5 -- the text is installed after the
+	// layout flips, never by a v1 repository's own copy.
+	if err := RefreshInfrastructuralSkills(root, layout.SchemaV2); err != nil {
+		t.Fatal(err)
+	}
+	asset, err := SkillAssetPath(layout.SchemaV2, "migrating-fleet-context")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := AssetsFS.ReadFile(asset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(migrating)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("refresh wrote the wrong text for v2: %v", err)
+	}
+
+	// The user-owned recording skill is never written by refresh, in either
+	// layout, and the v1 copy of it is untouched.
+	recAsset, err := SkillAssetPath(layout.SchemaV1, "recording-what-you-learn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recWant, _ := AssetsFS.ReadFile(recAsset)
+	recGot, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "recording-what-you-learn", "SKILL.md"))
+	if err != nil || !bytes.Equal(recGot, recWant) {
+		t.Fatal("refresh touched the user-owned recording skill")
 	}
 }

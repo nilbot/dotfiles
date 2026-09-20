@@ -211,6 +211,11 @@ jobs:
         run: |
           set -euo pipefail
           cd agents
+          # The layout gates of the v0.6.0 work join the same list: the
+          # migration plan/apply/resume matrix, trackedness, the per-layout
+          # skill catalogs, and the end-to-end migration fixture. They assert
+          # prose, digests, and the layout contract rather than one package's
+          # behavior, which is what this job is for.
           tests="TestEveryCommandIsDocumented
           TestEveryLeafHasARunner
           TestTheKnownCommandSetIsPresent
@@ -226,7 +231,50 @@ jobs:
           TestMigrationSkillMatchesEmbeddedAsset
           TestMigrationSkillPastesTheCanonicalRouter
           TestMigrationSkillNamesNoRepoLocalDocuments
-          TestLivingDocumentsSpellUpdateWithAll"
+          TestLivingDocumentsSpellUpdateWithAll
+          TestPlanMigrationBlocksDocsResidueAndAnArchiveInsideASource
+          TestPlanMigrationLeavesAMixedArchiveAlone
+          TestPlanMigrationNeverPlansTheArchiveAsAMove
+          TestPlanMigrationReportsAStoreLinkIntoTheKeptArchive
+          TestPlanMigrationReportsALinkFromProseThatDoesNotMove
+          TestPlanMigrationReportsALinkBetweenTwoMovingStores
+          TestRewriteLinksKeepsEveryLinkResolving
+          TestPlanMigrationRefusedPlansKeepTheirHeaderAndCounts
+          TestPlanMigrationRefusesAStoreWithANamedPipe
+          TestApplyMigrationFreezesTheJournalBeforeTheFirstMove
+          TestApplyRefusesWhenTheTreeChangesUnderTheMove
+          TestAbortIsLimitedToANothingMovedMigration
+          TestResumeCrashMatrix
+          TestResumeHandlesANonPrefixCrash
+          TestResumeRefusesAmbiguousAndLostMoves
+          TestLayoutMigrateJSONKeepsTheTableExitCodes
+          TestLayoutMigrateRoutesAMigratingManifestToResume
+          TestLayoutShowRouterRefusesAnUnresolvedManifest
+          TestIsIgnoredMatchesEverySpellingOnThePathItMatches
+          TestIsIgnoredSeesARuleEvenForATrackedPath
+          TestAgentsIgnoredAsksBothPaths
+          TestTrackednessHelpersOutsideARepository
+          TestIsTrackedDistinguishesUntrackedFromStaged
+          TestIsTrackedFailsClosedOnAGitError
+          TestDoctorAdvisesOnIgnoredStoresAndTheUncommittedManifestWindow
+          TestDoctorFailsOnAnInvalidManifest
+          TestInitRefusesV2FlagsWhenAgentsIsIgnored
+          TestInitCreationIsGatedOnTheRunningVersion
+          TestValidateFailsClosedWhenAComponentCannotBeInspected
+          TestSkillAssetsSplitByLayout
+          TestSkillAssetPathsResolvePerLayout
+          TestSkillCurrencyIsSelectedByResolvedLayout
+          TestChangedSkillAssetsHaveLegacyDigests
+          TestFrozenV1SkillAssetsStillSpeakV1Paths
+          TestFrozenV1AssetsEqualTheRecordedV051Bytes
+          TestFrozenV1SkillTextsAreCurrentOnAV1Repository
+          TestV2RecordingSkillFallbackResolvesV1Paths
+          TestV2RouterBytesArePinned
+          TestRecordingSkillNamesRolesNotDocsPaths
+          TestRefreshInfrastructuralSkillsIsLayoutSelectedAndUserSkillSafe
+          TestFleetUpdateRefreshesSupportedV2AndPreservesTheGate
+          TestLayoutManifestIsVisibleToLinguist
+          TestMigrationFixtureLinksAndArchiveSurvive"
           filter="$(echo $tests | tr ' ' '|')"
           go test -count=1 -v -run "^(${filter})$" ./... | tee /tmp/docs.log
           # `go test -run` exits 0 when the filter matches NOTHING -- it prints

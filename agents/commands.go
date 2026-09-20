@@ -20,8 +20,8 @@ func rootCommand() *Command {
 		},
 		{
 			Name: "init", Summary: "create .agents/, triggers, wiring, fleet entry",
-			Usage:    "agents init [--local]",
-			Detail:   "Scaffolds .agents/, writes harness wiring, and registers this repository in the machine-local fleet. Prints the remaining trust steps and exits 1 (advisory) so the state is visible rather than assumed. --local keeps .agents/ git-ignored.",
+			Usage:    "agents init [--local] [--template <p>]\n            [--stores <role=path>] [--archive <path>]",
+			Detail:   "Scaffolds .agents/, writes harness wiring, and registers this repository in the machine-local fleet. Prints the remaining trust steps and exits 1 (advisory) so the state is visible rather than assumed. --local keeps .agents/ git-ignored. --template, --stores, and --archive create an agents.layout/v2 layout instead of the implicit v1 one: --template code-repo expands to docs/{design,plans,journal,qna}, --template content-vault expands to .context/{design,plans,journal,qna}, and --template custom (or no --template) takes no defaults; --stores role=path overrides one role on top of the defaults, is repeatable, and with no template must name all four roles; --archive names the repository-relative archive to record, and with no --archive the manifest inherits docs/archive when that directory exists. The template name is a creation input and is never written to the manifest. A repository that already has a v1 layout (AGENTS.md or docs/) is refused, because adopting it is `agents layout migrate`'s job, and --local with any layout flag is refused.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runInit(a, io.Out) },
 		},
@@ -45,6 +45,45 @@ func rootCommand() *Command {
 			Detail:   "Inspects the repository or fleet for context layout drift, canonical router diffs, domain context, skills, and misplaced documentation. Non-mutating.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runDrift(a, io.Out) },
+		},
+		{
+			Name: "layout", Summary: "inspect the resolved layout, or migrate v1 to v2",
+			Usage:    "agents layout show|validate|path|migrate",
+			Detail:   "Reads .agents/layout.json and reports the layout this repository resolves to. A repository with no manifest resolves to the implicit v1 layout, whose four stores are under docs/. `show`, `validate`, and `path` are read-only: nothing they do creates a store, writes a file, or moves a document. `migrate` is the family's one mutation -- it moves the v1 stores to the v2 paths with `git mv`, writes the manifest, and replaces the router.",
+			Audience: []Audience{Human, Agent},
+			Sub: []*Command{
+				{
+					Name: "show", Summary: "print the resolved layout, or the canonical router",
+					Usage:    "agents layout show [--json] [--router]",
+					Detail:   "Prints the schema, status, min_mut_ver_floor, stores, archive, and one line per role. --json emits the normalized layout object, whose stores are the resolved role-to-path map rather than the manifest's spelling, and carries any problems in the object. --router prints the canonical router for the resolved layout and nothing else, so the migration skill can restore AGENTS.md byte-for-byte; a manifest that exists but did not resolve prints nothing and exits 1, so a caller must capture the bytes before writing them. An invalid manifest exits 1: the human report prints one line per problem before it, and --json stays one parseable object.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutShow(a, io.Out) },
+				},
+				{
+					Name: "validate", Summary: "check the layout against every validation rule",
+					Usage:    "agents layout validate [--json]",
+					Detail:   "Runs the layout validation rules and prints one line per problem. Exits 0 for a valid layout this binary may mutate; 1 when the layout is invalid or this binary may not mutate it; 4 outside a repository with .agents/. --json emits one object with manifest_path, problems, supported, reason, schema, and layout_status: supported is false when the layout has problems or the version gate refuses, and reason names which.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutValidate(a, io.Out) },
+				},
+				{
+					Name: "path", Summary: "print one store path by role",
+					Usage:    "agents layout path <role>",
+					Detail:   "Prints the repository-relative path the role resolves to and nothing else, so a skill can use it in a command substitution. Roles are design, plans, journal, and qna. A missing operand or an unknown role is malformed (exit 3); an unsupported, invalid, or migrating layout prints nothing and exits 4 or 1.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutPath(a, io.Out) },
+				},
+				{
+					Name: "migrate", Summary: "plan, apply, resume, or abort a v1 to v2 migration",
+					Usage: "agents layout migrate [--template <p>] [--stores <role=path> ...]\n" +
+						"                       [--archive <path>]\n" +
+						"                       [--dry-run | --apply | --resume --apply | --abort --apply]\n" +
+						"                       [--backup-tag <name>] [--json]",
+					Detail:   "Plans a v1 to v2 migration and applies, resumes, or aborts it. Dry run by default, and --dry-run is an accepted explicit synonym; --apply performs it and requires --backup-tag <name>, an annotated tag created at HEAD before the first write, so the rollback point exists even without a branch -- and a name that already exists or is not a valid ref is malformed, as is --backup-tag with --resume or --abort, where it cannot take effect. --template supplies the target store map from a template's defaults and --stores <role=path> overrides one role; with no template, --stores must name all four roles. The plan is refused, naming each reason, when the router is diverged or missing, a source store is missing or a symlink, a target path already exists, docs/ holds anything but the four stores and the declared archive, or this binary is below the target's min_mut_ver_floor. Planning also requires a clean working tree, no merge, rebase, cherry-pick, revert, am, or bisect in progress, and a branch that is not master or main. A `migrating` manifest is never re-planned: --resume --apply continues the journal it froze and --abort --apply deletes it while nothing can have moved, and every other invocation refuses, naming the phase and the remedy. --json emits exactly one object on every path: the plan, whose phase is planned for a dry run or a fresh --apply and the journal phase a --resume continued from, or a refusal object with repo, dry_run, phase, and the same error sentence the human surface prints when the refusal precedes a plan. Exits 0 when applied with no link candidates or when --abort completed, 1 for a dry-run plan, blockers, remaining link candidates, or a refused abort, 3 for malformed flags, 4 outside a repository with .agents/, and 5 when apply failed mid-way with the manifest left migrating for the next resume.",
+					Audience: []Audience{Human, Agent},
+					Run:      func(a []string, io IO) int { return runLayoutMigrate(a, io.Out) },
+				},
+			},
 		},
 		{
 			Name: "save", Summary: "commit .agents/ paths and nothing else (escape hatch)",
