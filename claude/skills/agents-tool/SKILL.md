@@ -182,7 +182,11 @@ outside a repository with `.agents/`, and `5` when a move failed mid-way — in
 which case the manifest stays `migrating` and the next step is to resume it.
 A resume cannot report link candidates — they are a property of the pre-move
 source tree, and the journal does not record them — so it can exit `0` on a
-migration the planning run would have reported with candidates.
+migration the planning run would have reported with candidates. The candidates
+themselves come from a target-driven scan of the repository's tracked markdown:
+a link is reported when the file holding it moves or when the path it names
+does, so a root `README.md` pointing into a moved store and a moved store's link
+into the archive are both on the list.
 
 `--json` emits one object on every path: the plan, or — when the command refuses
 before there is a plan — a refusal object with `repo`, `dry_run`, `phase`, and

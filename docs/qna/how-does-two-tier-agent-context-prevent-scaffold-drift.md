@@ -66,9 +66,12 @@ store with `git mv` and writes the manifest, and a run that stopped mid-way is
 continued with `--resume --apply` — `--apply` freezes the journal before it
 touches the first store, and `--resume` continues that frozen plan rather than
 planning again (a dry run writes nothing at all). The command deliberately stops at the mechanical half: it reports
-the markdown links the move breaks, and the rewrite, the rule extraction, and
-the router reconciliation stay with the `migrating-fleet-context` skill below,
-under human approval.
+the markdown links the move breaks, in every markdown file `git ls-files`
+tracks rather than only the stores — a link in a root `README.md` pointing into a
+store, or a link from a moved store into the archive that stays behind, breaks
+just as completely — and the rewrite, the rule extraction, and the router
+reconciliation stay with the `migrating-fleet-context` skill below, under human
+approval.
 
 ### 4. LLM Sorter as Drift Reconciliation
 

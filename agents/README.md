@@ -247,11 +247,22 @@ while nothing can have moved (phase `planned`, every move `pending`), leaving th
 backup tag as the record. Every other invocation against a `migrating` manifest
 refuses and names the phase and the remedy.
 
+The plan's link report is target-driven over the repository, because a link
+breaks when its *target* stops being where it was whether or not the file holding
+it moves. The scan walks every markdown file `git ls-files` tracks — not only the
+stores — skips fenced code blocks, and never reads anything under the archive.
+For each `link_candidates` entry, `file` and `line` name the containing file, and
+`old` is the target exactly as written; `new` is the spelling that resolves after
+the move: relative to the containing file's new directory when that file moves
+with its store, and the target's new repository-relative path when the file
+stays where it is. The CLI only reports them; the `migrating-fleet-context` skill
+writes them.
+
 | Invocation | Exit |
 |---|---|
 | dry run, or no apply flag: the plan is printed and nothing is written | `1` |
 | `--apply` applied, no blockers and no link candidates | `0` |
-| `--apply` applied, but markdown links still point into the moved stores | `1` |
+| `--apply` applied, but markdown links the move breaks are still spelled the old way | `1` |
 | `--apply`: plan blockers, or `docs_residue` appeared after the moves | `1` |
 | `--apply`: missing `--backup-tag`, conflicting flags, or malformed input | `3` |
 | `--apply`: a move failed mid-way; the manifest stays `migrating` | `5` |
@@ -263,8 +274,9 @@ refuses and names the phase and the remedy.
 candidates are reported only by the run that planned them, so a resume that
 completes a migration planned with candidates exits `0` where the fresh
 `--apply` exited `1`. The candidates are a property of the pre-move source tree:
-a fresh `--apply` scans the stores before moving them, and a resume completes a
-move list whose source tree no longer exists and is never re-planned.
+a fresh `--apply` scans the repository's tracked markdown before moving anything,
+and a resume completes a move list whose source tree no longer exists and is
+never re-planned.
 
 `agents layout migrate --json` emits exactly one object on every path. For a
 plan it is `repo`, `dry_run`, `phase`, `from`, `to`, `router`, `archive` (omitted when the

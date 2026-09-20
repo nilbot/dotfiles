@@ -235,6 +235,10 @@ jobs:
           TestPlanMigrationBlocksDocsResidueAndAnArchiveInsideASource
           TestPlanMigrationLeavesAMixedArchiveAlone
           TestPlanMigrationNeverPlansTheArchiveAsAMove
+          TestPlanMigrationReportsAStoreLinkIntoTheKeptArchive
+          TestPlanMigrationReportsALinkFromProseThatDoesNotMove
+          TestPlanMigrationReportsALinkBetweenTwoMovingStores
+          TestRewriteLinksKeepsEveryLinkResolving
           TestPlanMigrationRefusedPlansKeepTheirHeaderAndCounts
           TestPlanMigrationRefusesAStoreWithANamedPipe
           TestApplyMigrationFreezesTheJournalBeforeTheFirstMove

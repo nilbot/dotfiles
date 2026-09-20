@@ -172,7 +172,9 @@ func snapshotTree(t *testing.T, root string) map[string]string {
 }
 
 // markdownFiles lists the markdown files under one directory, repository-
-// relative and sorted: the same set the planner reports candidates in.
+// relative and sorted. "One directory" may be a single file, and "." is the
+// whole repository except .git, which is what lets a reading cover the tracked
+// prose outside every store as well as the stores themselves.
 func markdownFiles(t *testing.T, root, dir string) []string {
 	t.Helper()
 	var out []string
@@ -181,7 +183,13 @@ func markdownFiles(t *testing.T, root, dir string) []string {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !isMarkdown(d.Name()) {
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !isMarkdown(d.Name()) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
@@ -221,19 +229,37 @@ func countMarkdownLinks(t *testing.T, root, dir string) int {
 }
 
 // rewriteLinks applies a plan's Old -> New mapping the way the
-// migrating-fleet-context skill does: every markdown link in the repository
-// that resolves to either side of a reported mapping is re-spelled relative to
-// the file that now holds it. Resolving rather than matching text is what makes
-// it work after the moves -- the file that held the link moved too, and its own
-// store root may differ from the target's. It walks the repository because the
-// candidates name the file's plan-time path, which the migration has since
-// changed. The archive is the fixture's own concern: no candidate can point
-// into it (it is never a move source), and the fixture asserts its blobs are
-// byte-identical afterwards.
-func rewriteLinks(t *testing.T, root string, candidates []LinkCandidate) {
+// migrating-fleet-context skill does: it walks the repository after the moves
+// and writes each reported candidate's New spelling into the link the plan
+// reported, for every markdown file that now holds it.
+//
+// The spelling written back depends on where the containing file ended up,
+// which is why the moves are passed in. A file inside a move source carries New
+// already spelled from its new directory, so New is written verbatim; a file
+// that did not move takes New as the target's repository-relative path and
+// re-spells it from the directory the file still lives in -- that is the new,
+// repository-relative New form the amendment adds, and re-spelling it is what
+// makes a root README point at .context/plans rather than at ./.context/plans.
+//
+// Matching goes through the plan-time path of the file being written, because
+// the migration has since renamed the file that held the link. The archive is
+// the fixture's own concern: no candidate is ever reported under it (nothing
+// there is scanned), and the fixture asserts its blobs are byte-identical
+// afterwards.
+func rewriteLinks(t *testing.T, root string, moves []Move, candidates []LinkCandidate) {
 	t.Helper()
 	if len(candidates) == 0 {
 		return
+	}
+	// planTime reverses the moves for one post-move repository path and reports
+	// whether the file that now holds it is one of the moved files.
+	planTime := func(rel string) (string, bool) {
+		for _, m := range moves {
+			if pathPrefix(m.To, rel) {
+				return mapStorePath(m.To, m.From, rel), true
+			}
+		}
+		return rel, false
 	}
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -261,6 +287,7 @@ func rewriteLinks(t *testing.T, root string, candidates []LinkCandidate) {
 			t.Fatal(err)
 		}
 		rel = filepath.ToSlash(rel)
+		planFile, moved := planTime(rel)
 		dir := repoDir(rel)
 		info, err := os.Stat(path)
 		if err != nil {
@@ -284,16 +311,20 @@ func rewriteLinks(t *testing.T, root string, candidates []LinkCandidate) {
 				if !ok {
 					continue
 				}
-				c, ok := candidateFor(candidates, resolved, link.target)
+				c, ok := candidateFor(candidates, planFile, dir, resolved, link.target)
 				if !ok {
 					continue
 				}
-				spelling, err := filepath.Rel(dir, filepath.FromSlash(c.New))
-				if err != nil {
-					t.Fatal(err)
+				spelling := c.New
+				if !moved {
+					spelling, err = filepath.Rel(filepath.FromSlash(dir), filepath.FromSlash(c.New))
+					if err != nil {
+						t.Fatal(err)
+					}
+					spelling = filepath.ToSlash(spelling)
 				}
 				b.WriteString(line[last:link.start])
-				b.WriteString(filepath.ToSlash(spelling))
+				b.WriteString(spelling)
 				last = link.end
 				changed = true
 			}
@@ -309,27 +340,30 @@ func rewriteLinks(t *testing.T, root string, candidates []LinkCandidate) {
 	}
 }
 
-// candidateFor reports the mapping a link belongs to. Two things identify it:
-// the link resolves to one side of a mapping, so it points at the store before
-// or after the move; or it is spelled exactly the way the reported link was
-// spelled from the file the planner read it in. The spelling is what survives
-// when the file and its target land under different roots, because then the
-// moved link resolves to a path that never existed in either layout.
+// candidateFor reports the mapping a link in one file belongs to. A candidate is
+// a property of a file and a spelling, and both rules are scoped to the file the
+// planner read it in: the link is spelled exactly the way the plan recorded it
+// (Old is a spelling, so it means nothing beside its own file), or the link
+// already resolves, from that file's directory, to wherever New points.
 //
-// Either side of a mapping counts, so a link that already points at the new
-// path is re-spelled too, and rewriting twice changes nothing.
-func candidateFor(candidates []LinkCandidate, resolved, target string) (LinkCandidate, bool) {
+// The first rule is the one that survives when the containing file and its
+// target land under different roots: there the moved link resolves to a path
+// that existed in neither layout, so resolution alone cannot recognise it. The
+// second makes a second application of the mapping change nothing -- for a moved
+// file New is already a spelling, so it is resolved from the file's directory
+// before it is compared, and matching another file's candidate on a bare string
+// comparison would re-spell this link into a path that does not resolve.
+func candidateFor(candidates []LinkCandidate, file, dir, resolved, target string) (LinkCandidate, bool) {
 	for _, c := range candidates {
-		if resolved == c.Old || resolved == c.New {
+		if c.File == file && target == c.Old {
 			return c, true
 		}
 	}
 	for _, c := range candidates {
-		from, err := filepath.Rel(repoDir(c.File), c.Old)
-		if err != nil {
+		if c.File != file {
 			continue
 		}
-		if filepath.ToSlash(from) == target {
+		if newPath, ok := resolveLinkTarget(dir, c.New); ok && newPath == resolved {
 			return c, true
 		}
 	}
@@ -486,6 +520,11 @@ func TestPlanMigrationReportsLinkCandidatesWithoutRewriting(t *testing.T) {
 	writeFile(t, filepath.Join(root, "docs/design/a-design.md"),
 		"See [the plan](../plans/a-plan.md).\n")
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
+	// The scan reads a markdown file only if the repository tracks it, so the
+	// fixture stages what it writes; that is also the state a real plan runs in,
+	// where the CLI has already refused a dirty tree.
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "a link between two stores")
 	p, err := PlanMigration(root, MigrateOptions{
 		Template: TemplateContentVault,
 		Running:  "v0.6.0", RouterState: "current",
@@ -496,9 +535,17 @@ func TestPlanMigrationReportsLinkCandidatesWithoutRewriting(t *testing.T) {
 	if len(p.LinkCandidates) != 1 {
 		t.Fatalf("links = %+v", p.LinkCandidates)
 	}
+	// Old is the link as written. New is that link re-spelled from the file's
+	// NEW directory: here the containing store and the target store keep the
+	// same relative distance, because this template moves `docs/<role>` to
+	// `.context/<role>`, so the required spelling is the one already there.
 	got := p.LinkCandidates[0]
-	if got.Old != "docs/plans/a-plan.md" || got.New != ".context/plans/a-plan.md" {
-		t.Fatalf("candidate = %+v", got)
+	want := LinkCandidate{
+		File: "docs/design/a-design.md", Line: 1,
+		Old: "../plans/a-plan.md", New: "../plans/a-plan.md",
+	}
+	if got != want {
+		t.Fatalf("candidate = %+v, want %+v", got, want)
 	}
 	if _, err := os.Stat(filepath.Join(root, "docs/design/a-design.md")); err != nil {
 		t.Fatal("planner must not move or rewrite anything")
@@ -865,6 +912,12 @@ func TestPlanMigrationRefusesAMachineLocalManifest(t *testing.T) {
 // path are not moved by a store migration. A title is part of the syntax, not
 // of the target, and a fence left open at end of file still hides what follows
 // it.
+//
+// The escape link is reported now, and that is the amended scope: the file it
+// is written in moves with its store, so every repository link in it is a
+// candidate. Here the required spelling is the spelling already there -- the
+// file and the root keep their distance -- which is exactly what `New == Old`
+// says, and a skill that writes it back changes no byte.
 func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 	root := newGitV1Repo(t)
 	body := strings.Join([]string{
@@ -884,6 +937,8 @@ func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 	writeFile(t, filepath.Join(root, "docs/design/notes.md"), body)
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
 	writeFile(t, filepath.Join(root, "docs/plans/readme.txt"), "[not markdown](../plans/a-plan.md)\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "links, examples, and non-paths")
 
 	p, err := PlanMigration(root, MigrateOptions{
 		Template: TemplateContentVault,
@@ -895,18 +950,20 @@ func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 	if len(p.Blockers) != 0 {
 		t.Fatalf("blockers = %v", p.Blockers)
 	}
-	if len(p.LinkCandidates) != 1 {
-		t.Fatalf("candidates = %+v, want exactly the titled link", p.LinkCandidates)
+	want := []LinkCandidate{
+		{
+			File: "docs/design/notes.md", Line: 1,
+			Old: "../plans/a-plan.md", New: "../plans/a-plan.md",
+		},
+		{
+			File: "docs/design/notes.md", Line: 8,
+			Old: "../../outside.md", New: "../../outside.md",
+		},
 	}
-	got := p.LinkCandidates[0]
-	want := LinkCandidate{
-		File: "docs/design/notes.md", Line: 1,
-		Old: "docs/plans/a-plan.md", New: ".context/plans/a-plan.md",
+	if !reflect.DeepEqual(p.LinkCandidates, want) {
+		t.Fatalf("candidates = %+v, want %+v", p.LinkCandidates, want)
 	}
-	if got != want {
-		t.Fatalf("candidate = %+v, want %+v", got, want)
-	}
-	if p.Counts.Links != 1 {
+	if p.Counts.Links != len(want) {
 		t.Fatalf("counts = %+v", p.Counts)
 	}
 	after, err := os.ReadFile(filepath.Join(root, "docs/design/notes.md"))
@@ -915,6 +972,124 @@ func TestPlanMigrationSkipsFencedExamplesAndNonPaths(t *testing.T) {
 	}
 	if string(after) != body {
 		t.Fatalf("the planner rewrote a file it had only reported:\n%s", after)
+	}
+}
+
+// Design §9.2 (amended 2026-09-19): the scan is target-driven over the whole
+// repository. A link breaks when the file it points at stops being where it was,
+// whether or not the file holding it moves, and the source-scoped walk could see
+// neither of the two classes below.
+//
+// Worked example 1 of the amendment: a link written inside a moved store that
+// points into the archive the migration deliberately keeps in place. The link
+// was reported by nothing, so the CLI's `0 link(s)` was silent about a link the
+// move had just broken. `Old` is the link as written; `New` is the spelling that
+// still resolves from the store's NEW directory -- the store moves to
+// `.context/design` while the archive stays at `docs/archive`, so the link has
+// to climb one level further than it did.
+func TestPlanMigrationReportsAStoreLinkIntoTheKeptArchive(t *testing.T) {
+	root := newGitV1Repo(t)
+	mkdirAll(t, root, "docs/archive")
+	writeFile(t, filepath.Join(root, "docs/archive/old.md"), "# old\n")
+	// A link inside the archive is scanned by nothing and rewritten by nothing:
+	// the archive is excluded from the scan (design §9.2, §9.5), so this note
+	// must not appear as a candidate even though it points into a moving store.
+	writeFile(t, filepath.Join(root, "docs/archive/note.md"), "See [a plan](../plans/a-plan.md).\n")
+	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
+	writeFile(t, filepath.Join(root, "docs/design/a-design.md"), "See [x](../archive/old.md).\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "content, an archive link, and an archive note")
+
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault, Running: "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) != 0 {
+		t.Fatalf("plan = (%+v, %v)", p.Blockers, err)
+	}
+	want := LinkCandidate{
+		File: "docs/design/a-design.md", Line: 1,
+		Old: "../archive/old.md", New: "../../docs/archive/old.md",
+	}
+	if len(p.LinkCandidates) != 1 || p.LinkCandidates[0] != want {
+		t.Fatalf("candidates = %+v, want exactly %+v", p.LinkCandidates, want)
+	}
+	// The reported spelling is the required one: it has to resolve, from the
+	// containing file's NEW directory, to the archive the migration kept. A
+	// candidate whose New is the unchanged `../archive/old.md` would leave the
+	// link dangling, which is the outcome the amendment exists to prevent.
+	newFile := mapStorePath("docs/design", ".context/design", want.File)
+	resolved, ok := resolveLinkTarget(repoDir(newFile), want.New)
+	if !ok || resolved != "docs/archive/old.md" {
+		t.Fatalf("New = %q from %s resolves to %q (ok=%v), want docs/archive/old.md",
+			want.New, repoDir(newFile), resolved, ok)
+	}
+}
+
+// Worked example 2: a tracked markdown file outside every store -- a root
+// README, a vault note -- whose link points into a store that moves. This file
+// does not move, so only its target does, and `New` is the target's new
+// repository-relative path rather than a re-spelling from the file's own
+// directory. A file the repository does not track is not scanned at all: the set
+// comes from `git ls-files`, so an ignored draft cannot invent a candidate.
+func TestPlanMigrationReportsALinkFromProseThatDoesNotMove(t *testing.T) {
+	root := newGitV1Repo(t)
+	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
+	writeFile(t, filepath.Join(root, "README.md"), "See [the plan](docs/plans/a-plan.md).\n")
+	writeFile(t, filepath.Join(root, "vault/note.md"), "See [the plan](../docs/plans/a-plan.md).\n")
+	writeFile(t, filepath.Join(root, ".gitignore"), "scratch/\n")
+	writeFile(t, filepath.Join(root, "scratch/ignored.md"), "See [the plan](../docs/plans/a-plan.md).\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "prose that points into a moving store")
+
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault, Running: "v0.6.0", RouterState: "current",
+	})
+	if err != nil || len(p.Blockers) != 0 {
+		t.Fatalf("plan = (%+v, %v)", p.Blockers, err)
+	}
+	want := []LinkCandidate{
+		{File: "README.md", Line: 1, Old: "docs/plans/a-plan.md", New: ".context/plans/a-plan.md"},
+		{File: "vault/note.md", Line: 1, Old: "../docs/plans/a-plan.md", New: ".context/plans/a-plan.md"},
+	}
+	if !reflect.DeepEqual(p.LinkCandidates, want) {
+		t.Fatalf("candidates = %+v, want %+v", p.LinkCandidates, want)
+	}
+	if p.Counts.Links != len(want) {
+		t.Fatalf("counts = %+v", p.Counts)
+	}
+}
+
+// Worked example 3, the case the old source-scoped scan already handled: a link
+// from one moving store into another. `Old` is the spelling in the file, and
+// `New` is that link re-spelled from the containing file's NEW directory, which
+// here is where the link gains a level -- `docs/design` lands at
+// `.context/design` while `docs/plans` lands at `notes/plans`. A link that stays
+// inside its own store is reported too and keeps its spelling, because its
+// target is under a moving store either way.
+func TestPlanMigrationReportsALinkBetweenTwoMovingStores(t *testing.T) {
+	root := newGitV1Repo(t)
+	writeFile(t, filepath.Join(root, "docs/design/a-design.md"), "See [the plan](../plans/a-plan.md).\n")
+	writeFile(t, filepath.Join(root, "docs/design/sibling.md"), "See [its sibling](sibling.md).\n")
+	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "links between and inside the stores")
+
+	p, err := PlanMigration(root, MigrateOptions{
+		Running: "v0.6.0", RouterState: "current",
+		Stores: map[string]string{
+			RoleDesign: ".context/design", RolePlans: "notes/plans",
+			RoleJournal: ".context/journal", RoleQNA: ".context/qna",
+		},
+	})
+	if err != nil || len(p.Blockers) != 0 {
+		t.Fatalf("plan = (%+v, %v)", p.Blockers, err)
+	}
+	want := []LinkCandidate{
+		{File: "docs/design/a-design.md", Line: 1, Old: "../plans/a-plan.md", New: "../../notes/plans/a-plan.md"},
+		{File: "docs/design/sibling.md", Line: 1, Old: "sibling.md", New: "sibling.md"},
+	}
+	if !reflect.DeepEqual(p.LinkCandidates, want) {
+		t.Fatalf("candidates = %+v, want %+v", p.LinkCandidates, want)
 	}
 }
 
@@ -1109,6 +1284,12 @@ func TestDigestTreeIsStableAcrossRuns(t *testing.T) {
 // pointed at a sibling store by relative path is dangling until it is
 // rewritten. The count is the N-in/N-out gate of design §9.5, and resolution is
 // the post-condition.
+//
+// All three classes of the amended scan are here: a link between two stores
+// whose new roots differ, a link from a moved store into the archive the
+// migration keeps in place, and a link in a root README that never moves but
+// points into a store that does. The archive file is not scanned, and the fenced
+// example is not rewritten, in either direction.
 func TestRewriteLinksKeepsEveryLinkResolving(t *testing.T) {
 	root := newGitV1Repo(t)
 	writeFile(t, filepath.Join(root, "docs/design/a-design.md"), strings.Join([]string{
@@ -1120,8 +1301,12 @@ func TestRewriteLinksKeepsEveryLinkResolving(t *testing.T) {
 		"",
 		"A [site](https://example.com/).",
 		"",
+		"See [the archived design](../archive/2020-old-design.md).",
+		"",
 	}, "\n"))
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
+	writeFile(t, filepath.Join(root, "docs/archive/2020-old-design.md"), "archived\n")
+	writeFile(t, filepath.Join(root, "README.md"), "See [the plan](docs/plans/a-plan.md).\n")
 	gitOutput(t, root, "add", "-A")
 	gitOutput(t, root, "commit", "-m", "content")
 
@@ -1135,26 +1320,35 @@ func TestRewriteLinksKeepsEveryLinkResolving(t *testing.T) {
 	if err != nil || len(p.Blockers) != 0 {
 		t.Fatalf("plan = (%+v, %v)", p.Blockers, err)
 	}
-	if len(p.LinkCandidates) != 1 {
-		t.Fatalf("candidates = %+v", p.LinkCandidates)
+	want := []LinkCandidate{
+		{File: "README.md", Line: 1, Old: "docs/plans/a-plan.md", New: "notes/plans/a-plan.md"},
+		{File: "docs/design/a-design.md", Line: 1,
+			Old: "../plans/a-plan.md", New: "../../notes/plans/a-plan.md"},
+		{File: "docs/design/a-design.md", Line: 9,
+			Old: "../archive/2020-old-design.md", New: "../../docs/archive/2020-old-design.md"},
 	}
-	linksBefore := countMarkdownLinks(t, root, "docs")
+	if !reflect.DeepEqual(p.LinkCandidates, want) {
+		t.Fatalf("candidates = %+v, want %+v", p.LinkCandidates, want)
+	}
+	linksBefore := countMarkdownLinks(t, root, "docs") + countMarkdownLinks(t, root, "README.md")
 
 	// Perform the moves the planner described, so the rewrite runs against the
-	// tree the migration leaves behind.
+	// tree the migration leaves behind. Three links dangle until it does: the
+	// store-to-store link, the archive link, and the README's.
 	for _, m := range p.Moves {
 		mkdirAll(t, root, repoDir(m.To))
 		gitOutput(t, root, "mv", m.From, m.To)
 	}
-	if bad := unresolvedLinks(t, root, ".context"); len(bad) != 1 {
-		t.Fatalf("the fixture must dangle before the rewrite: %v", bad)
+	if bad := unresolvedLinks(t, root, "."); len(bad) != 3 {
+		t.Fatalf("the fixture must dangle three links before the rewrite: %v", bad)
 	}
-	rewriteLinks(t, root, p.LinkCandidates)
+	rewriteLinks(t, root, p.Moves, p.LinkCandidates)
 
-	if got := countMarkdownLinks(t, root, ".context"); got != linksBefore {
-		t.Fatalf("links in = %d, links out = %d", linksBefore, got)
+	linksAfter := countMarkdownLinks(t, root, ".context") + countMarkdownLinks(t, root, "README.md")
+	if linksAfter != linksBefore {
+		t.Fatalf("links in = %d, links out = %d", linksBefore, linksAfter)
 	}
-	if bad := unresolvedLinks(t, root, ".context"); len(bad) > 0 {
+	if bad := unresolvedLinks(t, root, "."); len(bad) > 0 {
 		t.Fatalf("unresolved links after rewrite: %v", bad)
 	}
 	body, err := os.ReadFile(filepath.Join(root, ".context/design/a-design.md"))
@@ -1164,21 +1358,38 @@ func TestRewriteLinksKeepsEveryLinkResolving(t *testing.T) {
 	if !strings.Contains(string(body), "(../../notes/plans/a-plan.md)") {
 		t.Fatalf("the link was not re-spelled for the new store root:\n%s", body)
 	}
+	if !strings.Contains(string(body), "(../../docs/archive/2020-old-design.md)") {
+		t.Fatalf("the link into the archive was not re-spelled from the new directory:\n%s", body)
+	}
 	if !strings.Contains(string(body), "An example: [the plan](../plans/a-plan.md).") {
 		t.Fatalf("the fenced example was rewritten:\n%s", body)
 	}
 	if !strings.Contains(string(body), "(https://example.com/)") {
 		t.Fatalf("an external link was rewritten:\n%s", body)
 	}
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "(notes/plans/a-plan.md)") {
+		t.Fatalf("the root README still points at the old store:\n%s", readme)
+	}
 
 	// Rewriting twice changes nothing: the mapping matches either side.
-	rewriteLinks(t, root, p.LinkCandidates)
+	rewriteLinks(t, root, p.Moves, p.LinkCandidates)
 	again, err := os.ReadFile(filepath.Join(root, ".context/design/a-design.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(again) != string(body) {
 		t.Fatalf("the rewrite is not idempotent:\n%s\n%s", body, again)
+	}
+	againReadme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(againReadme) != string(readme) {
+		t.Fatalf("the rewrite is not idempotent for an unmoved file:\n%s\n%s", readme, againReadme)
 	}
 }
 

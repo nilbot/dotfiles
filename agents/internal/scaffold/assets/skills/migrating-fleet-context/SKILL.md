@@ -308,12 +308,31 @@ Relocate each entry in `misplaced_docs` into the role it belongs to:
 git mv "$(agents layout path journal)/<file>-plan.md" "$(agents layout path plans)/"
 ```
 
-Then fix relative markdown links inside the moved files.
+Then fix the markdown links the layout move breaks. `agents layout migrate
+--dry-run` reports them (`link_candidates` in `--json`), and the list is not
+limited to the moved files: a link breaks when its **target** stops being where
+it was, so tracked prose that never moves — a repository-root `README.md`,
+`.agents/AGENTS.md`, a vault note — pointing into a moved store is on it too,
+and so is a link from a moved store into the archive, which stays where it is
+while the store does not. For each candidate, replace the link's target with
+`new` on the reported line of the reported file:
 
-**The archive is immutable and is never a source or a destination.** It holds
+- when the containing file moved with its store, `new` is already spelled
+  relative to that file's new directory — write it as it stands;
+- when the containing file stayed where it was, `new` is the target's new
+  repository-relative path, so re-spell it relative to the containing file's own
+  directory.
+
+A candidate whose `new` equals its `old` is a link that still resolves: write it
+back unchanged rather than skipping the line, so the count you report is the
+count the plan declared.
+
+**The archive is never a source, a destination, or a rewrite target.** It holds
 executed plans and retired specs, and a record edited to stay true is not a
-record. `agents drift` does not report anything under it, and neither should
-you relocate out of it.
+record. `agents drift` does not report anything under it, the planner never
+scans it, and neither should you relocate out of it or edit a link inside it —
+a link *pointing at* the archive is rewritten like any other, in the file that
+holds it.
 
 ### Retired stores
 

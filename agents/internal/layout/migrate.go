@@ -45,11 +45,23 @@ type MigrateOptions struct {
 	RouterState string
 }
 
-// LinkCandidate is one markdown link the migration will break: a link in a
-// moving store whose target resolves into a moving store. The planner reports
+// LinkCandidate is one markdown link the migration will break, which is any
+// markdown link in the repository's tracked markdown with a moving endpoint: it
+// is written inside a move source, or it points into one. The planner reports
 // it and never rewrites it; the migrating-fleet-context skill does (design
-// §9.5). Old and New are repository-relative, so the report does not depend on
-// the spelling the author chose.
+// §9.5). File and Line name the containing file and the line the link is
+// written on, so the report is actionable even when the file itself moves with
+// its store.
+//
+// Old is the link target exactly as written in the file, which is the only
+// spelling that identifies the occurrence. New is the spelling the migration
+// requires, and it differs by where the containing file ends up (design §9.2):
+// a file inside a move source moves with it, so New is re-spelled from that
+// file's NEW directory and is a link relative to that directory; a file
+// anywhere else stays where it is, so only the target moves and New is the
+// target's new repository-relative path. The two forms are deliberately
+// different, because the skill writes New into the file that holds it, and New
+// always names the target from where the containing file will be.
 type LinkCandidate struct {
 	File string `json:"file"`
 	Line int    `json:"line"`
@@ -108,8 +120,11 @@ type Plan struct {
 //
 // The git preconditions of design §9.1 -- clean tree, not on a protected
 // branch, no operation in progress -- are the CLI's, checked before this is
-// called: this function asks git nothing, and in particular never inspects the
-// tree it is planning against.
+// called: this function changes nothing through git. The two questions it does
+// ask git are reads, and both are contract questions rather than inspections of
+// the tree it is planning against: whether `.agents/` is ignored (§0.7), and
+// which markdown files the repository tracks, which is the link scan's
+// deterministic scope (§9.2).
 func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 	from := Resolve(root)
 	if from.Schema != SchemaV1 || len(from.Problems) > 0 {
@@ -478,71 +493,79 @@ func blockersFromProblems(ps []Problem) []Blocker {
 	return out
 }
 
-// scanLinkCandidates reports every markdown link inside a moving store whose
-// target resolves under a moving store, mapped to where that target is going.
-// It reads and writes nothing: design §9.5 has the CLI report the candidates
-// and the migrating-fleet-context skill rewrite them, and a planner that
-// rewrote prose would be reporting a plan it had already executed.
+// scanLinkCandidates reports every markdown link the migration will break: a
+// link in any markdown file the repository tracks with a moving endpoint -- the
+// file that holds it is inside a move source, or the path it names is. It reads
+// and writes nothing: design §9.5 has the CLI report the candidates and the
+// migrating-fleet-context skill rewrite them, and a planner that rewrote prose
+// would be reporting a plan it had already executed.
 //
+// The scan is target-driven over the whole repository (design §9.2, amended
+// 2026-09-19), not source-scoped over the move sources, and that scope is
+// load-bearing. A link breaks when the file it points at stops being where it
+// was, which is true whether or not the file containing it moves:
+//
+//   - a file inside a move source relocates, so every repository link in it is
+//     re-spelled from the store's new directory -- including one pointing into
+//     the archive, which stays where it is and whose relative distance from the
+//     store therefore changes;
+//   - a link written in prose that does not move -- a repository-root README, a
+//     .agents/AGENTS.md, a vault note -- breaks when its target moves, and a
+//     scan restricted to the move sources never even reads that file.
+//
+// The tracked set is `git ls-files`, so the scope is deterministic and a file
+// .gitignore hides is in neither the scan nor the rewrite. Files under the
+// declared archive are never scanned, because nothing there is ever rewritten.
 // Only markdown is read, only content outside fenced code blocks is read, and
 // only repository paths are candidates: a URL, a mailto, and a bare fragment
-// name no store and survive the move. The moves are the plan's authority for
-// what actually changes on disk, and the two layouts say which roles they
-// belong to; a move whose role either layout does not declare has no mapping to
-// report.
+// name no store and survive the move.
 func scanLinkCandidates(root string, moves []Move, from, to Layout) []LinkCandidate {
+	mappable := mappableMoves(moves, from, to)
+	if len(mappable) == 0 {
+		return nil
+	}
+	tracked, err := trackedMarkdown(root)
+	if err != nil {
+		// An unreadable tracked set is a repository this planner is already
+		// refusing: AgentsIgnored reports the same failure as a `local_agents`
+		// blocker, so an empty report here accompanies a refusal and is never a
+		// clean bill of health on its own.
+		return nil
+	}
 	var out []LinkCandidate
-	for _, m := range moves {
-		if _, ok := Path(from, m.Role); !ok {
+	for _, rel := range tracked {
+		if underArchive(rel, from.Archive, to.Archive) {
 			continue
 		}
-		if _, ok := Path(to, m.Role); !ok {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			// An index entry with no worktree file -- a staged deletion, or a
+			// tree the reader cannot see. `git mv` carries what is on disk, so
+			// a path with no content has no link to report.
 			continue
 		}
-		base := filepath.Join(root, filepath.FromSlash(m.From))
-		_ = filepath.WalkDir(base, func(path string, d fs.DirEntry, err error) error {
-			// An unreadable tree or file is already the digest's finding
-			// (store_unreadable); a link report is not where a plan fails.
-			if err != nil {
-				return nil
+		_, fileMoves := moveFor(mappable, rel)
+		dir := repoDir(rel)
+		var f fence
+		for i, line := range strings.Split(string(data), "\n") {
+			if !f.content(line) {
+				continue
 			}
-			if d.IsDir() || !isMarkdown(d.Name()) {
-				return nil
-			}
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return nil
-			}
-			rel = filepath.ToSlash(rel)
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			dir := repoDir(rel)
-			var f fence
-			for i, line := range strings.Split(string(data), "\n") {
-				if !f.content(line) {
+			for _, link := range markdownLinks(line) {
+				target, ok := resolveLinkTarget(dir, link.target)
+				if !ok {
 					continue
 				}
-				for _, link := range markdownLinks(line) {
-					old, ok := resolveLinkTarget(dir, link.target)
-					if !ok {
-						continue
-					}
-					for _, mv := range moves {
-						if !pathPrefix(mv.From, old) {
-							continue
-						}
-						out = append(out, LinkCandidate{
-							File: rel, Line: i + 1,
-							Old: old, New: mapStorePath(mv.From, mv.To, old),
-						})
-						break
-					}
+				if _, targetMoves := moveFor(mappable, target); !fileMoves && !targetMoves {
+					continue
 				}
+				out = append(out, LinkCandidate{
+					File: rel, Line: i + 1,
+					Old: link.target,
+					New: linkSpelling(rel, target, mappable),
+				})
 			}
-			return nil
-		})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
@@ -554,6 +577,100 @@ func scanLinkCandidates(root string, moves []Move, from, to Layout) []LinkCandid
 		return out[i].Old < out[j].Old
 	})
 	return out
+}
+
+// mappableMoves narrows a plan's moves to the ones the link scan can map: a
+// move whose role either layout does not declare has no new spelling to report.
+func mappableMoves(moves []Move, from, to Layout) []Move {
+	out := make([]Move, 0, len(moves))
+	for _, m := range moves {
+		if _, ok := Path(from, m.Role); !ok {
+			continue
+		}
+		if _, ok := Path(to, m.Role); !ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// moveFor reports the move a repository-relative path lives under: the one
+// whose From prefix contains it. A path outside every store has no move, and is
+// therefore neither a candidate target nor a containing file that relocates.
+func moveFor(moves []Move, rel string) (Move, bool) {
+	for _, m := range moves {
+		if pathPrefix(m.From, rel) {
+			return m, true
+		}
+	}
+	return Move{}, false
+}
+
+// linkSpelling is a candidate's New: the spelling the link requires once the
+// moves are done (design §9.2).
+//
+// A file inside a move source moves with it, so the target's absolute path
+// under the NEW layout -- its own move applied, and unchanged when its own store
+// stays, as the archive does -- is re-spelled from the containing file's new
+// directory. That is what keeps a link from a moved store into the kept archive
+// resolving: the store's directory changes depth relative to the archive, and
+// the spelling has to change with it. A file anywhere else keeps its own path,
+// so only the target moves and the required spelling is the target's new
+// repository-relative path.
+func linkSpelling(containingFile, target string, moves []Move) string {
+	if cm, ok := moveFor(moves, containingFile); ok {
+		newDir := repoDir(mapStorePath(cm.From, cm.To, containingFile))
+		newTarget := target
+		if tm, ok := moveFor(moves, target); ok {
+			newTarget = mapStorePath(tm.From, tm.To, target)
+		}
+		rel, err := filepath.Rel(filepath.FromSlash(newDir), filepath.FromSlash(newTarget))
+		if err != nil {
+			return newTarget
+		}
+		return filepath.ToSlash(rel)
+	}
+	if tm, ok := moveFor(moves, target); ok {
+		return mapStorePath(tm.From, tm.To, target)
+	}
+	return target
+}
+
+// trackedMarkdown lists the markdown files the repository tracks, repository-
+// relative and sorted. `git ls-files` is the trackedness query design §9.2 asks
+// for: the set is deterministic, a file .gitignore hides is not in it, and the
+// index is the repository's own answer rather than a walk's guess. Paths are
+// read NUL-separated, so a file name carrying a newline cannot split one entry
+// into two.
+func trackedMarkdown(root string) ([]string, error) {
+	out, err := repo.Git(root, "ls-files", "-z", "--cached")
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %v: %s", err, strings.TrimSpace(out))
+	}
+	var files []string
+	for _, rel := range strings.Split(out, "\x00") {
+		if rel == "" || !isMarkdown(rel) {
+			continue
+		}
+		files = append(files, filepath.ToSlash(rel))
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// underArchive reports whether a repository-relative path is one of the
+// declared archives or lives inside one. Both layouts are asked because both
+// are archives of record for this migration: the source's, which the manifest
+// carried into the plan, and the target's, which the plan declares. Nothing
+// under either is ever scanned, and nothing under either is ever edited.
+func underArchive(rel string, archives ...string) bool {
+	for _, a := range archives {
+		if a != "" && pathPrefix(a, rel) {
+			return true
+		}
+	}
+	return false
 }
 
 // isMarkdown reports whether a file name is markdown, the only prose a link

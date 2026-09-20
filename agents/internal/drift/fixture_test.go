@@ -20,17 +20,20 @@ import (
 // ---------------------------------------------------------------------------
 // The end-to-end migration fixture (design §0.6, §9.5, §10)
 //
-// The three link helpers below -- countMarkdownLinks, rewriteLinks, and
-// unresolvedLinks -- are a deliberate per-package duplication of the ones in
+// The link helpers below -- countMarkdownLinks, rewriteLinks, candidateFor,
+// unresolvedLinks, and the two path spellings they need (within, storePath) --
+// are a deliberate per-package duplication of the ones in
 // internal/layout/migrate_test.go, where the plan's helper table puts them.
 // Test helpers do not cross packages, and the production spellings they would
 // otherwise need (fence, markdownLinks, markdownLink, resolveLinkTarget,
-// repoDir, isMarkdown) are unexported in package layout, which is exactly the
-// property that keeps them out of this package's reach. They are minimal on
-// purpose: this fixture reads its own markdown, so they count `](...)` links
-// outside fenced blocks, apply an Old->New mapping, and list relative targets
-// that do not resolve. Everything else here is the v1 repository builder and
-// the index reader the archive-immutability gate needs.
+// repoDir, isMarkdown, pathPrefix, mapStorePath) are unexported in package
+// layout, which is exactly the property that keeps them out of this package's
+// reach. They are minimal on purpose: this fixture reads its own markdown, so
+// they count `](...)` links outside fenced blocks, apply an Old->New mapping the
+// way the migration skill does -- including the new repository-relative `New`
+// form for a file that does not move -- and list relative targets that do not
+// resolve. Everything else here is the v1 repository builder and the index
+// reader the archive-immutability gate needs.
 // ---------------------------------------------------------------------------
 
 // newGitV1Repo is the fixture's repository: the layout scaffold.Create writes
@@ -128,6 +131,32 @@ func withinArchive(rel string) bool {
 	return rel == "docs/archive" || strings.HasPrefix(rel, "docs/archive/")
 }
 
+// within reports whether a repository-relative path is a directory or lives
+// inside it. It is the fixture's copy of the production pathPrefix, which is
+// unexported in package layout: the two must agree, or the fixture would judge a
+// tree the planner described by different rules.
+func within(parent, child string) bool {
+	parent = strings.TrimSuffix(path.Clean(parent), "/")
+	child = strings.TrimSuffix(path.Clean(child), "/")
+	if parent == "." {
+		return true
+	}
+	return parent == child || strings.HasPrefix(child, parent+"/")
+}
+
+// storePath re-spells a path that lives under a moving store with that store's
+// new root; it mirrors the production mapStorePath, and is what turns a
+// candidate's plan-time path into the path it has after the move.
+func storePath(from, to, rel string) string {
+	from = strings.TrimSuffix(path.Clean(from), "/")
+	to = strings.TrimSuffix(path.Clean(to), "/")
+	rel = strings.TrimSuffix(path.Clean(rel), "/")
+	if rel == from {
+		return to
+	}
+	return to + strings.TrimPrefix(rel, from)
+}
+
 // inlineLink matches one inline markdown link's target -- the `](target)` form
 // the planner reports. Angle-bracketed and titled forms are not what this
 // fixture writes, and every reading below uses this one scanner on both sides
@@ -190,7 +219,10 @@ func resolveLinkTarget(dir, target string) (string, bool) {
 }
 
 // markdownFiles lists the markdown under one repository-relative directory,
-// sorted: the file set every reading below walks.
+// sorted: the file set every reading below walks. The argument may be a single
+// file, and "." is the whole repository except .git, which is what lets a
+// reading cover tracked prose outside every store -- a root README -- as well as
+// the stores themselves.
 func markdownFiles(t *testing.T, root, dir string) []string {
 	t.Helper()
 	var out []string
@@ -199,7 +231,13 @@ func markdownFiles(t *testing.T, root, dir string) []string {
 			if err != nil {
 				return err
 			}
-			if d.IsDir() || !isMarkdown(d.Name()) {
+			if d.IsDir() {
+				if d.Name() == ".git" {
+					return fs.SkipDir
+				}
+				return nil
+			}
+			if !isMarkdown(d.Name()) {
 				return nil
 			}
 			rel, err := filepath.Rel(root, p)
@@ -239,17 +277,33 @@ func countMarkdownLinks(t *testing.T, root, dir string) int {
 }
 
 // rewriteLinks applies the plan's Old -> New mapping the way the
-// migrating-fleet-context skill does: every markdown link in the repository
-// that resolves to either side of a reported mapping is re-spelled relative to
-// the file that now holds it. Resolving rather than matching text is what makes
-// it work after the moves -- the file holding the link moved too, and its own
-// store root may differ from the target's. The archive is the fixture's own
-// concern here: no candidate can point into it, because the planner never plans
-// it as a move, and the fixture asserts its blobs are identical afterwards.
-func rewriteLinks(t *testing.T, root string, candidates []layout.LinkCandidate) {
+// migrating-fleet-context skill does: it walks the repository after the moves
+// and writes each reported candidate's New spelling into the link the plan
+// reported, wherever that file now lives.
+//
+// The spelling written back depends on where the containing file ended up, which
+// is why the moves are passed in. A file inside a move source carries New already
+// spelled from its new directory, so New is written verbatim; a file that did
+// not move takes New as the target's repository-relative path and re-spells it
+// from the directory the file still lives in. Matching goes through the
+// plan-time path of the file being written, because the migration has since
+// renamed the file that held the link. The archive is the fixture's own concern
+// here: no file under it is ever scanned, so no candidate is reported there, and
+// the fixture asserts its blobs are identical afterwards.
+func rewriteLinks(t *testing.T, root string, moves []layout.Move, candidates []layout.LinkCandidate) {
 	t.Helper()
 	if len(candidates) == 0 {
 		return
+	}
+	// planTime reverses the moves for one post-move repository path and reports
+	// whether the file that now holds it is one of the moved files.
+	planTime := func(rel string) (string, bool) {
+		for _, m := range moves {
+			if within(m.To, rel) {
+				return storePath(m.To, m.From, rel), true
+			}
+		}
+		return rel, false
 	}
 	var files []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
@@ -276,7 +330,9 @@ func rewriteLinks(t *testing.T, root string, candidates []layout.LinkCandidate) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		dir := path.Dir(filepath.ToSlash(rel))
+		rel = filepath.ToSlash(rel)
+		planFile, moved := planTime(rel)
+		dir := path.Dir(rel)
 		info, err := os.Stat(file)
 		if err != nil {
 			t.Fatal(err)
@@ -294,21 +350,24 @@ func rewriteLinks(t *testing.T, root string, candidates []layout.LinkCandidate) 
 			}
 			out := inlineLink.ReplaceAllStringFunc(line, func(match string) string {
 				ix := inlineLink.FindStringSubmatchIndex(match)
-				resolved, ok := resolveLinkTarget(dir, match[ix[2]:ix[3]])
+				target := match[ix[2]:ix[3]]
+				resolved, ok := resolveLinkTarget(dir, target)
 				if !ok {
 					return match
 				}
-				for _, c := range candidates {
-					if resolved != c.Old && resolved != c.New {
-						continue
-					}
-					spelling, err := filepath.Rel(filepath.FromSlash(dir), filepath.FromSlash(c.New))
+				c, ok := candidateFor(candidates, planFile, dir, resolved, target)
+				if !ok {
+					return match
+				}
+				spelling := c.New
+				if !moved {
+					rel, err := filepath.Rel(filepath.FromSlash(dir), filepath.FromSlash(c.New))
 					if err != nil {
 						t.Fatalf("spelling %s from %s: %v", c.New, dir, err)
 					}
-					return match[:ix[2]] + filepath.ToSlash(spelling) + match[ix[3]:]
+					spelling = filepath.ToSlash(rel)
 				}
-				return match
+				return match[:ix[2]] + spelling + match[ix[3]:]
 			})
 			if out != line {
 				lines[i] = out
@@ -322,6 +381,33 @@ func rewriteLinks(t *testing.T, root string, candidates []layout.LinkCandidate) 
 			t.Fatal(err)
 		}
 	}
+}
+
+// candidateFor reports the mapping a link in one file belongs to. A candidate is
+// a property of a file and a spelling, and both rules are scoped to the file the
+// planner read it in: the link is spelled exactly the way the plan recorded it
+// (Old is a spelling, so it means nothing beside its own file), or the link
+// already resolves, from that file's directory, to wherever New points.
+//
+// The first rule is the one that survives when the containing file and its
+// target land under different roots: there the moved link resolves to a path
+// that existed in neither layout, so resolution alone cannot recognise it. The
+// second makes a second application of the mapping change nothing.
+func candidateFor(candidates []layout.LinkCandidate, file, dir, resolved, target string) (layout.LinkCandidate, bool) {
+	for _, c := range candidates {
+		if c.File == file && target == c.Old {
+			return c, true
+		}
+	}
+	for _, c := range candidates {
+		if c.File != file {
+			continue
+		}
+		if newPath, ok := resolveLinkTarget(dir, c.New); ok && newPath == resolved {
+			return c, true
+		}
+	}
+	return layout.LinkCandidate{}, false
 }
 
 // unresolvedLinks lists every relative link target under one directory tree
@@ -385,11 +471,18 @@ func assertDocsHoldsOnlyTheArchive(t *testing.T, root string) {
 }
 
 // TestMigrationFixtureLinksAndArchiveSurvive is the end-to-end gate of design
-// §0.6, §9.3, §9.5, and §10: a real v1 repository carrying nested content, a
-// markdown link between two stores, and a content-mixed archive goes through
-// the whole migration -- plan, apply with `git mv`, and the skill's link
-// rewrite -- and every promise the design makes about what survives is checked
-// against the bytes on disk afterwards.
+// §0.6, §9.3, §9.5, and §10: a real v1 repository carrying nested content,
+// markdown links of every class the amended scan reports, and a content-mixed
+// archive goes through the whole migration -- plan, apply with `git mv`, and the
+// skill's link rewrite -- and every promise the design makes about what survives
+// is checked against the bytes on disk afterwards.
+//
+// The link classes are the ones design §9.2 (amended 2026-09-19) names: a link
+// from one moved store into another, a link from a moved store into the archive
+// the migration keeps in place, and a link in tracked prose that never moves -- a
+// root README -- pointing into a store that does. The last two were reported by
+// nothing while the scan was source-scoped, so the old fixture passed over a
+// migration that left both dangling.
 //
 // It lives in package drift, not in package layout where the plan put it. The
 // direction is what decides it: drift imports layout, so an in-package layout
@@ -398,13 +491,21 @@ func TestMigrationFixtureLinksAndArchiveSurvive(t *testing.T) {
 	root := newGitV1Repo(t)
 	writeFile(t, filepath.Join(root, "docs/archive/plans/2020-old-plan.md"), "archived plan")
 	writeFile(t, filepath.Join(root, "docs/archive/2020-old-design.md"), "archived design")
-	writeFile(t, filepath.Join(root, "docs/design/a-design.md"),
-		"See [the plan](../plans/a-plan.md).\n")
+	writeFile(t, filepath.Join(root, "docs/design/a-design.md"), strings.Join([]string{
+		"See [the plan](../plans/a-plan.md).",
+		"",
+		"See [the old design](../archive/2020-old-design.md).",
+		"",
+	}, "\n"))
 	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# plan\n")
-	commitFixture(t, root, "content, a link, and a mixed archive")
+	writeFile(t, filepath.Join(root, "README.md"), "See [the plan](docs/plans/a-plan.md).\n")
+	commitFixture(t, root, "content, links, and a mixed archive")
 
 	archiveBefore := archiveBlobs(trackedBlobs(t, root))
-	linksBefore := countMarkdownLinks(t, root, "docs")
+	// Whole-repository, not just the stores: the prose that never moves is part
+	// of the gate now, and a count that skipped it could not see the README
+	// link at all.
+	linksBefore := countMarkdownLinks(t, root, ".")
 	if linksBefore == 0 {
 		t.Fatal("the v1 fixture holds no markdown link: the N-in/N-out gate would be vacuous")
 	}
@@ -453,11 +554,27 @@ func TestMigrationFixtureLinksAndArchiveSurvive(t *testing.T) {
 	if len(p.LinkCandidates) == 0 {
 		t.Fatal("no link candidate reported: the rewrite gate would be vacuous")
 	}
+	// Every class, named: the store-to-store link, the archive-bound link, and
+	// the link in prose that does not move. `Old` is the link as written in its
+	// own file; `New` is the spelling that resolves after the migration, which
+	// for a moved file is relative to its new directory and for a file that
+	// stays put is the target's new repository-relative path.
+	wantLinks := []layout.LinkCandidate{
+		{File: "README.md", Line: 1,
+			Old: "docs/plans/a-plan.md", New: ".context/plans/a-plan.md"},
+		{File: "docs/design/a-design.md", Line: 1,
+			Old: "../plans/a-plan.md", New: "../plans/a-plan.md"},
+		{File: "docs/design/a-design.md", Line: 3,
+			Old: "../archive/2020-old-design.md", New: "../../docs/archive/2020-old-design.md"},
+	}
+	if !reflect.DeepEqual(p.LinkCandidates, wantLinks) {
+		t.Fatalf("candidates = %+v, want %+v", p.LinkCandidates, wantLinks)
+	}
 
 	if err := layout.ApplyMigration(root, p, "pre-layout-v2-fixture"); err != nil {
 		t.Fatal(err)
 	}
-	rewriteLinks(t, root, p.LinkCandidates)
+	rewriteLinks(t, root, p.Moves, p.LinkCandidates)
 
 	// The archive is never moved and its blobs are byte-identical. The
 	// comparison covers the whole archive subtree, so a file that appeared in
@@ -488,13 +605,40 @@ func TestMigrationFixtureLinksAndArchiveSurvive(t *testing.T) {
 	// §9.5's counter-case is the subtest below, where no archive is declared).
 	assertDocsHoldsOnlyTheArchive(t, root)
 
-	// N in / N out: the same links, spelled from the v2 stores, and none of
-	// them dangling.
-	if got := countMarkdownLinks(t, root, ".context"); got != linksBefore {
+	// N in / N out over the whole repository, and none of them dangling -- the
+	// store-to-store link, the archive-bound link, and the README link alike.
+	if got := countMarkdownLinks(t, root, "."); got != linksBefore {
 		t.Fatalf("links in = %d, links out = %d", linksBefore, got)
 	}
-	if bad := unresolvedLinks(t, root, ".context"); len(bad) > 0 {
+	if bad := unresolvedLinks(t, root, "."); len(bad) > 0 {
 		t.Fatalf("unresolved links after rewrite: %v", bad)
+	}
+	// The two fixed classes are checked by name as well as by resolution: a
+	// rewrite that had left them spelled as they were would keep the counts
+	// equal and still dangle.
+	design, err := os.ReadFile(filepath.Join(root, ".context/design/a-design.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(design), "(../plans/a-plan.md)") {
+		t.Fatalf("the store-to-store link was not re-spelled:\n%s", design)
+	}
+	if !strings.Contains(string(design), "(../../docs/archive/2020-old-design.md)") {
+		t.Fatalf("the link into the kept archive was not re-spelled from the new directory:\n%s", design)
+	}
+	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(readme), "(.context/plans/a-plan.md)") {
+		t.Fatalf("the root README was not re-spelled onto the moved store:\n%s", readme)
+	}
+	// The archive is a place, not a rewrite target: no file under it was edited
+	// (the blob comparison above proves it), and the report never named one.
+	for _, c := range p.LinkCandidates {
+		if withinArchive(c.File) {
+			t.Fatalf("a link inside the archive was reported: %+v", c)
+		}
 	}
 
 	// `agents layout validate`'s equivalent, in process: the migrated layout
