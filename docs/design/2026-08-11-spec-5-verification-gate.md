@@ -35,25 +35,45 @@ binary stamps, which live in
 
 **The `test` matrix is no longer a cross product.** It is four deliberate legs:
 `agents` on `{ubuntu-latest, ubuntu-24.04-arm, macos-latest}`, and `bootstrap.d`
-on `{ubuntu-latest}`.
+on `{ubuntu-latest}`. A fifth job, `macos-dotfiles`, runs the real program on
+macOS.
 
-Why: macOS was 27.7% of the job-minutes in the window that built and released
-v0.6.0 (59.3 of 213.6), and one of its two legs bought host coverage that Linux
-already had in another form. `bootstrap.d`'s darwin behaviour is parameterised
-rather than `runtime.GOOS`-derived — `loginShell(..., "darwin", ...)` and
-`packagesCtx("darwin", "brew")` take the platform as an argument, so those
-branches already run on Linux. What is genuinely lost is macOS *host* behaviour
-for `bootstrap.d`'s integration tests, which execute the real `./bootstrap` in a
-temporary HOME: BSD `sh`, macOS `sudo` and the real package manager are no
-longer exercised in CI. That is the trade, and it is deliberate.
+Why the matrix changed: macOS was 27.7% of the job-minutes in the window that
+built and released v0.6.0 (59.3 of 213.6), and one of its two legs bought
+coverage that Linux already had in another form. `bootstrap.d`'s darwin
+behaviour is parameterised rather than `runtime.GOOS`-derived —
+`loginShell(..., "darwin", ...)` and `packagesCtx("darwin", "brew")` take the
+platform as an argument, so those branches already run on Linux. That suite also
+never executed the macOS commands even on macOS: `brew`, `chsh` and `dscl` are
+recorded into a fake planner and asserted, not run. What the dropped leg did do
+for real was run the suite's integration tests, which execute the compiled
+`./bootstrap` in a temporary HOME.
 
-In exchange, `ubuntu-24.04-arm` runs `agents` on arm64 Linux. `linux/arm64` is a
-shipped release target (spec 6 §4.1) that no leg had ever run on; the
-`macos-latest` leg only approximated arm64 through a different operating system,
-and it stays. macOS remains for `agents` because host behaviour is the entire
-point of that leg: it is what caught the git background-maintenance race in the
-tree snapshot (run `35470984407`, fixed in `d05a43e`), which no Linux leg
-surfaced. The 2026-08-29 latency work targeted `test (macos-latest,
+That part is replaced rather than dropped, by a job that tests more.
+**`macos-dotfiles` runs the real `./bootstrap plan dotfiles` on macOS.** The
+dropped leg never ran the program against a real machine profile; this does, and
+it plans rows no other job reaches — the `macOS/` subtree of `links.manifest`
+(`~/.config/ghostty`, `~/.config/alacritty/alacritty.toml`) is planned only when
+the platform resolves to `darwin`. Measured on its first run (`35535717117`): 24
+seconds against 103 for the leg it replaces, exiting 0 with `preflight` reporting
+`platform darwin` and `needs neither sudo nor network`. `plan` writes nothing and
+the `dotfiles` profile is preflight + config + verify, so it is safe on a
+disposable runner.
+
+**What is still not covered on macOS:** the `packages` and `fish` phases. No job
+runs `apply workstation` on macOS, which is what would install Homebrew formulae,
+change the login shell with `chsh`, and read it back with `dscl`. Linux covers
+the equivalent code path for real against Linuxbrew in `linux-stage-zero`; the
+macOS half of it is exercised on a real machine, or not at all. That gap is older
+than this amendment and is not closed by it.
+
+In exchange for the dropped leg, `ubuntu-24.04-arm` also runs `agents` on arm64
+Linux. `linux/arm64` is a shipped release target (spec 6 §4.1) that no leg had
+ever run on; the `macos-latest` leg only approximated arm64 through a different
+operating system, and it stays. macOS remains for `agents` because host behaviour
+is the entire point of that leg: it is what caught the git background-maintenance
+race in the tree snapshot (run `35470984407`, fixed in `d05a43e`), which no Linux
+leg surfaced. The 2026-08-29 latency work targeted `test (macos-latest,
 bootstrap.d)` at "< 45s"; that job no longer exists. Those measurements are the
 record of that day and are not rewritten.
 
@@ -261,6 +281,7 @@ Stated once so each phase can say which job it creates or extends.
 | `hygiene` | `ubuntu-latest` | phase 2 | — |
 | `docs` | `ubuntu-latest` | **phase 3** (help coverage) | **phase 4** (README block, backward check, skill coverage) |
 | `linux-dotfiles` | container | phase 5 | — |
+| `macos-dotfiles` | `macos-latest` | **amended 2026-09-20** (Amendment 1) | — |
 | `linux-stage-zero` (matrix) | `{debian, arch}` containers | phase 5 | — |
 
 **Four `test` jobs, not one.** Spec 2 §11 chose two modules specifically so a
