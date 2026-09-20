@@ -3419,9 +3419,27 @@ code above; `Digest` values are spelled `sha256:<hex>` so a later algorithm
 change is visible in the journal rather than silent. Task 11's step adds
 `time` and `agents/internal/scaffold` to that list.
 
-`scanLinkCandidates` walks each source store, skips fenced code blocks, finds
-markdown `](target)` links, resolves each target against the file's directory,
-and maps a target under an old store prefix to the new prefix. It never writes.
+`scanLinkCandidates` is **target-driven over the whole repository** (design §9.2,
+amended 2026-09-19): it walks every markdown file the repository tracks, skips
+fenced code blocks, finds markdown `](target)` links, resolves each target against
+the file's own directory, and reports a candidate whenever that target lands under
+a moving store. It never writes, and it never scans a file under the declared
+archive.
+
+`Old` is the repository-relative target as written. `New` is where the target has
+to resolve after the migration:
+
+- when the containing file is inside a move source, `New` is recomputed relative
+  to that source's new directory — so a link into the archive, which does not
+  move, is re-spelled to a path that still resolves;
+- when the containing file is anywhere else, only the target moves, so `New` is
+  the target's new repository-relative path.
+
+This supersedes the earlier source-scoped wording. The narrower scan missed both
+a link from a moved store into the kept archive and a link in tracked prose that
+never moves but points into a store that does; both dangle after a migration, and
+a candidate list that omits them is the one thing the skill cannot repair. The
+fixture must cover both.
 
 - [ ] **Step 4: Run the planner tests and the package suite**
 

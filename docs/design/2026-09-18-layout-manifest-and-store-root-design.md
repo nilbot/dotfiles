@@ -1169,6 +1169,32 @@ The planner reads the v1 layout, resolves the requested v2 layout, and produces
 one action per store directory — the whole directory, including its `README.md`
 and any nested content. It reports, but never performs, link candidates.
 
+The link scan is **target-driven, over the whole repository**, and that scope is
+load-bearing. A markdown link breaks when the file it *points at* stops being
+where it was, which is true whether or not the file *containing* it moves:
+
+- a link inside a moved store, including one pointing into the kept archive, has
+  to be re-spelled from the store's new directory;
+- a link in prose that does **not** move — a repository-root `README.md`, a
+  `.agents/AGENTS.md`, a vault note — and points *into* a moving store breaks
+  just as completely, and a scan restricted to the move sources would never see
+  it.
+
+So the planner walks every markdown file the repository tracks, resolves each
+relative target against the file's own directory, and reports a candidate
+whenever that target lands under a moving store. `Old` is the repository-relative
+target as written, and `New` is where it has to resolve after the migration: for
+a link written inside a move source, `New` is recomputed relative to the source's
+new directory, so a link into the archive is re-spelled to a path that still
+resolves; for a link written anywhere else, only the target moves, and `New` is
+the target's new repository-relative path. Files under the archive are never
+scanned, because nothing there is ever rewritten (§9.5), and the archive is not a
+move source.
+
+A file that is not moved keeps its own path; a link candidate therefore changes
+its *target*, never the file. The rewrite stays the skill's job — the CLI still
+only reports.
+
 Human output:
 
 ```
@@ -1270,7 +1296,13 @@ the record. Any later phase refuses, names the phase, and points at
 ### 9.5 Archive, links, and `docs/` removal
 
 - The archive path is recorded in the manifest and excluded from every walk,
-  every move list, and every link rewrite.
+  every move list, and every link rewrite. Excluded from every *link rewrite*
+  means no file under the archive is ever edited, and the archive is never a move
+  source; it does not mean a link *pointing at* the archive is ignored. A link
+  from a moved store into the archive is reported like any other, precisely
+  because the archive stays where it is and the store does not — leaving it alone
+  would turn a working link into a dangling one, which is the outcome the
+  candidate list exists to prevent.
 - Migration never moves a file out of the archive and never writes into it. The
   rule is content-blind: an archive holding meta artifacts, vault content, or
   both is treated identically, because the contract is about the place and not
@@ -1288,8 +1320,11 @@ the record. Any later phase refuses, names the phase, and points at
   manifest records `"archive": "docs/archive"`. `docs/` is not an empty shell;
   it holds the archive.
 - Link candidates are reported by the CLI and rewritten by the
-  `migrating-fleet-context` skill. The fixture test counts links before and
-  after, asserts equal counts, and asserts every rewritten target resolves.
+  `migrating-fleet-context` skill, wherever the containing file lives: inside a
+  moved store, or in tracked prose that did not move. The fixture test counts
+  links before and after, asserts equal counts, and asserts every rewritten
+  target resolves — including a link written in a moved store that points into
+  the archive, and a link written outside every store that points into one.
 
 ### 9.6 Rollback
 
