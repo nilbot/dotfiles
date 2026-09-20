@@ -1212,7 +1212,7 @@ layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   keep    .agents/AGENTS.md  (user-owned; prose reviewed by the skill)
   remove  docs/ after the moves (no archive, no other tracked content)
 
-  links   0 markdown links point into the moved stores
+  links   0 markdown links the move breaks; the skill rewrites them
   result  4 move, 1 keep, 0 blocked, 0 link(s)
 
   apply   agents layout migrate --template content-vault \

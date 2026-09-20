@@ -1003,7 +1003,7 @@ func printPlanReport(w io.Writer, p layout.Plan, mode string, removeLine bool) {
 			planLine(w, "remove", "docs/ after the moves (keeps %s)", safetext.Flatten(p.To.Archive))
 		}
 	}
-	planLine(w, "links", "%d markdown links point into the moved stores", p.Counts.Links)
+	planLine(w, "links", "%d markdown link(s) the move breaks and the skill must rewrite", p.Counts.Links)
 	planLine(w, "result", "%d move, %d keep, %d blocked, %d link(s)",
 		p.Counts.Move, p.Counts.Keep, p.Counts.Blocked, p.Counts.Links)
 }

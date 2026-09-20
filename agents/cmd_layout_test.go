@@ -913,7 +913,7 @@ func TestLayoutMigrateDryRunNamesEveryReportField(t *testing.T) {
 		"archive none",
 		"git     branch agents-test, tree clean",
 		"move    docs/design -> .context/design",
-		"links   0 markdown links point into the moved stores",
+		"links   0 markdown link(s) the move breaks and the skill must rewrite",
 		"result  4 move, 0 keep, 0 blocked, 0 link(s)",
 		"apply   agents layout migrate --template content-vault --apply --backup-tag",
 	} {
