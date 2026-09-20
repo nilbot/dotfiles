@@ -1,5 +1,15 @@
 name: release
 
+# Design: spec 6 §5.1 as amended (Amendment 1, 2026-09-20).
+#
+# This workflow does not re-run `verify.yml`. A release tag points at a commit
+# that was pushed to `master`, and that push already ran the gate there;
+# re-running it here cost 11 of the 12 jobs (~13.2 of ~14.0 job-minutes, 94%) and
+# proved nothing new about the same tree. So the release reads that evidence --
+# one API call for a successful `verify` run on `master` for exactly this commit
+# -- and then builds the tagged tree. Building here is not a duplicate of CI:
+# `-X main.version` and the archive names both come from the tag, so the version
+# is not knowable before the tag exists.
 on:
   push:
     tags:
@@ -7,28 +17,91 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to build (e.g. v0.2.0)'
-        required: false
+        description: 'Release tag to build (e.g. v0.6.0)'
+        required: true
         type: string
-        default: ''
+      dry_run:
+        description: 'Verify and package, but create no release and sync no formula'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+  # The guard below reads workflow runs. A `permissions:` block sets every scope
+  # it does not name to `none`, so without this line the guard fails closed on a
+  # 403 for a tag whose CI is green.
+  actions: read
 
 env:
   GOWORK: off
 
 jobs:
-  verify:
-    uses: ./.github/workflows/verify.yml
-
   release:
-    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Inputs and ref names reach the shell through the environment rather than
+      # `${{ }}` inside `run:`. A git ref may contain `$`, backticks and
+      # parentheses, so interpolating a tag name into a script would paste it
+      # into the shell; the environment cannot break out of its own quoting.
+      - name: determine version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_TAG"
+          else
+            VERSION="$REF_NAME"
+          fi
+          [ -n "$VERSION" ] || { echo "::error::no tag to release"; exit 1; }
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${DRY_RUN:-false}" >> "$GITHUB_OUTPUT"
+          echo "releasing ${VERSION} (dry run: ${DRY_RUN:-false})"
+
+      # The gate is the check a pull request must pass, so a tag is a promise
+      # that the same commit passed it. This reads that evidence instead of
+      # re-deriving it. Renaming `verify.yml` breaks this line deliberately:
+      # a guard that cannot find its evidence must fail, not pass.
+      - name: the tagged commit must have a green verify run on master
+        id: verified
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # `commits/<tag>` peels an annotated tag to its commit;
+          # `git/ref/tags/<tag>` would hand back the tag object instead.
+          SHA="$(gh api "repos/${REPO}/commits/${VERSION}" --jq .sha)" \
+            || { echo "::error::${VERSION} does not resolve to a commit in ${REPO}"; exit 1; }
+          # `head_sha` must be the full 40-character SHA: an abbreviated one
+          # returns HTTP 200 with `total_count: 0`, which reads as "not verified"
+          # for a commit that is.
+          [ "${#SHA}" -eq 40 ] \
+            || { echo "::error::${VERSION} resolved to '${SHA}', not a full commit SHA"; exit 1; }
+          # `event=push` and `branch=master` are what make this a mainline
+          # release: a green pull-request run for the same commit does not count.
+          RUNS="$(gh api "repos/${REPO}/actions/workflows/verify.yml/runs?head_sha=${SHA}&status=success&event=push&branch=master&per_page=1" --jq .total_count)"
+          if [ "${RUNS:-0}" -lt 1 ]; then
+            echo "::error::${VERSION} (${SHA}) has no successful verify run on master."
+            echo "Land the commit on master, wait for that push run to go green, then"
+            echo "re-run this workflow: the tag does not need to be re-pushed."
+            exit 1
+          fi
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "verified ${VERSION} (${SHA}) against its green master run"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The tag, not the dispatched ref: a manual run used to package the
+          # default branch's tree under the requested version number.
+          ref: ${{ steps.version.outputs.version }}
           fetch-depth: 0
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -36,18 +109,35 @@ jobs:
           go-version: '1.26.6'
           cache-dependency-path: agents/go.sum
 
-      - name: determine version
-        id: version
-        run: |
-          VERSION="${{ inputs.tag }}"
-          if [ -z "$VERSION" ]; then
-            VERSION="${GITHUB_REF_NAME}"
-          fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-
       - name: package release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          bash script/package-release.sh "${{ steps.version.outputs.version }}" dist
+          bash script/package-release.sh "$VERSION" dist
+
+      # An archive built by the master push run could not carry the version it
+      # is released under, so the release cannot transport CI's bytes. It
+      # asserts its own instead: the packaged binary must report the tag version
+      # and the commit whose green run was just read. That is what makes
+      # "released what the gate verified" checkable rather than assumed.
+      - name: the packaged binary must carry the tag version and the verified commit
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.verified.outputs.sha }}
+        run: |
+          set -euo pipefail
+          WORK="$(mktemp -d)"
+          tar -xzf "dist/agents_${VERSION}_linux_amd64.tar.gz" -C "$WORK" agents
+          REPORTED="$("${WORK}/agents" version)"
+          echo "packaged binary reports: ${REPORTED}"
+          case "$REPORTED" in
+            "agents ${VERSION} (commit: ${SHA},"*) ;;
+            *)
+              echo "::error::packaged binary reports '${REPORTED}', expected version ${VERSION} at commit ${SHA}"
+              exit 1
+              ;;
+          esac
+          ( cd dist && sha256sum -c checksums.txt )
 
       # The GitHub Release body is the authoritative carrier for the
       # deploy-before-flip prerequisite and the measured fleet baseline, and
@@ -57,9 +147,12 @@ jobs:
       # the difference between a gate the reader sees and a release that looks
       # successful while carrying none of the prose it promises.
       - name: release notes must exist and be non-empty
-        run: test -s ".github/release-notes/${{ steps.version.outputs.version }}.md"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: test -s ".github/release-notes/${VERSION}.md"
 
       - name: Create GitHub Release
+        if: steps.version.outputs.dry_run != 'true'
         uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
         with:
           tag_name: ${{ steps.version.outputs.version }}
@@ -69,8 +162,19 @@ jobs:
             dist/checksums.txt
 
       - name: sync formula to homebrew-tap
+        if: steps.version.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          bash script/sync-homebrew-formula.sh "${{ steps.version.outputs.version }}" dist
+          bash script/sync-homebrew-formula.sh "$VERSION" dist
+
+      - name: dry run summary
+        if: steps.version.outputs.dry_run == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA: ${{ steps.verified.outputs.sha }}
+        run: |
+          echo "dry run: ${VERSION} (${SHA}) verified, packaged and asserted;"
+          echo "no release was created and no formula was synced."
