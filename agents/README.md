@@ -267,7 +267,8 @@ a fresh `--apply` scans the stores before moving them, and a resume completes a
 move list whose source tree no longer exists and is never re-planned.
 
 `agents layout migrate --json` emits exactly one object on every path. For a
-plan it is `repo`, `dry_run`, `phase`, `from`, `to`, `router`, `archive`,
+plan it is `repo`, `dry_run`, `phase`, `from`, `to`, `router`, `archive` (omitted when the
+repository declares none),
 `moves`, `link_candidates`, `blockers`, and `counts`; `phase` is `planned` for a
 dry run or a fresh `--apply`, and the journal phase a `--resume` continued from
 — a resume reports the journal's own plan, never a re-planned one. `dry_run` is

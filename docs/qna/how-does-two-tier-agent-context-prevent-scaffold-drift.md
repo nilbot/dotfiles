@@ -63,8 +63,9 @@ in prose.
 A v1 repository becomes v2 through `agents layout migrate`, not by hand: the dry
 run is the default and prints the plan, `--apply --backup-tag <name>` moves each
 store with `git mv` and writes the manifest, and a run that stopped mid-way is
-continued with `--resume --apply` — the journal is frozen at plan time and never
-re-planned. The command deliberately stops at the mechanical half: it reports
+continued with `--resume --apply` — `--apply` freezes the journal before it
+touches the first store, and `--resume` continues that frozen plan rather than
+planning again (a dry run writes nothing at all). The command deliberately stops at the mechanical half: it reports
 the markdown links the move breaks, and the rewrite, the rule extraction, and
 the router reconciliation stay with the `migrating-fleet-context` skill below,
 under human approval.

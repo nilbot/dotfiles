@@ -219,8 +219,9 @@ printf '%s' "$router" > AGENTS.md
 On a v1 repository that prints the router pointing at the four `docs/` stores;
 on a v2 repository it prints the manifest-pointing router. Pasting either by
 hand is how a repository ends up carrying a router the tool then reports as
-diverged. This skill deliberately keeps no second copy: only the v1 text does,
-because a v1 repository has no `agents layout` to ask.
+diverged. This skill deliberately keeps no second copy; only the v1 text does,
+because the binary installed in a v1 repository may predate `agents layout`
+altogether, so that text cannot assume the command exists.
 
 ---
 

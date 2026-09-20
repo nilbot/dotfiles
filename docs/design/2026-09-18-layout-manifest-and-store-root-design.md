@@ -889,8 +889,8 @@ Full semantics are in §9 and the migration playbook. Surface rules:
 - `--template` is optional. When present, its creation defaults supply the
   store map; `--stores role=path` overrides individual roles. When absent (or
   `custom`), `--stores` must supply all four roles.
-- `--json` emits one object, on every path: the plan (`repo`, `dry_run`, `phase`,
-  `from`, `to`, `router`, `archive`, `moves`, `link_candidates`, `blockers`,
+  `from`, `to`, `router`, `archive` (omitted when the repository declares
+  none), `moves`, `link_candidates`, `blockers`,
   `counts`), or — for a refusal that precedes a plan, such as the preconditions
   or the `migrating` routing — a refusal object carrying `repo`, `dry_run`,
   `phase`, and the `error` sentence the human surface prints, so a consumer
