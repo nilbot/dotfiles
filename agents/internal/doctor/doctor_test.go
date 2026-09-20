@@ -2004,3 +2004,60 @@ func TestDoctorStandaloneMode(t *testing.T) {
 		t.Error("git-attributes check was not found in checks")
 	}
 }
+
+// The remedy used to name the installer without a path, without arguments, and
+// without the one flag that gets past the installer's own refusal -- and the
+// case it exists for is exactly the one where that refusal fires: a package
+// upgrade deletes the versioned path a pinned link points at, git runs the
+// dangling hook as if no hook existed, and the link is still ours.
+func TestDoctorRemedyIsTheCommandThatRepairsStaleHookLinks(t *testing.T) {
+	deps, binary, _ := newGitFiles(t)
+	stale := filepath.Join(filepath.Dir(binary), "Cellar", "agents", "0.0.1", "bin", "agents")
+	link := filepath.Join(deps.HooksDir, "pre-commit")
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(stale, link); err != nil {
+		t.Fatal(err)
+	}
+
+	check := checkInstalledLinks(deps, binary)
+	if check.Status != Fail {
+		t.Fatalf("stale owned link status = %v, want Fail", check.Status)
+	}
+	for _, want := range []string{"--adopt-owned", "install-hooks.sh", deps.Root, filepath.Dir(deps.GlobalGitConfig)} {
+		if !strings.Contains(check.Remedy, want) {
+			t.Errorf("remedy %q does not carry %q", check.Remedy, want)
+		}
+	}
+}
+
+// A link that resolves is nobody's business but the human's; a link that
+// dangles will never run and is invisible to git-hooks:links, which only sees
+// the four managed names. Two such links outlived the 2026-09-20 upgrade of
+// this machine unremarked, which is the whole reason for the check.
+func TestDoctorUnmanagedLinksWarnOnlyWhenDangling(t *testing.T) {
+	deps, binary, _ := newGitFiles(t)
+
+	if check := checkUnmanagedLinks(deps); check.Status != OK {
+		t.Errorf("healthy hooks directory status = %v (%s), want OK", check.Status, check.Detail)
+	}
+
+	if err := os.Symlink(filepath.Join(filepath.Dir(binary), "gone"), filepath.Join(deps.HooksDir, "pre-commit-user")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(binary, filepath.Join(deps.HooksDir, "post-checkout-user")); err != nil {
+		t.Fatal(err)
+	}
+
+	check := checkUnmanagedLinks(deps)
+	if check.Status != Warn {
+		t.Fatalf("dangling unowned link status = %v, want Warn", check.Status)
+	}
+	if !strings.Contains(check.Detail, "pre-commit-user") {
+		t.Errorf("detail %q does not name the dangling link", check.Detail)
+	}
+	if strings.Contains(check.Detail, "post-checkout-user") {
+		t.Errorf("detail %q names a link that resolves", check.Detail)
+	}
+}

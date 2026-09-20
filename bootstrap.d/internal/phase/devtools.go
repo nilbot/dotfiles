@@ -7,8 +7,10 @@ import "path/filepath"
 // binary backs.
 //
 // The three steps are ordered by dependency, not by preference. The hooks
-// installer symlinks four hook names AT the agents binary and refuses unless it
-// is an executable regular file, so the build has to have happened first.
+// installer symlinks four hook names AT the agents binary it is handed -- a
+// regular executable, or a symlink resolving into a Homebrew keg for agents --
+// so the build has to have happened first when that target is this checkout's
+// own build.
 func Devtools(c Context) error {
 	c.logf("== devtools")
 

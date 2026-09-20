@@ -293,7 +293,7 @@ so a machine consumer never has to skip prose.
 ## Upgrading to v0.6.0
 
 The GitHub Release body carries the authoritative upgrade instructions; this
-section is the durable repo-side copy of the same three things.
+section is the durable repo-side copy of the same prerequisites.
 
 **Deploy before flip.** A v0.5.1 binary cannot see `.agents/layout.json`. On a
 v2 repository it recreates the four `docs/` store READMEs and can overwrite a
@@ -303,6 +303,22 @@ manifest can stop it. So every machine that can run `agents init`,
 **v0.6.0** on `PATH` (verify with `agents version` and `agents doctor`'s
 `binary` check) *before* any repository is migrated. A repository below its
 `min_mut_ver_floor` still reads and displays, and refuses every mutation.
+
+**Re-check the Git hooks after the upgrade.** A package manager deletes the
+previous version's directory, so hooks pinned to it dangle — and git runs a
+dangling hook as if no hook existed, which turns the commit guard off with no
+error. `agents doctor`'s `git-hooks:links` check catches it and prints the exact
+repair, which is:
+
+```bash
+bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
+  ~/dotfiles "$HOME" "$(command -v agents)"
+```
+
+Installing through `$(command -v agents)` rather than `$(realpath …)` avoids the
+step entirely, because Homebrew repoints its stable path at the new version.
+Details: [`git/README.md`](../git/README.md) and
+[why a `brew upgrade` stops my commit guard](../docs/qna/why-does-a-brew-upgrade-stop-my-commit-guard.md).
 
 **The migration path.**
 

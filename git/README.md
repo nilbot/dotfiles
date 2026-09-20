@@ -16,22 +16,46 @@ phase runs the installer's preflight, builds `~/bin/agents`, then runs the
 installer.
 
 ### Option 2: Pointing to an Existing Binary (e.g. Homebrew)
-If `agents` is installed via Homebrew (`brew install nilbot/tap/agents`), resolve
-its canonical binary path using `realpath` and run the installer directly:
+If `agents` is installed via Homebrew (`brew install nilbot/tap/agents`), pass the
+path that Homebrew keeps stable and repoints on every upgrade:
 
 ```bash
-bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles $HOME $(realpath $(which agents))
+bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles "$HOME" "$(command -v agents)"
 ```
+
+Do **not** resolve it first with `realpath`. That yields
+`Cellar/agents/<version>/bin/agents`, and Homebrew deletes that directory when it
+upgrades — which leaves the hooks dangling, which git runs as if no hook existed.
 
 The installer checks for existing Git-hook and global-attributes ownership
 before it builds or changes anything. It refuses a foreign global
-`core.hooksPath` instead of replacing it or implicitly chaining it.
+`core.hooksPath` instead of replacing it or implicitly chaining it. It accepts a
+symlinked binary when it resolves into a Homebrew keg for agents, and records the
+path it was given, so passing `$(command -v agents)` records the stable path.
 
 After a successful install, Git invokes the Go-backed `agents` multicall binary
 for `pre-commit`, `commit-msg`, `post-merge`, and `post-checkout` in new and
 pre-existing repositories. Existing repository hooks and the executable personal
 hooks in `git/hooks/` remain chained by the dispatcher. A repository with its
 own local `core.hooksPath` intentionally overrides the global chain.
+
+## After upgrading `agents`
+
+A package upgrade deletes the previous version's directory. If the hooks name it,
+they dangle — and **git runs a dangling hook as if no hook existed**, so the
+commit guard stops running with no error. Run `agents doctor` and check
+`git-hooks:links`; when the link is one this installer wrote, it prints the exact
+command that repairs it, which is this one:
+
+```bash
+bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
+  ~/dotfiles "$HOME" "$(command -v agents)"
+```
+
+`--adopt-owned` repoints links this installer wrote for an earlier binary. A
+foreign file, or a link to another program, is still refused with or without the
+flag. Installing through `$(command -v agents)` in the first place means this
+step never comes up: Homebrew repoints its stable path for you.
 
 ## Checking an install
 

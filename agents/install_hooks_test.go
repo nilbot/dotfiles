@@ -285,9 +285,11 @@ func temporaryDotfilesCopy(t *testing.T) string {
 // That target went with the rest of provisioning in spec 2. The SEQUENCE did
 // not: bootstrap's devtools phase runs these same three steps in this same
 // order (bootstrap.d/internal/phase/devtools.go), because the installer links
-// four hook names AT the binary and refuses unless it is an executable regular
-// file. Driving the steps directly attaches the two cases below to the ordering
-// property itself rather than to whichever caller happens to run it.
+// four hook names AT the binary it is handed -- a regular executable, or a
+// symlink resolving into a Homebrew keg for agents -- so the build has to
+// produce one first. Driving the steps directly attaches the two cases below to
+// the ordering property itself rather than to whichever caller happens to run
+// it.
 func runHookSequence(t *testing.T, root, home, globalConfig string) (string, error) {
 	t.Helper()
 	// make's $(CURDIR) is the PHYSICAL working directory -- it comes from
@@ -1213,5 +1215,200 @@ func TestTask18RetiresTemplateAndClaudeHookInstallers(t *testing.T) {
 				t.Errorf("%s still advertises %q", relative, retiredReference)
 			}
 		}
+	}
+}
+
+// runHookInstallerArgs drives the installer with an explicit argument list, so
+// a case can pass a flag, a different binary path, or both. The four-argument
+// form the other cases use stays with runHookInstaller.
+func runHookInstallerArgs(t *testing.T, fixture hookInstallFixture, args ...string) (string, error) {
+	t.Helper()
+	script := filepath.Join(task18RepoRoot(t), "git", "install-hooks.sh")
+	command := exec.Command("bash", append([]string{script}, args...)...)
+	command.Env = isolatedGitEnvironment(t, fixture.home, fixture.globalConfig)
+	output, err := command.CombinedOutput()
+	return string(output), err
+}
+
+// fakeHomebrewKeg writes an agents binary where Homebrew would, and the stable
+// path that it points at, then returns both. The installer matches on these
+// names: <prefix>/Cellar/agents/<version>/bin/agents is the version-specific
+// keg a package upgrade deletes, and <prefix>/bin/agents is the stable path an
+// upgrade repoints, which is why only the second one survives an upgrade.
+func fakeHomebrewKeg(t *testing.T, fixture hookInstallFixture, version string) (keg, stable string) {
+	t.Helper()
+	prefix := filepath.Join(fixture.home, "homebrew")
+	keg = filepath.Join(prefix, "Cellar", "agents", version, "bin", "agents")
+	if err := os.MkdirAll(filepath.Dir(keg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keg, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stable = filepath.Join(prefix, "bin", "agents")
+	if err := os.MkdirAll(filepath.Dir(stable), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(keg, stable); err != nil {
+		t.Fatal(err)
+	}
+	return keg, stable
+}
+
+func installedHookTargets(t *testing.T, fixture hookInstallFixture) map[string]string {
+	t.Helper()
+	targets := make(map[string]string)
+	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
+		path := filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)
+		target, err := os.Readlink(path)
+		if err != nil {
+			t.Fatalf("%s is not a symlink: %v", hook, err)
+		}
+		targets[hook] = target
+	}
+	return targets
+}
+
+// A symlink is accepted when every hop lands in a Homebrew keg for agents, and
+// the path RECORDED is the one passed in rather than the keg it resolves to.
+// Recording the keg would satisfy the same checks today and break the hooks on
+// the next package upgrade, which is the whole reason the stable path is the
+// one worth accepting.
+func TestHookInstallerAcceptsASymlinkThatResolvesIntoAKeg(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	keg, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+
+	output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, stable)
+	if err != nil {
+		t.Fatalf("install with a keg-resolving symlink failed: %v\n%s", err, output)
+	}
+	for hook, target := range installedHookTargets(t, fixture) {
+		if target != stable {
+			t.Errorf("%s points at %q, want the stable path %q (the keg is %q)", hook, target, stable, keg)
+		}
+	}
+	if !strings.Contains(output, "installed global Git hooks") {
+		t.Errorf("install did not report success: %q", output)
+	}
+	// The note exists to point a pinned install at the stable path, so a stable
+	// install must not print it.
+	if strings.Contains(output, "version-specific keg path") {
+		t.Errorf("a stable install warned about pinning: %q", output)
+	}
+}
+
+// Installing through the keg path is what the previous advice produced, and it
+// is what the next upgrade breaks. The refusal has to say so, and it must not
+// offer --adopt-owned: adopting here would replace a path that survives
+// upgrades with one that does not.
+func TestHookInstallerRefusesAKegPathWhenTheStablePathIsInstalled(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	keg, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+	if output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, stable); err != nil {
+		t.Fatalf("initial install failed: %v\n%s", err, output)
+	}
+
+	output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, keg)
+	if err == nil {
+		t.Fatal("the keg path was accepted over an installed stable path")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, stable) {
+		t.Errorf("refusal does not name the stable path to keep: %q", output)
+	}
+	if strings.Contains(output, "--adopt-owned") {
+		t.Errorf("refusal offers a flag that would re-pin the hooks: %q", output)
+	}
+	for hook, target := range installedHookTargets(t, fixture) {
+		if target != stable {
+			t.Errorf("%s was repointed to %q by a refused run", hook, target)
+		}
+	}
+}
+
+// The post-upgrade shape: our own links pointing at a keg that no longer
+// exists. git runs a dangling hook as if no hook existed, so the commit guard
+// is off and nothing says so until this refusal. Default stays strict; the flag
+// is what repairs it, and only for links that are ours.
+func TestHookInstallerAdoptsOwnedLinksFromAnEarlierBinary(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+	stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
+	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
+		if err := os.Symlink(stale, filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, stable)
+	if err == nil {
+		t.Fatal("stale owned links were adopted without the flag")
+	}
+	if !strings.Contains(output, "--adopt-owned") {
+		t.Errorf("refusal does not name the flag that repairs it: %q", output)
+	}
+
+	output, err = runHookInstallerArgs(t, fixture, "install", "--adopt-owned", fixture.repoRoot, fixture.home, stable)
+	if err != nil {
+		t.Fatalf("--adopt-owned did not repair stale owned links: %v\n%s", err, output)
+	}
+	for hook, target := range installedHookTargets(t, fixture) {
+		if target != stable {
+			t.Errorf("%s points at %q after adoption, want %q", hook, target, stable)
+		}
+	}
+	if !strings.Contains(output, "repointed pre-commit") {
+		t.Errorf("adoption was not reported: %q", output)
+	}
+}
+
+// Adoption is scoped to links this installer could have written. A link to
+// another program stays refused with the flag, and nothing is mutated.
+func TestHookInstallerRefusesToAdoptForeignLinks(t *testing.T) {
+	fixture := newHookInstallFixture(t)
+	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+	foreign := filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit")
+	if err := os.Symlink("/preserved/foreign/hook", foreign); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runHookInstallerArgs(t, fixture, "install", "--adopt-owned", fixture.repoRoot, fixture.home, stable)
+	if err == nil {
+		t.Fatal("--adopt-owned adopted a foreign link")
+	}
+	if !strings.Contains(output, "refusing") {
+		t.Errorf("foreign refusal is not actionable: %q", output)
+	}
+	target, err := os.Readlink(foreign)
+	if err != nil || target != "/preserved/foreign/hook" {
+		t.Errorf("foreign link was touched: target=%q err=%v", target, err)
+	}
+}
+
+// `install --adopt-owned` reads as the verb and its modifier and
+// `--adopt-owned install` as the option and the verb. Both are accepted because
+// doctor prints the first form, and a remedy the human has to edit first is not
+// a remedy.
+func TestHookInstallerAcceptsTheAdoptFlagOnEitherSideOfTheMode(t *testing.T) {
+	for _, args := range [][]string{
+		{"install", "--adopt-owned"},
+		{"--adopt-owned", "install"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			fixture := newHookInstallFixture(t)
+			_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+			stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
+			if err := os.Symlink(stale, filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit")); err != nil {
+				t.Fatal(err)
+			}
+
+			full := append(append([]string{}, args...), fixture.repoRoot, fixture.home, stable)
+			output, err := runHookInstallerArgs(t, fixture, full...)
+			if err != nil {
+				t.Fatalf("%v failed: %v\n%s", args, err, output)
+			}
+			if target := installedHookTargets(t, fixture)["pre-commit"]; target != stable {
+				t.Errorf("pre-commit points at %q, want %q", target, stable)
+			}
+		})
 	}
 }

@@ -96,12 +96,12 @@ func DotfilesRoot() string {
 
 * **When `deps.Root == ""` (Standalone Mode)**:
   * `rootChecks()`: Returns `nil` (skips `root:exists`).
-  * `checkGitHooks()`: Skips `git-hooks:global` and `git-hooks:links`. Only runs `git-hooks:local` and `git-hooks:legacy`.
+  * `checkGitHooks()`: Skips `git-hooks:global`, `git-hooks:links`, and (since 2026-09-20) `git-hooks:unmanaged`. Only runs `git-hooks:local` and `git-hooks:legacy`.
   * `checkGitAttributes()`: Skips checking the global `~/.gitattributes` link; checks the repo-local `.gitattributes` for `.agents/** linguist-generated=true`.
   * **All repo-local checks run in full**: `binary` (PATH resolution), `wiring:*`, `trust:*`, `recording:*`, `gitleaks`, `trace-index`, `pointers`, `scaffold:doctor-instruction`, `docs-freshness`, and `lane-health`.
 
 * **When `deps.Root != ""` (Dotfiles Operator Mode)**:
-  * Runs the complete suite including `root:exists`, `git-hooks:global` (verifying `core.hooksPath` points to `<root>/git/hooks.d`), `git-hooks:links` (verifying all 4 hooks symlink to the running executable), and global `~/.gitattributes`.
+  * Runs the complete suite including `root:exists`, `git-hooks:global` (verifying `core.hooksPath` points to `<root>/git/hooks.d`), `git-hooks:links` (verifying all 4 hooks symlink to the running executable), `git-hooks:unmanaged` (warning about dangling links under other names, added 2026-09-20), and global `~/.gitattributes`.
 
 ### 3.2 `agents hook` & Git Multi-Call Dispatcher
 
