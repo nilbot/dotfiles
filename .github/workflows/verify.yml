@@ -35,9 +35,24 @@ jobs:
   test:
     strategy:
       fail-fast: false
+      # Four legs, deliberately not a cross product (spec 5, Amendment 1):
+      # `agents` runs on all three runners, `bootstrap.d` on x86_64 Linux only.
+      # `bootstrap.d` lost its macOS leg because its darwin behaviour is
+      # parameterised (`loginShell(..., "darwin", ...)`, `packagesCtx("darwin",
+      # "brew")`) and is therefore already covered on Linux; `agents` gained
+      # `ubuntu-24.04-arm` because linux/arm64 is a shipped release target that
+      # nothing ran on. macOS stays for `agents` -- that is the leg that caught
+      # the git background-maintenance race in the tree snapshot (35470984407).
       matrix:
-        os: [macos-latest, ubuntu-latest]
-        module: [agents, bootstrap.d]
+        include:
+          - os: ubuntu-latest
+            module: agents
+          - os: ubuntu-latest
+            module: bootstrap.d
+          - os: ubuntu-24.04-arm
+            module: agents
+          - os: macos-latest
+            module: agents
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     defaults:
@@ -69,12 +84,21 @@ jobs:
           GITLEAKS_SHA256_LINUX: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
           # macos-latest runners are arm64.
           GITLEAKS_SHA256_DARWIN_ARM64: 'b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5'
+          # ubuntu-24.04-arm is a different architecture, so a different asset.
+          # The `case` below fails closed on an unlisted runner, which is why
+          # adding a leg means pinning its checksum here: all four digests are
+          # the ones in gitleaks' own `gitleaks_8.30.1_checksums.txt`.
+          GITLEAKS_SHA256_LINUX_ARM64: 'e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080'
         run: |
           set -euo pipefail
           case "${{ matrix.os }}" in
             ubuntu-latest)
               asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
               sha256="${GITLEAKS_SHA256_LINUX}"
+              ;;
+            ubuntu-24.04-arm)
+              asset="gitleaks_${GITLEAKS_VERSION}_linux_arm64.tar.gz"
+              sha256="${GITLEAKS_SHA256_LINUX_ARM64}"
               ;;
             macos-latest)
               asset="gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz"
@@ -329,6 +353,27 @@ jobs:
       - name: check converges after apply
         run: ./bootstrap check dotfiles
 
+  # The macOS counterpart to `linux-dotfiles`, and NOT what
+  # `test (macos-latest, bootstrap.d)` was: that job ran the suite with the
+  # platform passed in as a value and brew/chsh recorded into a fake planner,
+  # never the program itself. This runs the real program on the real OS, which
+  # is the part of that leg nothing else replaced.
+  #
+  # `plan` only, deliberately. The `dotfiles` profile is preflight + config +
+  # verify -- no sudo, no network, no package manager, no login-shell change --
+  # so it is safe on a disposable runner, and plan reports intent without
+  # writing anything, which is what makes it a dry run worth having on macOS.
+  macos-dotfiles:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.26.6'
+      - name: plan
+        run: ./bootstrap plan dotfiles
+
   # Stage zero for real. `apply workstation` rather than `apply dotfiles`,
   # because phase.For gives the dotfiles profile only {preflight, config,
   # verify} and stageZero is called from Packages -- there is no per-phase flag,
@@ -462,7 +507,7 @@ jobs:
   # repository-settings change.
   gate:
     if: always()
-    needs: [test, secrets, hygiene, docs, linux-dotfiles, linux-stage-zero]
+    needs: [test, secrets, hygiene, docs, linux-dotfiles, macos-dotfiles, linux-stage-zero]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -473,10 +518,12 @@ jobs:
           echo "hygiene: ${{ needs.hygiene.result }}"
           echo "docs:    ${{ needs.docs.result }}"
           echo "linux-dotfiles: ${{ needs.linux-dotfiles.result }}"
+          echo "macos-dotfiles: ${{ needs.macos-dotfiles.result }}"
           echo "linux-stage-zero: ${{ needs.linux-stage-zero.result }}"
           [ "${{ needs.test.result }}"    = "success" ] || exit 1
           [ "${{ needs.secrets.result }}" = "success" ] || exit 1
           [ "${{ needs.hygiene.result }}" = "success" ] || exit 1
           [ "${{ needs.docs.result }}"    = "success" ] || exit 1
           [ "${{ needs.linux-dotfiles.result }}" = "success" ] || exit 1
+          [ "${{ needs.macos-dotfiles.result }}" = "success" ] || exit 1
           [ "${{ needs.linux-stage-zero.result }}" = "success" ] || exit 1
