@@ -198,6 +198,7 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 			Files: files, Bytes: size, Digest: digest,
 		})
 	}
+	p.Blockers = append(p.Blockers, nestedMoveBlockers(p.Moves)...)
 	p.Blockers = append(p.Blockers, residueBlockers(root, to.Archive)...)
 	p.Blockers = append(p.Blockers, archiveInSourceBlockers(to.Archive, from)...)
 	p.LinkCandidates = scanLinkCandidates(root, p.Moves, from, to)
@@ -218,6 +219,12 @@ func finishPlan(p Plan) Plan {
 // oid: a file ignored by .gitignore is invisible to git but is still carried by
 // `git mv`. `files` counts non-directory entries; `bytes` counts regular-file
 // bytes.
+//
+// Names and symlink targets are written quoted, so the record separator cannot
+// be smuggled through an entry name: a tree holding one directory called
+// "x\nd y" and a tree holding "x" and "y" are different trees and must not
+// share an identity. The guard is only a guard if the digest is injective over
+// the tree -- otherwise a resume compares two unrelated trees and agrees.
 func digestTree(root, rel string) (string, int, int64, error) {
 	type record struct {
 		rel    string
@@ -273,12 +280,12 @@ func digestTree(root, rel string) (string, int, int64, error) {
 	for _, rec := range records {
 		switch rec.kind {
 		case "d":
-			fmt.Fprintf(h, "d %s\n", rec.rel)
+			fmt.Fprintf(h, "d %q\n", rec.rel)
 		case "l":
-			fmt.Fprintf(h, "l %s %s\n", rec.rel, rec.target)
+			fmt.Fprintf(h, "l %q %q\n", rec.rel, rec.target)
 			files++
 		default:
-			fmt.Fprintf(h, "f %s %d\n", rec.rel, len(rec.data))
+			fmt.Fprintf(h, "f %q %d\n", rec.rel, len(rec.data))
 			h.Write(rec.data)
 			files++
 			total += int64(len(rec.data))
@@ -304,6 +311,44 @@ func entryKind(mode fs.FileMode) string {
 	default:
 		return mode.Type().String()
 	}
+}
+
+// nestedMoveBlockers refuses a plan in which one move's destination sits
+// strictly inside any move's source -- including its own. The moves are
+// reconciled independently and in journal order, so such a plan is not a layout
+// the engine can perform: the outer move relocates the tree the inner one is
+// about to leave (or `git mv` refuses to move a directory into itself), the
+// identity the journal froze stops describing what is on disk, and the pre-move
+// check then refuses with "the tree changed under the migration" -- a jam the
+// plan caused and whose only remaining remedy is the backup tag. Refusing it up
+// front keeps the operator's recovery the one every other blocker offers: fix
+// the invocation and re-run.
+//
+// It compares the moves the plan holds, so a store whose own check already
+// refused it (missing, symlinked, an existing target) is reported by that
+// blocker alone.
+func nestedMoveBlockers(moves []Move) []Blocker {
+	var out []Blocker
+	for _, inner := range moves {
+		for _, outer := range moves {
+			if !pathStrictlyInside(outer.From, inner.To) {
+				continue
+			}
+			out = append(out, Blocker{Code: ProblemPathOverlap, Detail: fmt.Sprintf(
+				"%s=%s is inside %s=%s; pick a destination outside every store this migration moves",
+				inner.Role, inner.To, outer.Role, outer.From)})
+		}
+	}
+	return out
+}
+
+// pathStrictlyInside reports whether child sits under parent without being
+// parent: a destination equal to its source is not an overlap, it is a move
+// that goes nowhere, and the per-store target_exists check already refuses it.
+func pathStrictlyInside(parent, child string) bool {
+	parent = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(parent)), "/")
+	child = strings.TrimSuffix(filepath.ToSlash(filepath.Clean(child)), "/")
+	return parent != child && pathPrefix(parent, child)
 }
 
 // docsResidue lists entries left in docs/ that are neither a v1 source store nor

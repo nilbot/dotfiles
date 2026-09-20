@@ -228,6 +228,107 @@ func TestValidateRejectsUnsafePaths(t *testing.T) {
 	}
 }
 
+// The journal's moves are the only strings the reconciliation engine acts on
+// directly: pruneSources removes their parent directories, runMoves creates
+// them, and `git mv` and `git add` are handed them verbatim. Validating the
+// journal's shape is not enough -- the engine reads a hand-edited journal as an
+// instruction -- so every move path is checked at this chokepoint, before any
+// of that runs.
+func TestValidateChecksEveryJournalMovePath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		edit func(*Layout)
+		code string
+		path string
+	}{
+		{
+			name: "source-escapes-the-repository",
+			edit: func(l *Layout) {
+				l.Migration.From.Stores[RoleDesign] = "../victim-store/store"
+				l.Migration.Moves[0].From = "../victim-store/store"
+			},
+			code: ProblemPathEscapes, path: "../victim-store/store",
+		},
+		{
+			name: "destination-escapes-the-repository",
+			edit: func(l *Layout) { l.Migration.Moves[0].To = "../escaped/design" },
+			code: ProblemPathEscapes, path: "../escaped/design",
+		},
+		{
+			name: "destination-through-a-symlinked-parent",
+			edit: func(l *Layout) { l.Migration.Moves[0].To = "linked/design" },
+			code: ProblemPathSymlink, path: "linked/design",
+		},
+		{
+			name: "absolute-destination",
+			edit: func(l *Layout) { l.Migration.Moves[0].To = filepath.Join(root, "design") },
+			code: ProblemPathAbsolute, path: filepath.Join(root, "design"),
+		},
+		{
+			name: "source-the-journal-never-declared",
+			edit: func(l *Layout) { l.Migration.Moves[0].From = "docs/elsewhere" },
+			code: ProblemMigration, path: "docs/elsewhere",
+		},
+		{
+			name: "destination-the-manifest-never-declared",
+			edit: func(l *Layout) { l.Migration.Moves[0].To = ".context/elsewhere" },
+			code: ProblemMigration, path: ".context/elsewhere",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := migratingJournal()
+			tc.edit(&l)
+			if got := Validate(root, l); !hasProblemAt(got, tc.code, tc.path) {
+				t.Fatalf("problems = %v, want %s at %s", got, tc.code, tc.path)
+			}
+		})
+	}
+
+	// The positive control: the journal every accepted plan writes still
+	// validates, so these checks refuse the hand edit and not the migration this
+	// build performs itself.
+	if got := Validate(root, migratingJournal()); len(got) != 0 {
+		t.Fatalf("a well-formed journal must validate: %v", got)
+	}
+}
+
+// migratingJournal is the journal a clean plan writes, hand-built: one move,
+// the frozen v1 source, and a v2 target declaring all four roles.
+func migratingJournal() Layout {
+	return Layout{Manifest: Manifest{
+		Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2,
+		LayoutStatus: StatusMigrating,
+		Stores: map[string]string{
+			RoleDesign: ".context/design", RolePlans: ".context/plans",
+			RoleJournal: ".context/journal", RoleQNA: ".context/qna",
+		},
+		Migration: &Migration{
+			From: MigrationFrom{Schema: SchemaV1, Stores: map[string]string{
+				RoleDesign: "docs/design", RolePlans: "docs/plans",
+				RoleJournal: "docs/journal", RoleQNA: "docs/qna",
+			}},
+			StartedAt: "2026-09-18T00:00:00Z", BackupTag: "pre-layout-v2-test",
+			CreatedManifest: true, Phase: PhasePlanned,
+			Moves: []Move{{Role: RoleDesign, From: "docs/design", To: ".context/design", State: MovePending}},
+		},
+	}}
+}
+
+// hasProblemAt reports whether the list carries the code for that exact path.
+func hasProblemAt(ps []Problem, code, path string) bool {
+	for _, p := range ps {
+		if p.Code == code && p.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate is only reachable for a manifest if Resolve calls it: a v2 layout
 // that reads clean from Resolve would otherwise carry none of V1–V16, and every
 // caller that mutates a repository goes through Resolve.

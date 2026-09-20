@@ -1013,6 +1013,97 @@ func TestDigestTreeCoversEveryEntryAndIsNotAGitOid(t *testing.T) {
 	}
 }
 
+// A recorded identity only guards anything if two different trees cannot hash
+// to the same digest. The record format used to write the name bare, so a name
+// carrying the record separator was a whole extra record: a tree holding one
+// directory called "x\nd y" hashed exactly like a tree holding "x" and "y", and
+// a symlink target could smuggle a record the same way. Verified end to end by
+// the reviewer: plan {README.md, x, y}, swap the source for {README.md,
+// x\nd y}, and both the pre-move and post-move checks pass over a tree that was
+// never planned.
+func TestDigestTreeIsInjectiveOverEntryNames(t *testing.T) {
+	cases := []struct {
+		name  string
+		one   func(t *testing.T, root string)
+		other func(t *testing.T, root string)
+	}{
+		{
+			// files=0 and bytes=0 on both sides, so the digest is the only
+			// thing that can tell these two trees apart.
+			name: "one directory named with a newline vs two directories",
+			one:  func(t *testing.T, root string) { mkdirAll(t, root, "x\nd y") },
+			other: func(t *testing.T, root string) {
+				mkdirAll(t, root, "x")
+				mkdirAll(t, root, "y")
+			},
+		},
+		{
+			name: "a symlink target carrying a newline vs two symlinks",
+			one: func(t *testing.T, root string) {
+				if err := os.Symlink("b\nl x c", filepath.Join(root, "a")); err != nil {
+					t.Fatal(err)
+				}
+			},
+			other: func(t *testing.T, root string) {
+				if err := os.Symlink("b", filepath.Join(root, "a")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("c", filepath.Join(root, "x")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			one, other := t.TempDir(), t.TempDir()
+			tc.one(t, one)
+			tc.other(t, other)
+			gotOne, filesOne, sizeOne, err := digestTree(one, ".")
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotOther, filesOther, sizeOther, err := digestTree(other, ".")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if gotOne == gotOther {
+				t.Fatalf("two different trees hash to %s (files %d/%d, bytes %d/%d)",
+					gotOne, filesOne, filesOther, sizeOne, sizeOther)
+			}
+		})
+	}
+}
+
+// The other half of the fix: quoting the names must not make the identity
+// depend on the walk, the map order, or the run. Resume compares the recorded
+// digest against a freshly walked tree, so a digest that moved between runs
+// would refuse every resume.
+func TestDigestTreeIsStableAcrossRuns(t *testing.T) {
+	root := t.TempDir()
+	mkdirAll(t, root, "x\nd y")
+	writeFile(t, filepath.Join(root, "x\nd y", "a file.md"), "body\n")
+	if err := os.Symlink("x\nd y", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	want, wantFiles, wantSize, err := digestTree(root, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wantFiles != 2 || wantSize != int64(len("body\n")) {
+		t.Fatalf("digestTree counted files=%d bytes=%d, want 2 and %d", wantFiles, wantSize, len("body\n"))
+	}
+	for i := 0; i < 8; i++ {
+		got, files, size, err := digestTree(root, ".")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want || files != wantFiles || size != wantSize {
+			t.Fatalf("run %d = (%s, %d, %d), want (%s, %d, %d)", i, got, files, size, want, wantFiles, wantSize)
+		}
+	}
+}
+
 // The three link helpers the end-to-end fixture needs, exercised on the shape
 // the migration produces: the stores land under different roots, so a link that
 // pointed at a sibling store by relative path is dangling until it is
@@ -1117,6 +1208,44 @@ func TestPlanMigrationLayersStoresOverTheTemplate(t *testing.T) {
 		if targets[role] != path {
 			t.Fatalf("stores = %v, want %v", targets, want)
 		}
+	}
+}
+
+// A destination nested inside a move source is not a layout the engine can
+// perform: the moves are reconciled independently and in journal order, so the
+// outer move relocates the tree the inner one is about to leave (or lands
+// inside the tree the inner one is about to move), the digest the journal froze
+// stops describing what is on disk, and the pre-move check then refuses with
+// "the tree changed under the migration" -- a jam this plan caused and the
+// operator cannot clear without reaching for the backup tag. Both shapes are
+// refused at plan time, and the blocker names both roles and both paths.
+func TestPlanMigrationBlocksADestinationInsideAMoveSource(t *testing.T) {
+	cases := []struct {
+		name   string
+		store  string
+		detail string
+	}{
+		{"another-moves-source", "docs/plans/new", "design=docs/plans/new is inside plans=docs/plans"},
+		{"its-own-source", "docs/design/new", "design=docs/design/new is inside design=docs/design"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newGitV1Repo(t)
+			p, err := PlanMigration(root, MigrateOptions{
+				Template: TemplateContentVault,
+				Stores:   map[string]string{RoleDesign: tc.store},
+				Running:  "v0.6.0", RouterState: "current",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !namedBlocker(p.Blockers, ProblemPathOverlap, tc.detail) {
+				t.Fatalf("blockers = %v, want %s naming %q", p.Blockers, ProblemPathOverlap, tc.detail)
+			}
+			if p.Counts.Blocked != len(p.Blockers) {
+				t.Fatalf("counts = %+v, blockers = %d", p.Counts, len(p.Blockers))
+			}
+		})
 	}
 }
 
@@ -1738,6 +1867,113 @@ func TestResumeRefusesAmbiguousAndLostMoves(t *testing.T) {
 			if !strings.Contains(err.Error(), want) {
 				t.Fatalf("refusal %q does not name %q", err, want)
 			}
+		}
+	})
+}
+
+// The journal is read as an instruction, not as a report: pruneSources removes
+// whatever filepath.Dir(mv.From) names, runMoves creates whatever
+// filepath.Dir(mv.To) names, and `git mv` is handed both strings. A hand-edited
+// journal is therefore a way to delete and create paths outside the repository,
+// and the reviewer's two reproductions are both reproduced here -- with nothing
+// else changed, so the only thing that can refuse them is Validate.
+func TestResumeRefusesAJournalWhoseMovesLeaveTheRepository(t *testing.T) {
+	t.Run("phase-moved-deletes-nothing-outside-the-repository", func(t *testing.T) {
+		root := newGitV1Repo(t)
+		// The empty directory the reviewer's journal deleted: it is the parent
+		// of the recorded source, so pruneSources removes it by name.
+		victim := filepath.Join(filepath.Dir(root), "victim-store")
+		if err := os.MkdirAll(victim, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeManifest(t, root, `{
+  "schema": "agents.layout/v2",
+  "min_mut_ver_floor": "0.6.0",
+  "layout_status": "migrating",
+  "stores": {
+    "design": ".context/design",
+    "plans": ".context/plans",
+    "journal": ".context/journal",
+    "qna": ".context/qna"
+  },
+  "migration": {
+    "from": {
+      "schema": "agents.layout/v1",
+      "stores": {
+        "design": "../victim-store/store",
+        "plans": "docs/plans",
+        "journal": "docs/journal",
+        "qna": "docs/qna"
+      }
+    },
+    "started_at": "2026-09-18T00:00:00Z",
+    "backup_tag": "pre-layout-v2-test",
+    "created_manifest": true,
+    "phase": "moved",
+    "moves": [
+      {"role": "design", "from": "../victim-store/store", "to": ".context/design",
+       "state": "done", "files": 0, "bytes": 0, "digest": "sha256:00"}
+    ]
+  }
+}`)
+		if ps := Resolve(root).Problems; len(ps) == 0 {
+			t.Error("a journal whose move source escapes the repository validated clean")
+		}
+		if err := ResumeMigration(root); err == nil {
+			t.Error("resume accepted a journal whose move source is outside the repository")
+		}
+		if _, err := os.Stat(victim); err != nil {
+			t.Errorf("resume removed %s, which is outside the repository: %v", victim, err)
+		}
+		if l := Resolve(root); l.LayoutStatus != StatusMigrating {
+			t.Errorf("layout_status = %q, want %q: the unsafe journal must not have been reconciled",
+				l.LayoutStatus, StatusMigrating)
+		}
+	})
+
+	t.Run("phase-planned-creates-nothing-outside-the-repository", func(t *testing.T) {
+		root := newGitV1Repo(t)
+		escaped := filepath.Join(filepath.Dir(root), "escaped")
+		// The plan's own identity for docs/design, so the pre-move digest check
+		// passes and the run reaches the os.MkdirAll the reviewer's journal
+		// reached.
+		digest, files, size, err := digestTree(root, "docs/design")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteManifest(root, Manifest{
+			Schema: SchemaV2, MinMutVerFloor: MinMutVerFloorV2,
+			LayoutStatus: StatusMigrating,
+			Stores: map[string]string{
+				RoleDesign: ".context/design", RolePlans: ".context/plans",
+				RoleJournal: ".context/journal", RoleQNA: ".context/qna",
+			},
+			Migration: &Migration{
+				From: MigrationFrom{Schema: SchemaV1, Stores: map[string]string{
+					RoleDesign: "docs/design", RolePlans: "docs/plans",
+					RoleJournal: "docs/journal", RoleQNA: "docs/qna",
+				}},
+				StartedAt: "2026-09-18T00:00:00Z", BackupTag: "pre-layout-v2-test",
+				CreatedManifest: true, Phase: PhasePlanned,
+				Moves: []Move{{
+					Role: RoleDesign, From: "docs/design", To: "../escaped/design", State: MovePending,
+					Files: files, Bytes: size, Digest: digest,
+				}},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if ps := Resolve(root).Problems; len(ps) == 0 {
+			t.Error("a journal whose move destination escapes the repository validated clean")
+		}
+		if err := ResumeMigration(root); err == nil {
+			t.Error("resume accepted a journal whose move destination is outside the repository")
+		}
+		if _, err := os.Stat(escaped); !os.IsNotExist(err) {
+			t.Errorf("resume created %s, which is outside the repository: %v", escaped, err)
+		}
+		if _, err := os.Stat(filepath.Join(root, "docs/design")); err != nil {
+			t.Errorf("the store under migration is gone: %v", err)
 		}
 	})
 }

@@ -313,8 +313,11 @@ func Validate(root string, l Layout) []Problem {
 		case l.Migration == nil || l.Migration.From.Schema == "" ||
 			len(l.Migration.From.Stores) == 0 || len(l.Migration.Moves) == 0:
 			ps = append(ps, Problem{Code: ProblemMigration, Path: ManifestRel, Detail: "journal incomplete"})
-		case !validPhase(l.Migration.Phase):
-			ps = append(ps, Problem{Code: ProblemMigration, Path: ManifestRel, Detail: "phase " + l.Migration.Phase})
+		default:
+			if !validPhase(l.Migration.Phase) {
+				ps = append(ps, Problem{Code: ProblemMigration, Path: ManifestRel, Detail: "phase " + l.Migration.Phase})
+			}
+			ps = append(ps, validateMovePaths(root, l)...)
 		}
 	}
 	if l.MinMutVerFloor == "" {
@@ -378,6 +381,45 @@ func Validate(root string, l Layout) []Problem {
 		ps = append(ps, Problem{Code: ProblemLocalAgents, Path: ManifestRel})
 	}
 	return sortedProblems(ps)
+}
+
+// validateMovePaths checks both paths of every journal move: validateRel for
+// the shape (relative, non-empty, no "..", inside root, no symlink component),
+// and membership in the map that declared the path -- From in the frozen v1
+// source the journal recorded, To in the manifest's own stores. Together they
+// are what keeps the engine's os.Remove, os.MkdirAll, git mv, and git add on
+// repository-relative paths the manifest itself declared.
+//
+// This is the one chokepoint: pruneSources, runMoves, and stageRename act on
+// the journal's strings directly, and a journal is a file an operator can edit,
+// so a move that names anything else is refused here rather than obeyed. The
+// refusal is fail-closed on purpose -- the remedy for an unsafe journal is the
+// backup tag and a fresh plan, never a guess about which path was meant.
+func validateMovePaths(root string, l Layout) []Problem {
+	declaredFrom := make(map[string]bool, len(l.Migration.From.Stores))
+	for _, path := range l.Migration.From.Stores {
+		declaredFrom[path] = true
+	}
+	declaredTo := make(map[string]bool, len(l.Stores))
+	for _, path := range l.Stores {
+		declaredTo[path] = true
+	}
+	var ps []Problem
+	for _, mv := range l.Migration.Moves {
+		if p := validateRel(root, mv.From); p != nil {
+			ps = append(ps, *p)
+		} else if !declaredFrom[mv.From] {
+			ps = append(ps, Problem{Code: ProblemMigration, Path: mv.From,
+				Detail: "move " + mv.Role + " source is not one of the journal's declared stores"})
+		}
+		if p := validateRel(root, mv.To); p != nil {
+			ps = append(ps, *p)
+		} else if !declaredTo[mv.To] {
+			ps = append(ps, Problem{Code: ProblemMigration, Path: mv.To,
+				Detail: "move " + mv.Role + " destination is not one of the manifest's stores"})
+		}
+	}
+	return ps
 }
 
 // storeRoles names every store in a fixed order: the four known roles in their
