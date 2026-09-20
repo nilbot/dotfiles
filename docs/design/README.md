@@ -25,7 +25,7 @@ Numbers are stable catalog identifiers, not priority or order.
 | 2 | [dotfiles hygiene](2026-08-07-spec-2-dotfiles-hygiene.md) | implemented |
 | 3 | [`agents distill`](../archive/specs/2026-08-07-spec-3-agents-distill.md) | **retired** — archived, never implemented |
 | 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | **designed 2026-08-22** — triggers fired; not implemented |
-| 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged |
+| 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged; **test matrix amended 2026-09-20** — `ubuntu-24.04-arm` runs `agents`, a shipped target no leg had run on, and `bootstrap.d` keeps x86_64 Linux only |
 | 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | implemented; **§5.1 amended 2026-09-20** — the release requires a green `master` run for the tagged commit instead of re-running the verification matrix, and four targets rather than three. Read Amendment 1 before touching `release.yml`: the guard is one API call and four of its details fail it silently. |
 | 7 | [capture cheaply, review before tracking](2026-08-12-spec-7-capture-and-review.md) | §1–2 in force; the capture half is retired |
 | — | [knowledge is documentation](2026-08-19-knowledge-is-documentation.md) | **executed 2026-08-20** — the retired code and stores are deleted |

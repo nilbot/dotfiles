@@ -31,6 +31,41 @@ binary stamps, which live in
 
 ---
 
+## Amendment 1 — 2026-09-20
+
+**The `test` matrix is no longer a cross product.** It is four deliberate legs:
+`agents` on `{ubuntu-latest, ubuntu-24.04-arm, macos-latest}`, and `bootstrap.d`
+on `{ubuntu-latest}`.
+
+Why: macOS was 27.7% of the job-minutes in the window that built and released
+v0.6.0 (59.3 of 213.6), and one of its two legs bought host coverage that Linux
+already had in another form. `bootstrap.d`'s darwin behaviour is parameterised
+rather than `runtime.GOOS`-derived — `loginShell(..., "darwin", ...)` and
+`packagesCtx("darwin", "brew")` take the platform as an argument, so those
+branches already run on Linux. What is genuinely lost is macOS *host* behaviour
+for `bootstrap.d`'s integration tests, which execute the real `./bootstrap` in a
+temporary HOME: BSD `sh`, macOS `sudo` and the real package manager are no
+longer exercised in CI. That is the trade, and it is deliberate.
+
+In exchange, `ubuntu-24.04-arm` runs `agents` on arm64 Linux. `linux/arm64` is a
+shipped release target (spec 6 §4.1) that no leg had ever run on; the
+`macos-latest` leg only approximated arm64 through a different operating system,
+and it stays. macOS remains for `agents` because host behaviour is the entire
+point of that leg: it is what caught the git background-maintenance race in the
+tree snapshot (run `35470984407`, fixed in `d05a43e`), which no Linux leg
+surfaced. The 2026-08-29 latency work targeted `test (macos-latest,
+bootstrap.d)` at "< 45s"; that job no longer exists. Those measurements are the
+record of that day and are not rewritten.
+
+**Adding a leg is not only a matrix edit.** The gitleaks install in the `test`
+job is checksum-pinned per runner and fails closed on an unlisted one
+(`unhandled runner os`), so a new runner needs its asset and digest pinned in the
+same change: `ubuntu-24.04-arm` takes `gitleaks_8.30.1_linux_arm64.tar.gz` at
+`e4a487ee…`. All four pinned digests are the ones gitleaks publishes in
+`gitleaks_8.30.1_checksums.txt`.
+
+---
+
 ## What this spec is
 
 Spec 2 deleted `git/hooks/go.pre-commit` in `c0e3bb1`, with a commit message
@@ -220,7 +255,7 @@ Stated once so each phase can say which job it creates or extends.
 
 | Job | Runner | Created by | Extended by |
 |---|---|---|---|
-| `test` (matrix) | `{macos-latest, ubuntu-latest}` × `{agents, bootstrap.d}` | phase 1 | — |
+| `test` (matrix) | `agents` on `{ubuntu-latest, ubuntu-24.04-arm, macos-latest}`; `bootstrap.d` on `{ubuntu-latest}` | phase 1 | **amended 2026-09-20** (Amendment 1) |
 | `secrets` | `ubuntu-latest` | phase 1 | — |
 | `gate` | `ubuntu-latest` | phase 1 | every later phase adds to `needs:` |
 | `hygiene` | `ubuntu-latest` | phase 2 | — |
