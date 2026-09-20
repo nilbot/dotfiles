@@ -1612,6 +1612,85 @@ func TestDoctorWarnsOnAMissingDeclaredStore(t *testing.T) {
 	if got == nil || got.Status != Warn || !strings.Contains(got.Detail, "journal=.context/journal") {
 		t.Fatalf("missing declared store = %+v, want warn naming journal=.context/journal", got)
 	}
+	// Design §7.5 makes `agents init` a no-op on this active supported v2
+	// manifest, so the old remedy printed a command that created no store. The
+	// Detail alone cannot catch that: it names the gap either way.
+	if want := "create the named store directory and its README.md by hand, or re-run the scaffold that owns it; `agents init` creates no store on an active v2 layout"; got.Remedy != want {
+		t.Errorf("missing declared store remedy = %q, want %q", got.Remedy, want)
+	}
+}
+
+// scaffoldRemedyV2 is the contract these tests hold the four layout-aware
+// scaffold remedies to. Each is an action that works on a v2 repository, where
+// §7.5 makes `agents init` write nothing at all; none of them may name it.
+var scaffoldRemedyV2 = map[string]string{
+	"scaffold:router":          "run `agents layout show --router > AGENTS.md` to restore the canonical router",
+	"scaffold:domain":          "create .agents/AGENTS.md with this repository's domain prose; the `agents init` starter template is a v1 convenience",
+	"scaffold:skill-recording": "populate .agents/skills/recording-what-you-learn/ with this layout's canonical text, or run the 'migrating-fleet-context' agent skill",
+	"layout:stores":            "create the named store directory and its README.md by hand, or re-run the scaffold that owns it; `agents init` creates no store on an active v2 layout",
+}
+
+// scaffoldRemedyV1 is the text each of the same four checks has always
+// printed. A v1 repository has no manifest and `agents init` really does these
+// writes there, so the v2 branch must leave every one of these bytes alone.
+var scaffoldRemedyV1 = map[string]string{
+	"scaffold:router":          "run 'agents init' to scaffold",
+	"scaffold:domain":          "run 'agents init' to populate starter template",
+	"scaffold:skill-recording": "run 'agents init' to populate bundled skill",
+	"layout:stores":            "run `agents init`; on a v2 repository it creates manifest-declared stores",
+}
+
+// The four remedies that told a v2 operator to run `agents init` were the one
+// printed recovery for states init cannot repair. These assertions pin the text
+// for both schemas, so a remedy cannot silently regress to a command that
+// writes nothing -- and cannot drift into the v2 text on a v1 repository
+// either.
+func TestDoctorScaffoldRemediesNameAnActionThatWorks(t *testing.T) {
+	assertRemedies := func(t *testing.T, checks []Check, want map[string]string) {
+		t.Helper()
+		for name, remedy := range want {
+			got := findCheckPtr(t, checks, name)
+			if got == nil {
+				t.Fatalf("missing check %q", name)
+			}
+			if got.Remedy != remedy {
+				t.Errorf("%s remedy = %q, want %q", name, got.Remedy, remedy)
+			}
+		}
+	}
+
+	// The reviewer's measurement, reproduced: a real v2 repository missing all
+	// four artifacts, each of which init left unrestored.
+	t.Run("v2 names actions init cannot take", func(t *testing.T) {
+		root := newV2Repo(t, ".context")
+		for _, rel := range []string{
+			"AGENTS.md",
+			".agents/AGENTS.md",
+			".agents/skills/recording-what-you-learn",
+			".context/journal",
+		} {
+			if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertRemedies(t, checkScaffold(root, "v0.6.0"), scaffoldRemedyV2)
+	})
+
+	// A v1 repository reaches all four writes, so its text stays as it is.
+	t.Run("v1 keeps the remedies it has always printed", func(t *testing.T) {
+		root := newScaffoldedRepo(t)
+		for _, rel := range []string{
+			"AGENTS.md",
+			".agents/AGENTS.md",
+			".agents/skills/recording-what-you-learn",
+			"docs/journal",
+		} {
+			if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+				t.Fatal(err)
+			}
+		}
+		assertRemedies(t, checkScaffold(root, "v0.6.0"), scaffoldRemedyV1)
+	})
 }
 
 // Outside a repository there is no index to be absent from, so the advisory is

@@ -203,11 +203,13 @@ func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th T
 		cacheRoot, _ = deps.TraceCacheDir(repoRoot)
 	}
 	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
-	// The layout is resolved once here: every layout.Resolve runs Validate,
-	// which asks git two trackedness questions. checkScaffoldFor takes the
-	// result instead of resolving again, and the freshness indicator needs the
-	// caller's clock, so both layout-aware producers are fed from this one
-	// resolution.
+	// The layout is resolved here for the freshness indicator and the
+	// layout-aware checks, which need the caller's clock and one resolution to
+	// share: every layout.Resolve runs Validate, which asks git two trackedness
+	// questions. checkScaffoldFor takes this result instead of resolving on its
+	// own account, but this is not the run's only resolution -- drift.InspectRepo
+	// inside checkScaffoldFor resolves the layout again for its own report, so a
+	// run on a manifest-bearing repository pays for two.
 	l := layout.Resolve(repoRoot)
 	checks = append(checks, checkScaffoldFor(repoRoot, deps.RunningVersion, l)...)
 	checks = append(checks, checkQNAFreshness(repoRoot, l, now))
@@ -1032,9 +1034,24 @@ func checkStoreSize(cacheRoot string, maxBytes int64) Check {
 
 // checkScaffold resolves the layout itself, for callers that have not resolved
 // it already. RunWithDeps resolves once per run and calls checkScaffoldFor, so
-// the report does not pay for a second Resolve and its git queries.
+// this path adds no Resolve of its own -- the drift inspection the check bodies
+// run resolves the layout again internally, on its own account.
 func checkScaffold(repoRoot, runningVersion string) []Check {
 	return checkScaffoldFor(repoRoot, runningVersion, layout.Resolve(repoRoot))
+}
+
+// scaffoldRemedy picks the recovery text for a scaffold gap by the schema the
+// repository actually resolves. Design §7.5 makes `agents init` a no-op on an
+// active supported v2 manifest -- it writes no router, no domain context, no
+// bundled skill, and no store there -- so a v2 remedy that names `init` prints
+// a command that changes nothing. The v1 branch is the text a repository with
+// no manifest has always been given, and `init` really does those writes for
+// it (scaffold.CreateWithLayout).
+func scaffoldRemedy(schema, v1, v2 string) string {
+	if schema == layout.SchemaV2 {
+		return v2
+	}
+	return v1
 }
 
 func checkScaffoldFor(repoRoot, runningVersion string, l layout.Layout) []Check {
@@ -1072,7 +1089,9 @@ func checkScaffoldFor(repoRoot, runningVersion string, l layout.Layout) []Check 
 			Name:   "scaffold:router",
 			Status: Fail,
 			Detail: "root AGENTS.md is missing",
-			Remedy: "run 'agents init' to scaffold",
+			Remedy: scaffoldRemedy(l.Schema,
+				"run 'agents init' to scaffold",
+				"run `agents layout show --router > AGENTS.md` to restore the canonical router"),
 		})
 	}
 
@@ -1104,7 +1123,9 @@ func checkScaffoldFor(repoRoot, runningVersion string, l layout.Layout) []Check 
 			Name:   "scaffold:domain",
 			Status: Warn,
 			Detail: ".agents/AGENTS.md is missing",
-			Remedy: "run 'agents init' to populate starter template",
+			Remedy: scaffoldRemedy(l.Schema,
+				"run 'agents init' to populate starter template",
+				"create .agents/AGENTS.md with this repository's domain prose; the `agents init` starter template is a v1 convenience"),
 		})
 	}
 
@@ -1133,7 +1154,9 @@ func checkScaffoldFor(repoRoot, runningVersion string, l layout.Layout) []Check 
 			Name:   "scaffold:skill-recording",
 			Status: Warn,
 			Detail: ".agents/skills/recording-what-you-learn/ is missing",
-			Remedy: "run 'agents init' to populate bundled skill",
+			Remedy: scaffoldRemedy(l.Schema,
+				"run 'agents init' to populate bundled skill",
+				"populate .agents/skills/recording-what-you-learn/ with this layout's canonical text, or run the 'migrating-fleet-context' agent skill"),
 		})
 	}
 
@@ -1269,7 +1292,9 @@ func layoutStoresCheck(root string, l layout.Layout) Check {
 	if len(missing) > 0 {
 		return Check{Name: "layout:stores", Status: Warn,
 			Detail: "missing store(s): " + strings.Join(missing, ", "),
-			Remedy: "run `agents init`; on a v2 repository it creates manifest-declared stores"}
+			Remedy: scaffoldRemedy(l.Schema,
+				"run `agents init`; on a v2 repository it creates manifest-declared stores",
+				"create the named store directory and its README.md by hand, or re-run the scaffold that owns it; `agents init` creates no store on an active v2 layout")}
 	}
 	return Check{Name: "layout:stores", Status: OK, Detail: "all four roles resolve to directories"}
 }
