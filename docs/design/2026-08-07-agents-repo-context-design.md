@@ -527,6 +527,51 @@ and `~/.codex` are harness-owned and must never be symlinked wholesale from
 dotfiles.** Link individual subdirectories only. §2's per-repo wiring follows the
 same rule.
 
+### 8.5 Hook links and package upgrades (2026-09-20)
+
+**A link into a package manager's version directory is a link the next upgrade
+deletes, and git runs a dangling hook as if no hook existed.** Measured on
+2026-09-20 after `brew upgrade agents` removed `Cellar/agents/0.5.1`: all four
+installed links pointed into it, and `git commit --allow-empty` in a disposable
+repository succeeded with exit 0 and no warning — so `agents guard --staged` had
+silently stopped running. `agents doctor` reported it, but its remedy ("run the
+reviewed global hook installer") named no path, no arguments and no flag, and the
+installer refused the only links that needed repairing.
+
+The installer changed in three ways and doctor in two:
+
+- **A symlinked binary is accepted when it resolves into a Homebrew keg for
+  agents** (`*/Cellar/agents/*/bin/agents`). The path RECORDED is the one passed
+  in, so `$(command -v agents)` records Homebrew's `bin/agents`, which the next
+  upgrade repoints. A symlink to anywhere else is still refused. The blanket
+  refusal this replaces was justified by symlink chaining making doctor
+  diagnostics fragile, but doctor follows the chain and compares file identity
+  with the running binary, so the chain was never what it verified.
+- **`--adopt-owned` repoints links this installer wrote for an earlier binary**,
+  accepted on either side of the mode. Without it every existing link must still
+  name the binary it was handed, which is what keeps a foreign hook from being
+  overwritten. Adoption is scoped to keg-shaped targets; a foreign file or a link
+  to another program is refused either way.
+- **A keg path passed while the stable path is installed is refused with the
+  stable path named**, rather than offered `--adopt-owned` — adopting there would
+  re-pin the hooks and re-break them at the next upgrade.
+- **Doctor's remedy is the command that repairs the check**, carrying
+  `--adopt-owned` when the failing link is ours and stale.
+- **Doctor gained `git-hooks:unmanaged`**, a warning for dangling links under
+  names this repository does not manage. `git-hooks:links` sees only the four
+  managed names, so two orphans (`pre-commit-user`, `post-checkout-user`) had
+  outlived the upgrade unremarked.
+
+Nothing here changes what the hooks run: the multicall dispatch on
+`basename(os.Args[0])`, the §8.3 chain, and the four managed names are as they
+were. This is about which path the links name, and what happens when the package
+manager moves it.
+
+**Known gap, not closed here:** `bootstrap apply workstation` installs hooks at
+`~/bin/agents` and passes no flag, so on a machine whose links are stale its
+preflight refuses and the human runs the remedy once. Whether provisioning should
+adopt and override a hook target a human chose is a separate decision.
+
 ## 9. Bootstrap and trust
 
 **This section originally claimed no harness lets a freshly cloned repo's hooks fire

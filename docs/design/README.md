@@ -21,7 +21,7 @@ Numbers are stable catalog identifiers, not priority or order.
 
 | # | Spec | Status |
 |---|---|---|
-| 1 | [repo-tracked agent context](2026-08-07-agents-repo-context-design.md) | implemented; its memory and `sources:` sections are superseded by the redesign below |
+| 1 | [repo-tracked agent context](2026-08-07-agents-repo-context-design.md) | implemented; its memory and `sources:` sections are superseded by the redesign below. **§8.5 added 2026-09-20** — a `brew upgrade` deletes the keg a pinned hook link names, git runs a dangling hook as if no hook existed, so the installer accepts a keg-resolving symlink and gained `--adopt-owned` |
 | 2 | [dotfiles hygiene](2026-08-07-spec-2-dotfiles-hygiene.md) | implemented |
 | 3 | [`agents distill`](../archive/specs/2026-08-07-spec-3-agents-distill.md) | **retired** — archived, never implemented |
 | 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | **designed 2026-08-22** — triggers fired; not implemented |

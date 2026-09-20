@@ -687,7 +687,7 @@ func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
 	globalValues, globalParseErr := configOriginValues(global.Output)
 	switch {
 	case global.Code == 1:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath is unset", Remedy: "run the reviewed global hook installer"})
+		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath is unset", Remedy: hookInstallerRemedy(deps, false)})
 	case global.Code != 0:
 		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath could not be read", Remedy: "inspect global Git configuration"})
 	case globalParseErr != nil || len(globalValues) != 1:
@@ -713,7 +713,8 @@ func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
 		checks = append(checks, Check{Name: "git-hooks:effective", Status: OK, Detail: "effective core.hooksPath is exact"})
 	}
 
-	checks = append(checks, checkInstalledLinks(deps.HooksDir, binary))
+	checks = append(checks, checkInstalledLinks(deps, binary))
+	checks = append(checks, checkUnmanagedLinks(deps))
 	checks = append(checks, checkLegacyHooks(repoRoot, deps))
 	return checks
 }
@@ -752,23 +753,108 @@ func configOriginValues(output string) ([]configOriginValue, error) {
 	return values, nil
 }
 
-func checkInstalledLinks(hooksDir, binary string) Check {
+// hookInstallerRemedy renders the command that repairs what the git-hooks and
+// git-attributes checks report. The text it replaces -- "run the reviewed
+// global hook installer" -- named no path, no arguments and no way past the
+// installer's own refusal. That matters most in the one case these checks exist
+// to catch: a package upgrade deletes the versioned path a pinned hook link
+// points at, git runs a dangling hook as if no hook existed, and the installer
+// then refuses the link it wrote itself unless it is handed --adopt-owned. So
+// the remedy carries the flag and the arguments, and falls back to the old
+// sentence only when the checkout paths are unknown.
+func hookInstallerRemedy(deps Dependencies, adoptOwned bool) string {
+	root := deps.Root
+	if root == "" && deps.HooksDir != "" {
+		root = filepath.Dir(filepath.Dir(deps.HooksDir))
+	}
+	home := ""
+	if deps.GlobalGitConfig != "" {
+		home = filepath.Dir(deps.GlobalGitConfig)
+	}
+	if root == "" || home == "" {
+		return "run the reviewed global hook installer"
+	}
+	adopt := ""
+	if adoptOwned {
+		adopt = " --adopt-owned"
+	}
+	return fmt.Sprintf(`run: bash "%s/git/install-hooks.sh" install%s "%s" "%s" "$(command -v agents)"`,
+		root, adopt, root, home)
+}
+
+// isManagedHookName reports whether this repository owns the hook name. The
+// installer links exactly installedHookNames; anything else in the directory
+// belongs to the human.
+func isManagedHookName(name string) bool {
+	for _, managed := range installedHookNames {
+		if name == managed {
+			return true
+		}
+	}
+	return false
+}
+
+// checkUnmanagedLinks reports symlinks in the hooks directory that this
+// repository does not manage and that no longer resolve. Git ignores names it
+// does not know, so they are inert -- and invisible: a link left behind by an
+// older install dangles forever and no other check names it. This is the pair
+// of links that survived the 2026-09-20 upgrade of this machine while
+// git-hooks:links, which sees only the four managed names, stayed silent.
+//
+// Warn, never fail: a dangling link under a managed name is already a failure
+// above, and anything else here is the human's to keep or delete.
+func checkUnmanagedLinks(deps Dependencies) Check {
+	entries, err := os.ReadDir(deps.HooksDir)
+	if err != nil {
+		return Check{Name: "git-hooks:unmanaged", Status: Warn, Detail: "hook directory could not be read", Remedy: "inspect " + deps.HooksDir}
+	}
+	var dangling []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if isManagedHookName(name) {
+			continue
+		}
+		path := filepath.Join(deps.HooksDir, name)
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
+		}
+		if _, err := os.Stat(path); err != nil {
+			dangling = append(dangling, name)
+		}
+	}
+	if len(dangling) == 0 {
+		return Check{Name: "git-hooks:unmanaged", Status: OK, Detail: "no unowned hook links dangle"}
+	}
+	sort.Strings(dangling)
+	return Check{
+		Name:   "git-hooks:unmanaged",
+		Status: Warn,
+		Detail: "unowned hook link(s) dangle and will never run: " + strings.Join(dangling, ", "),
+		Remedy: "delete them, or repoint them deliberately: " + hookInstallerRemedy(deps, false),
+	}
+}
+
+func checkInstalledLinks(deps Dependencies, binary string) Check {
 	binaryInfo, err := os.Stat(binary)
 	if err != nil {
 		return Check{Name: "git-hooks:links", Status: Fail, Detail: "current binary cannot be inspected", Remedy: "rebuild and reinstall agents"}
 	}
 	for _, name := range installedHookNames {
-		path := filepath.Join(hooksDir, name)
+		path := filepath.Join(deps.HooksDir, name)
 		info, err := os.Lstat(path)
 		if err != nil {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " hook link is missing or unreadable", Remedy: "run the reviewed global hook installer"}
+			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " hook link is missing or unreadable", Remedy: hookInstallerRemedy(deps, false)}
 		}
 		if info.Mode()&os.ModeSymlink == 0 {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " is not an owned symlink", Remedy: "preserve or move the foreign hook deliberately before installing"}
+			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " is not an owned symlink", Remedy: "preserve or move the foreign hook deliberately, then " + hookInstallerRemedy(deps, false)}
 		}
 		resolved, err := os.Stat(path)
 		if err != nil || !os.SameFile(binaryInfo, resolved) {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " does not resolve to the current binary", Remedy: "run the reviewed global hook installer"}
+			// The link exists and is ours, but names an older binary -- the
+			// shape a package upgrade leaves behind. Repointing it needs the
+			// flag, because the default refuses any link it did not just write.
+			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " does not resolve to the current binary", Remedy: hookInstallerRemedy(deps, true)}
 		}
 	}
 	return Check{Name: "git-hooks:links", Status: OK, Detail: "all four installed hook links resolve to the current binary"}
@@ -821,15 +907,15 @@ func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	}
 	linkInfo, err := os.Lstat(deps.AttributesLink)
 	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link is missing or not a symlink", Remedy: "run the reviewed global hook installer"}
+		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link is missing or not a symlink", Remedy: hookInstallerRemedy(deps, false)}
 	}
 	linkTarget, err := os.Stat(deps.AttributesLink)
 	if err != nil {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link is broken", Remedy: "run the reviewed global hook installer"}
+		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link is broken", Remedy: hookInstallerRemedy(deps, false)}
 	}
 	sourceInfo, err := os.Stat(deps.AttributesSource)
 	if err != nil || !sourceInfo.Mode().IsRegular() || !os.SameFile(linkTarget, sourceInfo) {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link does not resolve to the tracked source", Remedy: "run the reviewed global hook installer"}
+		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link does not resolve to the tracked source", Remedy: hookInstallerRemedy(deps, false)}
 	}
 	// The source has to be readable and has to be the tracked file, checked
 	// above. Its contents are no longer asserted: the one rule that lived here
