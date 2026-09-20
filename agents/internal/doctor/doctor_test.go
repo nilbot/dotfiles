@@ -2061,3 +2061,40 @@ func TestDoctorUnmanagedLinksWarnOnlyWhenDangling(t *testing.T) {
 		t.Errorf("detail %q names a link that resolves", check.Detail)
 	}
 }
+
+// The detail used to name one example command, which reads the same whether the
+// offending entries all came from one renamed build or from several unrelated
+// ones -- and the remedy is per-file, so the count per binary is what tells the
+// human how much they are about to delete by hand.
+func TestCheckWiringCountsUnownedLookalikesPerBinary(t *testing.T) {
+	binary := executableFile(t, t.TempDir(), "agents")
+	a := adapterNamed(t, "claude-code")
+	root := t.TempDir()
+	if err := a.Wire(root, binary); err != nil {
+		t.Fatal(err)
+	}
+	path := a.WireConfigPath(root)
+	cfg := readJSONMap(t, path)
+	groups := cfg["hooks"].(map[string]any)["Stop"].([]any)
+	for _, command := range []string{
+		"/tmp/agents-new hook stop --harness claude-code",
+		"/tmp/agents-new hook stop --harness claude-code",
+		"/opt/vendor/auditor hook stop --harness claude-code",
+	} {
+		groups = append(groups, map[string]any{
+			"hooks": []any{map[string]any{"type": "command", "command": command}},
+		})
+	}
+	cfg["hooks"].(map[string]any)["Stop"] = groups
+	writeJSONMap(t, path, cfg)
+
+	got, _, _ := checkWiring(a, root, binary)
+	if got.Status != Warn {
+		t.Fatalf("status = %v, want Warn: %+v", got.Status, got)
+	}
+	for _, want := range []string{"/tmp/agents-new (2)", "/opt/vendor/auditor (1)"} {
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("detail %q does not carry %q", got.Detail, want)
+		}
+	}
+}

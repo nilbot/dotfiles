@@ -368,12 +368,7 @@ func checkWiringNamedGroups(a harness.Adapter, path string, cfg map[string]any, 
 	}
 
 	if stale := resemblingButUnownedNamedGroups(agentsGroup); len(stale) > 0 {
-		return Check{
-			Name:   name,
-			Status: Warn,
-			Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary, e.g. %s", len(stale), stale[0]),
-			Remedy: "these are not `agents wire`'s to remove; delete them from " + path + " by hand",
-		}, info.ModTime(), keys
+		return unownedLookalikeCheck(name, path, stale, info.ModTime(), keys)
 	}
 
 	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
@@ -447,14 +442,50 @@ func checkWiringNestedHooks(a harness.Adapter, path string, cfg map[string]any, 
 	// ours, and the harness runs it anyway -- so it fails at every session
 	// start while this check says the wiring is exact. Report it; never delete.
 	if stale := resemblingButUnowned(hooks); len(stale) > 0 {
-		return Check{
-			Name:   name,
-			Status: Warn,
-			Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary, e.g. %s", len(stale), stale[0]),
-			Remedy: "these are not `agents wire`'s to remove; delete them from " + path + " by hand",
-		}, info.ModTime(), keys
+		return unownedLookalikeCheck(name, path, stale, info.ModTime(), keys)
 	}
 	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+}
+
+// unownedLookalikeCheck reports hook commands shaped like ours that run a
+// binary `agents wire` cannot identify as its own. The check exists because
+// those commands are nobody's: wire will not delete what it cannot prove it
+// wrote, and the harness runs them anyway, so they fire at every session start
+// while the wiring otherwise looks exact.
+//
+// The detail names each offending BINARY with its count rather than one example
+// command. A single example is what this said first, and it cost a round of
+// diagnosis: four commands from one renamed dev build read the same as four from
+// four different ones, and the remedy below is per-file, not per-command.
+func unownedLookalikeCheck(name, path string, stale []string, modified time.Time, keys []string) (Check, time.Time, []string) {
+	return Check{
+		Name:   name,
+		Status: Warn,
+		Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary: %s", len(stale), unownedLookalikeSummary(stale)),
+		Remedy: "`agents wire` never deletes a command it cannot prove it wrote, so delete these from " + path + " by hand",
+	}, modified, keys
+}
+
+// unownedLookalikeSummary counts the offending commands by the binary they run,
+// in first-seen order so the output is stable and reads like the file does.
+func unownedLookalikeSummary(stale []string) string {
+	counts := make(map[string]int, len(stale))
+	var order []string
+	for _, command := range stale {
+		binary, ok := harness.CommandBinary(command)
+		if !ok {
+			binary = command
+		}
+		if _, seen := counts[binary]; !seen {
+			order = append(order, binary)
+		}
+		counts[binary]++
+	}
+	parts := make([]string, 0, len(order))
+	for _, binary := range order {
+		parts = append(parts, fmt.Sprintf("%s (%d)", binary, counts[binary]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func resemblingButUnownedNamedGroups(agentsGroup map[string]any) []string {
