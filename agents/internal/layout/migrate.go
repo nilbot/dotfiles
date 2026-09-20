@@ -216,7 +216,11 @@ func PlanMigration(root string, opts MigrateOptions) (Plan, error) {
 	p.Blockers = append(p.Blockers, nestedMoveBlockers(p.Moves)...)
 	p.Blockers = append(p.Blockers, residueBlockers(root, to.Archive)...)
 	p.Blockers = append(p.Blockers, archiveInSourceBlockers(to.Archive, from)...)
-	p.LinkCandidates = scanLinkCandidates(root, p.Moves, from, to)
+	candidates, linkBlockers := scanLinkCandidates(root, p.Moves, from, to)
+	p.LinkCandidates = candidates
+	// A scan that could not run is a blocker, not an empty list: the caller must
+	// not read "0 link(s)" over evidence that was never gathered.
+	p.Blockers = append(p.Blockers, linkBlockers...)
 	return finishPlan(p), nil
 }
 
@@ -519,18 +523,22 @@ func blockersFromProblems(ps []Problem) []Blocker {
 // Only markdown is read, only content outside fenced code blocks is read, and
 // only repository paths are candidates: a URL, a mailto, and a bare fragment
 // name no store and survive the move.
-func scanLinkCandidates(root string, moves []Move, from, to Layout) []LinkCandidate {
+func scanLinkCandidates(root string, moves []Move, from, to Layout) ([]LinkCandidate, []Blocker) {
 	mappable := mappableMoves(moves, from, to)
 	if len(mappable) == 0 {
-		return nil
+		return nil, nil
 	}
 	tracked, err := trackedMarkdown(root)
 	if err != nil {
-		// An unreadable tracked set is a repository this planner is already
-		// refusing: AgentsIgnored reports the same failure as a `local_agents`
-		// blocker, so an empty report here accompanies a refusal and is never a
-		// clean bill of health on its own.
-		return nil
+		// Fail closed. An unreadable tracked set means the planner cannot know
+		// which files to scan, and "no candidates" would read as "this move
+		// breaks no links" -- the one conclusion the evidence does not support.
+		// Returning a blocker keeps the caller from printing a clean link count
+		// over a scan that never ran.
+		return nil, []Blocker{{
+			Code:   "link_scan_unreadable",
+			Detail: "cannot list the repository's tracked markdown, so link candidates are unknown: " + err.Error(),
+		}}
 	}
 	var out []LinkCandidate
 	for _, rel := range tracked {
@@ -562,7 +570,12 @@ func scanLinkCandidates(root string, moves []Move, from, to Layout) []LinkCandid
 				out = append(out, LinkCandidate{
 					File: rel, Line: i + 1,
 					Old: link.target,
-					New: linkSpelling(rel, target, mappable),
+					// The #fragment or ?query survives the move: it addresses a
+					// place INSIDE the target, and the target is still the same
+					// document after it moves. Dropping it would leave a link
+					// that reaches the right file at the wrong anchor, which the
+					// candidate's whole purpose is to avoid.
+					New: linkSpelling(rel, target, mappable) + linkSuffix(link.target),
 				})
 			}
 		}
@@ -576,7 +589,7 @@ func scanLinkCandidates(root string, moves []Move, from, to Layout) []LinkCandid
 		}
 		return out[i].Old < out[j].Old
 	})
-	return out
+	return out, nil
 }
 
 // mappableMoves narrows a plan's moves to the ones the link scan can map: a
@@ -618,6 +631,15 @@ func moveFor(moves []Move, rel string) (Move, bool) {
 // the spelling has to change with it. A file anywhere else keeps its own path,
 // so only the target moves and the required spelling is the target's new
 // repository-relative path.
+// linkSuffix returns the fragment or query a markdown target carries after its
+// path, including the delimiter, or "" when it carries none.
+func linkSuffix(target string) string {
+	if i := strings.IndexAny(target, "#?"); i >= 0 {
+		return target[i:]
+	}
+	return ""
+}
+
 func linkSpelling(containingFile, target string, moves []Move) string {
 	if cm, ok := moveFor(moves, containingFile); ok {
 		newDir := repoDir(mapStorePath(cm.From, cm.To, containingFile))

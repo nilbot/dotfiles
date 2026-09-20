@@ -2667,3 +2667,57 @@ func TestApplyNeverArmsTheCrashSeam(t *testing.T) {
 		t.Fatal("a production path armed the crash seam")
 	}
 }
+
+// A markdown target's fragment or query addresses a place INSIDE the document,
+// and the document is the same one after it moves. Dropping the suffix would
+// leave a link that reaches the right file at the wrong anchor, which is the
+// outcome the candidate exists to prevent.
+func TestLinkCandidatesKeepTheFragmentAndQuery(t *testing.T) {
+	root := newGitV1Repo(t)
+	writeFile(t, filepath.Join(root, "docs/plans/a-plan.md"), "# Plan\n\n## Gaps\n")
+	writeFile(t, filepath.Join(root, "docs/design/a-design.md"),
+		"See [gaps](../plans/a-plan.md#gaps) and [q](../plans/a-plan.md?raw=1).\n")
+	// The scan reads the TRACKED set, so the fixture's files have to be in the
+	// index: an untracked file is not part of the repository the planner reads.
+	gitOutput(t, root, "add", "-A")
+	gitOutput(t, root, "commit", "-m", "content")
+
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault, Running: "v0.6.0", RouterState: "current",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, c := range p.LinkCandidates {
+		got[c.Old] = c.New
+	}
+	if want := "../plans/a-plan.md#gaps"; got[want] != want {
+		t.Errorf("fragment candidate = %q for %q, want %q", got[want], want, want)
+	}
+	if want := "../plans/a-plan.md?raw=1"; got[want] != want {
+		t.Errorf("query candidate = %q for %q, want %q", got[want], want, want)
+	}
+}
+
+// An unreadable tracked set means the scan never ran, and "no candidates" would
+// read as "this move breaks no links" -- the one conclusion the evidence does
+// not support. It is a blocker, not an empty list.
+func TestPlanMigrationBlocksWhenTheLinkScanCannotRun(t *testing.T) {
+	root := newGitV1Repo(t)
+	if err := os.WriteFile(filepath.Join(root, ".git", "index"), []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := PlanMigration(root, MigrateOptions{
+		Template: TemplateContentVault, Running: "v0.6.0", RouterState: "current",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasBlocker(p.Blockers, "link_scan_unreadable") {
+		t.Fatalf("blockers = %v, want link_scan_unreadable", p.Blockers)
+	}
+	if p.Counts.Blocked != len(p.Blockers) {
+		t.Fatalf("counts.Blocked = %d, blockers = %d", p.Counts.Blocked, len(p.Blockers))
+	}
+}
