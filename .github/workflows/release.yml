@@ -49,10 +49,21 @@ jobs:
         run: |
           bash script/package-release.sh "${{ steps.version.outputs.version }}" dist
 
+      # The GitHub Release body is the authoritative carrier for the
+      # deploy-before-flip prerequisite and the measured fleet baseline, and
+      # generate_release_notes would omit both -- it only builds a body from
+      # commit titles. So the notes are a committed file this step must find;
+      # test -s fails the release rather than shipping an empty body, which is
+      # the difference between a gate the reader sees and a release that looks
+      # successful while carrying none of the prose it promises.
+      - name: release notes must exist and be non-empty
+        run: test -s ".github/release-notes/${{ steps.version.outputs.version }}.md"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@fe965f7af51af5f2602596916f38a38df2e33de0 # v3.0.2
         with:
           tag_name: ${{ steps.version.outputs.version }}
+          body_path: .github/release-notes/${{ steps.version.outputs.version }}.md
           files: |
             dist/agents_*_*.tar.gz
             dist/checksums.txt

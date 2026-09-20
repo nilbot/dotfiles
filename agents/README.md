@@ -277,6 +277,34 @@ a source that is not v1, malformed flags) it is a refusal object carrying
 `repo`, `dry_run`, `phase`, and the `error` sentence the human surface prints,
 so a machine consumer never has to skip prose.
 
+## Upgrading to v0.6.0
+
+The GitHub Release body carries the authoritative upgrade instructions; this
+section is the durable repo-side copy of the same three things.
+
+**Deploy before flip.** A v0.5.1 binary cannot see `.agents/layout.json`. On a
+v2 repository it recreates the four `docs/` store READMEs and can overwrite a
+v2-aware migration skill with its own embedded text, and no guard inside the
+manifest can stop it. So every machine that can run `agents init`,
+`agents update --all --apply`, or `agents save` against the fleet must resolve
+**v0.6.0** on `PATH` (verify with `agents version` and `agents doctor`'s
+`binary` check) *before* any repository is migrated. A repository below its
+`min_mut_ver_floor` still reads and displays, and refuses every mutation.
+
+**The migration path.**
+
+```bash
+agents layout migrate --dry-run                     # the plan; writes nothing
+agents layout migrate --apply --backup-tag <name>   # requires the tag
+agents layout migrate --resume --apply              # continue a frozen journal
+agents layout migrate --abort --apply               # only while nothing moved
+```
+
+**The measured fleet baseline.** v0.6.0 adds no new v1 advisory: `dotfiles`,
+`paperbubble`, `cowork`, and `lewm-mlx` stay `current`, and `autogo-mlx` and
+`desktop_pet` continue to exit 1 for pre-existing 2026-08-29 two-tier reasons
+this release neither creates nor clears.
+
 ---
 
 ## License
