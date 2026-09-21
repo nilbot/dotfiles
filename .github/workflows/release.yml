@@ -21,7 +21,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Verify and package, but create no release'
+        description: 'Verify and package, but create no release and sync no formula'
         required: false
         type: boolean
         default: false
@@ -107,7 +107,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: agents/go.sum
 
       - name: package release
         env:
@@ -161,18 +160,39 @@ jobs:
             dist/agents_*_*.tar.gz
             dist/checksums.txt
 
-      # There is no tap-sync step. The formula lives in nilbot/homebrew-tap and
-      # is maintained there; this repository used to carry a copy of it and a
-      # script that pushed a regenerated version over it, and neither is wanted:
-      # the copy was four releases stale, it installed the binary and nothing
-      # else, and a reader of this repository had no way to tell that the file
-      # they were looking at was not the one `brew` reads.
+      # The tap is updated from here, but this repository keeps no copy of the
+      # formula. `script/sync-homebrew-formula.sh` reads the formula the tap
+      # already has and rewrites only its four url and four sha256 lines, so
+      # nilbot/homebrew-tap remains the single source of truth for what `brew`
+      # installs. A second copy here went four minor versions stale before
+      # anyone noticed, and a reader of this repository could not tell that the
+      # file they were looking at was not the one `brew` reads.
       #
-      # The consequence is deliberate and worth stating: **releasing does not
-      # update the tap.** A release publishes the tarballs below; whoever wants
-      # `brew upgrade agents` to deliver it updates the tap's formula from
-      # `checksums.txt`. Until they do, `brew` keeps installing the previous
-      # version, which is the honest behaviour rather than a silent no-op.
+      # It runs after the release is published, because it reads the digests
+      # from `dist/checksums.txt` -- the same file the release carries, not a
+      # re-derivation of it.
+      - name: sync formula to homebrew-tap
+        if: steps.version.outputs.dry_run != 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ -z "${HOMEBREW_TAP_TOKEN}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set, so the tap cannot be updated. The release is published; the tap still points at the previous version until this runs." >&2
+            exit 1
+          fi
+          bash script/sync-homebrew-formula.sh "${VERSION}" dist
+
+      # A released tag the tap does not carry is the failure this job exists to
+      # make visible. Without it the release goes green and `brew upgrade agents`
+      # silently keeps installing the previous version -- which is exactly what
+      # happened between the formula copy going stale and anyone noticing.
+      - name: assert the tap carries this release
+        if: steps.version.outputs.dry_run != 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: bash script/sync-homebrew-formula.sh --check "${VERSION}" dist
 
       - name: dry run summary
         if: steps.version.outputs.dry_run == 'true'
@@ -181,4 +201,4 @@ jobs:
           SHA: ${{ steps.verified.outputs.sha }}
         run: |
           echo "dry run: ${VERSION} (${SHA}) verified, packaged and asserted;"
-          echo "no release was created and no tap was touched."
+          echo "no release was created and no formula was synced."

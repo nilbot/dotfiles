@@ -65,8 +65,11 @@ jobs:
           # Exact patch, never go-version-file: `go 1.26` in go.mod floats to
           # whatever the runner happens to ship.
           go-version: '1.26.6'
-          cache: ${{ matrix.module == 'agents' }}
-          cache-dependency-path: agents/go.sum
+          # No cache, because there is nothing to cache: this module's last two
+          # third-party dependencies went with the code that imported them, and
+          # `go.sum` is deleted. The default would key the cache on a file that
+          # no longer exists.
+          cache: false
       - name: build
         run: go build ./...
       - name: gofmt
@@ -169,7 +172,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: agents/go.sum
       # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
       # deliberate design -- it errors rather than skips), and this job's own
       # `go test` runs exercise that command, same as the test job's matrix.
@@ -230,7 +232,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
-          cache-dependency-path: agents/go.sum
       - name: every command carries help, an audience, and honest flags
         run: |
           set -euo pipefail
