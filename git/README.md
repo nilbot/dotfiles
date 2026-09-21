@@ -1,9 +1,10 @@
 # Git hook provisioning
 
 How the global Git hook chain is installed and how to check it. Moved here from
-`claude/CLAUDE.md`: that file is symlinked to `~/.claude/CLAUDE.md` and therefore
-loads into every Claude Code session in every repository, where install-time
-instructions cost context on every turn and are never acted on.
+the global instruction file, now `global/AGENTS.md`: that file is symlinked to
+`~/.dsh/AGENTS.md`, `~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md`, so it loads
+into every session in every repository, where install-time instructions cost
+context on every turn and are never acted on.
 
 The rule that file still carries — no AI attribution in anything that lands in a
 repository — stays there, because a session does act on it.
@@ -84,13 +85,13 @@ readlink "$HOME/.gitattributes"
 
 **The hooks cannot see pull requests.** `gh` talks to the GitHub API, not to
 Git, so nothing here protects a PR title or body. That half of the attribution
-rule is enforced by reading it, which is why it lives in `claude/CLAUDE.md`.
+rule is enforced by reading it, which is why it lives in `global/AGENTS.md`.
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `claude/CLAUDE.md` | the tracked global instruction file, symlinked to `~/.claude/CLAUDE.md` |
+| `global/AGENTS.md` | the tracked global instruction file, symlinked to `~/.dsh/AGENTS.md`, `~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md` |
 | `bootstrap.d/links.manifest` | declares that symlink, and every other managed path |
 | `~/bin/agents` | Go-backed multicall hook dispatcher |
 | `git/install-hooks.sh` | ownership-checking installer |
