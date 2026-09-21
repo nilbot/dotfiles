@@ -419,7 +419,10 @@ Stage exact paths, never `git add .`:
 
 ```bash
 cd /Users/nilbot/gist/paperbubble
-git add -- AGENTS.md .agents .context docs
+# Not `docs`: the migration's `git mv` already staged those renames, and the
+# directory no longer exists, so naming it fails the whole command with
+# `fatal: pathspec 'docs' did not match any files` (measured 2026-09-20).
+git add -- AGENTS.md .agents .context
 git diff --cached --stat
 git diff --cached --check
 
@@ -427,6 +430,12 @@ git commit -m "feat(context): move agent meta stores to .context"
 git push -u origin feat/layout-v2-migration
 gh pr create --fill
 ```
+
+`--fill` titles the PR from the branch's commits. When the pilot branch carries
+other work as well — paperbubble's carried ten commits, six of them editorial —
+write the title and body explicitly instead, so the rename diff is what the
+review names rather than whichever commit `--fill` picked. Check the repository's
+visibility before pushing: the branch may carry work that is not on any remote yet.
 
 The commit message names the pilot and the design:
 
