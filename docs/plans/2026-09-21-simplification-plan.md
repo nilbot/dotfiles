@@ -1,6 +1,41 @@
 # Simplification Plan
 
-**Status: ready for review. Nothing here has been executed.**
+**Status: EXECUTED 2026-09-21, with deviations recorded below.** The work is on
+branch `simplify/agents-single-home` (PR #52). Read this section before the plan
+itself: several steps landed differently from what is written further down,
+because the writing was a plan and the doing found things a plan could not.
+
+**What the execution taught, in the order it mattered:**
+
+- **The mechanical probe replaced the plan's deletion list.** Deleting the six
+  commands frees almost nothing on its own -- `go build` reported two undefined
+  symbols, and only one internal package became unreachable. What frees the rest
+  is rewriting `init`, `doctor` and the record half of `harness`, which is where
+  the plan had guessed at command files.
+- **`wire` had to be made strip-only, not merely re-ordered.** The plan's
+  "strip before emptying the event list" cannot work: `renderHooksJSON` stripped
+  and re-appended in one pass, so the strip is now driven by what a config holds
+  rather than by what a binary declares. Details in Task 2's replacement commits.
+- **A config whose only content is an empty hook container is not ours to
+  delete.** `{"hooks":{"Stop":[]}}` holds no entry of this tool's, and the first
+  removal rule deleted it. The rule now asks whether this run removed anything,
+  which is the only question that separates "we emptied it" from "it was empty".
+- **`checkAntigravityTrust` attached its instruction to a field the renderer
+  never prints** (a remedy is printed only for a check that is not ok), so the
+  manual step it exists to give reached no report. The step now travels in the
+  detail.
+- **The `commit-msg` guard stripped one of the two attribution URLs the global
+  instruction file quotes.** Found by the acceptance test, fixed, pinned.
+- **Skills: the tool installs `recording-what-you-learn` only.** The text it
+  installs is the text this repository records, and the two dead asset trees are
+  gone.
+- **The CI `docs` job named 45 tests that no longer existed.** Its list moved to
+  `agents/doctests.txt` so a diff to it is legible, and the job fails by name
+  when a listed test is missing or does not run.
+
+**Verification:** `script/accept-agents-simplification.sh` -- 42 checks, 0
+failures, including a real commit through the installed hook chain. CI on PR #52
+is the final gate.
 **Supersedes:** [`2026-09-21-agents-reduction-plan.md`](2026-09-21-agents-reduction-plan.md),
 [`2026-09-21-skills-single-home-plan.md`](2026-09-21-skills-single-home-plan.md),
 [`2026-09-21-simplification-roadmap.md`](2026-09-21-simplification-roadmap.md),
