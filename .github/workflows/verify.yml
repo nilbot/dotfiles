@@ -65,11 +65,14 @@ jobs:
           # Exact patch, never go-version-file: `go 1.26` in go.mod floats to
           # whatever the runner happens to ship.
           go-version: '1.26.6'
-          # No cache, because there is nothing to cache: this module's last two
-          # third-party dependencies went with the code that imported them, and
-          # `go.sum` is deleted. The default would key the cache on a file that
-          # no longer exists.
-          cache: false
+          # Keep the cache, and key it on go.mod. `go.sum` is deleted now that
+          # this module's last two third-party dependencies went with the code
+          # that imported them, so the default key would name a file that does
+          # not exist. Turning the cache off instead is the mistake this line
+          # exists to avoid: setup-go caches the go-build cache as well as the
+          # module cache, and losing it costs 4-6s per job in recompilation --
+          # measured, 0-2s for `build` across five runs before, 5s and 7s after.
+          cache-dependency-path: agents/go.mod
       - name: build
         run: go build ./...
       - name: gofmt
@@ -172,6 +175,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
+          # agents/go.mod, not agents/go.sum: that module has no external
+          # dependencies any more, so go.sum is deleted and would be a cache key
+          # naming a file that does not exist.
+          cache-dependency-path: agents/go.mod
       # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
       # deliberate design -- it errors rather than skips), and this job's own
       # `go test` runs exercise that command, same as the test job's matrix.
@@ -232,6 +239,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
+          # agents/go.mod, not agents/go.sum: that module has no external
+          # dependencies any more, so go.sum is deleted and would be a cache key
+          # naming a file that does not exist.
+          cache-dependency-path: agents/go.mod
       - name: every command carries help, an audience, and honest flags
         run: |
           set -euo pipefail
@@ -328,6 +339,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
+          # agents/go.mod, not agents/go.sum: that module has no external
+          # dependencies any more, so go.sum is deleted and would be a cache key
+          # naming a file that does not exist.
+          cache-dependency-path: agents/go.mod
       - name: plan
         run: ./bootstrap plan dotfiles
 

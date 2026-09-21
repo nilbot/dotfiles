@@ -107,6 +107,11 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.26.6'
+          # agents/go.mod, not agents/go.sum: that module has no external
+          # dependencies any more, so go.sum is deleted and would be a cache key
+          # naming a file that does not exist. This step cross-compiles four
+          # targets, so the build cache it restores is worth the most here.
+          cache-dependency-path: agents/go.mod
 
       - name: package release
         env:
