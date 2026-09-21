@@ -279,6 +279,23 @@ jobs:
 
           echo "doctests: $(echo $tests | wc -w | tr -d ' ') listed, all present and passing"
 
+      # The two shell suites that guard the release path. They live in this job
+      # because it is the one that runs at the repository root with Go already
+      # on PATH, and because both exist to stop prose drifting from code: one
+      # pins the lines `wire` prints and the comment explaining why, the other
+      # pins what the tap-sync script does to the tap's formula -- including the
+      # digest-to-platform mapping, whose failure is invisible until a user's
+      # `brew install` reports a SHA256 mismatch.
+      #
+      # Both are portable on purpose, no GNU-only flags, so the same files run
+      # here and on a macOS developer machine. Neither needs a network: the one
+      # scenario that reads the live tap skips itself when `gh` or the network
+      # is unavailable rather than failing.
+      - name: the release scripts keep their contracts
+        run: |
+          bash script/test-wire-wording.sh
+          bash script/test-sync-tap.sh
+
   # Spec 2's largest known gap: no phase of it had ever run on Linux. The
   # dotfiles profile is preflight + config + verify -- no sudo, no network, no
   # package manager, no login-shell change -- which is exactly what makes it

@@ -169,9 +169,10 @@ jobs:
       # formula. `script/sync-homebrew-formula.sh` reads the formula the tap
       # already has and rewrites only its four url and four sha256 lines, so
       # nilbot/homebrew-tap remains the single source of truth for what `brew`
-      # installs. A second copy here went four minor versions stale before
-      # anyone noticed, and a reader of this repository could not tell that the
-      # file they were looking at was not the one `brew` reads.
+      # installs. A second copy here went seven releases stale — last written
+      # at v0.1.0 on 2026-08-28, by which time the tap was at v0.6.0 — and a
+      # reader of this repository could not tell that the file they were
+      # looking at was not the one `brew` reads.
       #
       # It runs after the release is published, because it reads the digests
       # from `dist/checksums.txt` -- the same file the release carries, not a

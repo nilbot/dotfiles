@@ -89,12 +89,20 @@ digest_for() {
 }
 
 fetch_formula() {
-  local out="$1"
-  if ! gh api "repos/${TAP_REPO}/contents/${FORMULA_PATH}" --jq '.content' 2>/dev/null \
-      | tr -d '\n' | base64 --decode > "${out}" 2>/dev/null; then
+  local out="$1" raw
+  raw="$(gh api "repos/${TAP_REPO}/contents/${FORMULA_PATH}" --jq '.content' 2>/dev/null)"
+  if [[ -z "${raw}" ]]; then
     # A missing tap token is the common cause, and so is an unauthenticated rate
     # limit. Both are failures to check, not evidence that the tap is current.
     echo "Error: could not read ${TAP_REPO}/${FORMULA_PATH}" >&2
+    exit "${CHECK_EXIT_ERROR}"
+  fi
+  # Both spellings of the decode flag, because macOS ships a base64 whose long
+  # option is `-D` while GNU's is `--decode`. The old script carried this same
+  # pair; without it the script works in CI and fails on the maintainer's Mac.
+  if ! printf '%s' "${raw}" | tr -d '\n' | base64 --decode > "${out}" 2>/dev/null \
+       && ! printf '%s' "${raw}" | tr -d '\n' | base64 -D > "${out}" 2>/dev/null; then
+    echo "Error: could not decode ${TAP_REPO}/${FORMULA_PATH}" >&2
     exit "${CHECK_EXIT_ERROR}"
   fi
   if [[ ! -s "${out}" ]]; then
