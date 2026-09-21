@@ -53,10 +53,10 @@ func TestExitCodeTableIsRenderedFromTheConstants(t *testing.T) {
 
 func TestHelpForALeafExitsZeroAndNamesTheCommand(t *testing.T) {
 	var out bytes.Buffer
-	if code := runHelp([]string{"trace", "cache", "prune"}, &out); code != exitcode.OK {
+	if code := runHelp([]string{"doctor"}, &out); code != exitcode.OK {
 		t.Fatalf("help exit = %d, want 0", code)
 	}
-	for _, want := range []string{"agents trace cache prune", "never the records"} {
+	for _, want := range []string{"agents doctor", "observe"} {
 		if !strings.Contains(strings.ToLower(out.String()), strings.ToLower(want)) {
 			t.Errorf("help omitted %q:\n%s", want, out.String())
 		}
@@ -76,10 +76,12 @@ func TestHelpAllIncludesTheAutomatedCommands(t *testing.T) {
 	var narrow, wide bytes.Buffer
 	runHelp(nil, &narrow)
 	runHelp([]string{"--all"}, &wide)
-	if strings.Contains(narrow.String(), "agents hook") {
-		t.Errorf("default help lists a harness-only command:\n%s", narrow.String())
+	// guard is the automated command now: git invokes it, a person rarely
+	// types it, so the default listing leaves it out and --all adds it.
+	if strings.Contains(narrow.String(), "agents guard") {
+		t.Errorf("default help lists an automated command:\n%s", narrow.String())
 	}
-	if !strings.Contains(wide.String(), "agents hook") {
-		t.Errorf("--all omits a harness-only command:\n%s", wide.String())
+	if !strings.Contains(wide.String(), "agents guard") {
+		t.Errorf("--all omits an automated command:\n%s", wide.String())
 	}
 }

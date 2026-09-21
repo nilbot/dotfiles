@@ -14,29 +14,25 @@ import (
 
 	"github.com/nilbot/dotfiles/agents/internal/doctor"
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
-	"github.com/nilbot/dotfiles/agents/internal/machine"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
 type doctorCommandDependencies struct {
 	Getwd      func() (string, error)
 	Discover   func(string) (*repo.Context, error)
-	ReadID     func() (string, error)
 	BinaryPath func() (string, error)
 	Now        func() time.Time
 	DoctorDeps doctor.Dependencies
-	Run        func(string, string, string, string, string, doctor.Thresholds, time.Time, doctor.Dependencies) ([]doctor.Check, error)
+	Run        func(string, string, doctor.Dependencies) ([]doctor.Check, error)
 }
 
 func defaultDoctorCommandDependencies() doctorCommandDependencies {
 	// The scaffold checks ask whether the resolved layout admits this binary
 	// (design §5.3), so the running version -- not a literal -- reaches them.
 	doctorDeps := doctor.DependenciesFor(DotfilesRoot())
-	doctorDeps.RunningVersion = version
 	return doctorCommandDependencies{
 		Getwd:      os.Getwd,
 		Discover:   repo.Discover,
-		ReadID:     machine.ReadID,
 		BinaryPath: binaryPath,
 		Now:        func() time.Time { return time.Now().UTC() },
 		DoctorDeps: doctorDeps,
@@ -49,17 +45,11 @@ func runDoctor(args []string, stdout io.Writer) int {
 }
 
 func runDoctorWithDependencies(args []string, stdout io.Writer, deps doctorCommandDependencies) int {
-	thresholds := doctor.DefaultThresholds()
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(stdout)
-	fs.DurationVar(&thresholds.Window, "lane-window", thresholds.Window, "recent window used for lane health")
-	fs.IntVar(&thresholds.Modules, "lane-modules", thresholds.Modules, "distinct top-level modules before a lane is flagged")
-	fs.IntVar(&thresholds.Days, "lane-days", thresholds.Days, "days of span before a lane is flagged")
-	fs.IntVar(&thresholds.Sessions, "lane-sessions", thresholds.Sessions, "sessions before a lane is flagged")
-	fs.DurationVar(&thresholds.RecordingFreshness, "recording-freshness", thresholds.RecordingFreshness, "maximum age of a recent harness record")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || thresholds.Window <= 0 || thresholds.Modules <= 0 || thresholds.Days <= 0 || thresholds.Sessions <= 0 || thresholds.RecordingFreshness <= 0 {
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		if err == nil {
-			fmt.Fprintln(stdout, "agents doctor: flags require positive thresholds and no positional arguments")
+			fmt.Fprintln(stdout, "agents doctor: takes no arguments")
 		}
 		return exitcode.Malformed
 	}
@@ -78,7 +68,6 @@ func runDoctorWithDependencies(args []string, stdout io.Writer, deps doctorComma
 		fmt.Fprintln(stdout, "agents doctor: could not inspect the Git repository")
 		return exitcode.NoRecord
 	}
-	machineID, _ := deps.ReadID()
 	binary, err := deps.BinaryPath()
 	if err != nil {
 		fmt.Fprintln(stdout, "agents doctor: could not resolve the running executable")
@@ -89,12 +78,7 @@ func runDoctorWithDependencies(args []string, stdout io.Writer, deps doctorComma
 		fmt.Fprintln(stdout, "agents doctor: could not normalize the running executable")
 		return exitcode.NoRecord
 	}
-	store, err := repo.StoreDir(rc.Root)
-	if err != nil {
-		fmt.Fprintln(stdout, "agents doctor: could not resolve the machine-local store")
-		return exitcode.NoRecord
-	}
-	checks, err := deps.Run(rc.Root, repo.AgentsDir(rc.Root), store, machineID, binary, thresholds, deps.Now(), deps.DoctorDeps)
+	checks, err := deps.Run(rc.Root, binary, deps.DoctorDeps)
 	if err != nil {
 		fmt.Fprintln(stdout, "agents doctor: could not complete the diagnostic")
 		return exitcode.NoRecord

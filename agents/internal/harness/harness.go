@@ -18,8 +18,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-
-	"github.com/nilbot/dotfiles/agents/internal/pointer"
 )
 
 // Semantic event names. These are what the command line and the record use;
@@ -37,66 +35,11 @@ const (
 // destination field, so anything absent here -- last_assistant_message,
 // tool_input, tool_response -- cannot reach any writer, whatever a future
 // harness decides to send.
-type Payload struct {
-	HookEventName  string `json:"hook_event_name"`
-	SessionID      string `json:"session_id"`
-	ConversationID string `json:"conversationId"`
-
-	// The per-turn identifier, under both spellings in use. Codex sends
-	// turn_id; Claude Code sends prompt_id and has no turn_id at all (measured
-	// 2026-08-07, fixtures/2026-08-07-claude-code-hook-payloads). Build picks
-	// whichever is present rather than each adapter restating it.
-	TurnID   string `json:"turn_id"`
-	PromptID string `json:"prompt_id"`
-
-	AgentID             string   `json:"agent_id"`
-	AgentType           string   `json:"agent_type"`
-	Cwd                 string   `json:"cwd"`
-	WorkspacePaths      []string `json:"workspacePaths"`
-	TranscriptPath      string   `json:"transcript_path"`
-	TranscriptPathCamel string   `json:"transcriptPath"`
-	AgentTranscriptPath string   `json:"agent_transcript_path"`
-	Source              string   `json:"source"`
-}
-
-// Event maps a semantic event to one harness's spelling of it.
-type Event struct {
-	Semantic string
-	Vendor   string
-	Matcher  string // emitted only when non-empty; empty means match everything
-}
-
-// Capabilities states what a harness can supply, so the record format does not
-// have to pretend they are equal.
-type Capabilities struct {
-	Description bool // supplies a human label for a subagent
-}
-
-// Trace is everything a harness can determine from a payload on its own,
-// knowing nothing about repositories, machines, or lanes.
-type Trace struct {
-	Event           string
-	SessionID       string
-	TurnID          string
-	AgentID         string
-	AgentType       string
-	Description     string
-	Transcript      string
-	PointerVerified bool
-	Cwd             string // absolute, as the harness reported it
-}
 
 type Adapter interface {
 	Name() string
 	HarnessDir() string
 	NeedsSkillsSymlink() bool
-	Capabilities() Capabilities
-	Events() []Event
-
-	// Describe returns a human label for a subagent, or "" when the harness
-	// cannot supply one. transcript is the already-resolved path, because the
-	// only harness that can answer reads a sidecar next to it.
-	Describe(p Payload, transcript string) string
 
 	// WireConfigPath is the generated config file for a repo.
 	WireConfigPath(repoRoot string) string
@@ -104,8 +47,13 @@ type Adapter interface {
 	// Wire writes that config, merging into whatever is already there.
 	Wire(repoRoot, binary string) error
 
-	// Render produces the serialized config bytes for this harness.
-	Render(settings map[string]any, binary string) ([]byte, error)
+	// StripHooks removes this tool's own entries from a harness config, in
+	// place, and adds nothing. Adapters differ in where their entries live --
+	// Claude Code and Codex nest them under "hooks", Antigravity under "agents"
+	// -- so the shape of the removal is per-harness even though the reason is
+	// the same for all three. It takes no event list on purpose: see
+	// stripHooksJSON for why an event-driven strip is the defect, not the fix.
+	StripHooks(settings map[string]any) error
 
 	// TrustSteps are the manual steps left after wiring. No harness lets a
 	// freshly wired repo's hooks fire unattended, and defeating that gate is an
@@ -136,84 +84,15 @@ func All() []Adapter {
 
 // Decode reads one hook payload. It is the single place where hook JSON becomes
 // Go values, which is what makes the redaction guarantee auditable.
-func Decode(r io.Reader) (Payload, error) {
-	var p Payload
-	if err := json.NewDecoder(r).Decode(&p); err != nil {
-		return Payload{}, fmt.Errorf("decode hook payload: %w", err)
-	}
-	return p, nil
-}
-
-// turnID returns the per-turn identifier under whichever spelling the harness
-// used. turn_id wins when both are set, so a harness that adds the other name
-// later does not silently change which value is recorded.
-func turnID(p Payload) string {
-	if p.TurnID != "" {
-		return p.TurnID
-	}
-	return p.PromptID
-}
-
-// Build assembles the harness-determined part of a record.
-func Build(a Adapter, semantic string, p Payload) Trace {
-	sessionID := p.SessionID
-	if sessionID == "" {
-		sessionID = p.ConversationID
-	}
-	cwd := p.Cwd
-	if cwd == "" && len(p.WorkspacePaths) > 0 {
-		cwd = p.WorkspacePaths[0]
-	}
-	tr := Trace{
-		Event:     semantic,
-		SessionID: sessionID,
-		TurnID:    turnID(p),
-		Cwd:       cwd,
-	}
-
-	// The key whose presence in a transcript path verifies the pointer: the
-	// agent for subagent events, the session otherwise.
-	key := sessionID
-	if semantic == SubagentStart || semantic == SubagentStop {
-		tr.AgentID = p.AgentID
-		tr.AgentType = p.AgentType
-		key = p.AgentID
-	}
-
-	tr.Transcript, tr.PointerVerified = pointer.Resolve(
-		[]string{p.AgentTranscriptPath, p.TranscriptPath, p.TranscriptPathCamel}, key,
-	)
-	if a.Capabilities().Description {
-		tr.Description = a.Describe(p, tr.Transcript)
-	}
-	return tr
-}
-
-// hookCommand renders the invocation that a harness will run. Harness identity
-// is on the command line because it cannot be read from the environment.
-func HookCommand(binary, harnessName, semantic string) string {
-	return fmt.Sprintf("%s hook %s --harness %s", quotePOSIXWord(binary), semantic, harnessName)
-}
-
+// quotePOSIXWord quotes a word for a POSIX shell only when it has to, so the
+// common path stays readable in a config a human reads.
 func quotePOSIXWord(word string) string {
 	if word != "" && strings.IndexFunc(word, func(r rune) bool {
 		return !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && !strings.ContainsRune("_@%+=:,./-", r)
 	}) == -1 {
 		return word
 	}
-	return "'" + strings.ReplaceAll(word, "'", "'\"'\"'") + "'"
-}
-
-// CommandBinary returns the executable word of a hook command, whether or not
-// this repository owns it. ParseHookCommand answers "is this ours"; a report
-// about commands that merely RESEMBLE ours needs "whose is it", and splitting
-// the command here keeps one parser for the one generated spelling.
-func CommandBinary(command string) (string, bool) {
-	words, ok := splitShellWords(command)
-	if !ok || len(words) == 0 {
-		return "", false
-	}
-	return words[0], true
+	return "'" + strings.ReplaceAll(word, "'", `'"'"'`) + "'"
 }
 
 // ParseHookCommand recognizes only commands generated by agents. It accepts
@@ -227,12 +106,21 @@ func ParseHookCommand(command string) (binary, harnessName, semantic string, ok 
 	if !filepath.IsAbs(binary) || !isOwnedBinary(binary) || !knownSemantic(semantic) || !knownHarness(harnessName) {
 		return "", "", "", false
 	}
-	current := HookCommand(binary, harnessName, semantic)
-	legacy := fmt.Sprintf("%s hook %s --harness %s", binary, semantic, harnessName)
-	if command != current && (command != legacy || quotePOSIXWord(binary) != binary) {
-		return "", "", "", false
+	// Two spellings are recognised: the quoted one this tool writes, and the
+	// unquoted argument order an earlier version wrote. The second is only
+	// accepted when the binary needs no quoting: if it does, the two spellings
+	// are the same string and accepting the unquoted form unconditionally would
+	// widen what `wire` is allowed to delete from a config this tool does not
+	// own.
+	current := fmt.Sprintf("%s hook %s --harness %s", quotePOSIXWord(binary), semantic, harnessName)
+	if command == current {
+		return binary, harnessName, semantic, true
 	}
-	return binary, harnessName, semantic, true
+	legacy := fmt.Sprintf("%s hook %s --harness %s", binary, semantic, harnessName)
+	if command == legacy && quotePOSIXWord(binary) == binary {
+		return binary, harnessName, semantic, true
+	}
+	return "", "", "", false
 }
 
 func IsOwnedHookCommand(command string) bool {
@@ -498,46 +386,53 @@ func readHooksJSON(dir *os.Root, dirPath, name string) (map[string]any, configSn
 	return settings, configSnapshot{exists: true, info: opened, perm: opened.Mode().Perm()}, nil
 }
 
-// renderHooksJSON merges our entries while preserving every unrelated key and
-// foreign hook. Silently dropping an audit hook would be serious misbehaviour.
-func renderHooksJSON(settings map[string]any, harnessName string, events []Event, binary string) ([]byte, error) {
+// stripHooksJSON removes every entry this tool owns from a Claude Code or Codex
+// config, and changes nothing else.
+//
+// It walks EVERY key under "hooks", not the events any harness currently
+// declares. That distinction is the whole reason this function exists in this
+// shape: a strip driven by an event list can only remove an entry for an event
+// it recognises, so an entry left under any other key -- by an older version, a
+// renamed event, or a hand edit -- survives every repair while remaining
+// visible to `doctor`, which reports exactly that entry and tells the operator
+// to run `wire`. An entry that no invocation can clear, with a remedy that
+// provably does nothing, is worse than no check at all.
+//
+// It never adds. This tool no longer records harness lifecycle events, so there
+// is no entry for it to want; what remains is the cleanup of entries an earlier
+// version wrote. Foreign hooks and unknown shapes are preserved verbatim --
+// silently dropping an audit hook would be serious misbehaviour, and that rule
+// outlived the feature that motivated it.
+func stripHooksJSON(settings map[string]any) ([]byte, error) {
 	if settings == nil {
 		return nil, fmt.Errorf("generated hook config root must be a JSON object, not null")
 	}
-	var hooks map[string]any
-	if raw, present := settings["hooks"]; present {
-		var ok bool
-		hooks, ok = raw.(map[string]any)
+	raw, present := settings["hooks"]
+	if !present {
+		return marshalSettings(settings)
+	}
+	hooks, ok := raw.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("generated hook config hooks must be a JSON object")
+	}
+	for event, rawGroups := range hooks {
+		list, ok := rawGroups.([]any)
 		if !ok {
-			return nil, fmt.Errorf("generated hook config hooks must be a JSON object")
+			return nil, fmt.Errorf("generated hook config event %s must be a JSON array", event)
 		}
-	} else {
-		hooks = map[string]any{}
+		if kept := stripOurs(list); len(kept) == 0 {
+			delete(hooks, event)
+		} else {
+			hooks[event] = kept
+		}
 	}
-
-	for _, ev := range events {
-		var groups []any
-		if raw, present := hooks[ev.Vendor]; present {
-			var ok bool
-			groups, ok = raw.([]any)
-			if !ok {
-				return nil, fmt.Errorf("generated hook config event %s must be a JSON array", ev.Vendor)
-			}
-		}
-		kept := stripOurs(groups)
-
-		entry := map[string]any{
-			"hooks": []any{map[string]any{
-				"type":    "command",
-				"command": HookCommand(binary, harnessName, ev.Semantic),
-			}},
-		}
-		if ev.Matcher != "" {
-			entry["matcher"] = ev.Matcher
-		}
-		hooks[ev.Vendor] = append(kept, entry)
+	if len(hooks) == 0 {
+		delete(settings, "hooks")
 	}
-	settings["hooks"] = hooks
+	return marshalSettings(settings)
+}
+
+func marshalSettings(settings map[string]any) ([]byte, error) {
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return nil, err
@@ -666,7 +561,14 @@ func wireRepository(repoRoot string, a Adapter, binary string) error {
 	if err != nil {
 		return err
 	}
-	out, err := a.Render(settings, binary)
+	// How many of this tool's entries the file held before the strip, so that
+	// "we removed them all" can be told from "there were none". The two produce
+	// identical bytes and cannot be told apart from the result alone.
+	had := countOwned(a.Name(), settings)
+	if err := a.StripHooks(settings); err != nil {
+		return err
+	}
+	out, err := marshalSettings(settings)
 	if err != nil {
 		return err
 	}
@@ -687,7 +589,136 @@ func wireRepository(repoRoot string, a Adapter, binary string) error {
 		}
 		return nil
 	}
+	// What to do with the result, and the distinction that decides it.
+	//
+	// "The file became empty because we deleted our entries" and "the file held
+	// none of ours to begin with" produce identical bytes, so they cannot be
+	// told apart from the result. Removing on the bytes alone deletes a
+	// placeholder someone else wrote: measured, a config of `{"hooks":{"Stop":[]}}`
+	// holds no entry of this tool's -- an empty list is not an entry -- yet it
+	// stripped to `{}` and the whole file was removed. So the question asked here
+	// is the only one that separates the two: did this run delete anything?
+	//
+	// The four outcomes: nothing removed and nothing left to write, so leave the
+	// file exactly as it is (absent stays absent, a keyless file stays keyless);
+	// entries removed and nothing left, so remove the file -- it existed to carry
+	// them; entries removed and something left, so write the remainder back with
+	// everything foreign preserved; nothing removed but the file has content of
+	// its own, which is the ordinary no-op. The last two both publish.
+	if isEmptySettings(out) {
+		if had == 0 {
+			return nil
+		}
+		return removeIfUnchanged(dir, dirPath, configName, snapshot, validate)
+	}
 	return atomicWriteHooks(dir, dirPath, configName, out, snapshot, validate)
+}
+
+// removeIfUnchanged deletes a config only while it is still the exact file this
+// run read, and only when the skills invariant still holds.
+//
+// The removal path needs the same two checks the publish path performs, and for
+// the same reasons. Without the identity check, a writer that replaces the
+// config between the read and the removal loses its file -- the case
+// atomicWriteHooks' own comment says it exists to prevent, and which the
+// filesystem-safety suite reproduces by substituting a foreign config at the
+// publish boundary. Without the skills check, a removal can leave the harness
+// skills link in a state this run never validated.
+func removeIfUnchanged(dir *os.Root, dirPath, name string, snapshot configSnapshot, validateSkills func() error) error {
+	// The same seam the publish path crosses, and for the same reason: this is a
+	// mutation of a file the caller does not own, so the identity check has to
+	// happen after any racing writer has had its chance. Without this, the
+	// removal path verified a file that a concurrent writer had already
+	// replaced, and deleted the replacement.
+	beforeWirePublish()
+	current, err := dir.Lstat(name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !snapshot.exists {
+		return fmt.Errorf("%s appeared while wiring: refusing to remove it", filepath.Join(dirPath, name))
+	}
+	if !isSingleLinkRegular(current) || !os.SameFile(snapshot.info, current) ||
+		current.Mode() != snapshot.info.Mode() || current.Size() != snapshot.info.Size() ||
+		!current.ModTime().Equal(snapshot.info.ModTime()) {
+		return fmt.Errorf("%s changed while wiring: refusing to remove it", filepath.Join(dirPath, name))
+	}
+	if err := validateSkills(); err != nil {
+		return err
+	}
+	if err := dir.Remove(name); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+// mustMarshal serializes settings for a question that only needs the answer. An
+// unserializable map is caught by the real marshal on the publish path, and
+// this call must not become a second error path for it.
+func mustMarshal(settings map[string]any) []byte {
+	out, err := marshalSettings(settings)
+	if err != nil {
+		return []byte("{}")
+	}
+	return out
+}
+
+// isEmptySettings reports whether a marshalled config holds nothing at all.
+func isEmptySettings(out []byte) bool {
+	return strings.TrimSpace(string(out)) == "{}"
+}
+
+// countOwned reports how many hook commands in a config this tool owns, in any
+// of the shapes it has written.
+//
+// It exists so the removal rule can ask the one question the stripped bytes
+// cannot answer: whether an empty result means "we removed them all" or "there
+// were none of ours here". It walks every key rather than a declared event list
+// for the same reason the strip does -- an entry under an event this binary no
+// longer knows is exactly the kind that has to be found.
+//
+// It is the same predicate `stripOurs` deletes by, which is the property that
+// was broken once and is worth keeping: a report or a decision that is wider
+// than the repair prints a remedy that cannot work.
+func countOwned(harnessName string, settings map[string]any) int {
+	var group map[string]any
+	if harnessName == "antigravity" {
+		group, _ = settings["agents"].(map[string]any)
+	} else {
+		group, _ = settings["hooks"].(map[string]any)
+	}
+	count := 0
+	for _, rawList := range group {
+		list, ok := rawList.([]any)
+		if !ok {
+			continue
+		}
+		for _, rawEntry := range list {
+			entry, ok := rawEntry.(map[string]any)
+			if !ok {
+				continue
+			}
+			// A command directly in the list (Antigravity's shape).
+			if cmd, ok := entry["command"].(string); ok {
+				if IsOwnedHookCommand(cmd) {
+					count++
+				}
+				continue
+			}
+			// A group wrapping a hooks list (Claude Code's and Codex's shape).
+			inner, _ := entry["hooks"].([]any)
+			for _, rawHook := range inner {
+				hook, _ := rawHook.(map[string]any)
+				if cmd, ok := hook["command"].(string); ok && IsOwnedHookCommand(cmd) {
+					count++
+				}
+			}
+		}
+	}
+	return count
 }
 
 // stripOurs removes previously generated entries, at the level of individual

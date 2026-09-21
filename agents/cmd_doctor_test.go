@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -16,422 +15,150 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
-func commandDepsForDoctor(t *testing.T, checks []doctor.Check, runErr error) doctorCommandDependencies {
+// This suite replaces the one deleted with the checks it exercised. These tests
+// cover the contract of the doctor COMMAND, which is a layer above the checks
+// themselves: what it exits with, what it does with output it cannot trust, and
+// that it observes without writing. Nothing here asserts which checks exist,
+// because that is the package's business; these assert the command reports them
+// honestly.
+
+func fakeDoctorDeps(t *testing.T, root string, checks []doctor.Check) doctorCommandDependencies {
 	t.Helper()
-	root := newRepo(t)
 	return doctorCommandDependencies{
 		Getwd:      func() (string, error) { return root, nil },
 		Discover:   repo.Discover,
-		ReadID:     func() (string, error) { return "m1", nil },
 		BinaryPath: func() (string, error) { return filepath.Join(root, "agents"), nil },
-		Now:        func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
+		Now:        func() time.Time { return time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC) },
 		DoctorDeps: doctor.Dependencies{},
-		Run: func(string, string, string, string, string, doctor.Thresholds, time.Time, doctor.Dependencies) ([]doctor.Check, error) {
-			return checks, runErr
+		Run: func(string, string, doctor.Dependencies) ([]doctor.Check, error) {
+			return checks, nil
 		},
 	}
 }
 
-func realDoctorCommandDeps(t *testing.T, root string) doctorCommandDependencies {
-	t.Helper()
-	binary := filepath.Join(t.TempDir(), "agents")
-	if err := os.WriteFile(binary, []byte("test binary"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return doctorCommandDependencies{
-		Getwd:      func() (string, error) { return root, nil },
-		Discover:   repo.Discover,
-		ReadID:     func() (string, error) { return "m1", nil },
-		BinaryPath: func() (string, error) { return binary, nil },
-		Now:        func() time.Time { return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC) },
-		DoctorDeps: doctor.Dependencies{},
-		Run:        doctor.RunWithDeps,
-	}
-}
-
-// releaseFIFOAfter prevents a deliberately unsafe old reader from becoming a
-// test-process orphan. A safe reader closes stop before the timer fires.
-func releaseFIFOAfter(path string, delay time.Duration, stop <-chan struct{}) <-chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		select {
-		case <-time.After(delay):
-			f, _ := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
-			if f != nil {
-				_ = f.Close()
-			}
-		case <-stop:
-		}
-	}()
-	return done
-}
-
-// doctorCheckStatus returns the status mark doctor printed for one check, or
-// "<missing>" when it printed none. Remedy lines begin with "->" and so never
-// match a check name.
-func doctorCheckStatus(output, name string) string {
-	for _, line := range strings.Split(output, "\n") {
-		if fields := strings.Fields(line); len(fields) >= 2 && fields[1] == name {
-			return fields[0]
-		}
-	}
-	return "<missing>"
-}
-
-// TestDoctorCommandNamesThisBinarysCheckoutInsteadOfAssumingHome pins the one
-// line that fixes the reported bug: the doctor command asking DotfilesRoot()
-// which checkout this binary belongs to, instead of letting doctor assume
-// ~/dotfiles and report three failures and a warning against a healthy machine.
-//
-// DotfilesRoot and DependenciesFor are each covered alone, but covering two
-// halves says nothing about whether they are joined. This builds the real
-// dependencies through the real constructor, so reverting that line to
-// DefaultDependencies() fails here -- which is the whole value of the pin.
-func TestDoctorCommandNamesThisBinarysCheckoutInsteadOfAssumingHome(t *testing.T) {
-	stampRoot(t, "")
-	root := filepath.Join(t.TempDir(), "src", "dotfiles")
-	home := t.TempDir()
-	t.Setenv("AGENTS_DOTFILES_ROOT", root)
-	t.Setenv("HOME", home)
-
-	deps := defaultDoctorCommandDependencies().DoctorDeps
-
-	for _, c := range []struct{ field, got, want string }{
-		{"HooksDir", deps.HooksDir, filepath.Join(root, "git", "hooks.d")},
-		{"AttributesSource", deps.AttributesSource, filepath.Join(root, "git", "gitattributes")},
-		{"SharedGitConfig", deps.SharedGitConfig, filepath.Join(root, "git", "gitconfig.shared")},
-	} {
-		if c.got != c.want {
-			t.Errorf("doctor command DoctorDeps.%s = %q, want %q; doctor compares this "+
-				"against what Git reports, so a binary that assumes %s instead fails "+
-				"its own check on a correctly provisioned machine",
-				c.field, c.got, c.want, filepath.Join(home, "dotfiles"))
-		}
-	}
-}
-
+// Exit 0 when every check is ok, and 1 when any is not. The distinction is the
+// whole contract: a CI job or a hook keys off it, and reporting a warning as
+// success is the silent failure this tool exists to prevent.
 func TestDoctorCommandExitContract(t *testing.T) {
-	cases := []struct {
-		name   string
-		args   []string
-		checks []doctor.Check
-		err    error
-		want   int
-	}{
-		{"all ok", nil, []doctor.Check{{Name: "x", Status: doctor.OK, Detail: "ok"}}, nil, exitcode.OK},
-		{"warn", nil, []doctor.Check{{Name: "x", Status: doctor.Warn, Detail: "warn"}}, nil, exitcode.Advisory},
-		{"fail label is advisory exit", nil, []doctor.Check{{Name: "x", Status: doctor.Fail, Detail: "fail"}}, nil, exitcode.Advisory},
-		{"bad flag", []string{"--unknown"}, nil, nil, exitcode.Malformed},
-		{"extra arg", []string{"extra"}, nil, nil, exitcode.Malformed},
-		{"invalid threshold", []string{"--recording-freshness=0s"}, nil, nil, exitcode.Malformed},
-		{"core failure", nil, nil, errors.New("private failure"), exitcode.NoRecord},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var out bytes.Buffer
-			got := runDoctorWithDependencies(tc.args, &out, commandDepsForDoctor(t, tc.checks, tc.err))
-			if got != tc.want || got == exitcode.Block {
-				t.Fatalf("exit=%d want=%d output=%q", got, tc.want, out.String())
-			}
-			if strings.Contains(out.String(), "private failure") {
-				t.Fatalf("core error leaked dependency detail: %q", out.String())
-			}
-		})
-	}
-}
+	root := newRepo(t)
+	t.Chdir(root)
 
-func TestDoctorMapsUnsafeTraceLeavesToContentSafeNoRecord(t *testing.T) {
-	for _, kind := range []string{"symlink", "fifo"} {
-		t.Run(kind, func(t *testing.T) {
-			root := newRepo(t)
-			storeTraces := filepath.Join(mustStoreDir(t, root), "traces")
-			if err := os.MkdirAll(storeTraces, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			traceLeaf := filepath.Join(storeTraces, "2026-08-20.jsonl")
-			private := "PRIVATE-doctor-trace-sentinel"
-			var stop chan struct{}
-			var released <-chan struct{}
-			if kind == "symlink" {
-				target := filepath.Join(t.TempDir(), "outside.jsonl")
-				body := `{"when":"2026-08-20T12:00:00Z","agent_id":"` + private + `"}` + "\n"
-				if err := os.WriteFile(target, []byte(body), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(target, traceLeaf); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				if err := syscall.Mkfifo(traceLeaf, 0o600); err != nil {
-					t.Fatal(err)
-				}
-				stop = make(chan struct{})
-				released = releaseFIFOAfter(traceLeaf, 300*time.Millisecond, stop)
-			}
-
-			var out bytes.Buffer
-			start := time.Now()
-			code := runDoctorWithDependencies(nil, &out, realDoctorCommandDeps(t, root))
-			elapsed := time.Since(start)
-			if stop != nil {
-				close(stop)
-				<-released
-				if elapsed >= 150*time.Millisecond {
-					t.Fatalf("doctor blocked on trace FIFO for %v", elapsed)
-				}
-			}
-			if code != exitcode.NoRecord || !strings.Contains(out.String(), "could not complete the diagnostic") {
-				t.Fatalf("trace %s: exit=%d output=%q, want content-safe NoRecord", kind, code, out.String())
-			}
-			if strings.Contains(out.String(), private) {
-				t.Fatalf("trace %s exposed target content: %q", kind, out.String())
-			}
-		})
-	}
-}
-
-func TestDoctorOutsideRepositorySkips(t *testing.T) {
-	deps := commandDepsForDoctor(t, nil, nil)
-	dir := t.TempDir()
-	deps.Getwd = func() (string, error) { return dir, nil }
-	deps.Discover = func(string) (*repo.Context, error) { return nil, repo.ErrNotARepo }
-	var out bytes.Buffer
-	if got := runDoctorWithDependencies(nil, &out, deps); got != exitcode.Skip {
-		t.Fatalf("exit=%d output=%q", got, out.String())
-	}
-}
-
-func TestDoctorOperationalDiscoveryFailureDoesNotSkip(t *testing.T) {
-	deps := commandDepsForDoctor(t, nil, nil)
-	deps.Discover = func(string) (*repo.Context, error) { return nil, errors.New("Git executable unavailable") }
-	var out bytes.Buffer
-	if got := runDoctorWithDependencies(nil, &out, deps); got != exitcode.NoRecord {
-		t.Fatalf("exit=%d output=%q, want NoRecord", got, out.String())
-	}
-	if strings.Contains(out.String(), "Git executable unavailable") {
-		t.Fatalf("operational discovery detail leaked: %q", out.String())
-	}
-}
-
-func TestDoctorMissingMachineIDIsDiagnosticNotStateCreation(t *testing.T) {
-	deps := commandDepsForDoctor(t, []doctor.Check{{Name: "machine-id", Status: doctor.Warn, Detail: "missing"}}, nil)
-	state := t.TempDir()
-	deps.ReadID = func() (string, error) { return "", os.ErrNotExist }
-	before, _ := os.ReadDir(state)
-	var out bytes.Buffer
-	if got := runDoctorWithDependencies(nil, &out, deps); got != exitcode.Advisory {
-		t.Fatalf("exit=%d output=%q", got, out.String())
-	}
-	after, _ := os.ReadDir(state)
-	if len(before) != len(after) {
-		t.Fatal("doctor created machine state")
-	}
-}
-
-func TestDoctorOutputEscapesHostileFields(t *testing.T) {
-	checks := []doctor.Check{{Name: "name\nFAIL forged", Status: doctor.Warn, Detail: "detail\rforged", Remedy: "remedy\x1b[31m"}}
-	var out bytes.Buffer
-	if got := runDoctorWithDependencies(nil, &out, commandDepsForDoctor(t, checks, nil)); got != exitcode.Advisory {
-		t.Fatalf("exit=%d", got)
-	}
-	text := out.String()
-	if strings.Contains(text, "name\nFAIL forged") || strings.Contains(text, "detail\rforged") || strings.Contains(text, "\x1b") {
-		t.Fatalf("hostile output forged control text: %q", text)
-	}
-	if !strings.Contains(text, `name\nFAIL forged`) || !strings.Contains(text, `detail\rforged`) || !strings.Contains(text, `\x1b`) {
-		t.Fatalf("hostile output was not visibly escaped: %q", text)
-	}
-}
-
-func TestIsolatedDoctorUnderUnstampedChildBinary(t *testing.T) {
-	base := t.TempDir()
-	home := filepath.Join(base, "home")
-	state := filepath.Join(base, "state")
-	dotfiles := filepath.Join(home, "dotfiles")
-	binDir := filepath.Join(home, "bin")
-	binary := filepath.Join(binDir, "agents")
-	hooksDir := filepath.Join(dotfiles, "git", "hooks.d")
-	attrsSource := filepath.Join(dotfiles, "git", "gitattributes")
-	globalConfig := filepath.Join(home, ".gitconfig")
-	for _, dir := range []string{binDir, hooksDir, filepath.Join(home, ".codex")} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	build := exec.Command("go", "build", "-o", binary, ".")
-	// TestMain moves the working directory out of the checkout, so the module
-	// this package belongs to has to be named explicitly.
-	build.Dir = packageDir
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build temp agents: %v\n%s", err, out)
-	}
-	if err := os.WriteFile(filepath.Join(binDir, "gitleaks"), []byte("#!/bin/sh\nexit 99\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(attrsSource, []byte(".agents/reports/traces/*.jsonl merge=union\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(attrsSource, filepath.Join(home, ".gitattributes")); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		if err := os.Symlink(binary, filepath.Join(hooksDir, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	config := "[core]\n\thooksPath = " + hooksDir + "\n\tattributesFile = ~/.gitattributes\n"
-	if err := os.WriteFile(globalConfig, []byte(config), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	repoRoot := filepath.Join(base, "repo")
-	if err := os.MkdirAll(repoRoot, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	gitInit := exec.Command("git", "init", "-b", "main")
-	gitInit.Dir = repoRoot
-	if out, err := gitInit.CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, out)
-	}
-
-	// AGENTS_DOTFILES_ROOT is stripped from the base environment: an unstamped
-	// binary defaults to Standalone Mode unless AGENTS_DOTFILES_ROOT is explicitly
-	// supplied.
-	var baseEnvironment []string
-	for _, item := range os.Environ() {
-		key, _, _ := strings.Cut(item, "=")
-		if key == "HOME" || key == "XDG_STATE_HOME" || key == "GIT_CONFIG_GLOBAL" ||
-			key == "GIT_CONFIG_NOSYSTEM" || key == "GIT_TERMINAL_PROMPT" || key == "PATH" ||
-			key == "AGENTS_DOTFILES_ROOT" ||
-			key == "GIT_DIR" || key == "GIT_WORK_TREE" || key == "GIT_INDEX_FILE" ||
-			key == "GIT_CONFIG_COUNT" || key == "GIT_CONFIG_PARAMETERS" ||
-			strings.HasPrefix(key, "GIT_CONFIG_KEY_") || strings.HasPrefix(key, "GIT_CONFIG_VALUE_") {
-			continue
-		}
-		baseEnvironment = append(baseEnvironment, item)
-	}
-	baseEnvironment = append(baseEnvironment,
-		"HOME="+home,
-		"XDG_STATE_HOME="+state,
-		"GIT_CONFIG_GLOBAL="+globalConfig,
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-		"PATH="+binDir+":"+os.Getenv("PATH"),
-	)
-	run := func(env []string, args ...string) (int, string) {
-		t.Helper()
-		cmd := exec.Command(binary, args...)
-		cmd.Dir = repoRoot
-		cmd.Env = env
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			return 0, string(out)
-		}
-		if exit, ok := err.(*exec.ExitError); ok {
-			return exit.ExitCode(), string(out)
-		}
-		t.Fatalf("run agents %v: %v\n%s", args, err, out)
-		return -1, ""
-	}
-	if code, out := run(baseEnvironment, "init"); code != exitcode.Advisory {
-		t.Fatalf("isolated init exit=%d want=1\n%s", code, out)
-	}
-
-	t.Run("standalone mode skips dotfiles checks", func(t *testing.T) {
-		code, out := run(baseEnvironment, "doctor")
-		if code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
-			t.Fatalf("standalone doctor exit=%d want=1\n%s", code, out)
-		}
-		for _, name := range []string{"git-hooks:global", "git-hooks:links", "root:exists"} {
-			if status := doctorCheckStatus(out, name); status != "<missing>" {
-				t.Errorf("standalone doctor reported %q for %s, want skipped (<missing>)\n%s", status, name, out)
-			}
-		}
-		if status := doctorCheckStatus(out, "git-hooks:local"); status != "ok" {
-			t.Errorf("standalone doctor reported %q for git-hooks:local, want ok\n%s", status, out)
-		}
-		for _, name := range []string{"scaffold:router", "scaffold:symlink", "scaffold:domain", "scaffold:skill-recording", "scaffold:skill-migrating"} {
-			if status := doctorCheckStatus(out, name); status != "ok" {
-				t.Errorf("standalone doctor reported %q for %s, want ok\n%s", status, name, out)
-			}
-		}
-	})
-
-	t.Run("operator mode verifies dotfiles checkout and hooks", func(t *testing.T) {
-		operatorEnv := append(append([]string(nil), baseEnvironment...), "AGENTS_DOTFILES_ROOT="+dotfiles)
-		code, out := run(operatorEnv, "doctor")
-		if code != exitcode.Advisory || !strings.Contains(out, "wiring:codex") || !strings.Contains(out, "recording:codex") {
-			t.Fatalf("operator doctor exit=%d want=1\n%s", code, out)
-		}
-		for _, name := range []string{"git-hooks:global", "git-hooks:effective", "git-hooks:links", "root:exists"} {
-			if status := doctorCheckStatus(out, name); status != "ok" {
-				t.Errorf("operator doctor reported %q for %s, want ok; this fixture is "+
-					"provisioned correctly, so any other status means the child resolved "+
-					"a checkout other than the one under AGENTS_DOTFILES_ROOT\n%s", status, name, out)
-			}
-		}
-	})
-}
-
-func TestDoctorRendersGranularScaffoldChecksAndRemedies(t *testing.T) {
-	checks := []doctor.Check{
-		{
-			Name:   "scaffold:router",
-			Status: doctor.Warn,
-			Detail: "root AGENTS.md uses a legacy canonical template",
-			Remedy: "run the 'migrating-fleet-context' agent skill to update",
-		},
-		{
-			Name:   "scaffold:symlink",
-			Status: doctor.Fail,
-			Detail: "CLAUDE.md symlink is invalid (missing)",
-			Remedy: "run 'agents init' or recreate relative symlink: ln -s AGENTS.md CLAUDE.md",
-		},
-		{
-			Name:   "scaffold:domain",
-			Status: doctor.Warn,
-			Detail: ".agents/AGENTS.md is missing",
-			Remedy: "run 'agents init' to populate starter template",
-		},
-		{
-			Name:   "scaffold:skill-recording",
-			Status: doctor.OK,
-			Detail: ".agents/skills/recording-what-you-learn/ is present",
-		},
-		{
-			Name:   "scaffold:skill-migrating",
-			Status: doctor.Warn,
-			Detail: ".agents/skills/migrating-fleet-context/ is missing",
-			Remedy: "run 'agents update' or 'agents init' to refresh infrastructure skills",
-		},
-	}
-
-	var out bytes.Buffer
-	code := runDoctorWithDependencies(nil, &out, commandDepsForDoctor(t, checks, nil))
-	if code != exitcode.Advisory {
-		t.Fatalf("exit = %d, want Advisory", code)
-	}
-
-	output := out.String()
 	for _, tc := range []struct {
 		name   string
-		status string
-		remedy string
+		checks []doctor.Check
+		want   int
 	}{
-		{"scaffold:router", "warn", "run the 'migrating-fleet-context' agent skill to update"},
-		{"scaffold:symlink", "FAIL", "run 'agents init' or recreate relative symlink: ln -s AGENTS.md CLAUDE.md"},
-		{"scaffold:domain", "warn", "run 'agents init' to populate starter template"},
-		{"scaffold:skill-recording", "ok", ""},
-		{"scaffold:skill-migrating", "warn", "run 'agents update' or 'agents init' to refresh infrastructure skills"},
+		{"all ok", []doctor.Check{{Name: "a", Status: doctor.OK, Detail: "fine"}}, exitcode.OK},
+		{"one warn", []doctor.Check{{Name: "a", Status: doctor.Warn, Detail: "hmm"}}, exitcode.Advisory},
+		{"one fail", []doctor.Check{{Name: "a", Status: doctor.Fail, Detail: "no"}}, exitcode.Advisory},
+		{"mixed", []doctor.Check{{Name: "a", Status: doctor.OK}, {Name: "b", Status: doctor.Warn}}, exitcode.Advisory},
 	} {
-		if gotStatus := doctorCheckStatus(output, tc.name); gotStatus != tc.status {
-			t.Errorf("check %s status = %q, want %q", tc.name, gotStatus, tc.status)
-		}
-		if tc.remedy != "" && !strings.Contains(output, "-> "+tc.remedy) {
-			t.Errorf("output missing remedy for %s: %q\n%s", tc.name, tc.remedy, output)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			got := runDoctorWithDependencies(nil, &out, fakeDoctorDeps(t, root, tc.checks))
+			if got != tc.want {
+				t.Errorf("exit = %d, want %d\n%s", got, tc.want, out.String())
+			}
+		})
+	}
+}
+
+// A remedy is printed only for a check that is not ok. The rule matters because
+// a remedy is an instruction, and instructing someone to act on a passing check
+// is how a report teaches people to ignore it.
+func TestDoctorPrintsARemedyOnlyForANonOKCheck(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	checks := []doctor.Check{
+		{Name: "passing", Status: doctor.OK, Detail: "fine", Remedy: "do not print me"},
+		{Name: "failing", Status: doctor.Fail, Detail: "broken", Remedy: "do print me"},
+	}
+	var out bytes.Buffer
+	runDoctorWithDependencies(nil, &out, fakeDoctorDeps(t, root, checks))
+	if strings.Contains(out.String(), "do not print me") {
+		t.Errorf("a passing check printed its remedy:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "do print me") {
+		t.Errorf("a failing check did not print its remedy:\n%s", out.String())
+	}
+}
+
+// An unusable diagnostic is exit 5, not 0 and not a partial report. A doctor
+// that could not read the machine has nothing to say about it.
+func TestDoctorReportsAnUnusableDiagnosticAsNoRecord(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	deps := fakeDoctorDeps(t, root, nil)
+	deps.Run = func(string, string, doctor.Dependencies) ([]doctor.Check, error) {
+		return nil, errors.New("boom")
+	}
+	var out bytes.Buffer
+	if got := runDoctorWithDependencies(nil, &out, deps); got != exitcode.NoRecord {
+		t.Errorf("exit = %d, want %d (could not complete)\n%s", got, exitcode.NoRecord, out.String())
+	}
+}
+
+// A check naming a status the renderer does not know is a fault, not something
+// to print as a blank column. This guards against a status added to the package
+// later rendering as nothing.
+func TestDoctorRefusesAnUnknownStatus(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	checks := []doctor.Check{{Name: "a", Status: "catastrophe", Detail: "?"}}
+	var out bytes.Buffer
+	if got := runDoctorWithDependencies(nil, &out, fakeDoctorDeps(t, root, checks)); got != exitcode.NoRecord {
+		t.Errorf("exit = %d, want %d (could not complete)\n%s", got, exitcode.NoRecord, out.String())
+	}
+}
+
+// Outside a git repository there is nothing to inspect, and that is a skip
+// rather than a failure: running doctor in a scratch directory is not a fault.
+func TestDoctorOutsideRepositorySkips(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
+	nested := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(nested)
+	var out bytes.Buffer
+	if got := runDoctorWithDependencies(nil, &out, defaultDoctorCommandDependencies()); got != exitcode.Skip {
+		t.Errorf("exit = %d, want %d (skip)\n%s", got, exitcode.Skip, out.String())
+	}
+}
+
+// A control character in a check name or detail must not reach the terminal
+// raw: it can move the cursor, forge a second line, or hide the line above it.
+// The value still appears, so the reader learns what the check saw.
+func TestDoctorEscapesHostileFieldsInOutput(t *testing.T) {
+	root := newRepo(t)
+	t.Chdir(root)
+	checks := []doctor.Check{{
+		Name:   "wiring:forged",
+		Status: doctor.Fail,
+		Detail: "line one\nFAIL  wiring:everything  looks fine here\u001b[2K",
+	}}
+	var out bytes.Buffer
+	runDoctorWithDependencies(nil, &out, fakeDoctorDeps(t, root, checks))
+	if strings.Contains(out.String(), "\u001b") {
+		t.Errorf("a control sequence reached stdout:\n%q", out.String())
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 1 {
+		t.Errorf("a newline in a detail forged %d lines, want 1:\n%s", len(lines), out.String())
+	}
+}
+
+// doctor observes; it never writes. A diagnostic that mutates the machine it
+// reports on cannot be trusted to describe it.
+func TestDoctorChangesNothing(t *testing.T) {
+	root := newRepoWithAgents(t)
+	t.Chdir(root)
+	before := snapshotTree(t, root)
+	var out bytes.Buffer
+	runDoctorWithDependencies(nil, &out, defaultDoctorCommandDependencies())
+	after := snapshotTree(t, root)
+	if !reflect.DeepEqual(before, after) {
+		t.Errorf("doctor changed the tree it inspected:\nbefore\n%v\nafter\n%v", before, after)
 	}
 }

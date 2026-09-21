@@ -215,9 +215,14 @@ func IsRetiredShim(path string) bool {
 }
 
 var (
-	trailerLine         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*:[ \t]+\S.*$`)
-	claudeCoauthorLine  = regexp.MustCompile(`(?i)^co-authored-by[ \t]*:[ \t]*claude(?:[ \t]+code)?[ \t]*<noreply@anthropic\.com>[ \t]*$`)
-	claudeGeneratedLine = regexp.MustCompile(`(?i)^(?:🤖[ \t]*)?generated with[ \t]+(?:\[claude code\](?:\(https://claude\.com/claude-code\))?|claude code)[ \t]*$`)
+	trailerLine        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*[ \t]*:[ \t]+\S.*$`)
+	claudeCoauthorLine = regexp.MustCompile(`(?i)^co-authored-by[ \t]*:[ \t]*claude(?:[ \t]+code)?[ \t]*<noreply@anthropic\.com>[ \t]*$`)
+	// The URL varies between Claude Code versions, and the global instruction
+	// file in this repository quotes two of them by name. Matching only
+	// `claude.com/claude-code` left the other one in commit messages: measured,
+	// a message carrying the `claude.ai/code` footer came out unchanged, so the
+	// guard this pattern exists to be was absent for that form.
+	claudeGeneratedLine = regexp.MustCompile(`(?i)^(?:🤖[ \t]*)?generated with[ \t]+(?:\[claude code\](?:\(https://(?:claude\.com/claude-code|claude\.ai/code)\))?|claude code)[ \t]*$`)
 )
 
 // StripFooters removes Claude attribution from the trailing Git trailer block.

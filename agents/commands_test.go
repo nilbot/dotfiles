@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
@@ -36,18 +37,35 @@ func TestEveryLeafHasARunner(t *testing.T) {
 	})
 }
 
-// The commands that existed before the tree must all still be reachable.
-func TestTheKnownCommandSetIsPresent(t *testing.T) {
+// The command set is exactly this, and the test is written as an equality so
+// that a command is neither lost by accident nor kept by inertia. The list
+// shrank on purpose: the fleet registry, the layout schema and its migration,
+// the session record, and the hook entrypoint were removed -- each with the
+// package it needed, none of them left as an inert subcommand.
+func TestTheCommandSetIsExactlyThis(t *testing.T) {
 	present := map[string]bool{}
 	rootCommand().Walk(func(path []string, _ *Command) { present[strings.Join(path, " ")] = true })
-	for _, want := range []string{
-		"init", "wire", "doctor", "drift", "save",
-		"trace ls", "trace show", "trace cache", "trace cache prune", "trace migrate",
-		"ls", "update", "version", "guard", "hook",
-	} {
-		if !present[want] {
-			t.Errorf("command %q disappeared in the move to the tree", want)
+	want := []string{"help", "init", "wire", "doctor", "guard", "version"}
+	for _, name := range want {
+		if !present[name] {
+			t.Errorf("command %q is missing", name)
 		}
+	}
+	if len(present) != len(want) {
+		var extra []string
+		for name := range present {
+			found := false
+			for _, w := range want {
+				if name == w {
+					found = true
+				}
+			}
+			if !found {
+				extra = append(extra, name)
+			}
+		}
+		sort.Strings(extra)
+		t.Errorf("the tree has %d commands, want %d; unexpected: %v", len(present), len(want), extra)
 	}
 }
 
@@ -173,26 +191,9 @@ func TestDispatchOnUnknownCommandWritesToStderrAndExitsMalformed(t *testing.T) {
 	}
 }
 
-// runHook writes its diagnostics to stderr, not stdout, because a harness
-// consumes the hook's stdout as the channel it parses -- the sole reason the
-// IO bundle carries a separate Err field rather than flattening to one
-// writer. That is documented in the tree's wiring (commands.go) and in the
-// commit that introduced it, but nothing exercised it: this pins it by
-// dispatching through the real tree with an event that is guaranteed to fail
-// validation before touching any repository state.
-func TestDispatchRoutesHookDiagnosticsToStderrNotStdout(t *testing.T) {
-	t.Chdir(t.TempDir())
-	var code int
-	stdout, stderr := captureStdoutAndStderr(t, func() {
-		code = run([]string{"hook", "not-a-real-event", "--harness", "codex"})
-	})
-	if code != exitcode.OK {
-		t.Errorf("run(hook ...) exit = %d, want OK (%d); a failed record must never disrupt a dispatch", code, exitcode.OK)
-	}
-	if stdout != "" {
-		t.Errorf("run(hook ...) wrote to stdout, want stderr only (the harness parses stdout):\n%s", stdout)
-	}
-	if !strings.Contains(stderr, "not recorded") {
-		t.Errorf("run(hook ...) stderr = %q, want the not-recorded diagnostic", stderr)
-	}
-}
+// The hook entrypoint is gone, and with it the property its test guarded: the
+// harness parses stdout, so a hook could only ever write diagnostics to stderr.
+// Nothing in the surface now runs on a harness's behalf, so there is no stream
+// contract left to assert here. The equivalent guarantee -- that a retired hook
+// entry is removed rather than left to fail at session start -- is asserted in
+// cmd_wire_test.go and internal/harness/strip_test.go.

@@ -1,16 +1,12 @@
 package scaffold
 
 import (
-	"bytes"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/nilbot/dotfiles/agents/internal/layout"
 )
 
 // newRepo builds a real git repository. An earlier version of these tests just
@@ -343,22 +339,98 @@ func TestCreateLocalExcludesAgentsDir(t *testing.T) {
 	}
 }
 
-// Without --local, .agents/ is tracked. An exclude entry for it would make the
-// scaffolded directory invisible to git in the mode whose entire point is that
-// it is committed.
-func TestCreateWithoutLocalTracksAgentsDir(t *testing.T) {
-	root := newRepo(t)
-	if err := Create(root, false); err != nil {
-		t.Fatalf("Create: %v", err)
+// TestCreateAppliesEveryExcludeRule is the guard the eight-rule constant did not
+// have: only the claude and codex entries were asserted anywhere, so a rule
+// could be dropped from excludeLines -- or, worse, left in excludeLines and
+// never written -- with every test still green.
+//
+// The expectations are read from excludeLines rather than copied, because a
+// copy passes forever once the constant and the copy part ways, which is the
+// drift this test exists to catch. That choice cannot see a rule *removed* from
+// the constant (deliberately: the constant is what "every rule" means), so the
+// file is also compared against the constant as a set, which catches a rule the
+// code still writes after it left the constant.
+func TestCreateAppliesEveryExcludeRule(t *testing.T) {
+	// The one rule the two modes disagree about. The mode, not the rule, is
+	// what this test is about, so it is spelled once here.
+	const localOnlyRule = "/.agents/"
+
+	cases := []struct {
+		name  string
+		local bool
+		want  []string
+	}{
+		{name: "default", local: false, want: append([]string{}, excludeLines...)},
+		{name: "local", local: true, want: append(append([]string{}, excludeLines...), localOnlyRule)},
 	}
-	exclude := readExclude(t, root)
-	if hasLine(exclude, "/.agents/") {
-		t.Errorf("without --local, .agents/ must stay tracked:\n%s", exclude)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := newRepo(t)
+			if err := Create(root, tc.local); err != nil {
+				t.Fatalf("Create(local=%v): %v", tc.local, err)
+			}
+
+			// The file git writes its own comment lines into; only the pattern
+			// lines are ours to assert on.
+			counts := map[string]int{}
+			for _, rule := range excludeRules(readExclude(t, root)) {
+				counts[rule]++
+			}
+
+			for _, rule := range tc.want {
+				t.Run(rule, func(t *testing.T) {
+					if counts[rule] != 1 {
+						t.Errorf("exclude rule %q appears %d time(s) with local=%v, want exactly once:\n%s",
+							rule, counts[rule], tc.local, readExclude(t, root))
+					}
+				})
+			}
+
+			// local=true must not leak /.agents/ into the tracked mode, and the
+			// tracked mode must not write anything the constant does not hold.
+			wanted := map[string]bool{}
+			for _, rule := range tc.want {
+				wanted[rule] = true
+			}
+			for rule, n := range counts {
+				if !wanted[rule] {
+					t.Errorf("local=%v wrote %d copy(ies) of %q, which it does not declare", tc.local, n, rule)
+				}
+			}
+
+			// Idempotence: init on an initialized repository changes nothing, and
+			// a re-appended rule is how "changes nothing" stops being true.
+			if err := Create(root, tc.local); err != nil {
+				t.Fatalf("second Create(local=%v): %v", tc.local, err)
+			}
+			second := excludeRules(readExclude(t, root))
+			if len(second) != len(counts) {
+				t.Errorf("a second Create(local=%v) changed the rule set from %d rules to %d:\n%s",
+					tc.local, len(counts), len(second), readExclude(t, root))
+			}
+		})
 	}
 }
 
-// hasLine reports whether want is present as a whole line, which strings.Contains
-// cannot distinguish from being a prefix of some longer entry.
+// excludeRules returns the pattern lines of an exclude file. `git init` seeds
+// info/exclude with comment lines of its own, so counting every non-empty line
+// would count git's text as ours.
+func excludeRules(content string) []string {
+	var rules []string
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		rules = append(rules, line)
+	}
+	return rules
+}
+
+// Without --local, .agents/ is tracked. An exclude entry for it would make the
+// scaffolded directory invisible to git in the mode whose entire point is that
+// it is committed.
 func hasLine(content, want string) bool {
 	for _, l := range strings.Split(content, "\n") {
 		if strings.TrimSpace(l) == want {
@@ -368,404 +440,13 @@ func hasLine(content, want string) bool {
 	return false
 }
 
-func TestCreateAlwaysExcludesGeneratedHarnessConfigs(t *testing.T) {
+func TestCreateWithoutLocalTracksAgentsDir(t *testing.T) {
 	root := newRepo(t)
 	if err := Create(root, false); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	exclude := readExclude(t, root)
-	for _, want := range []string{
-		"/.claude/settings.json",
-		"/.claude/.agents-wire.lock",
-		"/.claude/skills",
-		"/.codex/hooks.json",
-		"/.codex/.agents-wire.lock",
-		"/.codex/skills",
-		"/.agents/hooks.json",
-		"/.agents/.agents-wire.lock",
-	} {
-		if !strings.Contains(exclude, want) {
-			t.Errorf("exclude missing %q:\n%s", want, exclude)
-		}
-		assertIgnored(t, root, strings.TrimPrefix(want, "/"))
-	}
-}
-
-func TestScaffoldExclusionsIncludeAntigravity(t *testing.T) {
-	root := newRepo(t)
-	if err := Create(root, false); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	excludePath := filepath.Join(root, ".git", "info", "exclude")
-	data, err := os.ReadFile(excludePath)
-	if err != nil {
-		t.Fatalf("read exclude error = %v", err)
-	}
-	content := string(data)
-	if !strings.Contains(content, "/.agents/hooks.json") {
-		t.Error("missing /.agents/hooks.json in exclude")
-	}
-	if !strings.Contains(content, "/.agents/.agents-wire.lock") {
-		t.Error("missing /.agents/.agents-wire.lock in exclude")
-	}
-}
-
-func TestCreateNoLongerScaffoldsATrackedTraceDirectory(t *testing.T) {
-	root := newRepo(t)
-	if err := Create(root, false); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, ".agents", "reports", "traces")); !os.IsNotExist(err) {
-		t.Error("scaffold still creates .agents/reports/traces; the index is machine-local now")
-	}
-	b, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(b), "merge=union") {
-		t.Error("merge=union survives, but nothing tracked appends concurrently now")
-	}
-	// The rendering rule is unrelated to traces and must stay.
-	if !strings.Contains(string(b), "linguist-generated=true") {
-		t.Error("Create dropped the linguist-generated attribute along with merge=union")
-	}
-}
-
-// The scaffolded DefaultAgentsMD must not name a command the binary no longer has.
-func TestDefaultAgentsMDNamesNoRetiredCommand(t *testing.T) {
-	for _, dead := range []string{
-		"agents handoff", "agents review", "agents index",
-		".agents/memory", ".agents/reports/handoff",
-	} {
-		if strings.Contains(DefaultAgentsMD, dead) {
-			t.Errorf("the scaffolded AGENTS.md still names %q, which no longer exists", dead)
-		}
-	}
-	// It still has to point somewhere, and at the thing that survived.
-	for _, want := range []string{"docs/qna/", "docs/plans/", "docs/journal/", "docs/design/", ".agents/skills/", ".agents/AGENTS.md"} {
-		if !strings.Contains(DefaultAgentsMD, want) {
-			t.Errorf("the scaffolded AGENTS.md does not point at %s", want)
-		}
-	}
-	if !strings.Contains(DefaultAgentsMD, DoctorInstruction) {
-		t.Error("the scaffolded AGENTS.md dropped the doctor instruction")
-	}
-}
-
-func TestDefaultAgentsMDContributorFriendly(t *testing.T) {
-	if strings.Contains(DefaultAgentsMD, "an empty or stale `.agents/` means the setup is broken") {
-		t.Error("DefaultAgentsMD still contains the strict broken-setup alarm phrase")
-	}
-	if !strings.Contains(DefaultAgentsMD, DoctorInstruction) {
-		t.Error("DefaultAgentsMD does not contain the updated DoctorInstruction")
-	}
-	if !strings.Contains(DoctorInstruction, "If the `agents` CLI is installed") {
-		t.Error("DoctorInstruction is not conditional on CLI presence")
-	}
-}
-
-func TestCreateScaffoldsFullTwoTierAndDocsHierarchy(t *testing.T) {
-	dir := newRepo(t)
-	if err := Create(dir, false); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	wantFiles := []string{
-		"AGENTS.md",
-		"CLAUDE.md",
-		".gitattributes",
-		".agents/AGENTS.md",
-		".agents/skills/recording-what-you-learn/SKILL.md",
-		".agents/skills/migrating-fleet-context/SKILL.md",
-		"docs/design/README.md",
-		"docs/plans/README.md",
-		"docs/journal/README.md",
-		"docs/qna/README.md",
-	}
-	for _, rel := range wantFiles {
-		p := filepath.Join(dir, rel)
-		if _, err := os.Lstat(p); err != nil {
-			t.Errorf("expected file/symlink %s to exist: %v", rel, err)
-		}
-	}
-
-	// Verify idempotency on second run
-	if err := Create(dir, false); err != nil {
-		t.Fatalf("subsequent Create failed: %v", err)
-	}
-}
-
-func TestCreatePreservesExistingCustomAssets(t *testing.T) {
-	dir := newRepo(t)
-
-	// Pre-create custom .agents/AGENTS.md and a custom skill
-	dotAgentsPath := filepath.Join(dir, ".agents", "AGENTS.md")
-	if err := os.MkdirAll(filepath.Dir(dotAgentsPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	customDotAgents := "custom domain guidelines\n"
-	if err := os.WriteFile(dotAgentsPath, []byte(customDotAgents), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	customSkillPath := filepath.Join(dir, ".agents", "skills", "recording-what-you-learn", "SKILL.md")
-	if err := os.MkdirAll(filepath.Dir(customSkillPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	customSkill := "custom skill content\n"
-	if err := os.WriteFile(customSkillPath, []byte(customSkill), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	customDocPath := filepath.Join(dir, "docs", "design", "README.md")
-	if err := os.MkdirAll(filepath.Dir(customDocPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	customDoc := "custom design readme\n"
-	if err := os.WriteFile(customDocPath, []byte(customDoc), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := Create(dir, false); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	// Verify custom contents were not overwritten
-	gotDotAgents, err := os.ReadFile(dotAgentsPath)
-	if err != nil || string(gotDotAgents) != customDotAgents {
-		t.Errorf("got %q, want %q", string(gotDotAgents), customDotAgents)
-	}
-
-	gotSkill, err := os.ReadFile(customSkillPath)
-	if err != nil || string(gotSkill) != customSkill {
-		t.Errorf("got %q, want %q", string(gotSkill), customSkill)
-	}
-
-	gotDoc, err := os.ReadFile(customDocPath)
-	if err != nil || string(gotDoc) != customDoc {
-		t.Errorf("got %q, want %q", string(gotDoc), customDoc)
-	}
-}
-
-// The selector itself: both skills resolve under both layouts, to distinct
-// paths, and every path is readable from AssetsFS (the v1/ subdirectories are
-// embedded recursively by `//go:embed assets/*`).
-func TestSkillAssetPathsResolvePerLayout(t *testing.T) {
-	for _, schema := range []string{layout.SchemaV1, layout.SchemaV2} {
-		for _, skill := range []string{"recording-what-you-learn", "migrating-fleet-context"} {
-			path, err := SkillAssetPath(schema, skill)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := AssetsFS.ReadFile(path); err != nil {
-				t.Fatalf("%s/%s: %q: %v", schema, skill, path, err)
-			}
-		}
-	}
-	v1, _ := SkillAssetPath(layout.SchemaV1, "recording-what-you-learn")
-	v2, _ := SkillAssetPath(layout.SchemaV2, "recording-what-you-learn")
-	if v1 == v2 {
-		t.Fatal("the v1 and v2 texts must be distinct assets")
-	}
-}
-
-func TestSkillAssetPathRejectsUnknownSchemaAndSkill(t *testing.T) {
-	if _, err := SkillAssetPath("agents.layout/v9", "recording-what-you-learn"); err == nil {
-		t.Error("an unknown schema must not resolve to some default asset")
-	}
-	if _, err := SkillAssetPath(layout.SchemaV2, "no-such-skill"); err == nil {
-		t.Error("an unknown skill must not resolve")
-	}
-}
-
-// canonicalV1SkillBytes resolves a skill's canonical text for the v1 layout.
-// These fixtures have no manifest, so v1 is the resolved layout and the frozen
-// v1 text is canonical (design §0.8) -- asserting against the flat asset would
-// pin the v2 text as the expectation for a v1 repository.
-func canonicalV1SkillBytes(t *testing.T, skillName string) []byte {
-	t.Helper()
-	assetPath, err := SkillAssetPath(layout.SchemaV1, skillName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content, err := AssetsFS.ReadFile(assetPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return content
-}
-
-func TestRefreshInfrastructuralSkills(t *testing.T) {
-	dir := newRepo(t)
-	if err := Create(dir, false); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-	recordingPath := filepath.Join(dir, ".agents", "skills", "recording-what-you-learn", "SKILL.md")
-	customPath := filepath.Join(dir, ".agents", "skills", "custom-skill", "SKILL.md")
-
-	if err := os.MkdirAll(filepath.Dir(customPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	staleMigrating := "stale migrating skill content\n"
-	customRecording := "custom recording skill content\n"
-	customSkill := "custom user skill content\n"
-
-	if err := os.WriteFile(migratingPath, []byte(staleMigrating), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(recordingPath, []byte(customRecording), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(customPath, []byte(customSkill), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := RefreshInfrastructuralSkills(dir, layout.SchemaV1); err != nil {
-		t.Fatalf("RefreshInfrastructuralSkills failed: %v", err)
-	}
-
-	// migrating-fleet-context should be overwritten with canonical embedded asset
-	// -- the v1 asset, because this fixture has no manifest and resolves v1: a
-	// v1 repository must be left with the text its own layout uses, never the
-	// v2 text.
-	expectedMigrating := canonicalV1SkillBytes(t, "migrating-fleet-context")
-	gotMigrating, err := os.ReadFile(migratingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotMigrating) != string(expectedMigrating) {
-		t.Fatalf("migrating-fleet-context was not refreshed to canonical content")
-	}
-
-	// recording-what-you-learn should remain untouched
-	gotRecording, err := os.ReadFile(recordingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotRecording) != customRecording {
-		t.Fatalf("recording-what-you-learn was overwritten: got %q, want %q", string(gotRecording), customRecording)
-	}
-
-	// custom skill should remain untouched
-	gotCustom, err := os.ReadFile(customPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotCustom) != customSkill {
-		t.Fatalf("custom skill was overwritten: got %q, want %q", string(gotCustom), customSkill)
-	}
-}
-
-func TestRefreshInfrastructuralSkillsCreatesMissingDirectory(t *testing.T) {
-	dir := newRepo(t)
-	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-	if err := RefreshInfrastructuralSkills(dir, layout.SchemaV1); err != nil {
-		t.Fatalf("RefreshInfrastructuralSkills failed on missing directory: %v", err)
-	}
-	expectedMigrating := canonicalV1SkillBytes(t, "migrating-fleet-context")
-	gotMigrating, err := os.ReadFile(migratingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(gotMigrating) != string(expectedMigrating) {
-		t.Fatalf("migrating-fleet-context was not written correctly")
-	}
-}
-
-// TestRefreshInfrastructuralSkillsLeavesMatchingCopyUnwritten pins the no-op
-// half of the refresh contract: an unmodified v1 repository must be untouched,
-// not rewritten with identical bytes. The mtime check is what distinguishes
-// "wrote the same bytes" from "did not write", which the design's byte-identical
-// promise and cmd_fleet's run-on-every-repository call site both require.
-func TestRefreshInfrastructuralSkillsLeavesMatchingCopyUnwritten(t *testing.T) {
-	dir := newRepo(t)
-	if err := Create(dir, false); err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-	migratingPath := filepath.Join(dir, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-
-	// A v1 repository's fresh copy is already canonical, so refreshing it must
-	// be a no-op.
-	want := canonicalV1SkillBytes(t, "migrating-fleet-context")
-	if got, err := os.ReadFile(migratingPath); err != nil || string(got) != string(want) {
-		t.Fatalf("Create did not install the v1 canonical text: err=%v", err)
-	}
-
-	past := time.Now().Add(-time.Hour).Truncate(time.Second)
-	if err := os.Chtimes(migratingPath, past, past); err != nil {
-		t.Fatal(err)
-	}
-	if err := RefreshInfrastructuralSkills(dir, layout.SchemaV1); err != nil {
-		t.Fatalf("RefreshInfrastructuralSkills failed: %v", err)
-	}
-	info, err := os.Stat(migratingPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.ModTime().Equal(past) {
-		t.Error("refresh rewrote an already-canonical copy; an unmodified repository must be a literal no-op")
-	}
-}
-
-// Refresh writes the text for the resolved layout, only when it differs, and
-// touches only the agents-owned skill. On a v1 repository it is a literal
-// no-op -- no write at all, so no mtime churn -- which is what lets v0.6.0
-// leave the fleet alone (design §0.8, §7.5).
-func TestRefreshInfrastructuralSkillsIsLayoutSelectedAndUserSkillSafe(t *testing.T) {
-	root := newRepo(t)
-	if err := Create(root, false); err != nil {
-		t.Fatal(err)
-	}
-	migrating := filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-
-	// The v1 text is already in place, so refresh must not write. An identical
-	// rewrite is indistinguishable by content, so the observable is the mtime.
-	frozen := time.Unix(1000000000, 0)
-	if err := os.Chtimes(migrating, frozen, frozen); err != nil {
-		t.Fatal(err)
-	}
-	if err := RefreshInfrastructuralSkills(root, layout.SchemaV1); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(migrating)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !info.ModTime().Equal(frozen) {
-		t.Fatal("refresh rewrote identical bytes on a v1 repository")
-	}
-
-	// The same root, resolved v2: the agents-owned copy becomes the v2 text.
-	// This is the post-flip half of §7.5 -- the text is installed after the
-	// layout flips, never by a v1 repository's own copy.
-	if err := RefreshInfrastructuralSkills(root, layout.SchemaV2); err != nil {
-		t.Fatal(err)
-	}
-	asset, err := SkillAssetPath(layout.SchemaV2, "migrating-fleet-context")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want, err := AssetsFS.ReadFile(asset)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := os.ReadFile(migrating)
-	if err != nil || !bytes.Equal(got, want) {
-		t.Fatalf("refresh wrote the wrong text for v2: %v", err)
-	}
-
-	// The user-owned recording skill is never written by refresh, in either
-	// layout, and the v1 copy of it is untouched.
-	recAsset, err := SkillAssetPath(layout.SchemaV1, "recording-what-you-learn")
-	if err != nil {
-		t.Fatal(err)
-	}
-	recWant, _ := AssetsFS.ReadFile(recAsset)
-	recGot, err := os.ReadFile(filepath.Join(root, ".agents", "skills", "recording-what-you-learn", "SKILL.md"))
-	if err != nil || !bytes.Equal(recGot, recWant) {
-		t.Fatal("refresh touched the user-owned recording skill")
+	if hasLine(exclude, "/.agents/") {
+		t.Errorf("without --local, .agents/ must stay tracked:\n%s", exclude)
 	}
 }

@@ -89,27 +89,11 @@ agents help --render=markdown
 | Command | What |
 |---|---|
 | `agents help` | print the listing, or one command's page |
-| `agents init` | create .agents/, triggers, wiring, fleet entry |
-| `agents wire` | regenerate harness configs (merges, never overwrites) |
-| `agents doctor` | report wiring, trust evidence, reachability, and lane health |
-| `agents drift` | inspect context layout and router drift |
-| `agents layout` | inspect the resolved layout, or migrate v1 to v2 |
-| `agents layout show` | print the resolved layout, or the canonical router |
-| `agents layout validate` | check the layout against every validation rule |
-| `agents layout path` | print one store path by role |
-| `agents layout migrate` | plan, apply, resume, or abort a v1 to v2 migration |
-| `agents save` | commit .agents/ paths and nothing else (escape hatch) |
-| `agents trace` | query records; read one back; copy reachable ones |
-| `agents trace ls` | query records |
-| `agents trace show` | read one transcript back |
-| `agents trace cache` | copy reachable transcripts into the store |
-| `agents trace cache prune` | remove cached copies, never the records |
-| `agents trace migrate` | move a tracked index into the machine-local store |
-| `agents ls` | list the fleet on this machine |
-| `agents update` | rewire every registered repo (dry run by default) |
+| `agents init` | create .agents/, the doc stores, and the wiring |
+| `agents wire` | remove this tool's entries from harness configs |
+| `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
-| `agents hook` | harness hook entrypoint |
 <!-- END GENERATED -->
 
 ## Development & Contributing

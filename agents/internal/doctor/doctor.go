@@ -5,26 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
-	"github.com/BurntSushi/toml"
-
-	"github.com/nilbot/dotfiles/agents/internal/drift"
 	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
-	"github.com/nilbot/dotfiles/agents/internal/layout"
-	"github.com/nilbot/dotfiles/agents/internal/record"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safeio"
-	"github.com/nilbot/dotfiles/agents/internal/safetext"
-	"github.com/nilbot/dotfiles/agents/internal/trace"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
 const (
@@ -40,20 +32,6 @@ type Check struct {
 	Remedy string
 }
 
-type Thresholds struct {
-	Window             time.Duration
-	Modules            int
-	Days               int
-	Sessions           int
-	RecordingFreshness time.Duration
-	// QueueDepth is where a backlog stops being a backlog and starts being an
-	// inbox nobody empties.
-	QueueDepth int
-	// CacheMaxBytes mirrors the cap the subagent-stop hook enforces, so doctor
-	// reports the same boundary the tool acts on rather than a second opinion.
-	CacheMaxBytes int64
-}
-
 type GitResult struct {
 	Output string
 	Code   int
@@ -63,7 +41,6 @@ type Dependencies struct {
 	LookPath              func(string) (string, error)
 	Git                   func(dir string, args ...string) GitResult
 	LegacyHooksPath       func(string) (string, error)
-	TraceCacheDir         func(string) (string, error)
 	CodexConfig           string
 	AntigravityConfig     string
 	HooksDir              string
@@ -76,22 +53,6 @@ type Dependencies struct {
 	// derived from, because every other path here is built by joining onto it,
 	// so nothing existing can report that the root itself is gone.
 	Root string
-	// RunningVersion is the running binary's version, which the scaffold checks
-	// need to decide whether a resolved layout's min_mut_ver_floor admits this
-	// binary (design §5.3). Injected by the caller, never read from a global.
-	RunningVersion string
-}
-
-func DefaultThresholds() Thresholds {
-	return Thresholds{
-		Window:             30 * 24 * time.Hour,
-		Modules:            3,
-		Days:               14,
-		Sessions:           20,
-		RecordingFreshness: 7 * 24 * time.Hour,
-		QueueDepth:         10,
-		CacheMaxBytes:      1 << 30,
-	}
 }
 
 // DependenciesFor builds the diagnostic against a named dotfiles checkout.
@@ -107,7 +68,6 @@ func DependenciesFor(root string) Dependencies {
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
 		LegacyHooksPath:       repo.LegacyHooksPath,
-		TraceCacheDir:         repo.TraceCacheDir,
 		CodexConfig:           filepath.Join(home, ".codex", "config.toml"),
 		AntigravityConfig:     filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"),
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
@@ -162,59 +122,28 @@ func sanitizedGitEnvironment(environment []string) []string {
 // bill of health for a diagnostic that never found the index. That is the
 // undiscriminating double this repository already has a memory entry about.
 // An explicit parameter has no nil case to be wrong about.
-func RunWithDeps(repoRoot, agentsDir, storeDir, thisMachine, binary string, th Thresholds, now time.Time, deps Dependencies) ([]Check, error) {
-	traceResult, err := trace.Query(storeDir, trace.Filter{}, now)
-	if err != nil {
-		return nil, errors.New("trace index could not be read")
-	}
-
+// RunWithDeps runs every check. It observes only: nothing here writes, and a
+// check that would have to mutate to answer is not a check.
+//
+// It takes a repository root, the running binary's path, and its dependencies,
+// and nothing else. A store directory and a machine identity went with the
+// session record; the threshold structure went because the only threshold left
+// capped a cache that no longer exists, so its value was parsed from a flag and
+// then read by nothing. An argument that cannot change any behaviour is worse
+// than no argument -- it invites a caller to pass one.
+func RunWithDeps(repoRoot, binary string, deps Dependencies) ([]Check, error) {
 	var checks []Check
 	checks = append(checks, checkBinary(binary, deps.LookPath))
-	wiringTimes := map[string]time.Time{}
-	var codexTrustKeys []string
 	for _, adapter := range harness.All() {
-		check, wiredAt, trustKeys := checkWiring(adapter, repoRoot, binary)
-		checks = append(checks, check)
-		wiringTimes[adapter.Name()] = wiredAt
-		if adapter.Name() == "codex" {
-			codexTrustKeys = trustKeys
-		}
+		checks = append(checks, checkWiring(adapter, repoRoot))
 	}
-	checks = append(checks, checkCodexTrust(deps.CodexConfig, codexTrustKeys))
 	checks = append(checks, checkAntigravityTrust(deps.AntigravityConfig, repoRoot))
-	for _, adapter := range harness.All() {
-		checks = append(checks, checkRecording(adapter, traceResult.Records, wiringTimes[adapter.Name()], th.RecordingFreshness, now))
-	}
 	checks = append(checks, checkGitleaks(deps.LookPath))
 	checks = append(checks, rootChecks(deps)...)
 	checks = append(checks, checkGitHooks(repoRoot, binary, deps)...)
 	checks = append(checks, checkGitAttributes(repoRoot, deps))
-	checks = append(checks, checkMachine(thisMachine))
-	if traceResult.Skipped > 0 {
-		checks = append(checks, Check{Name: "trace-index", Status: Warn, Detail: fmt.Sprintf("%d unreadable line(s) skipped", traceResult.Skipped), Remedy: "repair malformed JSONL or merge conflict markers; preserve valid lines"})
-	} else {
-		checks = append(checks, Check{Name: "trace-index", Status: OK, Detail: "all trace index lines are readable"})
-	}
-	// An unresolvable cache root is not a reason to skip the pointer checks: an
-	// empty root simply makes every gone transcript count as lost, which is what
-	// the check said before the cache existed at all.
-	var cacheRoot string
-	if deps.TraceCacheDir != nil {
-		cacheRoot, _ = deps.TraceCacheDir(repoRoot)
-	}
-	checks = append(checks, checkPointers(traceResult.Records, thisMachine, cacheRoot)...)
-	// The layout is resolved here for the freshness indicator and the
-	// layout-aware checks, which need the caller's clock and one resolution to
-	// share: every layout.Resolve runs Validate, which asks git two trackedness
-	// questions. checkScaffoldFor takes this result instead of resolving on its
-	// own account, but this is not the run's only resolution -- drift.InspectRepo
-	// inside checkScaffoldFor resolves the layout again for its own report, so a
-	// run on a manifest-bearing repository pays for two.
-	l := layout.Resolve(repoRoot)
-	checks = append(checks, checkScaffoldFor(repoRoot, deps.RunningVersion, l)...)
-	checks = append(checks, checkQNAFreshness(repoRoot, l, now))
-	checks = append(checks, checkStoreSize(cacheRoot, th.CacheMaxBytes))
-	checks = append(checks, LaneHealth(traceResult.Records, th, now)...)
+	checks = append(checks, checkScaffold(repoRoot)...)
+	checks = append(checks, checkSkills(repoRoot)...)
 	return checks, nil
 }
 
@@ -245,356 +174,306 @@ func checkBinary(binary string, lookPath func(string) (string, error)) Check {
 	return Check{Name: "binary", Status: OK, Detail: "PATH resolves to the running executable"}
 }
 
-func checkWiring(a harness.Adapter, repoRoot, binary string) (Check, time.Time, []string) {
+// checkWiring reports whether this tool has left anything behind in a harness
+// config, and what to do about it.
+//
+// The question inverted when the tool stopped recording. It used to ask "are
+// our entries present for every event we write?", and its remedy was to run
+// `wire` again. There is nothing to write any more, so the failure mode is the
+// opposite: an entry an earlier version wrote that is still there, calling a
+// subcommand this binary no longer answers.
+//
+// Two findings, kept separate because their remedies differ. An entry this tool
+// OWNS is one `agents wire` removes, so that is the remedy. An entry that merely
+// LOOKS like ours -- the generated shape under a binary this tool does not own,
+// which this repository has produced once for real -- is not ours to delete, so
+// telling the operator to run `wire` would print a remedy that provably does
+// nothing. Report and repair share one predicate here: the classification below
+// is the same one `stripOurs` uses to decide what it may delete.
+//
+// An absent config is success, not a gap: there is nothing left to write. A
+// config that cannot be read or parsed is still a fault, because it is a file
+// this tool either wrote or will need to write.
+func checkWiring(a harness.Adapter, repoRoot string) Check {
 	name := "wiring:" + a.Name()
 	path := a.WireConfigPath(repoRoot)
-	b, info, err := safeio.ReadRegularInfo(path)
+	b, _, err := safeio.ReadRegularInfo(path)
 	if err != nil {
-		return Check{Name: name, Status: Fail, Detail: "generated hook config is unavailable", Remedy: "run `agents wire`"}, time.Time{}, nil
+		if errors.Is(err, os.ErrNotExist) {
+			return Check{Name: name, Status: OK, Detail: "no generated config, and none needed"}
+		}
+		return Check{Name: name, Status: Warn, Detail: "generated config is not a readable regular file", Remedy: "fix or remove it"}
 	}
 	var cfg map[string]any
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		return Check{Name: name, Status: Fail, Detail: "generated hook config is malformed JSON", Remedy: "fix or remove it, then run `agents wire`"}, info.ModTime(), nil
+		return Check{Name: name, Status: Fail, Detail: "generated config is malformed JSON", Remedy: "fix or remove it"}
 	}
-
-	if a.Name() == "antigravity" {
-		return checkWiringNamedGroups(a, path, cfg, info, binary)
+	commands := commandsIn(a.Name(), cfg)
+	if owned := ownedOnly(commands); len(owned) > 0 {
+		return Check{
+			Name:   name,
+			Status: Fail,
+			Detail: fmt.Sprintf("%d retired entry(ies) this tool no longer answers: %s", len(owned), strings.Join(owned, ", ")),
+			Remedy: "run `agents wire` to remove them; the command they call no longer exists",
+		}
 	}
-	return checkWiringNestedHooks(a, path, cfg, info, binary)
+	if lookalikes := lookalikeOnly(commands); len(lookalikes) > 0 {
+		return Check{
+			Name:   name,
+			Status: Warn,
+			Detail: fmt.Sprintf("%d entry(ies) in the generated shape but under a binary this tool does not own: %s", len(lookalikes), strings.Join(lookalikes, ", ")),
+			Remedy: "remove them by hand: `wire` deletes only entries whose binary is this tool, and widening it to delete these would be deleting from a config this tool does not own",
+		}
+	}
+	return Check{Name: name, Status: OK, Detail: "no stale entries"}
 }
 
-func checkWiringNamedGroups(a harness.Adapter, path string, cfg map[string]any, info os.FileInfo, binary string) (Check, time.Time, []string) {
-	name := "wiring:" + a.Name()
-	agentsGroup, ok := cfg["agents"].(map[string]any)
-	if !ok {
-		return Check{Name: name, Status: Fail, Detail: "generated hook config has no agents object", Remedy: "run `agents wire`"}, info.ModTime(), nil
-	}
-
-	var keys []string
-	for _, ev := range a.Events() {
-		rawList, ok := agentsGroup[ev.Vendor].([]any)
-		if !ok {
-			return Check{Name: name, Status: Fail, Detail: "required event " + ev.Vendor + " is missing", Remedy: "run `agents wire`"}, info.ModTime(), nil
-		}
-		wantCommand := harness.HookCommand(binary, a.Name(), ev.Semantic)
-		matches := 0
-		isToolEvent := ev.Vendor == "PreToolUse" || ev.Vendor == "PostToolUse"
-
-		if isToolEvent {
-			for groupIndex, rawGroup := range rawList {
-				group, ok := rawGroup.(map[string]any)
-				if !ok {
-					continue
-				}
-				matcher, matcherPresent := group["matcher"]
-				matcherOK := (!matcherPresent && ev.Matcher == "") || (matcherPresent && ev.Matcher != "" && matcher == ev.Matcher)
-				inner, _ := group["hooks"].([]any)
-				for hookIndex, rawHook := range inner {
-					hook, ok := rawHook.(map[string]any)
-					if !ok {
-						continue
-					}
-					command, _ := hook["command"].(string)
-					typ, _ := hook["type"].(string)
-					if command == wantCommand && typ == "command" && matcherOK {
-						matches++
-						keys = append(keys, path+":"+snakeEvent(ev.Vendor)+fmt.Sprintf(":%d:%d", groupIndex, hookIndex))
-						continue
-					}
-					if command == wantCommand || harness.IsOwnedHookCommand(command) {
-						return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
-					}
-				}
-			}
-		} else {
-			for itemIndex, rawItem := range rawList {
-				item, ok := rawItem.(map[string]any)
-				if !ok {
-					continue
-				}
-				if innerHooks, hasHooks := item["hooks"].([]any); hasHooks {
-					for _, rawHook := range innerHooks {
-						if hook, ok := rawHook.(map[string]any); ok {
-							cmd, _ := hook["command"].(string)
-							if cmd == wantCommand || harness.IsOwnedHookCommand(cmd) {
-								return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
-							}
-						}
-					}
-					continue
-				}
-				command, _ := item["command"].(string)
-				typ, _ := item["type"].(string)
-				_, hasMatcher := item["matcher"]
-				if command == wantCommand && typ == "command" && !hasMatcher {
-					matches++
-					keys = append(keys, path+":"+snakeEvent(ev.Vendor)+fmt.Sprintf(":%d:0", itemIndex))
-					continue
-				}
-				if command == wantCommand || harness.IsOwnedHookCommand(command) {
-					return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
-				}
-			}
-		}
-
-		if matches != 1 {
-			return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("required event %s has %d exact generated hooks", ev.Vendor, matches), Remedy: "run `agents wire`"}, info.ModTime(), nil
+// ownedOnly keeps the commands `wire` is allowed to delete.
+func ownedOnly(commands []string) []string {
+	var out []string
+	for _, c := range commands {
+		if harness.IsOwnedHookCommand(c) {
+			out = append(out, c)
 		}
 	}
-
-	generatedCount := 0
-	for _, rawList := range agentsGroup {
-		items, _ := rawList.([]any)
-		for _, rawItem := range items {
-			item, _ := rawItem.(map[string]any)
-			if inner, ok := item["hooks"].([]any); ok {
-				for _, rawHook := range inner {
-					hook, _ := rawHook.(map[string]any)
-					command, _ := hook["command"].(string)
-					if harness.IsOwnedHookCommand(command) {
-						generatedCount++
-					}
-				}
-			} else {
-				command, _ := item["command"].(string)
-				if harness.IsOwnedHookCommand(command) {
-					generatedCount++
-				}
-			}
-		}
-	}
-	if generatedCount != len(a.Events()) {
-		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("hook config contains %d generated commands; want %d exact required hooks", generatedCount, len(a.Events())), Remedy: "run `agents wire`"}, info.ModTime(), nil
-	}
-
-	if stale := resemblingButUnownedNamedGroups(agentsGroup); len(stale) > 0 {
-		return unownedLookalikeCheck(name, path, stale, info.ModTime(), keys)
-	}
-
-	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+	return out
 }
 
-func checkWiringNestedHooks(a harness.Adapter, path string, cfg map[string]any, info os.FileInfo, binary string) (Check, time.Time, []string) {
-	name := "wiring:" + a.Name()
-	hooks, ok := cfg["hooks"].(map[string]any)
-	if !ok {
-		return Check{Name: name, Status: Fail, Detail: "generated hook config has no hooks object", Remedy: "run `agents wire`"}, info.ModTime(), nil
-	}
-
-	var keys []string
-	for _, ev := range a.Events() {
-		groups, ok := hooks[ev.Vendor].([]any)
-		if !ok {
-			return Check{Name: name, Status: Fail, Detail: "required event " + ev.Vendor + " is missing", Remedy: "run `agents wire`"}, info.ModTime(), nil
+// lookalikeOnly keeps the commands in the generated shape that this tool does
+// not own, so they can be reported without being deleted.
+func lookalikeOnly(commands []string) []string {
+	var out []string
+	for _, c := range commands {
+		if !harness.IsOwnedHookCommand(c) && harness.ResemblesHookCommand(c) {
+			out = append(out, c)
 		}
-		wantCommand := harness.HookCommand(binary, a.Name(), ev.Semantic)
-		matches := 0
-		for groupIndex, rawGroup := range groups {
-			group, ok := rawGroup.(map[string]any)
-			if !ok {
+	}
+	return out
+}
+
+// commandsIn returns every command in a harness config that is in this tool's
+// generated shape, so the caller can classify each one by whether it may be
+// deleted.
+//
+// It walks EVERY key under the harness's group rather than the events any
+// adapter currently declares, because the entries being looked for are the ones
+// an older version wrote: an event this binary no longer knows about is exactly
+// where a stale entry hides.
+//
+// It understands both shapes this tool has used. Claude Code and Codex nest a
+// command inside a group -- an event maps to `[{"hooks": [{"command": ...}]}]`
+// -- while Antigravity puts the command object directly in the list -- an event
+// maps to `[{"command": ...}]`. A walk that understood only one shape would
+// report the other harness's retired entry as clean, which is the failure this
+// check exists to catch, arriving as silence.
+func commandsIn(harnessName string, cfg map[string]any) []string {
+	var found []string
+	var groups map[string]any
+	if harnessName == "antigravity" {
+		groups, _ = cfg["agents"].(map[string]any)
+	} else {
+		groups, _ = cfg["hooks"].(map[string]any)
+	}
+	for _, raw := range groups {
+		entries, _ := raw.([]any)
+		for _, rawEntry := range entries {
+			entry, _ := rawEntry.(map[string]any)
+			if cmd, _ := entry["command"].(string); cmd != "" {
+				if harness.ResemblesHookCommand(cmd) || harness.IsOwnedHookCommand(cmd) {
+					found = append(found, cmd)
+				}
 				continue
 			}
-			matcher, matcherPresent := group["matcher"]
-			matcherOK := (!matcherPresent && ev.Matcher == "") || (matcherPresent && ev.Matcher != "" && matcher == ev.Matcher)
-			inner, _ := group["hooks"].([]any)
-			for hookIndex, rawHook := range inner {
-				hook, ok := rawHook.(map[string]any)
-				if !ok {
-					continue
-				}
-				command, _ := hook["command"].(string)
-				typ, _ := hook["type"].(string)
-				if command == wantCommand && typ == "command" && matcherOK {
-					matches++
-					keys = append(keys, path+":"+snakeEvent(ev.Vendor)+fmt.Sprintf(":%d:%d", groupIndex, hookIndex))
-					continue
-				}
-				if command == wantCommand || harness.IsOwnedHookCommand(command) {
-					return Check{Name: name, Status: Fail, Detail: "generated hook for " + ev.Vendor + " has stale structural fields", Remedy: "run `agents wire`"}, info.ModTime(), nil
-				}
-			}
-		}
-		if matches != 1 {
-			return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("required event %s has %d exact generated hooks", ev.Vendor, matches), Remedy: "run `agents wire`"}, info.ModTime(), nil
-		}
-	}
-	generatedCount := 0
-	for _, rawGroups := range hooks {
-		groups, _ := rawGroups.([]any)
-		for _, rawGroup := range groups {
-			group, _ := rawGroup.(map[string]any)
-			inner, _ := group["hooks"].([]any)
+			inner, _ := entry["hooks"].([]any)
 			for _, rawHook := range inner {
 				hook, _ := rawHook.(map[string]any)
-				command, _ := hook["command"].(string)
-				if harness.IsOwnedHookCommand(command) {
-					generatedCount++
+				cmd, _ := hook["command"].(string)
+				if harness.ResemblesHookCommand(cmd) || harness.IsOwnedHookCommand(cmd) {
+					found = append(found, cmd)
 				}
 			}
 		}
 	}
-	if generatedCount != len(a.Events()) {
-		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("hook config contains %d generated commands; want %d exact required hooks", generatedCount, len(a.Events())), Remedy: "run `agents wire`"}, info.ModTime(), nil
-	}
-	// Everything above counts hooks we own. An entry shaped like ours but run
-	// from some other binary is owned by nobody: `agents wire` will not replace
-	// it, because replacing it would mean deleting a command we cannot prove is
-	// ours, and the harness runs it anyway -- so it fails at every session
-	// start while this check says the wiring is exact. Report it; never delete.
-	if stale := resemblingButUnowned(hooks); len(stale) > 0 {
-		return unownedLookalikeCheck(name, path, stale, info.ModTime(), keys)
-	}
-	return Check{Name: name, Status: OK, Detail: "all required generated hooks are exact"}, info.ModTime(), keys
+	return found
 }
 
-// unownedLookalikeCheck reports hook commands shaped like ours that run a
-// binary `agents wire` cannot identify as its own. The check exists because
-// those commands are nobody's: wire will not delete what it cannot prove it
-// wrote, and the harness runs them anyway, so they fire at every session start
-// while the wiring otherwise looks exact.
+var installedHookNames = []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"}
+
+// repository last learned something it wrote down.
 //
-// The detail names each offending BINARY with its count rather than one example
-// command. A single example is what this said first, and it cost a round of
-// diagnosis: four commands from one renamed dev build read the same as four from
-// four different ones, and the remedy below is per-file, not per-command.
-func unownedLookalikeCheck(name, path string, stale []string, modified time.Time, keys []string) (Check, time.Time, []string) {
-	return Check{
-		Name:   name,
-		Status: Warn,
-		Detail: fmt.Sprintf("%d hook command(s) look generated but run a different binary: %s", len(stale), unownedLookalikeSummary(stale)),
-		Remedy: "`agents wire` never deletes a command it cannot prove it wrote, so delete these from " + path + " by hand",
-	}, modified, keys
-}
-
-// unownedLookalikeSummary counts the offending commands by the binary they run,
-// in first-seen order so the output is stable and reads like the file does.
-func unownedLookalikeSummary(stale []string) string {
-	counts := make(map[string]int, len(stale))
-	var order []string
-	for _, command := range stale {
-		binary, ok := harness.CommandBinary(command)
-		if !ok {
-			binary = command
-		}
-		if _, seen := counts[binary]; !seen {
-			order = append(order, binary)
-		}
-		counts[binary]++
+// It reads docs/qna, the one store path this tool writes. The store is fixed
+// rather than resolved from a layout, which is what makes this check cheap
+// enough to run on every invocation.
+//
+// It is deliberately weak, and the weakness is the point. It cannot tell a
+// quiet fortnight from a broken habit, and it says nothing about whether an
+// entry was ever read. An absent store is not a failure: most repositories have
+// not adopted this, and a check that fails everywhere teaches people to ignore
+// the whole report.
+func checkQNAFreshness(repoRoot string, now time.Time) Check {
+	const name = "recording:freshness"
+	dir := filepath.Join(repoRoot, "docs", "qna")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return Check{Name: name, Status: OK, Detail: "docs/qna: no such store in this repository"}
 	}
-	parts := make([]string, 0, len(order))
-	for _, binary := range order {
-		parts = append(parts, fmt.Sprintf("%s (%d)", binary, counts[binary]))
-	}
-	return strings.Join(parts, ", ")
-}
-
-func resemblingButUnownedNamedGroups(agentsGroup map[string]any) []string {
-	var found []string
-	for _, rawList := range agentsGroup {
-		items, _ := rawList.([]any)
-		for _, rawItem := range items {
-			item, _ := rawItem.(map[string]any)
-			if inner, ok := item["hooks"].([]any); ok {
-				for _, rawHook := range inner {
-					hook, _ := rawHook.(map[string]any)
-					command, _ := hook["command"].(string)
-					if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
-						found = append(found, command)
-					}
-				}
-			} else {
-				command, _ := item["command"].(string)
-				if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
-					found = append(found, command)
-				}
-			}
-		}
-	}
-	sort.Strings(found)
-	return found
-}
-
-// resemblingButUnowned returns the hook commands that have our shape but that
-// ParseHookCommand refuses, newest-looking first is not meaningful here so the
-// order is whatever the config gives.
-func resemblingButUnowned(hooks map[string]any) []string {
-	var found []string
-	for _, rawGroups := range hooks {
-		groups, _ := rawGroups.([]any)
-		for _, rawGroup := range groups {
-			group, _ := rawGroup.(map[string]any)
-			inner, _ := group["hooks"].([]any)
-			for _, rawHook := range inner {
-				hook, _ := rawHook.(map[string]any)
-				command, _ := hook["command"].(string)
-				if harness.ResemblesHookCommand(command) && !harness.IsOwnedHookCommand(command) {
-					found = append(found, command)
-				}
-			}
-		}
-	}
-	sort.Strings(found)
-	return found
-}
-
-func snakeEvent(s string) string {
-	var b strings.Builder
-	for i, r := range s {
-		if unicode.IsUpper(r) {
-			if i > 0 {
-				b.WriteByte('_')
-			}
-			b.WriteRune(unicode.ToLower(r))
+	newest := time.Time{}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		b.WriteRune(r)
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(newest) {
+			newest = info.ModTime()
+		}
 	}
-	return b.String()
+	if newest.IsZero() {
+		return Check{Name: name, Status: OK, Detail: "docs/qna: empty store; nothing recorded yet"}
+	}
+	return Check{Name: name, Status: OK,
+		Detail: fmt.Sprintf("docs/qna: newest entry is %s old", now.Sub(newest).Round(time.Hour))}
 }
 
-func checkCodexTrust(configPath string, currentKeys []string) Check {
-	remedy := "open human Codex `/hooks` and compare Installed and Active counts; doctor never grants trust"
-	var cfg struct {
-		Hooks struct {
-			State map[string]struct {
-				TrustedHash string `toml:"trusted_hash"`
-				Enabled     *bool  `toml:"enabled"`
-			} `toml:"state"`
-		} `toml:"hooks"`
+// checkScaffold reports the state of the three files `init` writes that make
+// the two-tier context work.
+//
+// These checks came back. They were previously computed inside the drift
+// inspection, so deleting the drift machinery took them with it -- machinery
+// whose removal had nothing to do with whether a repository still has its
+// router. The subject of each check still exists and `init` still writes and
+// repairs all three, which is what makes the check actionable.
+//
+// What is NOT restored is the content judgement the old router check made: it
+// classified the router as canonical, legacy or diverged, which required the
+// catalog of historical router texts. That catalog is gone with the layouts it
+// belonged to, and inventing a simpler version would be asserting something
+// this tool can no longer know. Presence and shape are what is checked; whether
+// the prose is still right is a human judgement.
+func checkScaffold(repoRoot string) []Check {
+	return []Check{
+		checkRouter(repoRoot),
+		checkSymlink(repoRoot),
+		checkDomain(repoRoot),
 	}
-	b, err := safeio.ReadRegular(configPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Check{Name: "trust:codex", Status: Warn, Detail: "Codex config is missing; no persisted trust entry", Remedy: remedy}
-		}
-		return Check{Name: "trust:codex", Status: Fail, Detail: "Codex config is not a readable regular file", Remedy: remedy}
-	}
-	if _, err := toml.Decode(string(b), &cfg); err != nil {
-		return Check{Name: "trust:codex", Status: Fail, Detail: "Codex config is unreadable or malformed", Remedy: remedy}
-	}
-	if len(currentKeys) == 0 {
-		return Check{Name: "trust:codex", Status: Warn, Detail: "current Codex hook positions are unavailable; trust cannot be correlated", Remedy: remedy}
-	}
-	present := 0
-	disabled := 0
-	for _, key := range currentKeys {
-		if state, ok := cfg.Hooks.State[key]; ok && state.TrustedHash != "" {
-			present++
-			if state.Enabled != nil && !*state.Enabled {
-				disabled++
-			}
-		}
-	}
+}
+
+// checkRouter reports whether the root instruction file is there. Every
+// harness reads it, and it is the one file an operator may reasonably delete
+// while reorganising a repository.
+func checkRouter(repoRoot string) Check {
+	const name = "scaffold:router"
+	path := filepath.Join(repoRoot, "AGENTS.md")
+	info, err := os.Lstat(path)
 	switch {
-	case present == 0:
-		return Check{Name: "trust:codex", Status: Warn, Detail: "no persisted trust entry for current hook positions", Remedy: remedy}
-	case present != len(currentKeys):
-		return Check{Name: "trust:codex", Status: Warn, Detail: fmt.Sprintf("persisted trust entries incomplete (%d/%d); current match unknown", present, len(currentKeys)), Remedy: remedy}
-	case disabled > 0:
-		return Check{Name: "trust:codex", Status: Warn, Detail: fmt.Sprintf("persisted trust entries present but %d/%d current hooks explicitly disabled", disabled, len(currentKeys)), Remedy: remedy}
-	default:
-		return Check{Name: "trust:codex", Status: OK, Detail: "persisted trust entries present; no current hook is explicitly disabled; `/hooks` review state is not disclosed"}
+	case os.IsNotExist(err):
+		return Check{Name: name, Status: Warn, Detail: "root AGENTS.md is missing",
+			Remedy: "run `agents init` to restore it from the embedded template"}
+	case err != nil:
+		return Check{Name: name, Status: Warn, Detail: "root AGENTS.md cannot be inspected: " + err.Error(),
+			Remedy: "check permissions on " + path}
+	case info.IsDir():
+		return Check{Name: name, Status: Fail, Detail: "root AGENTS.md is a directory",
+			Remedy: "replace it with the instruction file; a directory here is read as nothing"}
 	}
+	return Check{Name: name, Status: OK, Detail: "root AGENTS.md is present"}
+}
+
+// checkSymlink is the one that fails silently and does real damage.
+//
+// CLAUDE.md must be a relative symlink to AGENTS.md. A tar or zip extraction, a
+// Windows checkout with core.symlinks=false, or a sync tool can materialise it
+// as a regular file whose entire content is the text "AGENTS.md" -- and Claude
+// Code then reads that one line as the whole project context, with nothing
+// anywhere saying so. The relative form matters too: an absolute link records
+// one machine's checkout path and breaks on any other.
+func checkSymlink(repoRoot string) Check {
+	const name = "scaffold:symlink"
+	path := filepath.Join(repoRoot, "CLAUDE.md")
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return Check{Name: name, Status: Warn, Detail: "CLAUDE.md is missing",
+			Remedy: "run `agents init`, or create it: ln -s AGENTS.md CLAUDE.md"}
+	}
+	if err != nil {
+		return Check{Name: name, Status: Warn, Detail: "CLAUDE.md cannot be inspected: " + err.Error()}
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		return Check{Name: name, Status: Fail, Detail: "CLAUDE.md is not a symlink; a harness reading it sees whatever this file contains",
+			Remedy: "remove it and create the relative link: ln -s AGENTS.md CLAUDE.md"}
+	}
+	target, err := os.Readlink(path)
+	if err != nil {
+		return Check{Name: name, Status: Warn, Detail: "CLAUDE.md cannot be read as a link: " + err.Error()}
+	}
+	if target != "AGENTS.md" {
+		return Check{Name: name, Status: Fail, Detail: fmt.Sprintf("CLAUDE.md points at %q; an absolute or renamed target breaks on another machine", target),
+			Remedy: "recreate it relative to this directory: ln -s AGENTS.md CLAUDE.md"}
+	}
+	if _, err := os.Stat(path); err != nil {
+		return Check{Name: name, Status: Fail, Detail: "CLAUDE.md is a dangling link: AGENTS.md does not resolve",
+			Remedy: "run `agents init` to restore AGENTS.md"}
+	}
+	return Check{Name: name, Status: OK, Detail: "CLAUDE.md is a relative symlink to AGENTS.md"}
+}
+
+// checkDomain reports whether the repository's own rules file is there. It is a
+// Warn rather than a Fail: a repository may keep its guidance elsewhere, and
+// this tool writes a starter file rather than a required one.
+func checkDomain(repoRoot string) Check {
+	const name = "scaffold:domain"
+	path := filepath.Join(repoRoot, ".agents", "AGENTS.md")
+	info, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
+		return Check{Name: name, Status: Warn, Detail: ".agents/AGENTS.md is missing",
+			Remedy: "run `agents init` to write the starter template, then replace its prose with this repository's own"}
+	case err != nil:
+		return Check{Name: name, Status: Warn, Detail: ".agents/AGENTS.md cannot be inspected: " + err.Error()}
+	case info.IsDir():
+		return Check{Name: name, Status: Warn, Detail: ".agents/AGENTS.md is a directory, not a file"}
+	}
+	return Check{Name: name, Status: OK, Detail: ".agents/AGENTS.md domain context is present"}
+}
+
+// checkSkills reports the state of the one skill this tool installs.
+//
+// Three answers, because they call for three different responses: missing is a
+// setup gap with a remedy, present is silent success, and customized is
+// reported as OK on purpose. The skill is written once and then belongs to the
+// repository -- a repository that has edited it is using the tool as intended,
+// and a report that called that a fault would teach people to ignore the
+// report. Customized is distinct from missing rather than folded into it for
+// exactly that reason: the two are one word apart and opposite in meaning.
+func checkSkills(repoRoot string) []Check {
+	const name = "recording-what-you-learn"
+	const check = "scaffold:skill-recording"
+	current, found, err := scaffold.SkillCurrent(repoRoot, name)
+	if err != nil {
+		return []Check{{Name: check, Status: Warn, Detail: err.Error()}}
+	}
+	if found == "" {
+		return []Check{{
+			Name:   check,
+			Status: Warn,
+			Detail: ".agents/skills/" + name + "/ is missing",
+			Remedy: "run 'agents init' to populate the bundled skill",
+		}}
+	}
+	if !current {
+		return []Check{{
+			Name:   check,
+			Status: OK,
+			Detail: ".agents/skills/" + name + "/ carries repository customizations",
+		}}
+	}
+	return []Check{{
+		Name:   check,
+		Status: OK,
+		Detail: ".agents/skills/" + name + "/ is present",
+	}}
 }
 
 func checkAntigravityTrust(configPath, repoRoot string) Check {
@@ -650,269 +529,18 @@ func checkAntigravityTrust(configPath, repoRoot string) Check {
 		}
 	}
 
+	// Untrusted, and reported as OK because the Desktop App -- the harness this
+	// repository's hooks target -- executes on open with no trust gate. The
+	// consequence has to be stated in the DETAIL rather than carried by the
+	// remedy, and that is not a stylistic choice: the caller prints a remedy only
+	// for a check that is not ok, so a remedy attached to an ok check is never
+	// rendered. It was written that way and measured: the instruction this check
+	// exists to give was unreachable in every report it produced.
 	return Check{
 		Name:   name,
 		Status: OK,
-		Detail: "Desktop App executes on open (no trust gate); CLI trustedWorkspaces entry not found",
-		Remedy: remedy,
+		Detail: "Desktop App executes on open (no trust gate); " + repoRoot + " is not in the CLI's trustedWorkspaces, so the CLI loads nothing from it -- " + remedy,
 	}
-}
-
-func checkRecording(a harness.Adapter, recs []record.Record, wiringTime time.Time, freshness time.Duration, now time.Time) Check {
-	name := "recording:" + a.Name()
-	var latest time.Time
-	for _, rec := range recs {
-		if rec.Harness == a.Name() && rec.When.After(latest) {
-			latest = rec.When
-		}
-	}
-	remedy := "use the harness trust UI and confirm a new trace appears after the next session event"
-	if latest.IsZero() {
-		return Check{Name: name, Status: Warn, Detail: "this harness has never recorded here", Remedy: remedy}
-	}
-	if latest.After(now) {
-		return Check{Name: name, Status: Warn, Detail: "latest record has future clock skew", Remedy: "check clocks on machines writing this trace index"}
-	}
-	if !wiringTime.IsZero() && latest.Before(wiringTime) {
-		return Check{Name: name, Status: Warn, Detail: "latest record predates current wiring", Remedy: remedy}
-	}
-	if now.Sub(latest) > freshness {
-		return Check{Name: name, Status: Warn, Detail: "latest record is stale", Remedy: remedy}
-	}
-	return Check{Name: name, Status: OK, Detail: "recent recording observed"}
-}
-
-var installedHookNames = []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"}
-
-func checkLocalHooks(repoRoot string, git func(dir string, args ...string) GitResult) Check {
-	local := git(repoRoot, "config", "--local", "--get-all", "core.hooksPath")
-	localValues := configValues(local.Output)
-	switch {
-	case local.Code == 1:
-		return Check{Name: "git-hooks:local", Status: OK, Detail: "no repository-local core.hooksPath override"}
-	case local.Code != 0:
-		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath could not be read", Remedy: "inspect repository or linked-worktree Git configuration"}
-	case len(localValues) == 0:
-		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath returned an empty value"}
-	default:
-		return Check{Name: "git-hooks:local", Status: Warn, Detail: fmt.Sprintf("repository-local core.hooksPath override is set (%d value(s))", len(localValues)), Remedy: "the global agents hooks are shadowed here; chain them from the local hook directory if desired"}
-	}
-}
-
-func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
-	if deps.Git == nil {
-		name := "git-hooks:global"
-		if deps.Root == "" || deps.HooksDir == "" {
-			name = "git-hooks:local"
-		}
-		return []Check{{Name: name, Status: Fail, Detail: "Git diagnostic runner is unavailable"}}
-	}
-	if deps.Root == "" || deps.HooksDir == "" {
-		return []Check{
-			checkLocalHooks(repoRoot, deps.Git),
-			checkLegacyHooks(repoRoot, deps),
-		}
-	}
-	var checks []Check
-	global := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")
-	globalValues, globalParseErr := configOriginValues(global.Output)
-	switch {
-	case global.Code == 1:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath is unset", Remedy: hookInstallerRemedy(deps, false)})
-	case global.Code != 0:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath could not be read", Remedy: "inspect global Git configuration"})
-	case globalParseErr != nil || len(globalValues) != 1:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: fmt.Sprintf("global core.hooksPath has %d values", len(globalValues)), Remedy: "resolve the global values deliberately"})
-	case globalValues[0].Origin != "file:"+deps.GlobalGitConfig || globalValues[0].Value != deps.HooksDir:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath value or origin is unexpected", Remedy: "preserve included settings and restore the reviewed primary global setting deliberately"})
-	default:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: OK, Detail: "global core.hooksPath is exact"})
-	}
-
-	checks = append(checks, checkLocalHooks(repoRoot, deps.Git))
-
-	effective := deps.Git(repoRoot, "config", "--get", "core.hooksPath")
-	effectiveValues := configValues(effective.Output)
-	switch {
-	case effective.Code != 0:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: Fail, Detail: "effective core.hooksPath could not be read", Remedy: "inspect all Git configuration scopes"})
-	case len(effectiveValues) != 1:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: Fail, Detail: fmt.Sprintf("effective core.hooksPath has %d values", len(effectiveValues)), Remedy: "inspect all Git configuration scopes"})
-	case effectiveValues[0] != deps.HooksDir:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: Warn, Detail: "effective core.hooksPath shadows the agents hook directory", Remedy: "inspect local, worktree, command, and environment Git configuration"})
-	default:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: OK, Detail: "effective core.hooksPath is exact"})
-	}
-
-	checks = append(checks, checkInstalledLinks(deps, binary))
-	checks = append(checks, checkUnmanagedLinks(deps))
-	checks = append(checks, checkLegacyHooks(repoRoot, deps))
-	return checks
-}
-
-func configValues(output string) []string {
-	var values []string
-	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
-		if line != "" {
-			values = append(values, line)
-		}
-	}
-	return values
-}
-
-type configOriginValue struct {
-	Origin string
-	Value  string
-}
-
-func configOriginValues(output string) ([]configOriginValue, error) {
-	if output == "" {
-		return nil, nil
-	}
-	parts := strings.Split(output, "\x00")
-	if parts[len(parts)-1] != "" || len(parts)%2 != 1 {
-		return nil, errors.New("malformed Git origin output")
-	}
-	parts = parts[:len(parts)-1]
-	values := make([]configOriginValue, 0, len(parts)/2)
-	for i := 0; i < len(parts); i += 2 {
-		if parts[i] == "" {
-			return nil, errors.New("malformed Git origin output")
-		}
-		values = append(values, configOriginValue{Origin: parts[i], Value: parts[i+1]})
-	}
-	return values, nil
-}
-
-// hookInstallerRemedy renders the command that repairs what the git-hooks and
-// git-attributes checks report. The text it replaces -- "run the reviewed
-// global hook installer" -- named no path, no arguments and no way past the
-// installer's own refusal. That matters most in the one case these checks exist
-// to catch: a package upgrade deletes the versioned path a pinned hook link
-// points at, git runs a dangling hook as if no hook existed, and the installer
-// then refuses the link it wrote itself unless it is handed --adopt-owned. So
-// the remedy carries the flag and the arguments, and falls back to the old
-// sentence only when the checkout paths are unknown.
-func hookInstallerRemedy(deps Dependencies, adoptOwned bool) string {
-	root := deps.Root
-	if root == "" && deps.HooksDir != "" {
-		root = filepath.Dir(filepath.Dir(deps.HooksDir))
-	}
-	home := ""
-	if deps.GlobalGitConfig != "" {
-		home = filepath.Dir(deps.GlobalGitConfig)
-	}
-	if root == "" || home == "" {
-		return "run the reviewed global hook installer"
-	}
-	adopt := ""
-	if adoptOwned {
-		adopt = " --adopt-owned"
-	}
-	return fmt.Sprintf(`run: bash "%s/git/install-hooks.sh" install%s "%s" "%s" "$(command -v agents)"`,
-		root, adopt, root, home)
-}
-
-// isManagedHookName reports whether this repository owns the hook name. The
-// installer links exactly installedHookNames; anything else in the directory
-// belongs to the human.
-func isManagedHookName(name string) bool {
-	for _, managed := range installedHookNames {
-		if name == managed {
-			return true
-		}
-	}
-	return false
-}
-
-// checkUnmanagedLinks reports symlinks in the hooks directory that this
-// repository does not manage and that no longer resolve. Git ignores names it
-// does not know, so they are inert -- and invisible: a link left behind by an
-// older install dangles forever and no other check names it. This is the pair
-// of links that survived the 2026-09-20 upgrade of this machine while
-// git-hooks:links, which sees only the four managed names, stayed silent.
-//
-// Warn, never fail: a dangling link under a managed name is already a failure
-// above, and anything else here is the human's to keep or delete.
-func checkUnmanagedLinks(deps Dependencies) Check {
-	entries, err := os.ReadDir(deps.HooksDir)
-	if err != nil {
-		return Check{Name: "git-hooks:unmanaged", Status: Warn, Detail: "hook directory could not be read", Remedy: "inspect " + deps.HooksDir}
-	}
-	var dangling []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if isManagedHookName(name) {
-			continue
-		}
-		path := filepath.Join(deps.HooksDir, name)
-		info, err := os.Lstat(path)
-		if err != nil || info.Mode()&os.ModeSymlink == 0 {
-			continue
-		}
-		if _, err := os.Stat(path); err != nil {
-			dangling = append(dangling, name)
-		}
-	}
-	if len(dangling) == 0 {
-		return Check{Name: "git-hooks:unmanaged", Status: OK, Detail: "no unowned hook links dangle"}
-	}
-	sort.Strings(dangling)
-	return Check{
-		Name:   "git-hooks:unmanaged",
-		Status: Warn,
-		Detail: "unowned hook link(s) dangle and will never run: " + strings.Join(dangling, ", "),
-		Remedy: "delete them, or repoint them deliberately: " + hookInstallerRemedy(deps, false),
-	}
-}
-
-func checkInstalledLinks(deps Dependencies, binary string) Check {
-	binaryInfo, err := os.Stat(binary)
-	if err != nil {
-		return Check{Name: "git-hooks:links", Status: Fail, Detail: "current binary cannot be inspected", Remedy: "rebuild and reinstall agents"}
-	}
-	for _, name := range installedHookNames {
-		path := filepath.Join(deps.HooksDir, name)
-		info, err := os.Lstat(path)
-		if err != nil {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " hook link is missing or unreadable", Remedy: hookInstallerRemedy(deps, false)}
-		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " is not an owned symlink", Remedy: "preserve or move the foreign hook deliberately, then " + hookInstallerRemedy(deps, false)}
-		}
-		resolved, err := os.Stat(path)
-		if err != nil || !os.SameFile(binaryInfo, resolved) {
-			// The link exists and is ours, but names an older binary -- the
-			// shape a package upgrade leaves behind. Repointing it needs the
-			// flag, because the default refuses any link it did not just write.
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " does not resolve to the current binary", Remedy: hookInstallerRemedy(deps, true)}
-		}
-	}
-	return Check{Name: "git-hooks:links", Status: OK, Detail: "all four installed hook links resolve to the current binary"}
-}
-
-func checkLegacyHooks(repoRoot string, deps Dependencies) Check {
-	if deps.LegacyHooksPath == nil {
-		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
-	}
-	dir, err := deps.LegacyHooksPath(repoRoot)
-	if err != nil || !filepath.IsAbs(dir) {
-		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
-	}
-	var found []string
-	for _, name := range installedHookNames {
-		if githook.IsRetiredShim(filepath.Join(dir, name)) {
-			found = append(found, name)
-		}
-	}
-	if len(found) > 0 {
-		return Check{Name: "git-hooks:legacy", Status: Warn, Detail: "exact retired legacy dispatcher remains for " + strings.Join(found, ", "), Remedy: "remove only the exact retired shim after preserving foreign hooks"}
-	}
-	return Check{Name: "git-hooks:legacy", Status: OK, Detail: "no exact retired legacy dispatcher detected"}
-}
-
-var repoAttributeLines = []string{
-	".agents/** linguist-generated=true",
 }
 
 func checkGitAttributes(repoRoot string, deps Dependencies) Check {
@@ -968,536 +596,55 @@ func checkGitAttributes(repoRoot string, deps Dependencies) Check {
 	return Check{Name: "git-attributes", Status: OK, Detail: "global and repository attributes are exact"}
 }
 
-func hasExactLine(contents []byte, want string) bool {
-	for _, line := range strings.Split(strings.ReplaceAll(string(contents), "\r\n", "\n"), "\n") {
-		if line == want {
-			return true
+func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
+	if deps.Git == nil {
+		name := "git-hooks:global"
+		if deps.Root == "" || deps.HooksDir == "" {
+			name = "git-hooks:local"
+		}
+		return []Check{{Name: name, Status: Fail, Detail: "Git diagnostic runner is unavailable"}}
+	}
+	if deps.Root == "" || deps.HooksDir == "" {
+		return []Check{
+			checkLocalHooks(repoRoot, deps.Git),
+			checkLegacyHooks(repoRoot, deps),
 		}
 	}
-	return false
-}
-
-func checkPointers(recs []record.Record, thisMachine, cacheRoot string) []Check {
-	unverified := 0
-	for _, rec := range recs {
-		if rec.Transcript == "" || !rec.PointerVerified {
-			unverified++
-		}
-	}
-	checks := []Check{{Name: "pointers:unverified", Status: OK, Detail: fmt.Sprintf("%d unverified pointer(s)", unverified)}}
-	if unverified > 0 {
-		checks[0].Status = Warn
-		checks[0].Remedy = "unverified pointers cannot be materialized reliably"
-	}
-	if thisMachine == "" {
-		verified := len(recs) - unverified
-		checks = append(checks, Check{Name: "pointers:ownership", Status: Warn, Detail: fmt.Sprintf("machine identity unavailable; %d verified pointer(s) not classified", verified), Remedy: "restore the machine-local identity file"})
-		return checks
-	}
-	localUnreachable := 0
-	cached := 0
-	remote := map[string]int{}
-	unknownOwnership := 0
-	for _, rec := range recs {
-		if rec.Transcript == "" || !rec.PointerVerified {
-			continue
-		}
-		switch {
-		case rec.Machine == "":
-			unknownOwnership++
-		case rec.Machine != thisMachine:
-			remote[rec.Machine]++
-		default:
-			// Three answers, not two. Asking only whether the harness still has
-			// it counted a transcript we had successfully copied as lost, so the
-			// remedy this check prints could be followed perfectly and never
-			// move the number -- which teaches the reader to ignore the row.
-			if _, _, err := trace.Resolve(cacheRoot, rec); err != nil {
-				localUnreachable++
-			} else if _, serr := os.Stat(rec.Transcript); serr != nil {
-				cached++
-			}
-		}
-	}
-	if cached > 0 {
-		// ok, not a warning: the harness dropped these and the copy is why they
-		// still exist. Reported rather than silent because it is the only
-		// evidence that caching is doing anything.
-		checks = append(checks, Check{Name: "pointers:cached", Status: OK, Detail: fmt.Sprintf("%d transcript(s) survive only in the local cache", cached)})
-	}
-	// There is deliberately no check for locally unreachable pointers.
-	//
-	// It used to warn, with the remedy "run `agents trace cache` sooner". That
-	// is advice to win a race the design cannot win: subagent transcripts are
-	// deleted mid-session on a schedule nothing can anticipate, which is why
-	// the subagent-stop hook caches unconditionally. On this repository the
-	// check stood at 30 of 63 records and exited 1 on a healthy machine, every
-	// day, for a condition nobody could act on. A diagnostic that reports an
-	// unfixable normal state teaches its reader to ignore diagnostics.
-	if len(remote) > 0 {
-		machines := make([]string, 0, len(remote))
-		for machine := range remote {
-			machines = append(machines, machine)
-		}
-		sort.Strings(machines)
-		parts := make([]string, 0, len(machines))
-		for _, machine := range machines {
-			parts = append(parts, fmt.Sprintf("%s=%d", machine, remote[machine]))
-		}
-		checks = append(checks, Check{Name: "pointers:remote", Status: Warn, Detail: strings.Join(parts, ", "), Remedy: "materialize those pointers on their source machines"})
-	}
-	if unknownOwnership > 0 {
-		checks = append(checks, Check{Name: "pointers:ownership", Status: Warn, Detail: fmt.Sprintf("%d verified pointer(s) have no machine provenance", unknownOwnership), Remedy: "preserve the record but do not resolve it as local"})
-	}
-	return checks
-}
-
-func checkMachine(thisMachine string) Check {
-	if thisMachine == "" {
-		return Check{Name: "machine-id", Status: Warn, Detail: "machine identity is missing or unreadable", Remedy: "restore the machine-local identity; doctor does not create it"}
-	}
-	return Check{Name: "machine-id", Status: OK, Detail: "machine identity is readable"}
-}
-
-// checkQNAFreshness is the write-side leading indicator, and the only one.
-//
-// The capture apparatus this replaced measured itself thoroughly -- draft rate,
-// promotion rate, the age of the oldest pending draft -- and measured retrieval
-// not at all. Deleting it without leaving anything behind would have ended with
-// less instrumentation than before, so this is what remains: how long since the
-// repository last learned something it wrote down.
-//
-// It is deliberately weak. It cannot tell a quiet fortnight from a broken
-// habit, and it says nothing about whether an entry was ever read. Both limits
-// are stated in docs/design/2026-08-19-knowledge-is-documentation.md rather than
-// papered over with a proxy metric that would measure what is easy instead of
-// what matters.
-//
-// The store is resolved through the qna role rather than hardcoded to docs/qna
-// (design §7.4), and the detail begins with that resolved repository-relative
-// path so the report names what it read.
-//
-// An absent qna store is not applicable rather than a failure: most
-// repositories have not adopted this, and a check that fails everywhere teaches
-// people to ignore the whole report.
-func checkQNAFreshness(repoRoot string, l layout.Layout, now time.Time) Check {
-	rel, ok := layout.Path(l, layout.RoleQNA)
-	if !ok || rel == "" {
-		// An unknown or invalid manifest resolves no store. Name the document
-		// that was read rather than inventing a path it never declared.
-		return Check{Name: "layout:qna", Status: OK,
-			Detail: layout.ManifestRel + ": no qna store resolves in this repository",
-			Remedy: "run `agents layout validate` and fix the named path"}
-	}
-	// The manifest authors this path, and validateRel permits a control
-	// character in it, so what is printed is flattened even though the path
-	// used to read the directory is not.
-	shown := safetext.Flatten(rel)
-	entries, err := os.ReadDir(filepath.Join(repoRoot, filepath.FromSlash(rel)))
-	if err != nil {
-		return Check{Name: "layout:qna", Status: OK, Detail: shown + ": no such store in this repository"}
-	}
-	var newest time.Time
-	count := 0
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") || e.Name() == "README.md" {
-			continue
-		}
-		count++
-		if info, err := e.Info(); err == nil && info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-	}
-	if count == 0 {
-		return Check{Name: "layout:qna", Status: OK, Detail: shown + ": empty store; nothing recorded yet"}
-	}
-	days := int(now.Sub(newest).Hours() / 24)
-	return Check{Name: "layout:qna", Status: OK,
-		Detail: fmt.Sprintf("%s: %d entr(ies); newest written %d day(s) ago", shown, count, days)}
-}
-
-// checkStoreSize reports the cache against the caps the hook enforces.
-func checkStoreSize(cacheRoot string, maxBytes int64) Check {
-	if cacheRoot == "" {
-		return Check{Name: "store:size", Status: OK, Detail: "no local cache resolved"}
-	}
-	var total int64
-	err := filepath.WalkDir(cacheRoot, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
-	if err != nil {
-		return Check{Name: "store:size", Status: Warn, Detail: "the local cache size could not be measured", Remedy: "inspect the machine-local store"}
-	}
-	mb := float64(total) / (1024 * 1024)
-	if maxBytes > 0 && total > maxBytes {
-		return Check{Name: "store:size", Status: Warn, Detail: fmt.Sprintf("the transcript cache holds %.0f MB, over the %.0f MB cap", mb, float64(maxBytes)/(1024*1024)), Remedy: "run `agents trace cache prune --retention --yes`"}
-	}
-	return Check{Name: "store:size", Status: OK, Detail: fmt.Sprintf("the transcript cache holds %.0f MB", mb)}
-}
-
-// checkScaffold resolves the layout itself, for callers that have not resolved
-// it already. RunWithDeps resolves once per run and calls checkScaffoldFor, so
-// this path adds no Resolve of its own -- the drift inspection the check bodies
-// run resolves the layout again internally, on its own account.
-func checkScaffold(repoRoot, runningVersion string) []Check {
-	return checkScaffoldFor(repoRoot, runningVersion, layout.Resolve(repoRoot))
-}
-
-// scaffoldRemedy picks the recovery text for a scaffold gap by the schema the
-// repository actually resolves. Design §7.5 makes `agents init` a no-op on an
-// active supported v2 manifest -- it writes no router, no domain context, no
-// bundled skill, and no store there -- so a v2 remedy that names `init` prints
-// a command that changes nothing. The v1 branch is the text a repository with
-// no manifest has always been given, and `init` really does those writes for
-// it (scaffold.CreateWithLayout).
-func scaffoldRemedy(schema, v1, v2 string) string {
-	if schema == layout.SchemaV2 {
-		return v2
-	}
-	return v1
-}
-
-func checkScaffoldFor(repoRoot, runningVersion string, l layout.Layout) []Check {
-	// InspectRepo returns safe zero-value report structures on I/O error
-	// which naturally fall through to Fail/Warn checks below.
-	report, _ := drift.InspectRepo(repoRoot, runningVersion)
 	var checks []Check
-
-	// 1. scaffold:router
-	switch report.RouterState {
-	case drift.RouterCurrent:
-		checks = append(checks, Check{
-			Name:   "scaffold:router",
-			Status: OK,
-			Detail: "root AGENTS.md matches canonical template",
-		})
-	case drift.RouterKnownLegacy:
-		checks = append(checks, Check{
-			Name:   "scaffold:router",
-			Status: Warn,
-			Detail: "root AGENTS.md uses a legacy canonical template",
-			Remedy: "run the 'migrating-fleet-context' agent skill to update",
-		})
-	case drift.RouterDiverged:
-		checks = append(checks, Check{
-			Name:   "scaffold:router",
-			Status: Warn,
-			Detail: "root AGENTS.md contains unpartitioned domain rules or custom drift",
-			Remedy: "run the 'migrating-fleet-context' agent skill to un-nest domain rules into .agents/AGENTS.md",
-		})
-	case drift.RouterMissing:
-		fallthrough
+	global := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")
+	globalValues, globalParseErr := configOriginValues(global.Output)
+	switch {
+	case global.Code == 1:
+		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath is unset", Remedy: hookInstallerRemedy(deps, false)})
+	case global.Code != 0:
+		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath could not be read", Remedy: "inspect global Git configuration"})
+	case globalParseErr != nil || len(globalValues) != 1:
+		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: fmt.Sprintf("global core.hooksPath has %d values", len(globalValues)), Remedy: "resolve the global values deliberately"})
+	case globalValues[0].Origin != "file:"+deps.GlobalGitConfig || globalValues[0].Value != deps.HooksDir:
+		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath value or origin is unexpected", Remedy: "preserve included settings and restore the reviewed primary global setting deliberately"})
 	default:
-		checks = append(checks, Check{
-			Name:   "scaffold:router",
-			Status: Fail,
-			Detail: "root AGENTS.md is missing",
-			Remedy: scaffoldRemedy(l.Schema,
-				"run 'agents init' to scaffold",
-				"run `agents layout show --router > AGENTS.md` to restore the canonical router"),
-		})
+		checks = append(checks, Check{Name: "git-hooks:global", Status: OK, Detail: "global core.hooksPath is exact"})
 	}
 
-	// 2. scaffold:symlink
-	if report.SymlinkState == "ok" {
-		checks = append(checks, Check{
-			Name:   "scaffold:symlink",
-			Status: OK,
-			Detail: "CLAUDE.md is a relative symlink to AGENTS.md",
-		})
-	} else {
-		checks = append(checks, Check{
-			Name:   "scaffold:symlink",
-			Status: Fail,
-			Detail: "CLAUDE.md symlink is invalid (" + report.SymlinkState + ")",
-			Remedy: "run 'agents init' or recreate relative symlink: ln -s AGENTS.md CLAUDE.md",
-		})
-	}
+	checks = append(checks, checkLocalHooks(repoRoot, deps.Git))
 
-	// 3. scaffold:domain
-	if report.DomainState == "ok" {
-		checks = append(checks, Check{
-			Name:   "scaffold:domain",
-			Status: OK,
-			Detail: ".agents/AGENTS.md domain context is present",
-		})
-	} else {
-		checks = append(checks, Check{
-			Name:   "scaffold:domain",
-			Status: Warn,
-			Detail: ".agents/AGENTS.md is missing",
-			Remedy: scaffoldRemedy(l.Schema,
-				"run 'agents init' to populate starter template",
-				"create .agents/AGENTS.md with this repository's domain prose; the `agents init` starter template is a v1 convenience"),
-		})
-	}
-
-	// 4. scaffold:skill-recording
-	switch report.Skills["recording-what-you-learn"] {
-	case string(drift.ComponentCurrent):
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-recording",
-			Status: OK,
-			Detail: ".agents/skills/recording-what-you-learn/ is present",
-		})
-	case string(drift.ComponentKnownLegacy):
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-recording",
-			Status: OK,
-			Detail: ".agents/skills/recording-what-you-learn/ matches legacy template",
-		})
-	case string(drift.ComponentDiverged):
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-recording",
-			Status: OK,
-			Detail: ".agents/skills/recording-what-you-learn/ carries repository customizations",
-		})
+	effective := deps.Git(repoRoot, "config", "--get", "core.hooksPath")
+	effectiveValues := configValues(effective.Output)
+	switch {
+	case effective.Code != 0:
+		checks = append(checks, Check{Name: "git-hooks:effective", Status: Fail, Detail: "effective core.hooksPath could not be read", Remedy: "inspect all Git configuration scopes"})
+	case len(effectiveValues) != 1:
+		checks = append(checks, Check{Name: "git-hooks:effective", Status: Fail, Detail: fmt.Sprintf("effective core.hooksPath has %d values", len(effectiveValues)), Remedy: "inspect all Git configuration scopes"})
+	case effectiveValues[0] != deps.HooksDir:
+		checks = append(checks, Check{Name: "git-hooks:effective", Status: Warn, Detail: "effective core.hooksPath shadows the agents hook directory", Remedy: "inspect local, worktree, command, and environment Git configuration"})
 	default:
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-recording",
-			Status: Warn,
-			Detail: ".agents/skills/recording-what-you-learn/ is missing",
-			Remedy: scaffoldRemedy(l.Schema,
-				"run 'agents init' to populate bundled skill",
-				"populate .agents/skills/recording-what-you-learn/ with this layout's canonical text, or run the 'migrating-fleet-context' agent skill"),
-		})
+		checks = append(checks, Check{Name: "git-hooks:effective", Status: OK, Detail: "effective core.hooksPath is exact"})
 	}
 
-	// 5. scaffold:skill-migrating
-	switch report.Skills["migrating-fleet-context"] {
-	case string(drift.ComponentCurrent):
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-migrating",
-			Status: OK,
-			Detail: ".agents/skills/migrating-fleet-context/ is present",
-		})
-	case string(drift.ComponentKnownLegacy):
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-migrating",
-			Status: OK,
-			Detail: ".agents/skills/migrating-fleet-context/ matches legacy template",
-		})
-	case string(drift.ComponentDiverged):
-		// Unlike recording-what-you-learn, this skill is authoritative and
-		// agents-owned (design 5.1): a local divergence is staleness, not a
-		// customization to respect. Reporting it ok let a skill carrying
-		// obsolete migration instructions pass its own health check.
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-migrating",
-			Status: Warn,
-			Detail: ".agents/skills/migrating-fleet-context/ does not match the installed binary",
-			Remedy: "run 'agents update --all --apply' to refresh infrastructure skills",
-		})
-	default:
-		checks = append(checks, Check{
-			Name:   "scaffold:skill-migrating",
-			Status: Warn,
-			Detail: ".agents/skills/migrating-fleet-context/ is missing",
-			Remedy: "run 'agents update' or 'agents init' to refresh infrastructure skills",
-		})
-	}
-
-	// 6-9. The layout checks (design §7.4). Five layout-aware checks exist in
-	// the report: the four below, and layout:qna, which RunWithDeps appends
-	// because it needs the caller's clock. layout:committed is separate from
-	// layout:tracked because design §7.4 folds the untracked-but-not-ignored
-	// window into layout:tracked's row while the task's tests require the
-	// advisory standalone.
-	checks = append(checks, layoutManifestCheck(l, runningVersion))
-	checks = append(checks, layoutStoresCheck(repoRoot, l))
-	checks = append(checks, layoutTrackedCheck(repoRoot, l))
-	checks = append(checks, layoutCommittedCheck(repoRoot, l))
-
+	checks = append(checks, checkInstalledLinks(deps, binary))
+	checks = append(checks, checkUnmanagedLinks(deps))
+	checks = append(checks, checkLegacyHooks(repoRoot, deps))
 	return checks
-}
-
-// layoutManifestCheck reports what layout the repository resolves and whether
-// this binary may mutate it (design §7.4, §5.3).
-//
-// The order is V-rules first, status second, support third. Design §5.2 makes
-// V1-V16 the definition of an invalid layout, and a manifest that breaks one is
-// invalid whatever its layout_status says: §9.3 writes `layout_status:
-// "migrating"` together with the full move list in one atomic write, before any
-// store is touched, so a migrating manifest with a broken journal is a broken
-// manifest and not a normal intermediate state. drift weighs the same problems
-// first and calls the same repository `invalid`.
-func layoutManifestCheck(l layout.Layout, running string) Check {
-	// An unknown schema is its own warning, not an invalid manifest: the
-	// document may be perfectly well-formed for a binary newer than this one,
-	// and no store is guessed from it (design §5.1, §7.4).
-	if layout.HasProblem(l.Problems, layout.ProblemSchemaUnknown) {
-		detail := "the manifest declares no schema; no store is resolved"
-		if l.Schema != "" {
-			detail = fmt.Sprintf("manifest schema %q is not known to this binary; no store is resolved", l.Schema)
-		}
-		return Check{Name: "layout:manifest", Status: Warn,
-			Detail: detail,
-			Remedy: "upgrade the agents binary, or correct the manifest schema"}
-	}
-	if len(l.Problems) > 0 {
-		return Check{Name: "layout:manifest", Status: Fail,
-			Detail: "layout manifest is invalid: " + safetext.Flatten(drift.ProblemsText(l.Problems)),
-			Remedy: "run `agents layout validate` and fix the named path"}
-	}
-	if l.LayoutStatus == layout.StatusMigrating {
-		detail := "layout migration is in progress"
-		if l.Migration != nil && l.Migration.Phase != "" {
-			detail += "; recorded phase " + safetext.Flatten(l.Migration.Phase)
-		}
-		return Check{Name: "layout:manifest", Status: Warn,
-			Detail: detail,
-			Remedy: "run `agents layout migrate --resume --apply`"}
-	}
-	if l.Schema == layout.SchemaV1 {
-		return Check{Name: "layout:manifest", Status: OK,
-			Detail: "no manifest; implicit v1 docs/ layout"}
-	}
-	if ok, reason := layout.Support(running, l); !ok {
-		switch reason {
-		case "below_floor":
-			return Check{Name: "layout:manifest", Status: Warn,
-				Detail: fmt.Sprintf("manifest requires agents >= %s; running %s", l.MinMutVerFloor, running),
-				Remedy: "upgrade the agents binary before mutating this repository"}
-		case "unreleased":
-			// An unstamped build (design §5.3) has no release to compare, so
-			// claiming it is "below the floor" would assert a comparison that
-			// never happened.
-			return Check{Name: "layout:manifest", Status: Warn,
-				Detail: fmt.Sprintf("running %s does not report a release version, so it cannot prove it supports min_mut_ver_floor %s", running, l.MinMutVerFloor),
-				Remedy: "replace this build with a released agents binary before mutating this repository"}
-		default:
-			return Check{Name: "layout:manifest", Status: Warn,
-				Detail: fmt.Sprintf("this binary may not mutate the repository (%s); manifest requires agents >= %s; running %s", reason, l.MinMutVerFloor, running),
-				Remedy: "upgrade the agents binary before mutating this repository"}
-		}
-	}
-	return Check{Name: "layout:manifest", Status: OK,
-		Detail: fmt.Sprintf("%s stores=%d", layout.SchemaV2, len(l.Stores))}
-}
-
-// layoutStoresCheck reports the stores the resolved layout declares but that
-// are not directories on disk. It never creates anything.
-func layoutStoresCheck(root string, l layout.Layout) Check {
-	var missing []string
-	for _, role := range layout.Roles() {
-		p, ok := layout.Path(l, role)
-		if !ok || p == "" {
-			missing = append(missing, role+"=(unresolved)")
-			continue
-		}
-		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(p)))
-		if err != nil || !info.IsDir() {
-			// p is manifest-authored and may hold a control character, so the
-			// printed path is flattened even though the stat used the real one.
-			missing = append(missing, role+"="+safetext.Flatten(p))
-		}
-	}
-	if len(missing) > 0 {
-		return Check{Name: "layout:stores", Status: Warn,
-			Detail: "missing store(s): " + strings.Join(missing, ", "),
-			Remedy: scaffoldRemedy(l.Schema,
-				"run `agents init`; on a v2 repository it creates manifest-declared stores",
-				"create the named store directory and its README.md by hand, or re-run the scaffold that owns it; `agents init` creates no store on an active v2 layout")}
-	}
-	return Check{Name: "layout:stores", Status: OK, Detail: "all four roles resolve to directories"}
-}
-
-// layoutTrackedCheck is advisory: an ignored store still exists on this machine,
-// but its content will not travel with a clone. An ignored manifest or
-// .agents/ is the state V16 refuses every mutation in, so it is reported here
-// too (design §0.7, §7.4).
-//
-// The manifest question is asked only when a manifest was found. In the
-// implicit v1 layout there is nothing for such a rule to hide, and a v1
-// `--local` repository legitimately ignores `/.agents/` (design §0.7): warning
-// there would tell the operator to delete the rule `--local` exists to write.
-func layoutTrackedCheck(root string, l layout.Layout) Check {
-	if l.ManifestPath != "" {
-		ignored, err := layout.AgentsIgnored(root)
-		switch {
-		case err != nil && errors.Is(err, repo.ErrNotARepo):
-			// Outside a repository there is no ignore rule to be found.
-		case err != nil:
-			return Check{Name: "layout:tracked", Status: Warn,
-				Detail: safetext.Flatten("cannot determine whether the manifest is ignored: " + err.Error()),
-				Remedy: "run `agents layout validate`; mutation is refused while trackedness is unknown"}
-		case ignored:
-			return Check{Name: "layout:tracked", Status: Warn,
-				Detail: layout.ManifestRel + " or .agents/ is matched by an ignore rule",
-				Remedy: "remove the ignore rule; mutation is refused while the manifest is machine-local"}
-		}
-	}
-	var ignored []string
-	for _, role := range layout.Roles() {
-		p, ok := layout.Path(l, role)
-		if !ok || p == "" {
-			continue
-		}
-		got, err := repo.IsIgnored(root, p)
-		if err != nil {
-			if errors.Is(err, repo.ErrNotARepo) {
-				return Check{Name: "layout:tracked", Status: OK,
-					Detail: "not a git repository; no ignore rule can hide a store"}
-			}
-			return Check{Name: "layout:tracked", Status: Warn,
-				Detail: safetext.Flatten(fmt.Sprintf("cannot determine whether %s is ignored: %v", p, err)),
-				Remedy: "run `agents layout validate`; mutation is refused while trackedness is unknown"}
-		}
-		if got {
-			ignored = append(ignored, role+"="+safetext.Flatten(p))
-		}
-	}
-	if len(ignored) > 0 {
-		return Check{Name: "layout:tracked", Status: Warn,
-			Detail: "store(s) matched by an ignore rule: " + strings.Join(ignored, ", "),
-			Remedy: "remove the ignore rule; content in an ignored store will not travel with a clone"}
-	}
-	return Check{Name: "layout:tracked", Status: OK, Detail: "no declared store is ignored"}
-}
-
-// layoutCommittedCheck is advisory: the untracked-but-not-ignored manifest is
-// the normal window between `layout migrate --apply` and the migration commit.
-// A clone in that window resolves v1, which is a fact to state, not to fail on.
-func layoutCommittedCheck(root string, l layout.Layout) Check {
-	if l.Schema == layout.SchemaV1 {
-		return Check{Name: "layout:committed", Status: OK, Detail: "no manifest to commit"}
-	}
-	tracked, err := repo.IsTracked(root, layout.ManifestRel)
-	if err != nil {
-		if errors.Is(err, repo.ErrNotARepo) {
-			return Check{Name: "layout:committed", Status: OK, Detail: "not a git repository"}
-		}
-		return Check{Name: "layout:committed", Status: Warn,
-			Detail: safetext.Flatten("cannot determine whether the manifest is committed: " + err.Error())}
-	}
-	if !tracked {
-		// An ignored manifest is not merely uncommitted: committing it needs
-		// `-f`, and the rule would hide the next new file in every clone, so
-		// the remedy is the rule's removal rather than a commit.
-		if ignored, ierr := layout.AgentsIgnored(root); ierr == nil && ignored {
-			return Check{Name: "layout:committed", Status: Warn,
-				Detail: "manifest is not committed, and an ignore rule matches " + layout.ManifestRel + " or .agents/",
-				Remedy: "remove the ignore rule; a manifest in an ignored path would not travel with a clone"}
-		}
-		return Check{Name: "layout:committed", Status: Warn,
-			Detail: "manifest is not committed; a clone would fall back to v1",
-			Remedy: "commit .agents/layout.json with the migration commit"}
-	}
-	return Check{Name: "layout:committed", Status: OK, Detail: "manifest is tracked"}
 }
 
 func checkGitleaks(lookPath func(string) (string, error)) Check {
@@ -1510,64 +657,196 @@ func checkGitleaks(lookPath func(string) (string, error)) Check {
 	return Check{Name: "gitleaks", Status: OK, Detail: "gitleaks is available on PATH"}
 }
 
-// LaneHealth reports catch-all lanes. It is advisory and never changes Git.
-func LaneHealth(recs []record.Record, th Thresholds, now time.Time) []Check {
-	type laneStat struct {
-		modules, sessions map[string]struct{}
-		first, last       time.Time
+func checkInstalledLinks(deps Dependencies, binary string) Check {
+	binaryInfo, err := os.Stat(binary)
+	if err != nil {
+		return Check{Name: "git-hooks:links", Status: Fail, Detail: "current binary cannot be inspected", Remedy: "rebuild and reinstall agents"}
 	}
-	byLane := map[string]*laneStat{}
-	cutoff := now.Add(-th.Window)
-	for _, rec := range recs {
-		if rec.Lane == "" || rec.When.Before(cutoff) {
+	for _, name := range installedHookNames {
+		path := filepath.Join(deps.HooksDir, name)
+		info, err := os.Lstat(path)
+		if err != nil {
+			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " hook link is missing or unreadable", Remedy: hookInstallerRemedy(deps, false)}
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " is not an owned symlink", Remedy: "preserve or move the foreign hook deliberately, then " + hookInstallerRemedy(deps, false)}
+		}
+		resolved, err := os.Stat(path)
+		if err != nil || !os.SameFile(binaryInfo, resolved) {
+			// The link exists and is ours, but names an older binary -- the
+			// shape a package upgrade leaves behind. Repointing it needs the
+			// flag, because the default refuses any link it did not just write.
+			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " does not resolve to the current binary", Remedy: hookInstallerRemedy(deps, true)}
+		}
+	}
+	return Check{Name: "git-hooks:links", Status: OK, Detail: "all four installed hook links resolve to the current binary"}
+}
+
+func checkLegacyHooks(repoRoot string, deps Dependencies) Check {
+	if deps.LegacyHooksPath == nil {
+		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
+	}
+	dir, err := deps.LegacyHooksPath(repoRoot)
+	if err != nil || !filepath.IsAbs(dir) {
+		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
+	}
+	var found []string
+	for _, name := range installedHookNames {
+		if githook.IsRetiredShim(filepath.Join(dir, name)) {
+			found = append(found, name)
+		}
+	}
+	if len(found) > 0 {
+		return Check{Name: "git-hooks:legacy", Status: Warn, Detail: "exact retired legacy dispatcher remains for " + strings.Join(found, ", "), Remedy: "remove only the exact retired shim after preserving foreign hooks"}
+	}
+	return Check{Name: "git-hooks:legacy", Status: OK, Detail: "no exact retired legacy dispatcher detected"}
+}
+
+func checkLocalHooks(repoRoot string, git func(dir string, args ...string) GitResult) Check {
+	local := git(repoRoot, "config", "--local", "--get-all", "core.hooksPath")
+	localValues := configValues(local.Output)
+	switch {
+	case local.Code == 1:
+		return Check{Name: "git-hooks:local", Status: OK, Detail: "no repository-local core.hooksPath override"}
+	case local.Code != 0:
+		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath could not be read", Remedy: "inspect repository or linked-worktree Git configuration"}
+	case len(localValues) == 0:
+		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath returned an empty value"}
+	default:
+		return Check{Name: "git-hooks:local", Status: Warn, Detail: fmt.Sprintf("repository-local core.hooksPath override is set (%d value(s))", len(localValues)), Remedy: "the global agents hooks are shadowed here; chain them from the local hook directory if desired"}
+	}
+}
+
+// checkUnmanagedLinks reports symlinks in the hooks directory that this
+// repository does not manage and that no longer resolve. Git ignores names it
+// does not know, so they are inert -- and invisible: a link left behind by an
+// older install dangles forever and no other check names it. This is the pair
+// of links that survived the 2026-09-20 upgrade of this machine while
+// git-hooks:links, which sees only the four managed names, stayed silent.
+//
+// Warn, never fail: a dangling link under a managed name is already a failure
+// above, and anything else here is the human's to keep or delete.
+func checkUnmanagedLinks(deps Dependencies) Check {
+	entries, err := os.ReadDir(deps.HooksDir)
+	if err != nil {
+		return Check{Name: "git-hooks:unmanaged", Status: Warn, Detail: "hook directory could not be read", Remedy: "inspect " + deps.HooksDir}
+	}
+	var dangling []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if isManagedHookName(name) {
 			continue
 		}
-		stat := byLane[rec.Lane]
-		if stat == nil {
-			stat = &laneStat{modules: map[string]struct{}{}, sessions: map[string]struct{}{}, first: rec.When, last: rec.When}
-			byLane[rec.Lane] = stat
+		path := filepath.Join(deps.HooksDir, name)
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink == 0 {
+			continue
 		}
-		module := rec.Cwd
-		if before, _, ok := strings.Cut(module, "/"); ok {
-			module = before
-		}
-		stat.modules[module] = struct{}{}
-		stat.sessions[rec.SessionID] = struct{}{}
-		if rec.When.Before(stat.first) {
-			stat.first = rec.When
-		}
-		if rec.When.After(stat.last) {
-			stat.last = rec.When
+		if _, err := os.Stat(path); err != nil {
+			dangling = append(dangling, name)
 		}
 	}
-	lanes := make([]string, 0, len(byLane))
-	for lane := range byLane {
-		lanes = append(lanes, lane)
+	if len(dangling) == 0 {
+		return Check{Name: "git-hooks:unmanaged", Status: OK, Detail: "no unowned hook links dangle"}
 	}
-	sort.Strings(lanes)
-	var checks []Check
-	for _, lane := range lanes {
-		stat := byLane[lane]
-		var reasons []string
-		if len(stat.modules) > th.Modules {
-			modules := make([]string, 0, len(stat.modules))
-			for module := range stat.modules {
-				modules = append(modules, module)
-			}
-			sort.Strings(modules)
-			reasons = append(reasons, fmt.Sprintf("%d modules (%s)", len(modules), strings.Join(modules, ", ")))
+	sort.Strings(dangling)
+	return Check{
+		Name:   "git-hooks:unmanaged",
+		Status: Warn,
+		Detail: "unowned hook link(s) dangle and will never run: " + strings.Join(dangling, ", "),
+		Remedy: "delete them, or repoint them deliberately: " + hookInstallerRemedy(deps, false),
+	}
+}
+
+// configOriginValue is one git config entry with the file it came from, which
+// is what makes "set in the machine's config" distinguishable from "set in this
+// repository's".
+type configOriginValue struct {
+	Origin string
+	Value  string
+}
+
+func configOriginValues(output string) ([]configOriginValue, error) {
+	if output == "" {
+		return nil, nil
+	}
+	parts := strings.Split(output, "\x00")
+	if parts[len(parts)-1] != "" || len(parts)%2 != 1 {
+		return nil, errors.New("malformed Git origin output")
+	}
+	parts = parts[:len(parts)-1]
+	values := make([]configOriginValue, 0, len(parts)/2)
+	for i := 0; i < len(parts); i += 2 {
+		if parts[i] == "" {
+			return nil, errors.New("malformed Git origin output")
 		}
-		if days := int(stat.last.Sub(stat.first) / (24 * time.Hour)); days > th.Days {
-			reasons = append(reasons, fmt.Sprintf("%d days", days))
-		}
-		if len(stat.sessions) > th.Sessions {
-			reasons = append(reasons, fmt.Sprintf("%d sessions", len(stat.sessions)))
-		}
-		if len(reasons) > 0 {
-			checks = append(checks, Check{Name: "lane:" + lane, Status: Warn, Detail: strings.Join(reasons, "; "), Remedy: "consider separate branches; doctor never changes lanes"})
+		values = append(values, configOriginValue{Origin: parts[i], Value: parts[i+1]})
+	}
+	return values, nil
+}
+
+func configValues(output string) []string {
+	var values []string
+	for _, line := range strings.Split(strings.TrimSuffix(output, "\n"), "\n") {
+		if line != "" {
+			values = append(values, line)
 		}
 	}
-	return checks
+	return values
+}
+
+func hasExactLine(contents []byte, want string) bool {
+	for _, line := range strings.Split(strings.ReplaceAll(string(contents), "\r\n", "\n"), "\n") {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+// hookInstallerRemedy renders the command that repairs what the git-hooks and
+// git-attributes checks report. The text it replaces -- "run the reviewed
+// global hook installer" -- named no path, no arguments and no way past the
+// installer's own refusal. That matters most in the one case these checks exist
+// to catch: a package upgrade deletes the versioned path a pinned hook link
+// points at, git runs a dangling hook as if no hook existed, and the installer
+// then refuses the link it wrote itself unless it is handed --adopt-owned. So
+// the remedy carries the flag and the arguments, and falls back to the old
+// sentence only when the checkout paths are unknown.
+func hookInstallerRemedy(deps Dependencies, adoptOwned bool) string {
+	root := deps.Root
+	if root == "" && deps.HooksDir != "" {
+		root = filepath.Dir(filepath.Dir(deps.HooksDir))
+	}
+	home := ""
+	if deps.GlobalGitConfig != "" {
+		home = filepath.Dir(deps.GlobalGitConfig)
+	}
+	if root == "" || home == "" {
+		return "run the reviewed global hook installer"
+	}
+	adopt := ""
+	if adoptOwned {
+		adopt = " --adopt-owned"
+	}
+	return fmt.Sprintf(`run: bash "%s/git/install-hooks.sh" install%s "%s" "%s" "$(command -v agents)"`,
+		root, adopt, root, home)
+}
+
+// isManagedHookName reports whether this repository owns the hook name. The
+// installer links exactly installedHookNames; anything else in the directory
+// belongs to the human.
+func isManagedHookName(name string) bool {
+	for _, managed := range installedHookNames {
+		if name == managed {
+			return true
+		}
+	}
+	return false
+}
+
+var repoAttributeLines = []string{
+	".agents/** linguist-generated=true",
 }
 
 // rootChecks reports whether the checkout this binary was stamped to still

@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -159,7 +158,11 @@ func TestWireRefusesNonObjectHookContainersWithoutMutation(t *testing.T) {
 		cases := map[string][]byte{
 			"null-root":    []byte("null\n"),
 			"scalar-hooks": []byte("{\"hooks\":\"foreign\"}\n"),
-			"scalar-event": []byte(fmt.Sprintf("{\"hooks\":{%q:\"foreign\"}}\n", adapter.Events()[0].Vendor)),
+			// A vendor event name this tool has written for, with a value that
+			// is not an array. The name is written out rather than taken from
+			// the adapter: the strip walks every key, so the case is about the
+			// shape of the value, not about which events an adapter declares.
+			"scalar-event": []byte("{\"hooks\":{\"Stop\":\"foreign\"}}\n"),
 		}
 		for name, before := range cases {
 			t.Run(adapter.Name()+"/"+name, func(t *testing.T) {
@@ -223,6 +226,15 @@ func TestWireDoesNotOverwriteConfigThatAppearsDuringPublish(t *testing.T) {
 		t.Run(adapter.Name(), func(t *testing.T) {
 			root := t.TempDir()
 			config := adapter.WireConfigPath(root)
+			if err := os.MkdirAll(filepath.Dir(config), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Something of ours to strip, so this run reaches the publish path
+			// the race is about. Without it `wire` has nothing to write and the
+			// boundary is never crossed.
+			if err := os.WriteFile(config, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/Users/n/bin/agents hook stop --harness `+adapter.Name()+`"}]}]}}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
 			foreign := []byte("{\"foreign\":\"appeared during wire\"}\n")
 			oldBoundary := beforeWirePublish
 			beforeWirePublish = func() {
@@ -292,6 +304,18 @@ func TestWireRefusesSkillsReplacementBeforePublishingConfig(t *testing.T) {
 func TestConcurrentWireIsRefusedWhileFirstPublishOwnsTheLock(t *testing.T) {
 	root := t.TempDir()
 	adapter, _ := Get("codex")
+	// There must be something to strip. `wire` only reaches its publish phase --
+	// and therefore only takes the per-harness lock -- when it has a write to
+	// publish. A repository with nothing stale has nothing to protect, and
+	// asserting lock behaviour against it would be asserting about a phase the
+	// call never enters.
+	config := adapter.WireConfigPath(root)
+	if err := os.MkdirAll(filepath.Dir(config), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/Users/n/bin/agents hook stop --harness codex"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once

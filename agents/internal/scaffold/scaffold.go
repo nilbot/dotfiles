@@ -3,15 +3,15 @@
 package scaffold
 
 import (
-	"bytes"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/nilbot/dotfiles/agents/internal/layout"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 )
 
@@ -70,15 +70,6 @@ var gitattributesLines = []string{
 	".agents/** linguist-generated=true",
 }
 
-// v2GitattributesLines adds the manifest exception after the blanket rule.
-// gitattributes is last-match-wins, so the one .agents/ file a maintainer has to
-// read in a diff stops being linguist-generated while every other one stays
-// hidden. It is deliberately not part of gitattributesLines: a v1 repository has
-// no manifest, and `init` must not edit its tracked .gitattributes to describe a
-// file that is not there.
-var v2GitattributesLines = append(append([]string{}, gitattributesLines...),
-	".agents/layout.json -linguist-generated")
-
 // excludeLines are machine-specific generated paths. They go in
 // .git/info/exclude rather than the repo's tracked .gitignore: an ignore list
 // belongs to the repository's maintainers, not to this tool.
@@ -115,38 +106,45 @@ var embeddedAssets = []struct {
 	{".agents/AGENTS.md", "assets/dotagents/AGENTS.md"},
 }
 
-// bundledSkills are the skills embedded in the binary and refreshed by it.
-// Which text is canonical for each is a function of the resolved layout.
+// bundledSkills are the skills embedded in the binary and installed by init.
+//
+// recording-what-you-learn is the only one: it is the instruction that travels
+// with every repository, and its text is canonical in this binary. The other
+// skill this tool used to ship, migrating-fleet-context, described migrating a
+// repository between layout schemas -- a facility this tool no longer has, so
+// there is nothing left for it to teach.
 var bundledSkills = []string{
 	"recording-what-you-learn",
-	"migrating-fleet-context",
 }
 
-// skillAssets maps schema -> skill name -> embedded asset path. The flat path
-// holds the v2 text; v1/SKILL.md holds the frozen v1 text. Both exist for both
-// skills: the only mechanical remedy for a non-current bundled skill is a
-// fleet-wide `agents update --all --apply`, and the playbook forbids exactly
-// that during the pilot window, so freezing one more prose asset is cheaper
-// than leaving every v1 repository red for the length of the pilot (design
-// §0.8).
-var skillAssets = map[string]map[string]string{
-	layout.SchemaV1: {
-		"recording-what-you-learn": "assets/skills/recording-what-you-learn/v1/SKILL.md",
-		"migrating-fleet-context":  "assets/skills/migrating-fleet-context/v1/SKILL.md",
-	},
-	layout.SchemaV2: {
-		"recording-what-you-learn": "assets/skills/recording-what-you-learn/SKILL.md",
-		"migrating-fleet-context":  "assets/skills/migrating-fleet-context/SKILL.md",
-	},
+// StoreRoot is the directory the four documentation stores live under. The
+// roles are fixed: this tool no longer supports a manifest that places them
+// elsewhere.
+const StoreRoot = "docs"
+
+// StoreRoles are the four documentation-store roles, in the order the README
+// assets are written.
+var StoreRoles = []string{"design", "plans", "journal", "qna"}
+
+// StorePath returns the repository-relative path of one store role.
+func StorePath(role string) string { return StoreRoot + "/" + role }
+
+// skillAssets maps a bundled skill name to its embedded asset path.
+//
+// One skill, one text. It used to be a schema-keyed table holding two canonical
+// texts plus a frozen v1 copy, because a repository's layout decided which text
+// was current. There is one layout now, so the table is a map with one entry and
+// the text it names is the one that speaks the concrete store paths every
+// repository has -- an earlier revision of this file shipped the text that told
+// an agent to run `agents layout path`, a command that no longer exists, into
+// every freshly initialized repository.
+var skillAssets = map[string]string{
+	"recording-what-you-learn": "assets/skills/recording-what-you-learn/SKILL.md",
 }
 
-// SkillAssetPath resolves one embedded skill asset for a schema.
-func SkillAssetPath(schema, skillName string) (string, error) {
-	byName, ok := skillAssets[schema]
-	if !ok {
-		return "", fmt.Errorf("no skill assets for schema %q", schema)
-	}
-	path, ok := byName[skillName]
+// SkillAssetPath resolves one embedded skill asset.
+func SkillAssetPath(skillName string) (string, error) {
+	path, ok := skillAssets[skillName]
 	if !ok {
 		return "", fmt.Errorf("no asset for skill %q", skillName)
 	}
@@ -157,9 +155,7 @@ func SkillAssetPath(schema, skillName string) (string, error) {
 // layout gets the implicit one, exactly as before layouts existed. Like
 // CreateWithLayout it is idempotent -- running it on an initialized repository
 // changes nothing.
-func Create(root string, local bool) error {
-	return CreateWithLayout(root, local, layout.V1ForRoot(root))
-}
+func Create(root string, local bool) error { return CreateWithLayout(root, local) }
 
 // CreateWithLayout scaffolds .agents/ plus the stores the resolved layout
 // declares, and writes the router that layout selects. It never creates docs/
@@ -177,7 +173,7 @@ func Create(root string, local bool) error {
 // the caller's gate (layoutRefusal); ManifestPath is what tells a manifest read
 // back from the repository apart from a layout a caller constructed in order to
 // create it.
-func CreateWithLayout(root string, local bool, l layout.Layout) error {
+func CreateWithLayout(root string, local bool) error {
 	// First, before anything is written: a refusal that leaves a half-scaffolded
 	// repo behind is a worse outcome than the one it is refusing.
 	if local {
@@ -213,18 +209,6 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 		return err
 	}
 
-	// design §7.5: a manifest already in this repository is the authority, so
-	// `init` is a no-op for it -- not even a declared store the tree lacks, and
-	// not a missing router either. A half-created store is the migration
-	// command's `store_missing` blocker; a missing router is what `drift` and
-	// `doctor` report. Adding either here would be this function inventing a
-	// layout the manifest does not describe. This suppresses the layout writes
-	// only; the exclude write above has already happened.
-	if l.Schema == layout.SchemaV2 && l.ManifestPath != "" &&
-		l.LayoutStatus == layout.StatusActive && len(l.Problems) == 0 {
-		return nil
-	}
-
 	agents := filepath.Join(root, ".agents")
 	for _, d := range dirs {
 		if err := os.MkdirAll(filepath.Join(agents, d), 0o755); err != nil {
@@ -242,15 +226,10 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 		}
 	}
 
-	// One loop for both schemas: v1's stores are the synthesized docs/<role>,
-	// a v2 manifest's are wherever it says. The README that explains a store
-	// travels with the store, so a repository never gets a bare directory whose
-	// purpose is only in the binary.
-	for _, role := range layout.Roles() {
-		store, ok := layout.Path(l, role)
-		if !ok {
-			return fmt.Errorf("layout declares no %s store", role)
-		}
+	// The README that explains a store travels with the store, so a repository
+	// never gets a bare directory whose purpose is only in the binary.
+	for _, role := range StoreRoles {
+		store := StorePath(role)
 		if err := os.MkdirAll(filepath.Join(root, store), 0o755); err != nil {
 			return err
 		}
@@ -273,7 +252,7 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 	// into a v1 repository would make `agents init` produce a repository that
 	// `agents drift` immediately calls customized.
 	for _, skillName := range bundledSkills {
-		assetPath, err := SkillAssetPath(l.Schema, skillName)
+		assetPath, err := SkillAssetPath(skillName)
 		if err != nil {
 			return err
 		}
@@ -283,22 +262,14 @@ func CreateWithLayout(root string, local bool, l layout.Layout) error {
 		}
 	}
 
-	router := DefaultAgentsMD
-	if l.Schema == layout.SchemaV2 {
-		router = layout.V2AgentsMD
-	}
-	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), router); err != nil {
+	if err := writeIfAbsent(filepath.Join(root, "AGENTS.md"), DefaultAgentsMD); err != nil {
 		return err
 	}
 	if err := linkIfAbsent(filepath.Join(root, "CLAUDE.md"), "AGENTS.md"); err != nil {
 		return err
 	}
 
-	attributes := gitattributesLines
-	if l.Schema == layout.SchemaV2 {
-		attributes = v2GitattributesLines
-	}
-	return appendMissingLines(filepath.Join(root, ".gitattributes"), attributes)
+	return appendMissingLines(filepath.Join(root, ".gitattributes"), gitattributesLines)
 }
 
 func writeIfAbsentFromFS(path string, fs embed.FS, assetPath string) error {
@@ -378,37 +349,33 @@ func appendMissingLines(path string, want []string) error {
 	return err
 }
 
-// RefreshInfrastructuralSkills refreshes the 100% agents-owned infrastructural
-// skill (migrating-fleet-context) to the text for the repository's resolved
-// layout. It never writes recording-what-you-learn or a repository-specific
-// skill (design §0.8).
+// SkillCurrent reports whether the repository's copy of a bundled skill is the
+// text this binary carries, and what the repository has instead when it is not.
 //
-// It reads first and writes only when the bytes differ, so an unmodified v1
-// repository is a literal no-op rather than an identical rewrite: the design
-// promises "byte-identical", and an unconditional write would leave mtime churn
-// in every v1 repository on every `agents update --all --apply`.
-//
-// This is not how a repository becomes v2. A v1 repository's skill copy is the
-// frozen v1 text and does not know `agents layout migrate`; the CLI performs
-// the flip, and this refresh only keeps the agents-owned skill current once the
-// layout is v2.
-func RefreshInfrastructuralSkills(root, layoutVersion string) error {
-	assetPath, err := SkillAssetPath(layoutVersion, "migrating-fleet-context")
+// One comparison, because there is one bundled skill and one canonical text.
+// The schema-selected catalogs this replaced existed to answer "which of two
+// layouts' texts is this repository supposed to have" -- a question that
+// disappeared with the second layout.
+func SkillCurrent(root, skillName string) (current bool, found string, err error) {
+	assetPath, err := SkillAssetPath(skillName)
 	if err != nil {
-		return err
+		return false, "", err
 	}
-	content, err := AssetsFS.ReadFile(assetPath)
+	want, err := AssetsFS.ReadFile(assetPath)
 	if err != nil {
-		return err
+		return false, "", err
 	}
-	target := filepath.Join(root, ".agents", "skills", "migrating-fleet-context", "SKILL.md")
-	if existing, err := os.ReadFile(target); err == nil && bytes.Equal(existing, content) {
-		return nil
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
+	have, err := os.ReadFile(filepath.Join(root, ".agents", "skills", skillName, "SKILL.md"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, "", nil
+		}
+		return false, "", err
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(target, content, 0o644)
+	return digest(have) == digest(want), digest(have), nil
+}
+
+func digest(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
