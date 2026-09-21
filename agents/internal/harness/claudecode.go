@@ -21,10 +21,10 @@ func (c claudeCode) StripHooks(settings map[string]any) error {
 	return err
 }
 
-func (c claudeCode) Wire(repoRoot, binary string) error {
+func (c claudeCode) Wire(repoRoot string) (WireResult, error) {
 	// Neither harness discovers .agents/skills on its own: Claude Code reads
 	// .claude/skills, Codex reads .codex/skills. One directory, two names.
-	return wireRepository(repoRoot, c, binary)
+	return wireRepository(repoRoot, c)
 }
 
 // TrustSteps are the manual steps left after wiring: Claude Code asks for a

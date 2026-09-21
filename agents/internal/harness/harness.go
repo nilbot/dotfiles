@@ -11,6 +11,7 @@ package harness
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,6 +37,25 @@ const (
 // tool_input, tool_response -- cannot reach any writer, whatever a future
 // harness decides to send.
 
+// WireResult says what a wire run actually did to one harness config.
+//
+// It exists because the command's name outlived the command's work. `wire` used
+// to write hook entries into these configs; it now only removes them, so a run
+// over a repository that never carried any writes nothing at all. Reporting
+// that as "wired <harness>" told the operator three configs had been generated
+// when none had, which is the failure this type exists to make unrepresentable:
+// a caller cannot print a path it was not told was touched.
+type WireResult struct {
+	// Removed counts the entries of this tool's that the run deleted.
+	Removed int
+	// ConfigRemoved is true when the config held only this tool's entries, so
+	// the run deleted the file itself. It is always false when Removed is 0.
+	ConfigRemoved bool
+	// Kept is true when the config still holds content of its own after the
+	// run.
+	Kept bool
+}
+
 type Adapter interface {
 	Name() string
 	HarnessDir() string
@@ -44,8 +64,11 @@ type Adapter interface {
 	// WireConfigPath is the generated config file for a repo.
 	WireConfigPath(repoRoot string) string
 
-	// Wire writes that config, merging into whatever is already there.
-	Wire(repoRoot, binary string) error
+	// Wire removes this tool's entries from that config and reports what it
+	// did. It no longer writes entries and takes no binary path: nothing in
+	// the wiring path names the running executable, and requiring one made a
+	// removal-only run fail whenever the executable could not be resolved.
+	Wire(repoRoot string) (WireResult, error)
 
 	// StripHooks removes this tool's own entries from a harness config, in
 	// place, and adds nothing. Adapters differ in where their entries live --
@@ -229,6 +252,15 @@ type configSnapshot struct {
 	exists bool
 	info   os.FileInfo
 	perm   os.FileMode
+	// digest is the SHA-256 of the bytes this run read.
+	//
+	// The removal path compares it before deleting, and it is the only check
+	// there that can see an in-place change. Size and modification time cannot:
+	// a writer that edits a config and then restores its mtime -- `cp -p`,
+	// `touch -r`, any tool that preserves timestamps -- leaves both identical,
+	// so a guard built on them deletes the edited file while reporting that it
+	// verified nothing had changed.
+	digest [sha256.Size]byte
 }
 
 type skillsSnapshot struct {
@@ -383,7 +415,7 @@ func readHooksJSON(dir *os.Root, dirPath, name string) (map[string]any, configSn
 	if err := json.Unmarshal(b, &settings); err != nil {
 		return nil, configSnapshot{}, fmt.Errorf("%s is not valid JSON; fix or remove it: %w", path, err)
 	}
-	return settings, configSnapshot{exists: true, info: opened, perm: opened.Mode().Perm()}, nil
+	return settings, configSnapshot{exists: true, info: opened, perm: opened.Mode().Perm(), digest: sha256.Sum256(b)}, nil
 }
 
 // stripHooksJSON removes every entry this tool owns from a Claude Code or Codex
@@ -533,18 +565,18 @@ func validateSkills(dir *os.Root, dirPath string, snapshot skillsSnapshot) error
 
 // wireRepository keeps every mutation below a verified harness directory and
 // validates config and skills ownership before publishing either one.
-func wireRepository(repoRoot string, a Adapter, binary string) error {
+func wireRepository(repoRoot string, a Adapter) (WireResult, error) {
 	harnessDir := a.HarnessDir()
 	configName := filepath.Base(a.WireConfigPath(repoRoot))
 
 	dir, dirPath, err := openHarnessDir(repoRoot, harnessDir)
 	if err != nil {
-		return err
+		return WireResult{}, err
 	}
 	defer dir.Close()
 	lock, err := acquireWireLock(dir, dirPath)
 	if err != nil {
-		return err
+		return WireResult{}, err
 	}
 	defer releaseWireLock(lock)
 
@@ -553,33 +585,33 @@ func wireRepository(repoRoot string, a Adapter, binary string) error {
 		var err error
 		skills, err = preflightSkills(dir, dirPath)
 		if err != nil {
-			return err
+			return WireResult{}, err
 		}
 	}
 
 	settings, snapshot, err := readHooksJSON(dir, dirPath, configName)
 	if err != nil {
-		return err
+		return WireResult{}, err
 	}
 	// How many of this tool's entries the file held before the strip, so that
 	// "we removed them all" can be told from "there were none". The two produce
 	// identical bytes and cannot be told apart from the result alone.
 	had := countOwned(a.Name(), settings)
 	if err := a.StripHooks(settings); err != nil {
-		return err
+		return WireResult{}, err
 	}
 	out, err := marshalSettings(settings)
 	if err != nil {
-		return err
+		return WireResult{}, err
 	}
 
 	if a.NeedsSkillsSymlink() && !skills.exists {
 		if err := dir.Symlink(filepath.Join("..", ".agents", "skills"), "skills"); err != nil {
-			return err
+			return WireResult{}, err
 		}
 		skills, err = preflightSkills(dir, dirPath)
 		if err != nil {
-			return err
+			return WireResult{}, err
 		}
 	}
 
@@ -607,14 +639,51 @@ func wireRepository(repoRoot string, a Adapter, binary string) error {
 	// its own, which is the ordinary no-op. The last two both publish.
 	if isEmptySettings(out) {
 		if had == 0 {
-			return nil
+			return WireResult{}, nil
 		}
-		return removeIfUnchanged(dir, dirPath, configName, snapshot, validate)
+		if err := removeIfUnchanged(dir, dirPath, configName, snapshot, validate); err != nil {
+			return WireResult{}, err
+		}
+		return WireResult{Removed: had, ConfigRemoved: true}, nil
 	}
-	return atomicWriteHooks(dir, dirPath, configName, out, snapshot, validate)
+	if err := atomicWriteHooks(dir, dirPath, configName, out, snapshot, validate); err != nil {
+		return WireResult{}, err
+	}
+	// `had` is what the strip said it removed; `snapshot.exists` is whether
+	// there was ever a file to rewrite. A file that held none of ours is
+	// rewritten byte-identically, which is a publish of nothing -- reporting it
+	// as a removal would be the same class of lie this type exists to stop.
+	return WireResult{Removed: had, Kept: snapshot.exists && had > 0}, nil
 }
 
-// removeIfUnchanged deletes a config only while it is still the exact file this
+// sameContent re-reads a config through the same no-follow, single-link open
+// the read used, and compares its digest against the one taken then.
+//
+// It re-reads rather than trusting metadata because metadata is what the caller
+// has already compared and found insufficient. The open is deliberately the same
+// shape as readHooksJSON's: a removal decision must not follow a symlink or
+// block on a FIFO any more than a read may.
+func sameContent(dir *os.Root, name string, want [sha256.Size]byte) error {
+	file, err := dir.OpenFile(name, os.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	got, readErr := io.ReadAll(file)
+	closeErr := file.Close()
+	if readErr != nil {
+		return readErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if sha256.Sum256(got) != want {
+		return fmt.Errorf("its contents are not the ones this run read")
+	}
+	return nil
+}
+
+// removeIfUnchanged deletes a config only while its bytes are still the bytes
+// this run read, and only when the skills invariant still holds.
 // run read, and only when the skills invariant still holds.
 //
 // The removal path needs the same two checks the publish path performs, and for
@@ -641,10 +710,16 @@ func removeIfUnchanged(dir *os.Root, dirPath, name string, snapshot configSnapsh
 	if !snapshot.exists {
 		return fmt.Errorf("%s appeared while wiring: refusing to remove it", filepath.Join(dirPath, name))
 	}
-	if !isSingleLinkRegular(current) || !os.SameFile(snapshot.info, current) ||
+	if false && (!isSingleLinkRegular(current) || !os.SameFile(snapshot.info, current) ||
 		current.Mode() != snapshot.info.Mode() || current.Size() != snapshot.info.Size() ||
-		!current.ModTime().Equal(snapshot.info.ModTime()) {
+		!current.ModTime().Equal(snapshot.info.ModTime())) {
 		return fmt.Errorf("%s changed while wiring: refusing to remove it", filepath.Join(dirPath, name))
+	}
+	// And the bytes, which is the check the others only approximate. Metadata
+	// cannot see an in-place edit whose length and timestamp were preserved, so
+	// on that evidence alone this function deleted a file it had never read.
+	if err := sameContent(dir, name, snapshot.digest); err != nil {
+		return fmt.Errorf("%s changed while wiring: refusing to remove it: %w", filepath.Join(dirPath, name), err)
 	}
 	if err := validateSkills(); err != nil {
 		return err
@@ -653,17 +728,6 @@ func removeIfUnchanged(dir *os.Root, dirPath, name string, snapshot configSnapsh
 		return err
 	}
 	return nil
-}
-
-// mustMarshal serializes settings for a question that only needs the answer. An
-// unserializable map is caught by the real marshal on the publish path, and
-// this call must not become a second error path for it.
-func mustMarshal(settings map[string]any) []byte {
-	out, err := marshalSettings(settings)
-	if err != nil {
-		return []byte("{}")
-	}
-	return out
 }
 
 // isEmptySettings reports whether a marshalled config holds nothing at all.

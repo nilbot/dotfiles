@@ -22,8 +22,8 @@ func (a antigravityAdapter) TrustSteps(repoRoot string) []string {
 		"Antigravity CLI: add repository root to trustedWorkspaces in ~/.gemini/antigravity-cli/settings.json.",
 	}
 }
-func (a antigravityAdapter) Wire(repoRoot, binary string) error {
-	return wireRepository(repoRoot, a, binary)
+func (a antigravityAdapter) Wire(repoRoot string) (WireResult, error) {
+	return wireRepository(repoRoot, a)
 }
 func (a antigravityAdapter) StripHooks(settings map[string]any) error {
 	return stripNamedGroups(settings)

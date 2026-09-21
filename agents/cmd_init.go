@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
@@ -63,9 +64,11 @@ func runInit(args []string, stdout io.Writer) int {
 	return exitcode.Advisory
 }
 
-// binaryPath is the running executable's own path, which is what the harness
-// config must name: a hook command that resolved to anything else would run a
-// different binary than the one that wired it.
+// binaryPath is the running executable's own path. The doctor's binary check
+// needs it: it proves the `agents` on PATH and the `agents` that is running are
+// the same file. Nothing in the wiring path uses it -- `wire` removes entries by
+// reading the config's text, not by naming a binary -- so a removal no longer
+// fails on a machine where the executable cannot be resolved.
 func binaryPath() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -74,18 +77,48 @@ func binaryPath() (string, error) {
 	return exe, nil
 }
 
+// wireAll removes this tool's entries from every harness config and reports
+// what each run actually did.
+//
+// It reports what the run did, never what it was expected to do. The two are no
+// longer the same statement: `wire` removes this tool's entries and writes none,
+// so on a repository that never carried any -- every freshly initialized one --
+// the run touches no config at all.
 func wireAll(root string, stdout io.Writer) int {
-	bin, err := binaryPath()
-	if err != nil {
-		fmt.Fprintf(stdout, "agents: cannot resolve own path: %v\n", err)
-		return exitcode.NoRecord
-	}
 	for _, a := range harness.All() {
-		if err := a.Wire(root, bin); err != nil {
+		res, err := a.Wire(root)
+		if err != nil {
 			fmt.Fprintf(stdout, "agents: wiring %s: %v\n", a.Name(), err)
 			return exitcode.NoRecord
 		}
-		fmt.Fprintf(stdout, "wired %s -> %s\n", a.Name(), a.WireConfigPath(root))
+		switch {
+		case res.Removed == 0:
+			fmt.Fprintf(stdout, "%s: no entries of this tool's to remove\n", a.Name())
+		case res.ConfigRemoved:
+			fmt.Fprintf(stdout, "%s: removed %d entr%s and the config that held them\n",
+				a.Name(), res.Removed, plural(res.Removed, "y", "ies"))
+		default:
+			fmt.Fprintf(stdout, "%s: removed %d entr%s, kept the rest of %s\n",
+				a.Name(), res.Removed, plural(res.Removed, "y", "ies"),
+				relPath(root, a.WireConfigPath(root)))
+		}
 	}
 	return exitcode.OK
+}
+
+// plural picks the suffix for a count, so the line reads as prose at 1 and at n.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
+}
+
+// relPath shortens a path to the repository it is in, for output a reader
+// compares against what they see in their own checkout.
+func relPath(root, path string) string {
+	if rel, err := filepath.Rel(root, path); err == nil {
+		return rel
+	}
+	return path
 }

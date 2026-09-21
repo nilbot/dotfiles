@@ -22,8 +22,8 @@ func (c codex) StripHooks(settings map[string]any) error {
 	return err
 }
 
-func (c codex) Wire(repoRoot, binary string) error {
-	return wireRepository(repoRoot, c, binary)
+func (c codex) Wire(repoRoot string) (WireResult, error) {
+	return wireRepository(repoRoot, c)
 }
 
 // TrustSteps are the manual steps left after wiring. Codex loads a project's

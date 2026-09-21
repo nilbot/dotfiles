@@ -6,7 +6,7 @@ format (§3.1) and the memory `sources:` schema (§3.4). Both were specified in 
 *specifically* so this could be built later without unrepairable data loss.
 
 > **⚠ Premise changed 2026-08-12 by
-> [spec 7](../../archive/design/2026-08-12-spec-7-capture-and-review.md). Read that first.**
+> [spec 7](../../design/2026-08-12-spec-7-capture-and-review.md). Read that first.**
 > This document describes distillation as *the* path from machine-bound material
 > to tracked knowledge. It is now the **fallback** path. Spec 7's primary path
 > drafts while the producing session's context is still live — at a blocking

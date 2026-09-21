@@ -241,8 +241,13 @@ func CreateWithLayout(root string, local bool) error {
 	// used to be a schema-keyed catalog, because the resolved layout selected
 	// which text was canonical; with one layout there is one text, and it is the
 	// one the repository records. This is what keeps a fresh repository
-	// byte-identical to the skill this checkout ships: see
-	// `agents drift` immediately calls customized.
+	// byte-identical to the skill this checkout ships, and therefore what makes
+	// "the installed skill equals the embedded skill" a property a test can
+	// assert: see TestInstalledSkillMatchesTheBinary.
+	//
+	// Nothing classifies that copy as current or customized any more. The drift
+	// command that did was deleted with the rest of the record feature, so the
+	// equality above is the whole guarantee rather than one input to a check.
 	for _, skillName := range bundledSkills {
 		assetPath, err := SkillAssetPath(skillName)
 		if err != nil {

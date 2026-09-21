@@ -104,7 +104,7 @@ func TestWireRemovesRetiredEntriesAndTheFileThatOnlyHeldThem(t *testing.T) {
 	path := a.WireConfigPath(root)
 	writeJSON(t, path, `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/agents hook session-start --harness claude-code"}]}],"Stop":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/agents hook stop --harness claude-code"}]}]}}`)
 
-	if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+	if _, err := a.Wire(root); err != nil {
 		t.Fatalf("wire: %v", err)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -121,7 +121,7 @@ func TestWireKeepsForeignHooksAndSettings(t *testing.T) {
 	path := a.WireConfigPath(root)
 	writeJSON(t, path, `{"hooks":{"Notification":[{"hooks":[{"type":"command","command":"/my/own/notify.sh"}]}],"Stop":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/agents hook stop --harness claude-code"}]}]},"permissions":{"allow":["Bash(ls:*)"]}}`)
 
-	if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+	if _, err := a.Wire(root); err != nil {
 		t.Fatalf("wire: %v", err)
 	}
 	settings := readSettings(t, path)
@@ -144,7 +144,7 @@ func TestWireKeepsAForeignHookSharingOurGroup(t *testing.T) {
 	path := a.WireConfigPath(root)
 	writeJSON(t, path, `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/my/own/audit.sh"},{"type":"command","command":"/opt/homebrew/bin/agents hook stop --harness claude-code"}]}]}}`)
 
-	if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+	if _, err := a.Wire(root); err != nil {
 		t.Fatalf("wire: %v", err)
 	}
 	settings := readSettings(t, path)
@@ -185,7 +185,7 @@ func TestWireKeepsTheOtherKeysOfAGroupItRewrites(t *testing.T) {
 			path := a.WireConfigPath(root)
 			writeJSON(t, path, `{"hooks":{"Stop":[`+tc.group+`]}}`)
 
-			if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+			if _, err := a.Wire(root); err != nil {
 				t.Fatalf("wire: %v", err)
 			}
 			groups, _ := eventValue(t, readSettings(t, path), "hooks", "Stop").([]any)
@@ -242,7 +242,7 @@ func TestWireKeepsGroupsWhoseShapeItDoesNotRecognise(t *testing.T) {
 			path := a.WireConfigPath(root)
 			writeJSON(t, path, `{"hooks":{"Notification":`+tc.groups+`}}`)
 
-			if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+			if _, err := a.Wire(root); err != nil {
 				t.Fatalf("wire: %v", err)
 			}
 			got := eventValue(t, readSettings(t, path), "hooks", "Notification")
@@ -288,7 +288,7 @@ func TestWireKeepsAntigravityEventValuesThatAreNotLists(t *testing.T) {
 			path := a.WireConfigPath(root)
 			writeJSON(t, path, tc.body)
 
-			if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+			if _, err := a.Wire(root); err != nil {
 				t.Fatalf("wire: %v", err)
 			}
 			got := readSettings(t, path)
@@ -311,7 +311,7 @@ func TestWireIsIdempotent(t *testing.T) {
 	// The first run normalizes the file to this tool's formatting; idempotence
 	// is that every run AFTER that settles. Comparing raw bytes would fail on
 	// the first pass simply because the fixture was written on one line.
-	if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+	if _, err := a.Wire(root); err != nil {
 		t.Fatalf("wire: %v", err)
 	}
 	settled, err := os.ReadFile(path)
@@ -319,7 +319,7 @@ func TestWireIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+		if _, err := a.Wire(root); err != nil {
 			t.Fatalf("wire %d: %v", i, err)
 		}
 	}
@@ -354,7 +354,7 @@ func TestWireRemovesTheAntigravityGroup(t *testing.T) {
 	path := a.WireConfigPath(root)
 	writeJSON(t, path, `{"agents":{"Stop":[{"type":"command","command":"/opt/homebrew/bin/agents hook stop --harness antigravity"}]}}`)
 
-	if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+	if _, err := a.Wire(root); err != nil {
 		t.Fatalf("wire: %v", err)
 	}
 	if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -371,7 +371,7 @@ func TestWireRefusesToReplaceARealSkillsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, _ := Get("claude-code")
-	if err := a.Wire(root, "/bin/agents"); err == nil {
+	if _, err := a.Wire(root); err == nil {
 		t.Error("wire replaced a real .claude/skills directory; it must refuse")
 	}
 }
@@ -383,7 +383,7 @@ func TestWireRefusesUnparseableSettings(t *testing.T) {
 	a, _ := Get("claude-code")
 	path := a.WireConfigPath(root)
 	writeJSON(t, path, "{not json")
-	if err := a.Wire(root, "/bin/agents"); err == nil {
+	if _, err := a.Wire(root); err == nil {
 		t.Error("wire accepted an unparseable config; it must refuse")
 	}
 }
@@ -481,7 +481,7 @@ func TestWireLeavesAPlaceholderConfigItNeverWrote(t *testing.T) {
 			}
 			path := a.WireConfigPath(root)
 			writeJSON(t, path, tc.body)
-			if err := a.Wire(root, "/opt/homebrew/bin/agents"); err != nil {
+			if _, err := a.Wire(root); err != nil {
 				t.Fatalf("wire: %v", err)
 			}
 			if _, err := os.Lstat(path); err != nil {

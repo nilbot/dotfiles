@@ -54,7 +54,7 @@ func TestWireRefusesLinkedConfigLeavesWithoutExternalMutation(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+				if _, err := adapter.Wire(root); err == nil {
 					t.Fatalf("Wire accepted a %s generated config", kind)
 				}
 				got, err := os.ReadFile(external)
@@ -91,7 +91,7 @@ func TestWireRefusesSymlinkedHarnessDirectoryWithoutExternalMutation(t *testing.
 				t.Fatal(err)
 			}
 
-			if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+			if _, err := adapter.Wire(root); err == nil {
 				t.Fatal("Wire accepted a symlinked harness directory")
 			}
 			got, err := os.ReadFile(externalConfig)
@@ -141,7 +141,7 @@ func TestWireRefusesForeignSkillsBeforeChangingConfig(t *testing.T) {
 					}
 				}
 
-				if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+				if _, err := adapter.Wire(root); err == nil {
 					t.Fatalf("Wire accepted %s skills content", kind)
 				}
 				got, err := os.ReadFile(config)
@@ -174,7 +174,7 @@ func TestWireRefusesNonObjectHookContainersWithoutMutation(t *testing.T) {
 				if err := os.WriteFile(config, before, 0o600); err != nil {
 					t.Fatal(err)
 				}
-				if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+				if _, err := adapter.Wire(root); err == nil {
 					t.Fatalf("Wire accepted %s", name)
 				}
 				got, err := os.ReadFile(config)
@@ -201,7 +201,7 @@ func TestWireAtomicRewritePreservesPrivateConfigModeAndCleansTemps(t *testing.T)
 			if err := os.WriteFile(config, []byte("{\"preserve\":true}\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if err := adapter.Wire(root, "/Users/n/bin/agents"); err != nil {
+			if _, err := adapter.Wire(root); err != nil {
 				t.Fatal(err)
 			}
 			info, err := os.Stat(config)
@@ -244,7 +244,7 @@ func TestWireDoesNotOverwriteConfigThatAppearsDuringPublish(t *testing.T) {
 			}
 			t.Cleanup(func() { beforeWirePublish = oldBoundary })
 
-			if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+			if _, err := adapter.Wire(root); err == nil {
 				t.Fatal("Wire overwrote a config that appeared during publish")
 			}
 			got, err := os.ReadFile(config)
@@ -286,7 +286,7 @@ func TestWireRefusesSkillsReplacementBeforePublishingConfig(t *testing.T) {
 			}
 			t.Cleanup(func() { beforeWirePublish = oldBoundary })
 
-			if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+			if _, err := adapter.Wire(root); err == nil {
 				t.Fatal("Wire published config after the managed skills link changed")
 			}
 			got, err := os.ReadFile(config)
@@ -329,11 +329,11 @@ func TestConcurrentWireIsRefusedWhileFirstPublishOwnsTheLock(t *testing.T) {
 	t.Cleanup(func() { beforeWirePublish = oldBoundary })
 
 	firstDone := make(chan error, 1)
-	go func() { firstDone <- adapter.Wire(root, "/Users/n/bin/agents") }()
+	go func() { _, err := adapter.Wire(root); firstDone <- err }()
 	<-entered
 
 	secondDone := make(chan error, 1)
-	go func() { secondDone <- adapter.Wire(root, "/Users/n/bin/agents") }()
+	go func() { _, err := adapter.Wire(root); secondDone <- err }()
 	select {
 	case err := <-secondDone:
 		if err == nil {
@@ -364,7 +364,7 @@ func TestWireRefusesConfigFIFOWithoutBlocking(t *testing.T) {
 		if err := syscall.Mkfifo(config, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := adapter.Wire(root, "/Users/n/bin/agents"); err == nil {
+		if _, err := adapter.Wire(root); err == nil {
 			t.Fatal("Wire accepted a FIFO generated config")
 		}
 		return
@@ -387,5 +387,141 @@ func TestWireRefusesConfigFIFOWithoutBlocking(t *testing.T) {
 				t.Fatalf("bounded FIFO child failed: %v", err)
 			}
 		})
+	}
+}
+
+// ownedConfigFor is a config holding exactly one entry of this tool's, in the
+// shape that harness reads, for each adapter. It is deliberately short so the
+// in-place-edit test can rewrite it at the same length.
+func ownedConfigFor(name string) string {
+	if name == "antigravity" {
+		return `{"agents":{"Stop":[{"type":"command","command":"/opt/homebrew/bin/agents hook stop --harness antigravity"}]}}`
+	}
+	return `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/opt/homebrew/bin/agents hook stop --harness ` + name + `"}]}]}}`
+}
+
+// TestWireRefusesInPlaceEditThatPreservesSizeAndMtime pins the removal guard to
+// the config's BYTES.
+//
+// The other removal-safety tests all substitute a different file, which changes
+// the inode and is caught by the identity check. That leaves the in-place case
+// untested: overwriting the same inode with different bytes of the same length,
+// then restoring the mtime, is invisible to every metadata comparison this code
+// makes. Built on metadata alone the guard deleted that file while reporting
+// that it had verified nothing changed -- so this test exists to fail if the
+// content comparison is ever dropped as redundant.
+func TestWireRefusesInPlaceEditThatPreservesSizeAndMtime(t *testing.T) {
+	// All three harnesses, not adaptersForWireSafety's two: that helper stays
+	// narrow for the symlink and FIFO cases, whose probes are written against
+	// the `hooks` tree shape. The removal path is shared, so the guard that this
+	// test exists to protect has to hold for antigravity too.
+	for _, name := range []string{"claude-code", "codex", "antigravity"} {
+		adapter, ok := Get(name)
+		if !ok {
+			t.Fatalf("adapter %q is not registered", name)
+		}
+		t.Run(adapter.Name(), func(t *testing.T) {
+			root := t.TempDir()
+			config := adapter.WireConfigPath(root)
+			if err := os.MkdirAll(filepath.Dir(config), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			original := []byte(ownedConfigFor(adapter.Name()))
+			if err := os.WriteFile(config, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.Stat(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// A same-length replacement written through the SAME inode, then
+			// given its old timestamp back: size, mode and mtime all still match
+			// the snapshot, so only the bytes can tell the difference.
+			edited := append([]byte(nil), original...)
+			edited[0] = ' ' // leading whitespace: same length, different digest
+			restore := func() {
+				file, err := os.OpenFile(config, os.O_WRONLY, 0)
+				if err != nil {
+					t.Errorf("in-place edit: %v", err)
+					return
+				}
+				if _, err := file.WriteAt(edited, 0); err != nil {
+					t.Errorf("in-place write: %v", err)
+				}
+				if err := file.Close(); err != nil {
+					t.Errorf("in-place close: %v", err)
+				}
+				if err := os.Chtimes(config, before.ModTime(), before.ModTime()); err != nil {
+					t.Errorf("restoring mtime: %v", err)
+				}
+			}
+
+			oldBoundary := beforeWirePublish
+			beforeWirePublish = restore
+			t.Cleanup(func() { beforeWirePublish = oldBoundary })
+
+			_, wireErr := adapter.Wire(root)
+
+			if wireErr == nil {
+				t.Fatal("wire removed a config whose bytes it never read: an in-place edit preserving size and mtime went undetected")
+			}
+			if _, err := os.Stat(config); err != nil {
+				t.Fatalf("the edited config was removed despite the refusal: %v", err)
+			}
+		})
+	}
+}
+
+// TestWireRefusesConfigReplacedOnTheRemovalPath is the causal test for the
+// removal path's byte guard, which no other test reaches.
+//
+// TestWireDoesNotOverwriteConfigThatAppearsDuringPublish covers the publish path,
+// and for claude-code and codex that path refuses first, so the removal path's
+// own checks can be deleted with the suite staying green. Antigravity is the
+// only adapter with no skills symlink to preflight, so it is the only harness
+// whose empty-config result arrives at removeIfUnchanged directly.
+//
+// Measured: with this test present, deleting sameContent fails it; disabling the
+// inode/mode/size/mtime comparison instead does not, because the byte comparison
+// subsumes it -- a replacement whose bytes match is a file this run may still
+// delete, so identity is the weaker of the two and no longer load-bearing.
+func TestWireRefusesConfigReplacedOnTheRemovalPath(t *testing.T) {
+	adapter, ok := Get("antigravity")
+	if !ok {
+		t.Fatal("antigravity adapter is not registered")
+	}
+	root := t.TempDir()
+	config := adapter.WireConfigPath(root)
+	if err := os.MkdirAll(filepath.Dir(config), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Something of ours, and nothing else, so the run reaches removal.
+	if err := os.WriteFile(config, []byte(ownedConfigFor("antigravity")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	foreign := []byte("{\"agents\":{\"Stop\":[{\"type\":\"command\",\"command\":\"/my/own/notify.sh\"}]}}\n")
+	// Renamed into place, not rewritten in place: that is what this guard is for.
+	// A rewrite keeps the inode and is caught by the content digest; only a
+	// replacement makes the inode itself differ, which is the condition
+	// removeIfUnchanged's identity check exists to detect.
+	oldBoundary := beforeWirePublish
+	beforeWirePublish = func() {
+		staged := filepath.Join(filepath.Dir(config), "staged-by-foreign-writer.json")
+		if err := os.WriteFile(staged, foreign, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(staged, config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { beforeWirePublish = oldBoundary })
+
+	if _, err := adapter.Wire(root); err == nil {
+		t.Fatal("Wire removed a config whose bytes it never read: the removal path has no byte guard")
+	}
+	got, err := os.ReadFile(config)
+	if err != nil || string(got) != string(foreign) {
+		t.Fatalf("concurrent config was lost on the removal path: bytes=%q err=%v", got, err)
 	}
 }
