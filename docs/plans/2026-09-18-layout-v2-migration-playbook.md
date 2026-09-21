@@ -196,7 +196,9 @@ Present, in one message:
 2. the baseline files from Step 1;
 3. the dry-run output and the JSON plan;
 4. the exact commands that will run in Step 5;
-5. the rollback table from §11.
+5. the rollback table from §11;
+6. the branch the migration will land on, named explicitly rather than left to a
+   tool's default.
 
 Then stop. Silence is not approval, and a clean dry run is not approval.
 
@@ -433,6 +435,18 @@ git push -u origin feat/layout-v2-migration
 gh pr create --fill
 ```
 
+**Name the base branch. Always.** `gh pr create` defaults to the repository's
+default branch, and in a content vault that default is usually a published backup
+rather than an integration trunk. On paperbubble it defaulted to `master`, whose
+tip is `vault backup: 2024-10-30`, and the PR proposed eleven commits and
+fifty-six files — the abandoned CAM attempt, the editorial work and this
+migration — none of which its owner had decided to propose. The migration belongs
+on the integration trunk (`agents-editorial` there), which is the branch work
+continues on; the default branch receives it only when its owner decides. Pass
+`--base <branch>`. If the trunk exists only locally, either push it first or skip
+the PR altogether: a one-commit fast-forward needs no review page, and the commit
+and its tag are the record.
+
 `--fill` titles the PR from the branch's commits. When the pilot branch carries
 other work as well — paperbubble's carried ten commits, six of them editorial —
 write the title and body explicitly instead, so the rename diff is what the
@@ -477,6 +491,16 @@ while `phase` is still `planned` and nothing has moved — abort it with
 later phase still needs.
 
 ## 12. Post-merge fleet state
+
+"After paperbubble is merged" means **onto its integration trunk**, not necessarily
+its default branch. On paperbubble the migration landed on `agents-editorial` by
+fast-forward while `master` still held the last published vault backup.
+
+The layout is a property of the checkout, so the fleet view is already correct:
+`agents drift` and `agents doctor` read the working tree, and they report v2 from
+the moment the migration is committed — whichever branch carries it. Do not wait
+for a default-branch merge to treat the pilot as migrated, and do not push the
+trunk to the default branch to make the reports agree.
 
 After paperbubble is merged:
 
