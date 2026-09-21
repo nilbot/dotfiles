@@ -28,3 +28,21 @@ that resolved repository paths from the working directory — `task18RepoRoot` a
 two `go build` invocations — which now use `packageDir`, captured before the
 chdir. Worth knowing before adding a test here that reads a tracked fixture:
 resolving from cwd will not work.
+
+## Follow-up, 2026-09-21
+
+**The answer holds; the entry's own example has expired.**
+
+`ResemblesHookCommand` and `ParseHookCommand` both still exist, still differ in
+width, and the asymmetry between reporting and deleting is still the point.
+`doctor` now leans on it a second way: the same predicate that decides what
+`wire` may strip also separates an entry this tool owns from one that merely
+looks like ours.
+
+What has gone is `TestInitDoesNotPointAtTheRetiredTrackedTracePath`. The tracked
+trace path in its name was deleted on 2026-09-21 with the trace store, and the
+test went with its subject — the rule from
+[where else does this command name live](where-else-does-this-command-name-live.md),
+applied to a test rather than a CI step. The defect it documented is not
+reopened: `TestMain`'s chdir and `packageDir` are both still there, and so is
+the reason for them.

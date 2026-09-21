@@ -73,3 +73,42 @@ action committed to git:
 2. Update the `## Machine Wiring` section to make `agents doctor` conditional on the
    binary being present on PATH.
 3. Commit the change directly to the repository.
+
+## Follow-up, 2026-09-21
+
+**The conclusion holds. §2's mechanism does not.** Everything §2 attributes to
+`agents update` and `agents drift` names commands that were removed on
+2026-09-21, when the tool was cut to six:
+
+```text
+$ agents help --all
+  agents doctor                                      report wiring, trust, and scaffold state
+  agents guard --staged                              pre-commit checks (the only command that blocks)
+  agents help [<command> [<subcommand>...]] [--all]  print the listing, or one command's page
+  agents init [--local]                              create .agents/, the doc stores, and the wiring
+  agents version                                     print binary version and build provenance
+  agents wire                                        remove this tool's entries from harness configs
+```
+
+Both `agents update --all --apply` and `agents drift` were removed on
+2026-09-21, so there is no fleet-wide refresh to reason about and no drift
+classifier inspecting registered repositories. Read §2 as the record of what was
+true on 2026-08-28.
+
+The rest of the entry is unaffected, and was re-measured. `agents init` run twice
+on a fresh repository leaves `AGENTS.md` and `.agents/AGENTS.md` byte-identical
+and untouched, so §1's `writeIfAbsent` gate still holds; §3's three intractable
+states still rule out automatic migration for the same reasons; and the manual
+procedure above is still the only path. There is nothing to run instead of
+`update`.
+
+Two further details in §2 have moved. The `migrating-fleet-context` skill was
+archived to `docs/archive/skills/` and nothing refreshes it now — there is no
+resolved layout to refresh it for. And `.claude/skills` and `.codex/skills` are
+still created by `agents init` and are still symlinks, but both point at
+`.agents/skills`, which holds only `recording-what-you-learn`.
+
+One thing §2 does not say, and now needs to: `agents wire` has changed direction.
+It *removes* this tool's hook entries rather than writing them, so a repository
+configured by the old binary gets its retired entries stripped rather than
+refreshed.

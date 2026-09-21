@@ -4,7 +4,8 @@
 **Status:** implemented
 **Scope:** spec 1 of the catalog (see [Roadmap](#roadmap-specs-2-to-5) for what is deliberately deferred)
 
-> **Amended 2026-08-12 by [spec 7](2026-08-12-spec-7-capture-and-review.md).**
+> **Amended 2026-08-12 by [spec 7](../archive/design/2026-08-12-spec-7-capture-and-review.md)
+> (now archived 2026-09-21 — its subject was deleted).**
 > Five days of measured use found the tracked trace index to be a reference to
 > tier-3 material filed in tier 2: 48% of records were unreachable on the machine
 > that wrote them, and the curated store they were meant to feed held zero
@@ -14,7 +15,7 @@
 > traces retires), **§4** (a new `agents handoff draft` verb writes to an
 > untracked queue, `handoff write --draft` retires, and the auto-draft caller §4
 > specified but never built now exists), and **§6** (adds
-> `agents review` and `agents handoff draft`; demotes `agents save` to an escape
+> `agents review` and `agents handoff draft` (both since deleted, as is `agents save` — see the 2026-09-21 note below); demotes `agents save` to an escape
 > hatch).
 >
 > **§2's scaffolded `CLAUDE.md` gains a capture paragraph**, which under spec 7's
@@ -38,6 +39,22 @@
 > governed by instruction rather than by a queue. **Still in force, and the
 > reason this document is not archived:** §1's placement rule and tiers, §3.3-3.4
 > on what a record must carry, and §6's exit-code vocabulary.
+>
+> **Amended again 2026-09-21 by the reduction that deleted the layout manifest.**
+> The same change deleted the record itself, so the previous paragraph's second
+> sentence no longer holds: §3.3–3.4 are a record of a schema that is gone, not a
+> live requirement. Deleted from **§1**: both pointer kinds — the trace record and
+> the memory `sources:` list — and the Check/Materialize/Read/Distil operations
+> table. Deleted in full: **§3** (the JSONL trace schema, `pointer_verified`, the
+> `.gitattributes` `merge=union` line) and **§4** (lane-scoped handoffs and lane
+> health). Deleted from **§6**: `agents trace*`, `agents save`, `agents ls`,
+> `agents update` — all deleted — along with `agents hook`, `agents review`,
+> `agents handoff` and `agents distill`, each deleted too. Deleted in full:
+> **§10** (the fleet registry), along with
+> `internal/{trace,record,machine,pointer,lane,registry}`. **Still in force, and
+> the reason this document is not archived:** §1's placement rule and its three
+> tiers, §5's harness adapters, §6's exit-code vocabulary, §7's guard layering,
+> §8's Go-backed git hooks, and §9's bootstrap and trust boundary.
 
 ---
 
@@ -117,21 +134,24 @@ tier is a design smell.
 | Machine-bound | harness dirs | **Raw material.** Never authoritative | never |
 
 The third tier is not ignored — it is *pointed at*. Concretely, there are exactly
-two kinds of pointer in this design, and both are defined below:
+two kinds of pointer in this design, and both are defined below. **Both are
+deleted as of 2026-09-21, and nothing points at the machine tier any more; the
+paragraph is kept as the record of the rule.**
 
 1. **Trace record → transcript** (§3). A tracked JSONL line carrying `machine`,
-   `harness`, and the absolute transcript path.
+   `harness`, and the absolute transcript path. *(deleted)*
 2. **Memory entry → machine-bound source** (§3.4). A `sources:` list in a memory
-   file's frontmatter, naming material that lives outside the repo.
+   file's frontmatter, naming material that lives outside the repo. *(deleted)*
 
-Following a pointer has three defined operations:
+Following a pointer had four defined operations. Every command in this table is
+deleted 2026-09-21; the tier rule it served is not the reason it existed.
 
 | Operation | Command | Behaviour |
 |---|---|---|
 | **Check** | `agents doctor` | Report which pointers are unreachable from this machine, which are gone but cached, and which machine holds the rest |
-| **Materialize** | `agents trace cache`, and the `subagent-stop` hook | Copy reachable transcripts into the cache in the git **common** directory |
-| **Read** | `agents trace show <id>` | Resolve one record to content — the harness's copy if it is still there, otherwise ours |
-| **Distil** | `agents distill` (**spec 3**) | On the machine that owns the material, read it and draft curated memory entries |
+| **Materialize** | the deleted `agents trace cache`, and the `subagent-stop` hook (also deleted) | Copy reachable transcripts into the cache in the git **common** directory |
+| **Read** | the deleted `agents trace show <id>` | Resolve one record to content — the harness's copy if it is still there, otherwise ours |
+| **Distil** | the deleted `agents distill` (**spec 3**, itself retired) | On the machine that owns the material, read it and draft curated memory entries |
 
 Materialize was originally a `.trace-cache/` inside the working tree, kept out of
 commits by an ignore rule. It is now `<git-common-dir>/agents/trace-cache`: one
@@ -149,8 +169,8 @@ provenance can never be repaired retroactively.
 
 ```
 <repo>/
-├── CLAUDE.md                    thin trigger — points at .agents/, carries the wiring check
-├── AGENTS.md                    symlink → CLAUDE.md
+├── AGENTS.md                    the real file — the router; points at .agents/, carries the wiring check
+├── CLAUDE.md                    symlink → AGENTS.md
 ├── .agents/
 │   ├── memory/                  curated only; frontmatter + [[wikilinks]]
 │   │   └── INDEX.md             GENERATED from frontmatter — never hand-edited
@@ -167,13 +187,28 @@ provenance can never be repaired retroactively.
 └── .codex/skills → ../.agents/skills       symlink, git-ignored
 ```
 
-**Why `CLAUDE.md` stays short.** It is the only file every harness loads
-automatically, so it costs context in *every* session — including ones that never
-touch `.agents/`. It is the trigger, not the payload.
+**The polarity of those two lines was reversed by the 2026-08-19 redesign, and
+this is the record of it.** As designed here, `CLAUDE.md` was the real file and
+`AGENTS.md` the symlink to it — correct while Claude Code was the only harness
+that loaded a root instruction file automatically. Once Antigravity and Codex
+became first-class, `AGENTS.md` became the file every harness reads and
+`CLAUDE.md` became the compatibility alias, so the pair was inverted:
+`scaffold.Create` writes `AGENTS.md` as a regular file and `linkIfAbsent`s
+`CLAUDE.md` to it (`agents/internal/scaffold/scaffold.go`), and `doctor` reports
+`scaffold:symlink` as `ok` only when `CLAUDE.md` is a **relative** symlink to
+`AGENTS.md`. Verify on any initialized repository with
+`ls -la AGENTS.md CLAUDE.md` and `cd agents && go run . doctor`. `.agents/` is
+unchanged by the reversal.
 
-**Why `AGENTS.md` is a symlink, not a copy.** `agents_clone` documented a symlink
-and shipped two byte-identical files, which can silently diverge. One source, two
-names.
+**Why the alias is the short one now.** Every harness loads `AGENTS.md`
+automatically and `CLAUDE.md` only in Claude Code, so naming the real file after
+the general convention is what keeps the pair from diverging. The paragraph below
+is kept as the original reasoning for having exactly one real file.
+
+**Why one of them is a symlink, not a copy** (written when the symlink was
+`AGENTS.md`; the rule is unchanged, the polarity is not). `agents_clone` documented
+a symlink and shipped two byte-identical files, which can silently diverge. One
+source, two names.
 
 **Why the harness configs are generated and git-ignored.** They embed absolute
 paths that do not survive a change of machine or `$HOME`, and Claude Code's
@@ -418,16 +453,19 @@ it misses subagents running under another harness, the hooks' own writes, and
 anything done by hand. It is early warning and must never be described as the
 guarantee.
 
-`guard --staged` performs three checks:
+`guard --staged` performs these checks today:
 
 1. **Secret scan** of staged `.agents/` content. Blocks (exit 2).
-2. **Generated-file check** — regenerate `INDEX.md` files in memory and compare
-   byte-for-byte against what is staged. Blocks if they differ. See
-   [Drift](#drift-generate-or-guard) for why this exists and why it is not the
-   drift guard that was rejected.
+2. **Unsafe-path check** on staged `.agents/` blobs. Blocks.
 3. **Mixed-commit warning** — a commit touching both `.agents/` and code paths.
-   Advisory (exit 1). This is the mechanism behind `agents save`, so the habit is
-   not required for correctness.
+   Advisory (exit 1). Its companion mechanism, `agents save` (deleted
+   2026-09-21), is gone; the warning stands on its own.
+
+The generated-file check that used to sit between 1 and 2 — regenerate the
+`INDEX.md` files in memory and compare them byte-for-byte against what is staged
+— was retired 2026-08-20 with both `INDEX.md` generators
+([knowledge is documentation](2026-08-19-knowledge-is-documentation.md)). See
+[Drift](#drift-generate-or-guard) for why the guard exists at all.
 
 ## 8. Git hooks become Go-backed
 
@@ -604,7 +642,7 @@ than a silent failure. Concretely:
 |---|---|
 | `agents init` | After writing wiring, prints the exact remaining trust steps for each harness it wired, and exits 1 (advisory) so the state is visible rather than assumed |
 | `agents doctor` | Re-checks and prints the remediation for anything unmet — the command to run, or the UI step (`/hooks` in Codex) with what to look for |
-| `CLAUDE.md` | Instructs the agent to run `agents doctor` early and surface the result, because a hook cannot install itself and a missing hook fails silently |
+| the root instruction file (`CLAUDE.md` when this was written; `AGENTS.md` since the 2026-08-19 reversal of §2) | Instructs the agent to run `agents doctor` early and surface the result, because a hook cannot install itself and a missing hook fails silently |
 | you | Perform the trust step once per repo per harness |
 
 `agents doctor` answers four questions:
@@ -629,11 +667,12 @@ TUI-only, so `doctor` observes but never establishes either state.
 Q3 is worth keeping only as a diagnostic, not as a gate: project trust gates neither
 harness in non-interactive mode.
 
-## 10. Fleet registry
+## 10. Fleet registry — retired, deleted 2026-09-21
 
-**Presence of `.agents/` in a repo is the truth.** The registry is a *cache* of
-known repo paths so `agents update --all` and cross-repo trace search work without
-scanning the disk.
+**Presence of `.agents/` in a repo is the truth.** The registry was a *cache* of
+known repo paths so the deleted `agents update --all` and cross-repo trace search
+could work without scanning the disk. Both are gone with it, so nothing needs a
+fleet list; the section is kept as the record of why it was machine-local.
 
 **The registry is machine-local and is never tracked**, at
 `~/.local/state/agents/registry.json` (XDG state). It lives outside dotfiles entirely.
@@ -645,8 +684,9 @@ genuinely machine-specific — the same dotfiles clone on two machines should ha
 two different registries — so tracking it would be wrong even if the repo were
 private.
 
-`agents ls` reconciles cache against reality and reports drift in both directions:
-registered-but-missing, and present-but-unregistered. Drift here is a **normal
+The deleted `agents ls` reconciled cache against reality and reported drift in
+both directions:
+registered-but-missing, and present-but-unregistered. Drift here was a **normal
 state to report, not an error to block** — a repo can be moved, archived, or
 deleted at any time, and none of those are mistakes.
 
@@ -699,7 +739,9 @@ trustworthiness is worse than no guard.
 **The fleet registry deliberately gets no such guard.** A generated index and a
 cache are different things: the index has one correct value derivable from tracked
 source, so a mismatch is a defect. The cache describes a mutable world it does not
-control, so a mismatch is news, not a bug. `agents ls` reports; nothing blocks.
+control, so a mismatch is news, not a bug. The deleted `agents ls` reported;
+nothing blocked. The registry is deleted 2026-09-21 too, so the distinction is
+now only the reason it was drawn.
 
 ---
 
@@ -857,7 +899,7 @@ files in this directory, then stop.'` with **no trust- or permission-bypass flag
   hooks, nothing prompted, exit was 0. A user gets no signal at all. `codex doctor` does
   not mention hooks either.
 - **Not the binary's fault.** Piping a captured `SessionStart` payload (`cwd` rewritten to
-  the probe repo) straight into `agents hook session-start --harness codex` wrote a correct
+  the probe repo) straight into the since-deleted `agents hook session-start --harness codex` wrote a correct
   record with `pointer_verified: true`. The hook works; Codex never calls it.
 - **Nothing on this machine has persisted hook trust.** No `[hooks]` section in
   `~/.codex/config.toml`, no file under `~/.codex/` containing `trusted_hash` (search covered `*.toml`, `*.json`, `*.jsonl`), no matching
@@ -1026,7 +1068,9 @@ on the first run. Fixtures:
   shape: `{"agentType","description","toolUseId","spawnDepth"}`. The adapter's
   sidecar read is confirmed as the only available source.
 - `SessionStart` does **not** fire for subagents — confirmed: one session with one
-  subagent produced exactly one `SessionStart`. Subagents inherit `CLAUDE.md` but
+  subagent produced exactly one `SessionStart`. Subagents inherit the root
+  instruction file (`CLAUDE.md`, the real file at the time of this measurement;
+  `AGENTS.md` since the 2026-08-19 reversal of §2) but
   do not act on it — 0 of 31 observed subagents followed an inherited bootstrap
   directive. **This is why recording must be a hook and never an instruction.**
 - Transcripts: `~/.claude/projects/<slug>/<session-uuid>/subagents/agent-<id>.jsonl`,
@@ -1065,12 +1109,12 @@ which covers pre-existing repos for free.
 
 | Risk | Mitigation |
 |---|---|
-| Auto-drafted handoffs go stale and read as authoritative | `draft` vs `reviewed` provenance; reader weighs by age. Reduced, not eliminated. |
-| `agents init` cannot make hooks live in Codex | `doctor` reports hook trust state with remediation (depends on trust store being readable); `CLAUDE.md` carries the check |
+| Auto-drafted handoffs go stale and read as authoritative | `draft` vs `reviewed` provenance; reader weighs by age. Reduced, not eliminated. **Moot — the handoff store and the queue are deleted 2026-08-20/2026-09-21.** |
+| `agents init` cannot make hooks live in Codex | `doctor` reports hook trust state with remediation (depends on trust store being readable); the root `AGENTS.md` carries the check |
 | `core.hooksPath` shadows repo-local hooks | Dispatcher chains to `.git/hooks/<name>` first; `doctor` reports local overrides |
-| `update --all` touching many repos at once | `--dry-run` is the default |
-| Codex contract churn | Every payload assumption is a golden-file test; `pointer_verified` degrades instead of breaking |
-| `git add -A` sweeping trace records into a code commit | `guard` warns on mixed commits; `agents save` for the common path |
+| `update --all` touching many repos at once | `--dry-run` is the default. **Moot — `agents update` and the fleet registry are deleted 2026-09-21.** |
+| Codex contract churn | Every payload assumption is a golden-file test; `pointer_verified` degrades instead of breaking. **Moot — the payload decoder and the trace record are deleted 2026-09-21.** |
+| `git add -A` sweeping trace records into a code commit | `guard` warns on mixed commits; the scoped `agents save` (deleted 2026-09-21) covered the common path |
 | Secrets reaching the tracked tree | Structural redaction in the record type; `guard --staged` at the commit boundary |
 | Registry leaking repo paths into a public dotfiles repo | Registry lives in `~/.local/state/`, never in dotfiles (§10) |
 

@@ -466,6 +466,28 @@ func TestStripFootersRemovesOnlyTrailingAIAttributionLines(t *testing.T) {
 	}
 }
 
+// Every attribution form the repository's own global instruction file quotes is
+// stripped. It quotes two URLs by name and notes that the URL varies between
+// Claude Code versions, so a pattern that matched only one of them left the
+// guard absent for the other: measured, the `claude.ai/code` footer passed
+// through untouched while the test above -- which only used the other form --
+// stayed green.
+func TestStripFootersRemovesEveryDocumentedAttributionForm(t *testing.T) {
+	for _, line := range []string{
+		"🤖 Generated with [Claude Code](https://claude.ai/code)",
+		"🤖 Generated with [Claude Code](https://claude.com/claude-code)",
+		"Co-Authored-By: Claude <noreply@anthropic.com>",
+	} {
+		t.Run(line, func(t *testing.T) {
+			in := []byte("feat: something\n\n" + line + "\n")
+			want := []byte("feat: something\n")
+			if got := StripFooters(in); !bytes.Equal(got, want) {
+				t.Errorf("StripFooters = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestCommitMsgPreservesBodyAttributionWithTrackedExtrasPresent(t *testing.T) {
 	extras := filepath.Clean(filepath.Join("..", "..", "..", "git", "hooks"))
 	if info, err := os.Stat(extras); err != nil || !info.IsDir() {

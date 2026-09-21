@@ -1,5 +1,14 @@
 # How do you sync Homebrew tap formulas from upstream CI without git cloning?
 
+> **Status, 2026-09-21: current, and now load-bearing.** The Contents API call
+> below is what `script/sync-homebrew-formula.sh` performs on every release —
+> `release.yml` calls it after publishing, then calls it again with `--check` to
+> assert the tap moved. The script reads the tap's existing formula and rewrites
+> only its four `url` and four `sha256` lines, so there is no rendered copy in
+> this repository to drift from the tap. Read it together with spec 6 §5.2,
+> which records why the digests are matched by filename rather than by line
+> order in `checksums.txt`.
+
 ## The Problem
 
 When a new release of a tool is published in its source repository (e.g. `nilbot/dotfiles`), the separate Homebrew tap repository (e.g. `nilbot/homebrew-tap`) must have its `Formula/<tool>.rb` updated with the new version and release archive SHA-256 checksums.

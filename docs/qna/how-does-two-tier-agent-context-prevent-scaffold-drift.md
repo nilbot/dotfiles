@@ -82,3 +82,27 @@ Rather than failing or clobbering, the LLM migration engine (the `migrating-flee
 2. Extracts human-authored rules and appends them to `.agents/AGENTS.md`.
 3. Restores root `AGENTS.md` to canonical form, taking the bytes from `agents layout show --router` rather than embedding a second copy of the text.
 4. Presents an interactive diff for explicit human approval.
+
+## Follow-up, 2026-09-21
+
+**The isolation boundary stands; the machinery that chose between two routers
+does not.** The layout schema was deleted, in the refactor that cut the `agents`
+tool to six commands. Everything §3 and §4 do with it now names something that is
+gone: `agents layout show --router`, `agents layout path` and `agents layout
+migrate` were all removed on 2026-09-21, `.agents/layout.json` and its
+`agents.layout/v2` schema were removed with them, and the `migrating-fleet-context`
+skill was archived to `docs/archive/skills/` — its own README saying the tool "no
+longer has a layout schema", so "no command it names still exists".
+
+There is nothing to run instead, because there is nothing left to resolve or
+migrate. Measured on a fresh repository, `agents init` writes one fixed set of
+stores, and the complete router bytes are now the `scaffold.DefaultAgentsMD`
+constant in `agents/internal/scaffold/scaffold.go` — one shape, not one of two.
+Every repository the tool writes today is that shape, so the deleted migration
+has no source state to migrate from.
+
+The asymmetry the entry exists to describe is unchanged. The root router is still
+machine-managed, `.agents/AGENTS.md` is still human-owned, and a human editing
+the wrong one still produces the drift this answers. What has gone is the
+detection and repair: steps 1 and 3 of §4 were both built on the deleted router
+command, so what remains is a procedure with no tool behind it.

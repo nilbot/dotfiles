@@ -98,12 +98,25 @@ func DotfilesRoot() string {
   * `rootChecks()`: Returns `nil` (skips `root:exists`).
   * `checkGitHooks()`: Skips `git-hooks:global`, `git-hooks:links`, and (since 2026-09-20) `git-hooks:unmanaged`. Only runs `git-hooks:local` and `git-hooks:legacy`.
   * `checkGitAttributes()`: Skips checking the global `~/.gitattributes` link; checks the repo-local `.gitattributes` for `.agents/** linguist-generated=true`.
-  * **All repo-local checks run in full**: `binary` (PATH resolution), `wiring:*`, `trust:*`, `recording:*`, `gitleaks`, `trace-index`, `pointers`, `scaffold:doctor-instruction`, `docs-freshness`, and `lane-health`.
+  * **All repo-local checks run in full**: `binary` (PATH resolution), `wiring:*`, `trust:*`, `gitleaks`, `git-attributes`, `scaffold:router`, `scaffold:symlink`, `scaffold:domain`, and `scaffold:skill-recording`.
+
+  > **Amended 2026-09-21.** The list this bullet carried — `recording:*`,
+  > `trace-index`, `pointers`, `scaffold:doctor-instruction`, `docs-freshness`,
+  > `lane-health` — is deleted along with the trace store, the fleet registry and
+  > the drift subsystem that produced it. The list above is what `agents doctor`
+  > reports today; check it with `cd agents && go run . doctor`.
 
 * **When `deps.Root != ""` (Dotfiles Operator Mode)**:
   * Runs the complete suite including `root:exists`, `git-hooks:global` (verifying `core.hooksPath` points to `<root>/git/hooks.d`), `git-hooks:links` (verifying all 4 hooks symlink to the running executable), `git-hooks:unmanaged` (warning about dangling links under other names, added 2026-09-20), and global `~/.gitattributes`.
 
-### 3.2 `agents hook` & Git Multi-Call Dispatcher
+### 3.2 Git-hook dispatch (was the deleted `agents hook` multicall)
+
+> **Renamed 2026-09-21.** There is no `agents hook` command; it was deleted, and
+> so were the intercepting hooks it served. The dispatcher it referred to
+> survives, keyed on the invoked name rather than on a subcommand: `main.go`
+> checks `filepath.Base(os.Args[0])` against `githook.IsHookName` and, when it
+> matches one of the four installed hook names, runs the hook chain instead of
+> the CLI. Everything below about `ExtrasDir` and mode behaviour still holds.
 
 When invoked as a Git hook (`pre-commit`, `commit-msg`, `post-merge`, `post-checkout`):
 * `ExtrasDir` is computed as `filepath.Join(DotfilesRoot(), "git", "hooks")`.

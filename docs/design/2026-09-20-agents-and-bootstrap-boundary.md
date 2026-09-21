@@ -27,7 +27,7 @@ machine this was written on, and one of those disagreements is an incident
 | unit of change | **the machine** | **one repository** |
 | writes | `$HOME` paths, packages, login shell, global Git config, the global hook chain | files under a checkout: `.agents/`, the doc stores, instructions, skills, `.claude/settings.json`, `.codex/hooks.json` |
 | reads | its own manifest, PATH, the package manager | a repository, and — read-only — machine state (`~/.gitconfig`, `~/.gitattributes`) |
-| entry points | `./bootstrap plan\|apply\|check <profile>` | `agents <command>`, `agents hook` as a Git-hook multicall |
+| entry points | `./bootstrap plan\|apply\|check <profile>` | `agents <command>`, and the same binary dispatched as a Git hook under a hook name (`pre-commit`, `commit-msg`, `post-merge`, `post-checkout`) |
 | profiles | `workstation` = every phase; `dotfiles` = `preflight+config+verify`, the one with no sudo, no network, no package manager and no login-shell change | n/a |
 
 **The rule:** bootstrap reconciles the machine; `agents` reconciles a repository
@@ -45,7 +45,7 @@ Exactly one resource is machine-global *and* speaks `agents`: the hook chain.
 |---|---|
 | `git/install-hooks.sh` | the installer. Shell, deliberately: it must work when no `agents` binary exists yet — a fresh machine, a failed build, or a Homebrew-only user who never runs bootstrap |
 | `bootstrap.d/internal/phase/devtools.go` | builds `~/bin/agents`, then calls the installer at **that** path |
-| `agents hook` / `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
+| the deleted `agents hook` (now: the same binary invoked as a Git hook) / `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
 
 The call direction is one-way: bootstrap calls the installer, bootstrap builds
 `agents`, and `agents` never calls either. That is the property to preserve.
@@ -63,12 +63,12 @@ predates this review and that the installer now explains better.
 
 ### (b) A `$HOME` path the system writes to, aimed at content this repo publishes
 
-`links.manifest:20` declares `~/.claude/skills` as a symlink to the checkout's
+`links.manifest:20` declared `~/.claude/skills` as a symlink to the checkout's
 `claude/skills`. The harness wrote its own skill content (`synced/`) **through
 that link**, into the tracked working tree — 200+ uncommitted changes by the
 operator's account, discovered and repaired by hand on 2026-09-19, and not
 written down until now. The machine-readable shape it left behind is a real
-directory holding per-skill links, which `bootstrap plan workstation` refuses:
+directory holding per-skill links, which `bootstrap plan workstation` refused:
 
 ```text
 bootstrap: config: refusing: /Users/nilbot/.claude/skills
@@ -76,8 +76,8 @@ bootstrap: config: refusing: /Users/nilbot/.claude/skills
   remedy:  move it aside deliberately, then retry
 ```
 
-The refusal is correct — it protected the checkout. **The declaration is what is
-wrong.** This is the third instance of one defect class, and spec 1 §8.4 already
+The refusal was correct — it protected the checkout. **The declaration was what
+was wrong.** This is the third instance of one defect class, and spec 1 §8.4 already
 records the first two: `~/.gitconfig` was a symlink to `git/gitconfig.symlink`, so
 every `git config --global` wrote into tracked public content; `~/.claude` was
 symlinked wholesale from the checkout for the same reason and with the same
@@ -86,9 +86,20 @@ never be aimed at content this repository publishes* — was applied to
 `~/.gitconfig` and to `~/.claude`, but not to the subdirectory the harness
 writes into.
 
-Consequence today: `bootstrap plan workstation` exits 2 at `config` and nothing
-after it runs, so the machine cannot be provisioned through that profile at all
-until the declaration is decided.
+**Resolved 2026-09-21 by deleting the row, which is what rule 2 below asks for.**
+`bootstrap.d/links.manifest` no longer declares `claude/skills` or `gemini/skills`,
+so the refusal above no longer fires and the `config` phase is no longer blocked
+by this path. Verify with `grep -c 'claude/skills' bootstrap.d/links.manifest`,
+which must print `0`. `.claude/skills` is now written per repository by
+`agents init`, at the repository tier where the harness actually reads it,
+instead of being aimed at the checkout from `$HOME`.
+
+> **Separately measured 2026-09-21:** `bootstrap plan workstation` still exits 2
+> at `config` on this machine, now refusing `~/.claude/CLAUDE.md` — it points at
+> `claude/CLAUDE.md` while the manifest names `global/AGENTS.md`. That is the
+> machine-global instruction file being re-homed, a different change with its own
+> owner; it is recorded here only so the exit-2 above is not misread as this
+> declaration surviving.
 
 ### (c) Two writers of `~/.gitconfig`
 
@@ -154,10 +165,12 @@ four-argument form untouched.
 
 ## 7. Deferred, in the order they should be taken
 
-1. **Decide the `~/.claude/skills` declaration** (§4b). It is a decision, not a
-   patch: the manifest can stop claiming the path, or the harness side can be
-   told to stop writing into it, but the current pair cannot both stand. Until it
-   is decided, `bootstrap plan|apply workstation` is blocked on this machine.
+1. ~~**Decide the `~/.claude/skills` declaration** (§4b).~~ **Closed 2026-09-21 —
+   decided by deleting the row.** The manifest stopped claiming the path, so the
+   declaration and the harness can no longer disagree; `bootstrap plan|apply
+   workstation` is no longer blocked by *this* path. The remaining exit-2 at
+   `config` on this machine is the separate `~/.claude/CLAUDE.md` move noted in
+   §4b, which has its own owner.
 2. **Settle hook ownership when bootstrap and a package manager are both
    present** (§4a): whether `devtools` should pass `--adopt-owned`, defer to
    links it did not write, or refuse with an explicit instruction.

@@ -109,6 +109,14 @@ it green, so the branch is mergeable at every boundary.
 Measured on this machine, 2026-08-13 and re-verified 2026-08-14, after spec 7's
 phases A and B′ landed.
 
+> **What the 2026-09-21 reduction removed from this baseline.** It is a dated
+> measurement and is left as one, but three of the artifacts it names are
+> deleted: `agents/internal/machine/machine.go` (below), the deleted `agents ls`
+> fleet registry (two measurements below), and the deleted `agents trace` /
+> deleted `agents save` commands (phases 3 and 4). The measurements that cite
+> them were true when taken; they are marked at the point of use rather than
+> recomputed, because recomputing a historical baseline would destroy it.
+
 - No `.github/` directory. No workflows, no PR checks, no releases.
 - Two Go modules — `agents/` and `bootstrap.d/` — and deliberately **no
   `go.work`** (spec 2 §11). Two independent build graphs.
@@ -136,7 +144,7 @@ phases A and B′ landed.
 - `bootstrap.d/main.go:29` declares `exitAdvisory`. **No path in the module
   returns it** — verified as the only occurrence, with no bare `return 1` in the
   file.
-- `agents ls` reports **56 registered repositories, 40 of them missing.** Two are
+- The since-deleted `agents ls` reported **56 registered repositories, 40 of them missing.** Two are
   real; the rest are Go test temp directories and capture-experiment repos that
   the test suite registered into the real machine-local registry. See phase 2.
 - `agents doctor` exits advisory on this healthy machine, over `recording:codex`
@@ -340,7 +348,7 @@ targets is live. Measured 2026-08-14 on this machine:
 - **Run normally, that `HOME` is the developer's.** This machine's real
   `~/.local/state/agents/registry.json` holds **56 entries, of which 2 are real
   repositories** — 28 are Go test temp directories and 26 are capture-experiment
-  repos. `agents ls` reports 40 of them missing.
+  repos. The since-deleted `agents ls` reported 40 of them missing.
 
 So "run under a synthetic `HOME` and require green" **passes today and catches
 none of this.** It relocates the pollution rather than detecting it. The check
@@ -562,7 +570,7 @@ the direction that hurts: a document confidently naming a command that no longer
 exists.
 
 **Scope of the backward check:** `README.md`, both `CLAUDE.md` files — the
-project one and the tracked global `claude/CLAUDE.md` — and everything under
+project one and the tracked global `global/AGENTS.md` — and everything under
 `claude/skills/` and `.agents/skills/`. It **excludes**
 `docs/archive/plans/` and `docs/design/`: those are dated records
 of what was true when written, the executed bootstrap plan legitimately names
@@ -570,18 +578,22 @@ of what was true when written, the executed bootstrap plan legitimately names
 
 **Harness guidance lives in `claude/skills/`** — not in either `CLAUDE.md`, and
 not in `.agents/skills/`. `bootstrap.d/links.manifest:20-21` symlinks
-`claude/skills` → `~/.claude/skills` and `claude/CLAUDE.md` → `~/.claude/CLAUDE.md`
+`claude/skills` → `~/.claude/skills` and `global/AGENTS.md` → `~/.claude/CLAUDE.md`
 on every provisioned machine, so `claude/skills/` is fleet-wide while
-`.agents/skills/` is per-repository procedure. `agents` is a fleet-wide tool —
-`agents ls` lists registered repositories, `agents update --all` rewires every
-one — so `.agents/skills/` would give the guidance to the one repository that
-needs it least.
+`.agents/skills/` is per-repository procedure. `agents` was a fleet-wide tool: the
+deleted `agents ls` listed registered repositories, and the
+deleted `agents update --all` rewired every one of them — so `.agents/skills/`
+would give the guidance to the one repository that
+needs it least. *(The fleet machinery is deleted 2026-09-21; `agents` is now a
+per-repository tool with no fleet scope, so the argument now rests only on which
+tier the guidance belongs to.)*
 
 The two artifacts answer different questions and only one can be generated. The
 rendered block answers *what is this command*; the skill answers *which command
-is this situation* — when a finding is worth `agents handoff draft` rather than a
-comment, why `agents review` stands between a draft and the tracked record, when
-`agents trace show` answers what grep cannot. The `Agent`-audience coverage check
+is this situation* — when a finding was worth the deleted `agents handoff draft`
+rather than a
+comment, why the deleted `agents review` stood between a draft and the tracked record, when
+the deleted `agents trace show` answered what grep could not. The `Agent`-audience coverage check
 is what keeps the second honest as the first grows: without it a new command
 lands, gets a generated reference entry, and no agent ever reaches for it — the
 shape spec 7 measured when `CLAUDE.md` said *how* to write a handoff and never
@@ -596,8 +608,13 @@ pointer" to `.agents/`; the global one is kept to rules a session acts on.
 agents help --render=markdown > /tmp/surface.md
 # regenerate the marked block in README.md from /tmp/surface.md, then:
 git diff --exit-code README.md
-cd agents && go test -count=1 -run 'TestDocumentedCommandsExist' ./...
+cd agents && go test -count=1 -run 'TestLivingDocumentsNameOnlyRealCommands' .
 ```
+
+*(The test named here was `TestDocumentedCommandsExist` when this phase was
+written. It is now `TestLivingDocumentsNameOnlyRealCommands`, which covers the
+same invariant plus the instruction files and both skill trees; the README block
+itself is guarded by `TestReadmeCommandBlockIsCurrent`.)*
 
 **Demonstrated to fail by:** adding a command to the registry without
 regenerating the README block; and naming `agents nosuchverb` in a code span in
@@ -830,11 +847,16 @@ duration.
 
 **Extending `agents index` to write the README block** — tempting, because
 `index` already owns generated content and the `generated-file` guard rule would
-cover the README for free. Rejected: `agents save` commits `.agents/` paths and
+cover the README for free. Rejected: the since-deleted `agents save` committed
+`.agents/` paths and
 nothing else, and the `mixed-commit` guard exists to keep repository content and
 agent context in separate commits. Teaching `index` to write a tracked file
 outside `.agents/` puts those two mechanisms in tension for a convenience. The
 renderer emits markdown on stdout; CI is the enforcement point.
+
+*(Deleted along the way: `agents index` and its `generated-file` guard rule in
+2026-08-20, and the deleted `agents save` in 2026-09-21. The rejection still
+stands on the `mixed-commit` rule, which survives.)*
 
 **Adding `NoRecord = 5` to `bootstrap` to match `agents`** — rejected. Neither
 binary nor spec 1 is the authority on whether a code is needed; a path that means

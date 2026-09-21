@@ -154,8 +154,12 @@ func appendMixedCommitFinding(findings []Finding, agentPaths, otherPaths []strin
 	return append(findings, Finding{
 		Rule:     "mixed-commit",
 		Blocking: false,
+		// The advice names no subcommand: `agents save`, which used to commit
+		// .agents/ by itself, is gone. Naming a command that does not exist
+		// would be worse than naming none -- this is the one command that runs
+		// at commit time, so a reader is unusually likely to act on it.
 		Detail: fmt.Sprintf("this commit touches %d agent path(s) and %d other path(s); "+
-			"`agents save` commits .agents/ on its own", len(agentPaths), len(otherPaths)),
+			"consider committing .agents/ changes separately", len(agentPaths), len(otherPaths)),
 	})
 }
 

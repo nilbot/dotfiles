@@ -3,7 +3,7 @@
 ## Context
 
 The second read of
-[the layout design](../design/2026-09-18-layout-manifest-and-store-root-design.md)
+[the layout design](../archive/design/2026-09-18-layout-manifest-and-store-root-design.md)
 took up the review queue's remaining four questions (Q4–Q7) and the
 implementation plan written against them. The draft answer to Q7 was to accept
 a fleet advisory: after v0.6.0, every v1 repository's

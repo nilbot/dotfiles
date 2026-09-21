@@ -51,3 +51,37 @@ When the question is "does this name still appear anywhere", scope the grep by
 Related: [how-do-i-confirm-something-is-not-wired](how-do-i-confirm-something-is-not-wired.md)
 — establishing an absence needs the one read that could disconfirm it, and here
 that read was the workflow file.
+
+## Follow-up, 2026-09-21
+
+**The method was used again, on the largest retirement this repository has done.**
+
+The layout, trace, save, ls, update, drift and hook subcommands were deleted
+together. The sweep was scoped by *path* rather than by file type, as the answer
+says — the whole tree minus the immutable archive:
+
+```bash
+git grep -nE 'agents (drift|layout|trace|save|ls|update|hook)' -- . ':(exclude)docs/archive'
+```
+
+It returned hits in `docs/plans/`, `docs/journal/`, `docs/design/`, this store,
+the Go sources, the tests and `agents/README.md` — and sorting by file was what
+made the result readable, because the stores are not the same kind of caller.
+Plans and journals legitimately name anything true of their date. Design docs and
+READMEs are live claims. The Go hits are mostly the machinery that *detects*
+retired entries, which has to name them.
+
+Five lines in this store named a deleted command as an instruction, across two
+entries. Each gained a dated note at its end, and the sentence naming the command
+carries the removal date inline, because the alternative is a reader who finds a
+confident present-tense instruction and no marker that it expired. The rule held
+again: the hits that mattered were prose in a store nobody would call a caller.
+
+One concrete detail above has changed. The `claude/` argument no longer has
+skills in it: `claude/skills` was emptied on 2026-09-21 and its skills moved to
+`docs/archive/skills/`, which nothing loads. The harness-loaded documents are now
+the ones under `.agents/skills/` — reached through the `.claude/skills` and
+`.codex/skills` symlinks `agents init` creates — plus each harness's own
+instruction file. The lesson is unaffected: a document a harness loads in every
+session is still a caller with a much longer half-life than a CI step, wherever
+it lives.

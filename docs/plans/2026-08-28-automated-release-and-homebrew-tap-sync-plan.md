@@ -22,7 +22,7 @@ graph TD
 
 **Tech Stack:** Bash, GitHub CLI (`gh`), GitHub REST API, Homebrew Ruby DSL
 
-**Spec:** [`docs/design/2026-08-28-automated-release-and-homebrew-tap-sync.md`](../design/2026-08-28-automated-release-and-homebrew-tap-sync.md)
+**Spec:** [`docs/archive/design/2026-08-28-automated-release-and-homebrew-tap-sync.md`](../archive/design/2026-08-28-automated-release-and-homebrew-tap-sync.md)
 
 ## Global Constraints
 

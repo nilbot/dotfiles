@@ -1,0 +1,79 @@
+# Tests the `docs` job in .github/workflows/verify.yml runs.
+#
+# Why this file exists. The job used to carry this list inline in YAML, and when
+# a refactor deleted the layout, migration and fleet machinery, 45 of the 58
+# names it held stopped existing. The job's own guard -- "assert each named test
+# actually ran" -- turned that into a failure rather than a silent pass, which is
+# how it was caught, but the list was only reviewable by reading a YAML heredoc.
+# A list is data; it lives here, where a diff to it is legible and a reviewer can
+# see which guarantees were dropped when a change removes a name.
+#
+# What belongs here. Tests that assert prose and contracts rather than one
+# package's internal behaviour: the command tree and its help text, the flags
+# each handler registers, the generated README block, the living documents that
+# name commands, and the text of the skill this tool installs. Package-level
+# behaviour belongs in the ordinary `test` job, which runs everything.
+#
+# One name per line, comments with `#`. Every name must exist: the job fails,
+# naming the offender, if a listed test no longer does.
+
+# --- the command tree, its help, and its flags ---
+TestEveryCommandIsDocumented
+TestEveryLeafHasARunner
+TestEveryCommandDeclaresAKnownAudience
+TestNoSourceFileRestatesAUsageLine
+TestEveryUsageForCallSiteNamesARealCommand
+TestEveryRegisteredFlagIsDocumented
+TestNoUsageLineNamesAFlagThatDoesNotExist
+TestTheCommandSetIsExactlyThis
+
+# --- help rendering, at depth and by audience ---
+TestHelpForALeafExitsZeroAndNamesTheCommand
+TestHelpForAnUnknownPathExitsThree
+TestHelpFlagWorksAtDepth
+TestHelpAllIncludesTheAutomatedCommands
+TestRenderHelpFiltersSubcommandsByAudience
+TestRenderMarkdownFlagIsDeclaredAndRefusesWhatItCannotAnswer
+TestRenderMarkdownListsEveryCommandAtEveryDepth
+TestRenderUsageHidesNonHumanCommandsUnlessAllIsSet
+TestMalformedInvocationReportsWhatWasWrong
+
+# --- the documents that name commands ---
+TestReadmeCommandBlockIsCurrent
+TestLivingDocumentsNameOnlyRealCommands
+# The complement of the guard above: that one fails on a command that does
+# not exist, this one on a command that was deleted. Both belong here -- a
+# doc guard absent from this list is a guard the `docs` job never runs.
+TestLivingDocumentsNameNoDeletedCommand
+
+# --- the skill this tool installs ---
+TestInstalledSkillMatchesTheBinary
+TestInstalledSkillNamesNoDeletedCommand
+
+# --- the check command's contract, which the README documents ---
+TestDoctorCommandExitContract
+TestDoctorPrintsARemedyOnlyForANonOKCheck
+TestDoctorRefusesAnUnknownStatus
+
+# --- the repository-shape checks the README describes as part of doctor ---
+TestWiringIsOKWhenThereIsNoConfig
+TestWiringFailsOnARetiredEntry
+TestWiringWarnsOnALookalikeUnderAnotherBinary
+TestCheckAntigravityTrustMatchesTheRepositoryRootExactly
+
+# --- the ignore rules the docs describe ---
+TestCreateAppliesEveryExcludeRule
+
+# --- the attribution rule the global instruction file states ---
+TestStripFootersRemovesEveryDocumentedAttributionForm
+
+# --- the unknown-shape rule the README states as a guarantee ---
+TestWireKeepsGroupsWhoseShapeItDoesNotRecognise
+TestWireLeavesAPlaceholderConfigItNeverWrote
+
+# --- git ignore/trackedness rules the docs describe ---
+TestIsIgnoredMatchesEverySpellingOnThePathItMatches
+TestIsIgnoredSeesARuleEvenForATrackedPath
+TestTrackednessHelpersOutsideARepository
+TestIsTrackedDistinguishesUntrackedFromStaged
+TestIsTrackedFailsClosedOnAGitError

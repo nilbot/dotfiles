@@ -35,3 +35,32 @@ Portability and containment are different properties and the obvious command
 only tests the first. When a check and its subject can both be satisfied by
 something other than the thing you care about, the check is decorative — break
 the production line it names, watch it go red, then restore.
+
+## Follow-up, 2026-09-21
+
+**This entry now contains one of the checks it warns about.**
+
+```bash
+H=$(mktemp -d); HOME=$H go test -count=1 ./...
+test ! -e "$H/.local/state/agents"
+```
+
+`$H/.local/state/agents` was the machine-local registry — the fleet registry's
+store, under `HOME`. It was deleted on 2026-09-21 with the fleet registry and the
+rest of the capture apparatus, nothing writes that path any more, and so
+`test ! -e` cannot fail. The command still exits 0, and it now exits 0 for a
+reason that has nothing to do with containment: the path is absent because the
+code that would have created it is gone.
+
+Measured with `HOME` pointed at a fresh temporary directory, `go test
+./internal/... -count=1` leaves Go build caches under `$H/Library/` and nothing
+else. Containment is therefore not broken — it is held for free, because there is
+no machine-local store left to leak. That is exactly the case where the rule from
+[where else does this command name live](where-else-does-this-command-name-live.md)
+applies: delete the check with its subject rather than repairing it. A
+replacement that asserted *"nothing outside `$H/Library` was written"* would be
+measuring a stronger property than the suite now has any way to violate.
+
+The third lesson above is untouched and still the more general one: `HOME=$(mktemp
+-d) go test ./...` exiting 0 still measures portability, and portability was
+never containment. The portability half of the command still works.

@@ -1,160 +1,108 @@
 # agents
 
-A developer harness manager, repository context framework, and transcript recorder for AI coding agents (Claude Code, Codex, Antigravity, Cursor).
+Scaffolds and maintains the repository context an AI coding agent needs: the two-tier instruction files, the documentation stores, the bundled skill, and the harness wiring that makes them visible.
 
 ---
 
 ## Features
 
-- **Multi-Harness Wiring**: Automatically configures and keeps in sync hook configurations for Claude Code (`.claude/settings.json`), Codex (`.codex/hooks.json`), and Antigravity (`.agents/hooks.json`).
-- **Two-Tier Context & Drift Detection**: Enforces clean separation between canonical machine routing (`AGENTS.md`, `CLAUDE.md`) and repository domain guidelines (`.agents/AGENTS.md`). `agents drift` inspects context layout, canonical diffs, domain context, bundled skills, and misplaced documentation across repositories. Repository-specific skills under `.agents/skills/` are listed as `local_skills` and never classified as drift.
-- **Layout Manifest Resolution**: `agents layout show`, `agents layout validate`, and `agents layout path` read `.agents/layout.json` and report the layout a repository resolves to — schema, status, minimum mutating version (`min_mut_ver_floor`), and the store each role names — without writing anything. A repository with no manifest keeps the implicit v1 `docs/` layout. `agents layout migrate` adopts an existing v1 repository into a v2 layout: it freezes a resumable journal before the first move, moves each store with `git mv`, and replaces the router.
-- **Fleet Maintenance & Skill Refresh**: `agents update` rewires machine hooks across registered repositories, refreshes the authoritative `migrating-fleet-context` skill, and emits advisory notices if any repository exhibits context drift.
-- **Durable Transcript Caching**: Captures and preserves subagent conversation transcripts before harnesses delete them, storing them in `.agents/transcripts/` with retention and size bounding.
-- **Repository Guardrails & Pre-Commit Secret Scanning**: Integrates `gitleaks` into `agents guard --staged` to catch secret leaks before commit.
-- **Commit Message Sanitization**: Built-in Git `commit-msg` hook automatically strips AI attribution footers and co-author tags to keep git histories clean.
-- **Self-Diagnostic Tooling**: `agents doctor` inspects harness wiring, trust permissions, transcript indices, repository hygiene, and 5 granular `scaffold:*` diagnostics without mutating your configuration.
+- **Repository Scaffold**: `agents init` creates `.agents/` and the four documentation stores under `docs/{design,plans,journal,qna}`, each with a README explaining what belongs in it, the root `AGENTS.md` router and its `CLAUDE.md` symlink, `.agents/AGENTS.md` for repository-specific rules, the bundled `recording-what-you-learn` skill, and the `.agents/** linguist-generated=true` rule in the repository's `.gitattributes`.
+- **Harness Wiring**: Makes `.agents/skills/` visible where each harness looks for it — a relative `.claude/skills` symlink for Claude Code and a relative `.codex/skills` symlink for Codex, both pointing at `.agents/skills`. Antigravity reads `.agents/` in place and needs no symlink. The tool writes no hook entries of its own: nothing records harness lifecycle events any more.
+- **Retired-Entry Cleanup**: `agents wire` removes from `.claude/settings.json`, `.codex/hooks.json` and `.agents/hooks.json` the hook entries this tool wrote in an earlier version, and preserves every other setting in those files. A config left holding nothing is removed rather than left behind as `{}`.
+- **Repository Guardrails & Pre-Commit Secret Scanning**: `agents guard --staged` scans the staged `.agents/` blobs with `gitleaks` to catch secret leaks, blocks a staged `.agents/` path carrying a control character, and warns when one commit mixes agent context with code. Invoked automatically from the pre-commit hook.
+- **Commit Message Sanitization**: the installed `commit-msg` hook strips the Claude attribution footer and the `Co-Authored-By: Claude` trailer from the trailing trailer block, so git histories read as the author's own work. A human co-author trailer or another tool's footer is left as written.
+- **Self-Diagnostic Tooling**: `agents doctor` reports whether anything stale is left in the harness configs, what the harnesses trust, and the state of the files this tool owns. It observes; it never mutates.
 
 ---
 
 ## Installation
 
-### Homebrew (macOS & Linux)
+### Build from Source (Go 1.26+)
+
+```bash
+cd agents
+go build -o ~/bin/agents .
+```
+
+The binary is self-contained. Two builders in this repository run the same
+command with the operator-mode stamp added: `make agents` from the repository
+root, and the devtools phase of `./bootstrap apply workstation`.
+
+### Released Binaries
 
 ```bash
 brew install nilbot/tap/agents
 ```
 
-To upgrade:
-```bash
-brew update && brew upgrade nilbot/tap/agents
-```
+This installs whichever release `nilbot/homebrew-tap` currently points at — the
+formula lives in that repository and is maintained there, not here.
 
-### Pre-built Binary (GitHub Releases)
+Releases are cut from tags by
+[`.github/workflows/release.yml`](../.github/workflows/release.yml):
+`script/package-release.sh` builds darwin/{arm64,amd64} and linux/{arm64,amd64}
+archives plus `checksums.txt`, and the workflow asserts the packaged binary
+reports the tag's version and commit before publishing them.
 
-Download pre-compiled binaries for Darwin (Apple Silicon / Intel) or Linux (x86_64 / ARM64) from [GitHub Releases](https://github.com/nilbot/dotfiles/releases).
+**Releasing does not update the tap.** There is no sync step: a release publishes
+the archives, and the tap's formula is pointed at the new checksums separately.
+Until that happens `brew upgrade agents` keeps installing the previous version,
+so a release being published is not the same as it being installable.
 
-Extract and place the binary on your `$PATH`:
-```bash
-tar -xzf agents_*_darwin_arm64.tar.gz
-sudo mv agents /usr/local/bin/
-```
-
-### From Source (Go 1.26+)
-
-```bash
-go install github.com/nilbot/dotfiles/agents@latest
-```
+A release carries the tree at its tag, which is not necessarily the tree you are
+reading. The module has no `agents/vX.Y.Z` tags, so
+`go install github.com/nilbot/dotfiles/agents@latest` resolves to a
+pseudo-version of the default branch rather than a release. `agents version`
+prints what a binary actually is.
 
 ---
 
 ## Quickstart
 
-Initialize any Git repository to track agent context, scaffold Two-Tier instructions, and wire harness triggers:
+Initialize any Git repository to create the agent context and wire it to the harnesses you use:
 
 ```bash
 cd my-project
 agents init
 ```
 
-`agents init` creates the implicit v1 layout, whose four stores are
-`docs/{design,plans,journal,qna}`. To create an `agents.layout/v2` layout
-instead, pass a template: `agents init --template content-vault` puts the same
-four stores under `.context/`, and `agents init --template code-repo` keeps them
-under `docs/`. `--stores <role>=<path>` overrides an individual role and
-`--archive <path>` records the immutable archive. A repository that already has
-`AGENTS.md` or `docs/` is refused: adopting it is `agents layout migrate`'s job.
+`init` takes one flag, `--local`, which keeps `.agents/` out of the repository.
+It is refused inside a linked worktree, where `info/exclude` is shared with the
+main checkout.
 
-Run diagnostics to verify that harnesses, hooks, and scaffold integrity are intact:
+It exits 1 (advisory) even on success, because wiring is written but not yet live — each harness has a trust step no process can perform for you, and `init` prints the list.
+
+Verify the repository is in the state it should be:
 
 ```bash
 agents doctor
 ```
 
-Inspect repository or fleet-wide context layout and router drift:
-
-```bash
-# Check context layout and detect drift in current repository
-agents drift
-
-# Output full JSON drift report for AI agents and automation
-agents drift --json
-
-# Inspect a specific repository or check all registered fleet repositories
-agents drift --repo /path/to/repo
-agents drift --all
-```
-
-Update fleet wiring and refresh embedded migration skills:
-
-```bash
-# Dry run update across all registered repositories
-agents update --all
-
-# Apply harness rewiring and skill refresh across the fleet
-agents update --all --apply
-```
-
-Resolve where the documentation stores live (read-only, never writes):
-
-```bash
-# The resolved layout: schema, status, min_mut_ver_floor, stores, archive
-agents layout show
-
-# One store path by role, for use in a shell command substitution
-qna=$(agents layout path qna)
-
-# Validate the manifest; exits 1 for problems or an unsupported version floor
-agents layout validate
-```
-
-Adopt an existing v1 repository into an `agents.layout/v2` layout (dry run
-first; `--apply` requires a backup tag):
-
-```bash
-# The plan: what moves where, what blocks it, and the links it would break
-agents layout migrate --template content-vault --dry-run
-
-# Apply it on a migration branch, with the rollback point as an annotated tag
-agents layout migrate --template content-vault \
-  --apply --backup-tag pre-layout-v2-20260918
-
-# Continue a migration that stopped mid-way; --abort deletes a manifest from
-# phase `planned`, while nothing can have moved
-agents layout migrate --resume --apply
-```
-
-Inspect session transcripts and agent activity:
-
-```bash
-# List recorded sessions and subagent runs
-agents trace ls
-
-# View the full transcript of a specific turn or subagent
-agents trace show <session-id>
-
-# List recent recorded sessions and subagent runs with limit
-agents trace ls --limit 10
-```
-
----
+Re-run `agents wire` after upgrading from a version that installed hook entries;
+it removes them.
 
 ## Operating Modes
 
-`agents` operates in two modes:
+`agents` operates in two modes, chosen by whether the binary knows a dotfiles
+checkout. The stamp beats the environment variable, so a stamped binary cannot
+be redirected by `AGENTS_DOTFILES_ROOT`.
 
 ### 1. Standalone Mode (Default)
-When installed via Homebrew or downloaded from releases, `agents` operates as a standalone repository tool.
+
+A binary built without the stamp and without `AGENTS_DOTFILES_ROOT` operates as
+a standalone repository tool.
 - Requires no external dotfiles clone.
-- `agents doctor` checks repository-local harness wiring, repo `.gitattributes`, secret scanner presence, documentation freshness, and 5 granular `scaffold:*` diagnostics:
-  - `scaffold:router`: Validates that root `AGENTS.md` matches the canonical router template without unpartitioned domain drift.
-  - `scaffold:symlink`: Verifies that `CLAUDE.md` is a valid relative symlink to `AGENTS.md`.
-  - `scaffold:domain`: Confirms presence of `.agents/AGENTS.md` for repository-specific domain rules.
-  - `scaffold:skill-recording`: Checks status and customization state of `.agents/skills/recording-what-you-learn/`. This skill is repository-customizable, so local edits are reported without warning.
-  - `scaffold:skill-migrating`: Checks that `.agents/skills/migrating-fleet-context/` matches the installed binary. This skill is `agents`-owned, so any divergence is staleness and warns; run `agents update --all --apply` to refresh it.
+- `agents doctor` reports:
+  - `binary`: whether the `agents` on `PATH` is the running executable.
+  - `wiring:<harness>`: whether a harness config still holds an entry this tool wrote and no longer answers. Failures come with `agents wire` as the remedy; an absent config is OK, not a gap.
+  - `trust:antigravity`: whether the Antigravity CLI config is readable and names this repository as trusted.
+  - `gitleaks`: scanner presence.
+  - `scaffold:router`, `scaffold:symlink`, `scaffold:domain`: the root `AGENTS.md`, its `CLAUDE.md` symlink, and `.agents/AGENTS.md`. The symlink check is the one that catches a silent failure: extracted or synced without symlink support, `CLAUDE.md` becomes a regular file whose content is the text `AGENTS.md`, and a harness then reads that one line as the whole project context.
+  - `scaffold:skill-recording`: the state of `.agents/skills/recording-what-you-learn/`. The skill is repository-customizable, so a local edit is reported as such without warning; only a missing one warns.
+  - `git-hooks:local`, `git-hooks:legacy`, `git-attributes`: a repository-local `core.hooksPath` override, an exact retired dispatcher left in the repository's hooks directory, and the repository `.gitattributes` rule.
 - Git hook dispatching executes repository-level hooks and built-in guards.
 
 ### 2. Dotfiles Operator Mode
+
 For developers managing a centralized `dotfiles` checkout with machine-level Git hook chaining:
 - **Build with Link Stamp**:
   ```bash
@@ -164,7 +112,8 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
   ```bash
   export AGENTS_DOTFILES_ROOT="$HOME/dotfiles"
   ```
-- In Operator Mode, `agents` validates global `core.hooksPath` symlinks (`~/dotfiles/git/hooks.d/`) and chains personal hook scripts from `~/dotfiles/git/hooks/*`.
+- Operator Mode adds `root:exists` and the `git-hooks:global`, `git-hooks:effective`, `git-hooks:links` and `git-hooks:unmanaged` checks, which hold the global `core.hooksPath` and the four installed hook links in `~/dotfiles/git/hooks.d/` to what this tool expects.
+- The dispatcher runs the repository's own hook, then the executable personal hooks named `<anything>.<hook>` in `~/dotfiles/git/hooks/`; on `pre-commit` the built-in guard runs last.
 
 ---
 
@@ -174,141 +123,45 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 | Command | What |
 |---|---|
 | `agents help` | print the listing, or one command's page |
-| `agents init` | create .agents/, triggers, wiring, fleet entry |
-| `agents wire` | regenerate harness configs (merges, never overwrites) |
-| `agents doctor` | report wiring, trust evidence, reachability, and lane health |
-| `agents drift` | inspect context layout and router drift |
-| `agents layout` | inspect the resolved layout, or migrate v1 to v2 |
-| `agents layout show` | print the resolved layout, or the canonical router |
-| `agents layout validate` | check the layout against every validation rule |
-| `agents layout path` | print one store path by role |
-| `agents layout migrate` | plan, apply, resume, or abort a v1 to v2 migration |
-| `agents save` | commit .agents/ paths and nothing else (escape hatch) |
-| `agents trace` | query records; read one back; copy reachable ones |
-| `agents trace ls` | query records |
-| `agents trace show` | read one transcript back |
-| `agents trace cache` | copy reachable transcripts into the store |
-| `agents trace cache prune` | remove cached copies, never the records |
-| `agents trace migrate` | move a tracked index into the machine-local store |
-| `agents ls` | list the fleet on this machine |
-| `agents update` | rewire every registered repo (dry run by default) |
+| `agents init` | create .agents/, the doc stores, and the wiring |
+| `agents wire` | remove this tool's entries from harness configs |
+| `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
-| `agents hook` | harness hook entrypoint |
 <!-- END GENERATED -->
 
-### Layout commands
+`agents help` prints the listing a person reads, which leaves out `guard` — the
+one command only the hook invokes. `agents help --all` includes it.
 
-`agents layout` reads `.agents/layout.json`; `show`, `validate`, and `path` are
-read-only, and `migrate` is the family's only mutation. `show` prints the
-resolved layout — `--json` for the normalized object (prose-free, with any
-problems carried inside the object), `--router` for the canonical root router
-and nothing else. `path <role>` prints one repository-relative store path
-(`design`, `plans`, `journal`, `qna`) and nothing else. `validate` runs the
-layout validation rules and exits `0` for a valid, supported layout, `1` for
-problems or a manifest this binary may not mutate, and `4` outside a repository
-with `.agents/`. Nothing in this family creates a layout: `agents init` with
-`--template`, `--stores`, or `--archive` creates a v2 one, and adopting an
-existing v1 repository is `agents layout migrate`'s job, not init's.
+### Examples
 
-`agents layout validate --json` emits one object:
+```bash
+# Create the agent context in a repository
+agents init
 
-| Field | Meaning |
-|---|---|
-| `manifest_path` | `.agents/layout.json`; omitted for the implicit v1 layout |
-| `problems` | array, never null; each entry has a `code` and whichever of `path`/`detail` the rule supplies |
-| `supported` | whether this binary may mutate the repository; false when the layout has problems (`invalid`, `unknown_schema`) or when the version gate refuses |
-| `reason` | why not, when `supported` is false: `invalid`, `unknown_schema`, `below_floor`, `unreleased`, or `migrating` |
-| `schema` | `agents.layout/v1` or `agents.layout/v2` |
-| `layout_status` | `active` or `migrating` |
+# Keep .agents/ out of the repository (refused inside a linked worktree)
+agents init --local
 
-### Migration (`agents layout migrate`)
+# Remove hook entries an earlier version wrote
+agents wire
 
-`agents layout migrate` adopts an existing v1 repository into an
-`agents.layout/v2` manifest. The dry run is the default — `--dry-run` is an
-accepted explicit synonym — and writes nothing. `--apply` performs it and
-requires `--backup-tag <name>`, an annotated tag created at HEAD before the
-first write, so the rollback point exists even without a branch; a name that
-already exists or is not a valid ref is malformed, as is `--backup-tag` with
-`--resume` or `--abort`, where it cannot take effect. `--template` supplies the
-target store map from a template's defaults and `--stores <role>=<path>`
-overrides one role; with no template, `--stores` must name all four roles.
+# Report wiring, trust, and the state of the files this tool owns
+agents doctor
 
-Planning refuses, naming every reason in one report, when the router is diverged
-or missing, a source store is missing or a symlink, a target path already
-exists, `docs/` holds anything but the four stores and the declared archive, or
-this binary is below the target's `min_mut_ver_floor`. It also requires a clean
-working tree, no merge, rebase, cherry-pick, revert, am, or bisect in progress,
-and a branch that is not `master` or `main`.
+# Pre-commit secret and staged-path scan (run automatically by the hook)
+agents guard --staged
+```
 
-A `migrating` manifest is never re-planned: `--resume --apply` continues the
-journal it froze, and `--abort --apply` deletes a journal this migration created
-while nothing can have moved (phase `planned`, every move `pending`), leaving the
-backup tag as the record. Every other invocation against a `migrating` manifest
-refuses and names the phase and the remedy.
+## Upgrading
 
-The plan's link report is target-driven over the repository, because a link
-breaks when its *target* stops being where it was whether or not the file holding
-it moves. The scan walks every markdown file `git ls-files` tracks — not only the
-stores — skips fenced code blocks, and never reads anything under the archive.
-For each `link_candidates` entry, `file` and `line` name the containing file, and
-`old` is the target exactly as written; `new` is the spelling that resolves after
-the move: relative to the containing file's new directory when that file moves
-with its store, and the target's new repository-relative path when the file
-stays where it is. The CLI only reports them; the `migrating-fleet-context` skill
-writes them.
+Two things need attention when you upgrade this tool.
 
-| Invocation | Exit |
-|---|---|
-| dry run, or no apply flag: the plan is printed and nothing is written | `1` |
-| `--apply` applied, no blockers and no link candidates | `0` |
-| `--apply` applied, but markdown links the move breaks are still spelled the old way | `1` |
-| `--apply`: plan blockers, or `docs_residue` appeared after the moves | `1` |
-| `--apply`: missing `--backup-tag`, conflicting flags, or malformed input | `3` |
-| `--apply`: a move failed mid-way; the manifest stays `migrating` | `5` |
-| `--abort --apply`: manifest deleted, backup tag left | `0` |
-| `--abort --apply` refused, or no `migrating` manifest | `1` |
-| any: not inside a repository with `.agents/` | `4` |
-
-`--resume --apply` follows the same rows as `--apply` with one exception: link
-candidates are reported only by the run that planned them, so a resume that
-completes a migration planned with candidates exits `0` where the fresh
-`--apply` exited `1`. The candidates are a property of the pre-move source tree:
-a fresh `--apply` scans the repository's tracked markdown before moving anything,
-and a resume completes a move list whose source tree no longer exists and is
-never re-planned.
-
-`agents layout migrate --json` emits exactly one object on every path. For a
-plan it is `repo`, `dry_run`, `phase`, `from`, `to`, `router`, `archive` (omitted when the
-repository declares none),
-`moves`, `link_candidates`, `blockers`, and `counts`; `phase` is `planned` for a
-dry run or a fresh `--apply`, and the journal phase a `--resume` continued from
-— a resume reports the journal's own plan, never a re-planned one. `dry_run` is
-true whenever nothing was applied, including a plan refused for its blockers.
-For a refusal that precedes a plan (the preconditions, the `migrating` routing,
-a source that is not v1, malformed flags) it is a refusal object carrying
-`repo`, `dry_run`, `phase`, and the `error` sentence the human surface prints,
-so a machine consumer never has to skip prose.
-
-## Upgrading to v0.6.0
-
-The GitHub Release body carries the authoritative upgrade instructions; this
-section is the durable repo-side copy of the same prerequisites.
-
-**Deploy before flip.** A v0.5.1 binary cannot see `.agents/layout.json`. On a
-v2 repository it recreates the four `docs/` store READMEs and can overwrite a
-v2-aware migration skill with its own embedded text, and no guard inside the
-manifest can stop it. So every machine that can run `agents init`,
-`agents update --all --apply`, or `agents save` against the fleet must resolve
-**v0.6.0** on `PATH` (verify with `agents version` and `agents doctor`'s
-`binary` check) *before* any repository is migrated. A repository below its
-`min_mut_ver_floor` still reads and displays, and refuses every mutation.
-
-**Re-check the Git hooks after the upgrade.** A package manager deletes the
-previous version's directory, so hooks pinned to it dangle — and git runs a
-dangling hook as if no hook existed, which turns the commit guard off with no
-error. `agents doctor`'s `git-hooks:links` check catches it and prints the exact
-repair, which is:
+**Re-check the git hooks.** A package manager deletes the previous version's
+directory, so hook links pinned to it dangle — and git runs a dangling hook as
+if no hook existed, which turns the commit guard off with no error at all. In
+Operator Mode, `agents doctor`'s `git-hooks:links` check catches it and prints
+the repair, and `git-hooks:unmanaged` warns about dangling links this tool does
+not own:
 
 ```bash
 bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
@@ -316,23 +169,18 @@ bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
 ```
 
 Installing through `$(command -v agents)` rather than `$(realpath …)` avoids the
-step entirely, because Homebrew repoints its stable path at the new version.
+problem in the first place, because Homebrew repoints its stable path — the
+`/opt/homebrew/bin/agents` symlink into the current keg — at the new version.
 Details: [`git/README.md`](../git/README.md) and
 [why a `brew upgrade` stops my commit guard](../docs/qna/why-does-a-brew-upgrade-stop-my-commit-guard.md).
 
-**The migration path.**
-
-```bash
-agents layout migrate --dry-run                     # the plan; writes nothing
-agents layout migrate --apply --backup-tag <name>   # requires the tag
-agents layout migrate --resume --apply              # continue a frozen journal
-agents layout migrate --abort --apply               # only while nothing moved
-```
-
-**The measured fleet baseline.** v0.6.0 adds no new v1 advisory: `dotfiles`,
-`paperbubble`, `cowork`, and `lewm-mlx` stay `current`, and `autogo-mlx` and
-`desktop_pet` continue to exit 1 for pre-existing 2026-08-29 two-tier reasons
-this release neither creates nor clears.
+**Run `agents wire` once, after upgrading past a version that installed hook
+entries.** Earlier versions wrote an `agents hook …` entry into each harness
+config to record session lifecycle events. This tool no longer records anything,
+so those entries point at a subcommand that no longer exists — which the harness
+would run at the start of every session and fail. `wire` removes exactly those
+entries and leaves every other setting alone. `agents doctor` reports them as
+`wiring:<harness>` failures with `agents wire` as the remedy.
 
 ---
 

@@ -1202,7 +1202,7 @@ func TestTask18RetiresTemplateAndClaudeHookInstallers(t *testing.T) {
 			t.Errorf("retired artifact still exists: %s (%v)", relative, err)
 		}
 	}
-	for _, relative := range []string{"git/gitconfig.shared", "claude/CLAUDE.md"} {
+	for _, relative := range []string{"git/gitconfig.shared", "global/AGENTS.md"} {
 		contents, err := os.ReadFile(filepath.Join(root, relative))
 		if err != nil {
 			t.Fatal(err)

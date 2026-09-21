@@ -46,10 +46,12 @@ first.
 
 ## The Makefile
 
-`make agents` builds the `agents` binary to `~/bin/agents`. It is the only
-target left, and it is a developer convenience for inner-loop work on `agents/`
-— `./bootstrap apply workstation` builds the same binary in its devtools phase.
-Provisioning belongs to `./bootstrap`; `make dotfiles` is retired, not aliased.
+`make agents` builds the `agents` binary to `~/bin/agents`. It is a developer
+convenience for inner-loop work on `agents/` — `./bootstrap apply workstation`
+builds the same binary in its devtools phase. The Makefile's other target,
+`make release`, packages the cross-platform archives the release workflow
+publishes. Provisioning belongs to `./bootstrap`; `make dotfiles` is retired,
+not aliased.
 
 **Run it from the main checkout, not a linked worktree.** The binary is stamped
 with the checkout it was built from, and this target writes the single global
@@ -61,19 +63,20 @@ finds no extras directory and silently runs none of your personal hooks, at exit
 
 ## The `agents` tool
 
-`agents` manages the machine: harness wiring, the git hook chain, the
-pre-commit guard, and the machine-local cache of agent transcripts. It does
-**not** manage knowledge — that half was retired on 2026-08-20, and what a
-repository knows now lives in its own `docs/`, written by instruction rather
-than by a command. See
+`agents` scaffolds a repository's agent context and maintains the machine
+around it: `init` writes the tree, `wire` installs the harness wiring, `doctor`
+reports state, and the binary doubles as the git hook dispatcher and the
+pre-commit guard. It does **not** manage knowledge — that half was retired on
+2026-08-20, and what a repository knows now lives in its own `docs/`, written
+by instruction rather than by a command. See
 [knowledge is documentation](docs/design/2026-08-19-knowledge-is-documentation.md).
 
 Repositories follow a **Two-Tier Agent Context** structure:
 - **Tier 1 (Root Router)**: Standardized, lightweight `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) serving as the entrypoint bootstrap router pointing to durable docs and domain rules.
 - **Tier 2 (Domain Context & Durable Knowledge)**: Repository-specific domain guidelines in `.agents/AGENTS.md`, executable skills in `.agents/skills/`, and durable project knowledge organized in a **4-store layout** under `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
 
-`agents help <command>` explains any command in full; **when** to reach for one
-is in the skill under `claude/skills/agents-tool/`, and when to write something
+`agents help <command>` explains any command in full, and `agents help --all`
+adds `guard`, the one command only the hook invokes. When to write something
 down is in `.agents/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is
@@ -89,27 +92,11 @@ agents help --render=markdown
 | Command | What |
 |---|---|
 | `agents help` | print the listing, or one command's page |
-| `agents init` | create .agents/, triggers, wiring, fleet entry |
-| `agents wire` | regenerate harness configs (merges, never overwrites) |
-| `agents doctor` | report wiring, trust evidence, reachability, and lane health |
-| `agents drift` | inspect context layout and router drift |
-| `agents layout` | inspect the resolved layout, or migrate v1 to v2 |
-| `agents layout show` | print the resolved layout, or the canonical router |
-| `agents layout validate` | check the layout against every validation rule |
-| `agents layout path` | print one store path by role |
-| `agents layout migrate` | plan, apply, resume, or abort a v1 to v2 migration |
-| `agents save` | commit .agents/ paths and nothing else (escape hatch) |
-| `agents trace` | query records; read one back; copy reachable ones |
-| `agents trace ls` | query records |
-| `agents trace show` | read one transcript back |
-| `agents trace cache` | copy reachable transcripts into the store |
-| `agents trace cache prune` | remove cached copies, never the records |
-| `agents trace migrate` | move a tracked index into the machine-local store |
-| `agents ls` | list the fleet on this machine |
-| `agents update` | rewire every registered repo (dry run by default) |
+| `agents init` | create .agents/, the doc stores, and the wiring |
+| `agents wire` | remove this tool's entries from harness configs |
+| `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
-| `agents hook` | harness hook entrypoint |
 <!-- END GENERATED -->
 
 ## Development & Contributing
@@ -123,9 +110,9 @@ agents help --render=markdown
 | Path | What |
 |---|---|
 | `bootstrap`, `bootstrap.d/` | the provisioner: shim, phases, `links.manifest`, `Brewfile` |
-| `agents/` | the `agents` binary — repo-tracked agent context, harness wiring, drift detection, and trace cache |
+| `agents/` | the `agents` binary — repository scaffold, harness wiring, the git hook dispatcher, and the pre-commit guard |
 | `AGENTS.md`, `CLAUDE.md` | Tier 1 canonical root router and harness compatibility symlink |
-| `.agents/` | Tier 2 repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and harness hooks |
+| `.agents/` | Tier 2 repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and Antigravity's wiring config (`.agents/hooks.json`) |
 | `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
 | `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question, `archive/` immutable pre-2026-08-20 history |

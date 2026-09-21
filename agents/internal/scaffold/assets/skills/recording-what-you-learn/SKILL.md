@@ -9,25 +9,16 @@ Knowledge about a codebase is **documentation**. It goes in the repository's
 docs, in plain markdown, committed like anything else. There is no queue, no
 promotion step and no separate store to sync.
 
-The repository's layout manifest is the source of truth. Resolve a role with
-the tool, never by assuming a directory name:
+Two stores, one retrieval axis each:
 
-```bash
-agents layout path qna
-agents layout path journal
-```
+| | indexed by | answers |
+|---|---|---|
+| `docs/qna/` | topic | "how does X actually work / why did X happen" |
+| `docs/journal/` | time | "what was I doing, and why did it go that way" |
 
-On a repository with no manifest the tool resolves the v1 defaults. If the
-binary is absent, read `.agents/layout.json` directly; if that is absent too,
-the repository is v1 — follow the v1 recording skill's store names, or ask the
-human before creating anything.
-
-Two stores, one retrieval axis each: the Q&A role is indexed by topic and
-answers "how does X actually work / why did X happen"; the journal role is
-indexed by time and answers "what was I doing, and why did it go that way".
-Resolving a role is all this skill does with paths. Which store humans edit,
-which agents mostly write, and which is read-only for one side is collaboration
-policy, and it belongs in `.agents/AGENTS.md`, not here.
+A repository may name different directories in its own `AGENTS.md`. If it names
+none and has a `docs/`, use these. If it has no `docs/` at all, ask before
+creating one.
 
 ## When to write
 
@@ -38,7 +29,7 @@ it, and do not ask whether it is worth it: they already answered that.
 
 **The work hits something.** A bug understood, a training run collapsed, a build
 broken in a way that took real effort to diagnose, an approach abandoned and why.
-These earn a journal entry at the moment they resolve, not at session end.
+These earn a `docs/journal/` entry at the moment they resolve, not at session end.
 
 Nothing fires because a session ended. A session ending is not evidence that
 anything happened.
@@ -53,7 +44,7 @@ from the inside, which is why the check has to be mechanical rather than a
 judgement about whether you are sure.
 
 ```bash
-grep -ril "<distinctive noun>" "$(agents layout path qna)" "$(agents layout path design)"
+grep -ril "<distinctive noun>" docs/qna/ docs/design/
 ```
 
 Distinctive nouns are what work: an image name, a flag, a tool, an error string.
@@ -100,6 +91,6 @@ work most likely to produce findings and least likely to record them.
 
 ## Where this comes from
 
-`2026-08-19-knowledge-is-documentation.md` in the dotfiles repository, with the
-evidence for each rule above. Read it before changing any of this — several of
-these choices look arbitrary and are not.
+`docs/design/2026-08-19-knowledge-is-documentation.md` in the dotfiles
+repository, with the evidence for each rule above. Read it before changing any
+of this — several of these choices look arbitrary and are not.
