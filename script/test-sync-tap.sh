@@ -90,10 +90,10 @@ RUBY
 # before arm64 within each OS. This transposition is the point of the test, so
 # it is asserted before it is relied on.
 cat > "${WORK}/dist/checksums.txt" <<SUMS
-1111111111111111111111111111111111111111111111111111111111111111  agents_${TAG}_darwin_amd64.tar.gz
-2222222222222222222222222222222222222222222222222222222222222222  agents_${TAG}_darwin_arm64.tar.gz
-3333333333333333333333333333333333333333333333333333333333333333  agents_${TAG}_linux_amd64.tar.gz
-4444444444444444444444444444444444444444444444444444444444444444  agents_${TAG}_linux_arm64.tar.gz
+9f2c41ab7d3e50861c0b4a9d2e7f385a1b6c0d4e5f7a8b9c0d1e2f3a4b5c6d70  agents_${TAG}_darwin_amd64.tar.gz
+3a7e9c1d5b8f20463d6a1c9e7b4f28051a3c6e9d2b5f80741c3a6e9d2b5f8074  agents_${TAG}_darwin_arm64.tar.gz
+c81d4e7a2b5f90836e1c4a7d039b2f685a9c3e6d1b4f70829c3a5e8d1b4f7082  agents_${TAG}_linux_amd64.tar.gz
+5e0b3d6f9a2c584717b4d0e3f6a9c2b5d8e1f4a7c0b3d6e9f2a5c8b1d4e7f0a3  agents_${TAG}_linux_arm64.tar.gz
 SUMS
 
 # The order the formula lists its four slots, for the assertion below.
@@ -227,9 +227,18 @@ echo
 echo "=== 6. --check agrees with the live tap's current release ==="
 # The strongest check available without touching the tap: read the real formula,
 # rewrite it for the version it already carries, and require the result to be
-# identical. Skipped when there is no network or no `gh`, because a network
-# failure is not a test failure.
-if command -v gh >/dev/null 2>&1 && gh api repos/nilbot/homebrew-tap --jq '.name' >/dev/null 2>&1; then
+# identical.
+#
+# Skipped unless `gh` is installed, the network answers, AND a token is present.
+# All three are preconditions, not failures: `sync-homebrew-formula.sh` now
+# authenticates before it reads, so with no token it exits 2 and says so. This
+# scenario previously ran with no token at all, which meant it could only ever
+# fail or skip -- in CI it skipped (no `gh` on the runner) and locally it failed
+# with "neither HOMEBREW_TAP_TOKEN nor GH_TOKEN is set", which read as a defect
+# in the script rather than in the test.
+if command -v gh >/dev/null 2>&1 \
+   && [ -n "${HOMEBREW_TAP_TOKEN:-}${GH_TOKEN:-}" ] \
+   && gh api repos/nilbot/homebrew-tap --jq '.name' >/dev/null 2>&1; then
   LIVE="${WORK}/live.rb"
   if gh api repos/nilbot/homebrew-tap/contents/Formula/agents.rb --jq '.content' 2>/dev/null \
        | tr -d '\n' | base64 --decode > "${LIVE}" 2>/dev/null \
