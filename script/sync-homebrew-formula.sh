@@ -75,6 +75,39 @@ require_checksums() {
   fi
 }
 
+# plausible_digests rejects digests that have the right shape but are not real
+# checksums, before anything is written to the tap.
+#
+# Why this exists. The tap was published a formula carrying `1111...`,
+# `2222...`, `3333...`, `4444...` -- the values from the fixture in
+# script/test-sync-tap.sh -- instead of the release's digests. Nothing in the
+# path objected: 64 lowercase hex characters pass every format check, the
+# formula stayed valid Ruby, and the tap's CI runs `--only-tap-syntax`, which
+# cannot tell a real digest from a placeholder. It would have surfaced as a
+# SHA256 mismatch in a user's `brew install` -- the same blind spot that the
+# filename-keyed matching above exists to avoid.
+#
+# How the placeholder got there was not established, so this does not claim to
+# fix a known cause. It closes the class: whatever writes the formula, these
+# values cannot leave here. A real sha256 has no long run of one repeated
+# character; sixteen repeats cannot occur by accident, and is exactly what a
+# hand-written fixture produces.
+plausible_digests() {
+  local target sha
+  for target in "${TARGETS[@]}"; do
+    sha="$(digest_for "${target}")"
+    case "${sha}" in
+      0000000000000000000000000000000000000000000000000000000000000000)
+        echo "Error: the digest for ${target} is all zeroes; refusing to publish a placeholder" >&2
+        exit "${CHECK_EXIT_ERROR}" ;;
+    esac
+    if printf '%s' "${sha}" | grep -qE '(.)\1{15}'; then
+      echo "Error: the digest for ${target} repeats one character; refusing to publish a placeholder" >&2
+      exit "${CHECK_EXIT_ERROR}"
+    fi
+  done
+}
+
 # digest_for echoes the sha256 recorded for one target, selected by the archive
 # filename rather than by its position in the file.
 digest_for() {
@@ -155,7 +188,25 @@ PY
 check_ts="$(mktemp)"; render_ts="$(mktemp)"
 trap 'rm -f "${check_ts}" "${render_ts}"' EXIT
 
+# Authenticate before the first `gh` call, which is the READ of the tap's
+# formula -- not the write at the end.
+#
+# This is the bug that made the first v0.7.0 release fail after publishing. The
+# token was resolved only just before the final `PUT`, so reading the formula ran
+# unauthenticated; `gh` answers an unauthenticated request with exit 4
+# ("requires authentication") and no stderr, so the release step died with a bare
+# `Process completed with exit code 4.` and the release notes said nothing about
+# why. The workflow had also stopped exporting `GH_TOKEN`, which the old script
+# set alongside the tap token, so nothing upstream covered for it either.
+TOKEN="${HOMEBREW_TAP_TOKEN:-${GH_TOKEN:-}}"
+if [[ -z "${TOKEN}" ]]; then
+  echo "Error: neither HOMEBREW_TAP_TOKEN nor GH_TOKEN is set, so the tap cannot be read" >&2
+  exit "${CHECK_EXIT_ERROR}"
+fi
+export GH_TOKEN="${TOKEN}"
+
 require_checksums
+plausible_digests
 fetch_formula "${check_ts}"
 render "${check_ts}" "${render_ts}"
 
@@ -172,12 +223,6 @@ fi
 if diff -q "${check_ts}" "${render_ts}" >/dev/null; then
   echo "tap formula already points at v${VERSION}; nothing to push"
   exit 0
-fi
-
-TOKEN="${HOMEBREW_TAP_TOKEN:-${GH_TOKEN:-}}"
-if [[ -z "${TOKEN}" ]]; then
-  echo "Error: neither HOMEBREW_TAP_TOKEN nor GH_TOKEN is set" >&2
-  exit "${CHECK_EXIT_ERROR}"
 fi
 
 file_sha="$(gh api "repos/${TAP_REPO}/contents/${FORMULA_PATH}" --jq '.sha' 2>/dev/null || true)"
