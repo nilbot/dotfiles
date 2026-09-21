@@ -3,7 +3,7 @@
 **Date:** 2026-08-28  
 **Status:** Designed  
 **Context:** Automation of cross-repo release distribution between `nilbot/dotfiles` and `nilbot/homebrew-tap`  
-**Depends on:** [Spec 6 (Releases and Distribution)](2026-08-11-spec-6-releases-and-distribution.md), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md)
+**Depends on:** [Spec 6 (Releases and Distribution)](../../design/2026-08-11-spec-6-releases-and-distribution.md), [Contributor Guardrails](../../design/2026-08-28-contributor-guardrails-and-scaffold-decoupling.md)
 
 ---
 
@@ -67,7 +67,7 @@ bash script/sync-homebrew-formula.sh <VERSION> [DIST_DIR]
      - `LINUX_AMD64_SHA` (`agents_*_linux_amd64.tar.gz`)
    - Asserts all 4 digests are non-empty, 64-character lowercase hexadecimal strings.
 3. **Formula Rendering**:
-   - Generates [`Formula/agents.rb`](../../Formula/agents.rb) strictly adhering to Homebrew RuboCop guidelines (`# typed: false`, `# frozen_string_literal: true`, 2-space indentation, `license "MIT"`, no redundant `version` line).
+   - Generates `Formula/agents.rb` (deleted from this repository 2026-09-21; the live formula is in `nilbot/homebrew-tap`) strictly adhering to Homebrew RuboCop guidelines (`# typed: false`, `# frozen_string_literal: true`, 2-space indentation, `license "MIT"`, no redundant `version` line).
    - Writes generated formula to `Formula/agents.rb` in local repository.
 4. **Direct REST API Commit**:
    - If `GH_TOKEN` or `HOMEBREW_TAP_TOKEN` is present:

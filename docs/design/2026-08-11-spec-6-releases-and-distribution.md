@@ -159,13 +159,25 @@ Release archives are generated per platform:
   guarded commit, so the uploaded archives are provably built from the commit
   whose green run was read.
 
-### 5.2 Homebrew Formula (`Formula/agents.rb`)
+### 5.2 Homebrew Formula
 
-A Homebrew formula template enables installation via Homebrew:
+**Amended 2026-09-21.** The formula lives in `nilbot/homebrew-tap` and is
+maintained there. This repository used to carry a copy of it plus a script that
+pushed a regenerated version over it on every release; both are deleted.
+
+The copy was four releases stale (`v0.1.0` against the tap's `v0.6.0`), it
+installed the binary and nothing else, and — the reason it went — a reader here
+could not tell that the file they were looking at was not the one `brew` reads.
+A second copy of a published artifact that no consumer reads is a trap, not a
+convenience.
+
+Installation is unchanged for the user:
 ```bash
 brew install nilbot/tap/agents
 ```
-The formula downloads the platform-specific release tarball from GitHub Releases, verifies its SHA-256 checksum, and links `bin/agents`.
+The consequence for the release process: **publishing no longer updates the
+tap.** Whoever cuts a release points the tap's formula at the new
+`checksums.txt` as a separate, deliberate step.
 
 ---
 

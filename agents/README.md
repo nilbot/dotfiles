@@ -34,13 +34,19 @@ root, and the devtools phase of `./bootstrap apply workstation`.
 brew install nilbot/tap/agents
 ```
 
-This installs the newest tagged release from the `nilbot/homebrew-tap` tap.
+This installs whichever release `nilbot/homebrew-tap` currently points at — the
+formula lives in that repository and is maintained there, not here.
+
 Releases are cut from tags by
 [`.github/workflows/release.yml`](../.github/workflows/release.yml):
 `script/package-release.sh` builds darwin/{arm64,amd64} and linux/{arm64,amd64}
-archives plus `checksums.txt`, the workflow asserts the packaged binary reports
-the tag's version and commit, and `script/sync-homebrew-formula.sh` pushes the
-regenerated `Formula/agents.rb` to the tap.
+archives plus `checksums.txt`, and the workflow asserts the packaged binary
+reports the tag's version and commit before publishing them.
+
+**Releasing does not update the tap.** There is no sync step: a release publishes
+the archives, and the tap's formula is pointed at the new checksums separately.
+Until that happens `brew upgrade agents` keeps installing the previous version,
+so a release being published is not the same as it being installable.
 
 A release carries the tree at its tag, which is not necessarily the tree you are
 reading. The module has no `agents/vX.Y.Z` tags, so

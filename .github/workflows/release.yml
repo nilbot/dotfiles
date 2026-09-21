@@ -21,7 +21,7 @@ on:
         required: true
         type: string
       dry_run:
-        description: 'Verify and package, but create no release and sync no formula'
+        description: 'Verify and package, but create no release'
         required: false
         type: boolean
         default: false
@@ -161,14 +161,18 @@ jobs:
             dist/agents_*_*.tar.gz
             dist/checksums.txt
 
-      - name: sync formula to homebrew-tap
-        if: steps.version.outputs.dry_run != 'true'
-        env:
-          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          bash script/sync-homebrew-formula.sh "$VERSION" dist
+      # There is no tap-sync step. The formula lives in nilbot/homebrew-tap and
+      # is maintained there; this repository used to carry a copy of it and a
+      # script that pushed a regenerated version over it, and neither is wanted:
+      # the copy was four releases stale, it installed the binary and nothing
+      # else, and a reader of this repository had no way to tell that the file
+      # they were looking at was not the one `brew` reads.
+      #
+      # The consequence is deliberate and worth stating: **releasing does not
+      # update the tap.** A release publishes the tarballs below; whoever wants
+      # `brew upgrade agents` to deliver it updates the tap's formula from
+      # `checksums.txt`. Until they do, `brew` keeps installing the previous
+      # version, which is the honest behaviour rather than a silent no-op.
 
       - name: dry run summary
         if: steps.version.outputs.dry_run == 'true'
@@ -177,4 +181,4 @@ jobs:
           SHA: ${{ steps.verified.outputs.sha }}
         run: |
           echo "dry run: ${VERSION} (${SHA}) verified, packaged and asserted;"
-          echo "no release was created and no formula was synced."
+          echo "no release was created and no tap was touched."

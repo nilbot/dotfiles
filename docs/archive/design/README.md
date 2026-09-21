@@ -34,3 +34,13 @@ below is for. Only relative links were adjusted, so they still resolve.
   mechanism. §3a's measurement still stands and is the subject of
   [the capture experiment analysis](../analysis/2026-08-12-capture-instruction-experiment.md),
   which is archived next to it.
+
+- `2026-08-28-automated-release-and-homebrew-tap-sync.md` — moved 2026-09-21.
+  Its whole subject was the automation: a `script/sync-homebrew-formula.sh` that
+  rendered `Formula/agents.rb` and pushed it to `nilbot/homebrew-tap` on every
+  release, driven by `.github/workflows/release.yml`. The script, the in-repo
+  formula copy and the workflow step are all deleted; the formula lives in the
+  tap repository and is maintained there. The reasoning about *why*
+  release-and-tap had to be automated is the record of a decision that was
+  made and then reversed — releasing no longer updates the tap at all, which is
+  the one fact a reader needs and the one this document cannot tell them.
