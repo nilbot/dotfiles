@@ -422,7 +422,9 @@ cd /Users/nilbot/gist/paperbubble
 # Not `docs`: the migration's `git mv` already staged those renames, and the
 # directory no longer exists, so naming it fails the whole command with
 # `fatal: pathspec 'docs' did not match any files` (measured 2026-09-20).
-git add -- AGENTS.md .agents .context
+# `.gitattributes` belongs in the set: the same reconcile added the manifest's
+# linguist line, and leaving it out commits every migration output except one.
+git add -- AGENTS.md .agents .context .gitattributes
 git diff --cached --stat
 git diff --cached --check
 
@@ -436,6 +438,11 @@ other work as well — paperbubble's carried ten commits, six of them editorial 
 write the title and body explicitly instead, so the rename diff is what the
 review names rather than whichever commit `--fill` picked. Check the repository's
 visibility before pushing: the branch may carry work that is not on any remote yet.
+
+The commit trips the pre-commit guard's `mixed-commit` advisory, because it
+touches `.agents/` alongside other paths. It is advisory, and the design requires
+the manifest and the moved stores to land in one commit, so this is the intended
+shape rather than something to fix.
 
 The commit message names the pilot and the design:
 
