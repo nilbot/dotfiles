@@ -109,18 +109,32 @@ Expected:
 
 Present these three files at the approval gate. They are the before image.
 
-## 4. Step 2 — Branch and backup tag
+## 4. Step 2 — Branch, and the backup tag name
 
 ```bash
 cd /Users/nilbot/gist/paperbubble
 git switch -c feat/layout-v2-migration
-git tag -a pre-layout-v2-20260918 -m "paperbubble before .context migration"
 git status --porcelain     # must still be empty
 ```
 
-The tool also requires `--backup-tag` and creates it at HEAD; creating it here
-first makes the rollback point visible before any tool runs. If the tag already
-exists, choose a new name and use it consistently below.
+Choose the tag name now — `pre-layout-v2-YYYYMMDD`, dated the day the migration
+actually runs — and pass it as `--backup-tag` in Step 3 and Step 5. **Do not
+create it.** The tool creates the annotated tag at `HEAD` as its first act,
+before its first write (design §9.2), so the rollback point exists before
+anything moves. Pre-creating it makes the apply refuse; measured on the pilot,
+2026-09-20:
+
+```text
+agents layout migrate: --backup-tag "pre-layout-v2-20260920" already exists;
+choose another name, or continue the migration it belongs to with `agents layout
+migrate --resume --apply`
+exit=3
+```
+
+That refusal is fail-closed — nothing was written — and it cost one round of
+diagnosis, which is why this step no longer tells you to run `git tag`. If you
+want the rollback point visible before the tool runs, `git rev-parse HEAD` names
+the same commit the tag will point at.
 
 ## 5. Step 3 — Dry run and review
 
@@ -150,12 +164,14 @@ layout migrate (dry run) — /Users/nilbot/gist/paperbubble
   move    docs/plans    -> .context/plans    (1 file)
   move    docs/journal  -> .context/journal  (1 file)
   move    docs/qna      -> .context/qna      (1 file)
-  keep    .agents/AGENTS.md  (user-owned; prose reviewed by the skill)
   remove  docs/ after the moves (no archive, no other tracked content)
-
-  links   0 markdown links the move breaks; the skill rewrites them
-  result  4 move, 1 keep, 0 blocked, 0 link(s)
+  links   0 markdown link(s) the move breaks and the skill must rewrite
+  result  4 move, 0 keep, 0 blocked, 0 link(s)
 ```
+
+`.agents/AGENTS.md` is not a plan row: `Counts.Keep` is 0 by ruling, so there is
+no `keep` line and the result reads `0 keep`, not `1 keep`. The plan leaves that
+file untouched, and Step 6 reviews its prose. Measured on the pilot, 2026-09-20.
 
 Review every line of the JSON plan:
 
@@ -163,7 +179,7 @@ Review every line of the JSON plan:
 |---|---|---|
 | `blockers` | empty | any blocker stops the migration |
 | `to.stores` | `.context/{design,plans,journal,qna}` | the requested layout |
-| `archive` | `""` | no archive exists; nothing may be moved or recorded |
+| `archive` | key absent | no archive exists; nothing may be moved or recorded. The field is `omitempty`, so "none" is the absent key rather than an empty string |
 | `router` | `current -> canonical v2` | the router is proven boilerplate, so the swap is deterministic |
 | `moves` | four directory moves | no file-level copy list |
 | `link_candidates` | empty | if non-empty, the skill rewrites them after apply |
@@ -180,7 +196,7 @@ Present, in one message:
 2. the baseline files from Step 1;
 3. the dry-run output and the JSON plan;
 4. the exact commands that will run in Step 5;
-5. the rollback table from §10.
+5. the rollback table from §11.
 
 Then stop. Silence is not approval, and a clean dry run is not approval.
 
@@ -205,13 +221,19 @@ git status --porcelain
 # R  docs/plans/README.md -> .context/plans/README.md
 # R  docs/journal/README.md -> .context/journal/README.md
 # R  docs/qna/README.md -> .context/qna/README.md
-# M  AGENTS.md
-# A  .agents/layout.json
+#  M AGENTS.md
+#  M .gitattributes
+# ?? .agents/layout.json
 # (plus the skill files changed in Step 6)
 
 test ! -e docs && echo "docs/ removed"
 cat .agents/layout.json
 ```
+
+Only the moves are staged: `git mv` stages them, and the tool leaves its own
+writes for the migration commit — the router and `.gitattributes` unstaged, the
+manifest untracked. `layout:committed` warns until Step 8 commits it, which is
+the intended sequence rather than something to repair here.
 
 Expected manifest:
 
@@ -361,12 +383,15 @@ Expected drift:
 Archive and blob proof:
 
 ```bash
-git log --follow --oneline -- .context/design/README.md | head -3
+git log --follow --oneline -- .context/design/README.md | head -3   # after Step 8
 git diff --cached --stat
 git diff HEAD --find-renames --name-status
 ```
 
-Every store README must appear as a rename, never as a delete plus add.
+Every store README must appear as a rename, never as a delete plus add. Before
+the migration commit, `R100` from `--find-renames` is the proof, and
+`git log --follow` on a new path is empty by construction — that path exists in no
+commit yet. Both hold on the pilot, 2026-09-20.
 
 Vault check (manual, read-only):
 
@@ -381,7 +406,10 @@ Vault check (manual, read-only):
 No repository test suite exists in paperbubble. The equivalent gate is:
 
 ```bash
-git status --porcelain | grep -v '^R ' | grep -v '^M ' | grep -v '^A ' && echo "unexpected change; stop"
+# The tool stages the moves and leaves its own writes for the migration commit,
+# so the expected set is exactly: staged renames, the two skill texts from
+# Step 6, the router and attributes, and the untracked manifest.
+git status --porcelain | grep -vE '^R  docs/.+ -> \.context/.+$|^ M (AGENTS\.md|\.gitattributes|\.agents/skills/(migrating-fleet-context|recording-what-you-learn)/SKILL\.md)$|^\?\? \.agents/layout\.json$' && echo "unexpected change; stop"
 git diff --check
 ```
 
@@ -391,7 +419,12 @@ Stage exact paths, never `git add .`:
 
 ```bash
 cd /Users/nilbot/gist/paperbubble
-git add -- AGENTS.md .agents .context docs
+# Not `docs`: the migration's `git mv` already staged those renames, and the
+# directory no longer exists, so naming it fails the whole command with
+# `fatal: pathspec 'docs' did not match any files` (measured 2026-09-20).
+# `.gitattributes` belongs in the set: the same reconcile added the manifest's
+# linguist line, and leaving it out commits every migration output except one.
+git add -- AGENTS.md .agents .context .gitattributes
 git diff --cached --stat
 git diff --cached --check
 
@@ -399,6 +432,17 @@ git commit -m "feat(context): move agent meta stores to .context"
 git push -u origin feat/layout-v2-migration
 gh pr create --fill
 ```
+
+`--fill` titles the PR from the branch's commits. When the pilot branch carries
+other work as well — paperbubble's carried ten commits, six of them editorial —
+write the title and body explicitly instead, so the rename diff is what the
+review names rather than whichever commit `--fill` picked. Check the repository's
+visibility before pushing: the branch may carry work that is not on any remote yet.
+
+The commit trips the pre-commit guard's `mixed-commit` advisory, because it
+touches `.agents/` alongside other paths. It is advisory, and the design requires
+the manifest and the moved stores to land in one commit, so this is the intended
+shape rather than something to fix.
 
 The commit message names the pilot and the design:
 
