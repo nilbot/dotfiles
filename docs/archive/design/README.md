@@ -10,7 +10,16 @@ cannot resolve.
 reasoning are exactly as they were on the date in the filename — including the
 present-tense claims, which were true when written. Read them as of that date. A
 document here may name a command that no longer exists; that is what the entry
-below is for. Only relative links were adjusted, so they still resolve.
+below is for.
+
+That includes their links. These files linked their siblings as
+`../../design/x.md` while they lived in `docs/design/`, and the text still says
+so, because the text is the record. The targets are now beside them in this
+directory, so a link written `../../design/x.md` resolves to
+`docs/archive/design/x.md` — read it there. One link was already stale before
+the move and is left stale for the same reason: the capture-experiment analysis
+points at `experiment/capture-setup.sh` with one `../` too many, and its target
+is `docs/archive/experiment/capture-setup.sh`.
 
 - `2026-09-18-layout-manifest-and-store-root-design.md` — moved 2026-09-21. It
   specified `agents.layout/v2`: a tracked `.agents/layout.json`, a role→path

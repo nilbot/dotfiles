@@ -41,6 +41,10 @@ TestMalformedInvocationReportsWhatWasWrong
 # --- the documents that name commands ---
 TestReadmeCommandBlockIsCurrent
 TestLivingDocumentsNameOnlyRealCommands
+# The complement of the guard above: that one fails on a command that does
+# not exist, this one on a command that was deleted. Both belong here -- a
+# doc guard absent from this list is a guard the `docs` job never runs.
+TestLivingDocumentsNameNoDeletedCommand
 
 # --- the skill this tool installs ---
 TestInstalledSkillMatchesTheBinary

@@ -478,3 +478,22 @@ measured:
   and carries no per-command list, so it needs no change here.
 - **`.codex/skills`.** A real directory holding only the product's own
   `.system/`; the repository has no `codex/` source directory. Nothing to do.
+
+## Follow-up, 2026-09-21
+
+**Two files this plan names were deleted while it was being executed.**
+
+- `Formula/agents.rb` no longer exists in this repository. Task §"Step 1"
+  (`:189`) and its quoted repro `grep -n 'hook\|install-hooks' Formula/agents.rb`
+  therefore cannot run; the grep exits 2. The conclusion the step recorded is
+  unaffected and is the reason it is safe to leave this as a record: the formula
+  names no hook and no installer, so `bootstrap.d`'s devtools phase is the only
+  writer of the hook chain. The formula now lives only in
+  `nilbot/homebrew-tap`, and `script/sync-homebrew-formula.sh` points it at each
+  release — spec 6 §5.2 is the authority.
+- `script/sync-homebrew-formula.sh` still exists but does something different:
+  it reads the tap's formula and rewrites its four `url` and four `sha256` lines
+  instead of rendering a formula from this repository's copy and pushing it over
+  the tap's.
+
+The rest of the plan is a dated record and is not rewritten.

@@ -313,3 +313,27 @@ go away with the layout, `guard`'s main job goes with them.
   rest are read-only reporting and cost little. Task 2 Step 4 says which.
 - **The Homebrew distribution decision.** This plan keeps `agents`
   distributable and asserts only `version`.
+
+## Follow-up, 2026-09-21
+
+**Invariant 5, and the two places this plan names a file that no longer
+exists.** This plan was written against the tree as it stood when drafted; two
+of the files it names were then deleted by the work it describes.
+
+- Invariant 5's subject, `script/sync-homebrew-formula.sh`, was deleted and
+  replaced by a script of the same name with different behaviour: it no longer
+  installs `agents` or asserts `agents version`, it edits the tap's existing
+  formula. The **obligation** the invariant records therefore still stands and is
+  in fact strengthened — the release must not break the Homebrew path silently —
+  but the mechanism it cites is not the current one. Spec 6 §5.2 is the
+  authority for what the script does now, and `release.yml` runs it with
+  `--check` so a tap left behind fails the release.
+- `Formula/agents.rb` was deleted from this repository; the formula lives only in
+  `nilbot/homebrew-tap`. `docs/plans/2026-09-21-simplification-plan.md:189`
+  instructs a reader to modify it, and the grep its Step 1 quotes
+  (`grep -n 'hook\|install-hooks' Formula/agents.rb`) exits 2 for a missing file.
+  Its conclusion is unaffected: `bootstrap.d`'s devtools phase is the only writer
+  of the hook chain, and that step is done.
+
+The plan is otherwise a record of what was done and is not rewritten. Read
+§"Verified Facts" and the task steps as of 2026-09-21.

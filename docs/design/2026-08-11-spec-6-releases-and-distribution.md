@@ -50,7 +50,7 @@ transporting bytes between runs.
 - The query also requires `event=push` and `branch=master`, so a green
   pull-request run for the same commit does not satisfy it: a release comes from
   the mainline, not from a branch that merely has green CI.
-- No green `master` run means no build, no release and no formula sync. The
+- No green `master` run means no build and no release. The
   failure is fail-closed and names the commit and the condition.
 
 ### `workflow_dispatch` resolves and checks out the tag
@@ -59,7 +59,7 @@ The version came from the `tag` input while `actions/checkout` defaulted to the
 dispatched ref, so a manual run packaged the default branch's tree under the
 requested version number. The amendment checks out the tag the run resolved. The
 dispatch form also gains a `dry_run` input that stops before the release is
-created and before the formula is synced, so the whole path can be rehearsed
+created, so the whole path can be rehearsed
 against an already-released tag.
 
 ### §4 and §4.2 corrected
@@ -162,22 +162,40 @@ Release archives are generated per platform:
 ### 5.2 Homebrew Formula
 
 **Amended 2026-09-21.** The formula lives in `nilbot/homebrew-tap` and is
-maintained there. This repository used to carry a copy of it plus a script that
-pushed a regenerated version over it on every release; both are deleted.
+maintained there. This repository used to carry a second copy of it; that copy
+is deleted. What replaces it is not a copy but an editor.
 
-The copy was four releases stale (`v0.1.0` against the tap's `v0.6.0`), it
-installed the binary and nothing else, and — the reason it went — a reader here
-could not tell that the file they were looking at was not the one `brew` reads.
-A second copy of a published artifact that no consumer reads is a trap, not a
+The copy was seven releases stale (`v0.1.0` against the tap's `v0.6.0` — last
+written by `3c6f6cb` on 2026-08-28 and never again) and a reader here could not
+tell that the file they were looking at was not the one `brew` reads. A second
+copy of a published artifact that no consumer reads is a trap, not a
 convenience.
+
+`script/sync-homebrew-formula.sh` reads the formula the tap already has through
+the Contents API and rewrites only its four `url` and four `sha256` lines, so the
+tap remains the single source of truth. `release.yml` runs it after publishing
+the release, then runs it again with `--check` to assert the result.
+
+**It matches digests by filename, never by position, and that is load-bearing.**
+`checksums.txt` comes from `sha256sum agents_v<X.Y.Z>_*.tar.gz`, whose glob sorts
+by collation: `darwin_amd64` is listed **before** `darwin_arm64`. The formula's
+four slots read `darwin_arm64`, `darwin_amd64`, `linux_arm64`, `linux_amd64`. A
+paste in line order therefore swaps every Intel digest with its ARM sibling, and
+nothing catches it — the formula stays valid Ruby, and the tap's CI runs
+`brew test-bot --only-tap-syntax`, which checks syntax rather than whether a
+digest belongs to the URL above it. The mismatch would surface only in a user's
+`brew install`. Keying each digest on the archive filename in the URL removes the
+ordering question by construction.
+
+The regression this guards against is measured, not hypothetical: the sync step
+ran on every release from v0.2.1 to v0.6.0, each tap commit landing 1-35 seconds
+after the release was published. Any version of this that leaves the tap behind
+silently is a regression against that record.
 
 Installation is unchanged for the user:
 ```bash
 brew install nilbot/tap/agents
 ```
-The consequence for the release process: **publishing no longer updates the
-tap.** Whoever cuts a release points the tap's formula at the new
-`checksums.txt` as a separate, deliberate step.
 
 ---
 
