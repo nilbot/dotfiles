@@ -14,7 +14,7 @@ func rootCommand() *Command {
 			// outside the tree that this design is meant to end.
 			Name: "help", Summary: "print the listing, or one command's page",
 			Usage:    "agents help [<command> [<subcommand>...]] [--all]\nagents help --render=markdown",
-			Detail:   "Prints the command listing, or one command's own page at any depth -- `agents help trace cache prune` reaches the leaf. --all adds the commands only git and harnesses invoke, which the listing a person reads leaves out. --help and -h anywhere in an invocation mean the same as `agents help` for the command path in front of them. --render=markdown emits the whole surface as a markdown table for the generated README block, and takes no command path.",
+			Detail:   "Prints the command listing, or one command's own page at any depth -- a path such as `agents help init` reaches that command's own page. --all adds the commands only git and harnesses invoke, which the listing a person reads leaves out. --help and -h anywhere in an invocation mean the same as `agents help` for the command path in front of them. --render=markdown emits the whole surface as a markdown table for the generated README block, and takes no command path.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runHelp(a, io.Out) },
 		},

@@ -95,10 +95,10 @@ var dirs = []string{
 	"skills",
 }
 
-// embeddedAssets are the layout-independent files CreateWithLayout installs.
-// Neither the four docs/<role>/README.md files nor the two bundled skills are
-// here: both travel with the store the resolved layout puts them in (design
-// §0.8), so CreateWithLayout writes them from the layout it was handed.
+// embeddedAssets are the files Create writes that are not stores or skills.
+// The four docs/<role>/README.md files and the bundled skill are written
+// separately, because each travels with the thing it explains: the README with
+// its store, the skill text with the skill.
 var embeddedAssets = []struct {
 	relPath   string
 	assetPath string
@@ -157,22 +157,15 @@ func SkillAssetPath(skillName string) (string, error) {
 // changes nothing.
 func Create(root string, local bool) error { return CreateWithLayout(root, local) }
 
-// CreateWithLayout scaffolds .agents/ plus the stores the resolved layout
-// declares, and writes the router that layout selects. It never creates docs/
-// for a v2 layout: docs/{design,plans,journal,qna} are v1's stores, and an
-// older binary recreating them on a v2 repository is the anti-shell failure
-// design §1.2 exists to prevent.
+// CreateWithLayout scaffolds .agents/ and the four documentation stores, and
+// writes the two instruction files.
 //
-// A layout whose manifest is already in the repository is that manifest's own
-// declaration, so this writes no layout for it (design §7.5): the machine
-// exclude file is still updated, because it is machine state about wiring rather
-// than layout data, but no store, router, or gitattributes line is added. It
-// deliberately does not create a store the manifest declares and the tree lacks:
-// the manifest is the authority, and a half-created store is Task 10's
-// `store_missing` blocker rather than init's remedy. Support and validity are
-// the caller's gate (layoutRefusal); ManifestPath is what tells a manifest read
-// back from the repository apart from a layout a caller constructed in order to
-// create it.
+// It is idempotent and writes nothing that already exists, so running it on an
+// initialized repository changes nothing. The name is a leftover: it once took a
+// resolved layout and wrote whatever that layout declared, and the tool now has
+// one fixed set of stores, so there is no layout for it to accept. The
+// parameter is gone and the spelling is kept only to avoid churning every call
+// site in the same change that removed the feature.
 func CreateWithLayout(root string, local bool) error {
 	// First, before anything is written: a refusal that leaves a half-scaffolded
 	// repo behind is a worse outcome than the one it is refusing.
@@ -186,13 +179,12 @@ func CreateWithLayout(root string, local bool) error {
 		}
 	}
 
-	// The machine exclude file is written before the layout question is asked,
-	// and for every layout: it is machine state about wiring, not layout data
-	// (design §0.7 -- info/exclude is "never read as a layout input, never
-	// written from layout data"). Suppressing it under the §7.5 no-op below
-	// would leave a supported v2 repository with untracked .claude/, .codex/,
-	// .agents/hooks.json and .agents/.agents-wire.lock, so a `git add .` there
-	// would commit one machine's settings.json.
+	// The machine exclude file is written before anything else, and
+	// unconditionally: it is machine state about wiring rather than anything the
+	// repository declares, so it must not depend on which files this run happens
+	// to create. Skipping it would leave untracked .claude/, .codex/,
+	// .agents/hooks.json and .agents/.agents-wire.lock in the tree, and the next
+	// `git add .` would commit one machine's settings.json.
 	lines := excludeLines
 	if local {
 		// --local: the whole directory stays out of the repo, for repos where
@@ -245,11 +237,11 @@ func CreateWithLayout(root string, local bool) error {
 		}
 	}
 
-	// The resolved layout selects each bundled skill's canonical text (design
-	// §0.8), from the layout the caller handed us rather than a second read of
-	// the manifest. This is what keeps a fresh v1 repository byte-identical to
-	// what v0.5.1 wrote: the flat asset is now the v2 text, and installing it
-	// into a v1 repository would make `agents init` produce a repository that
+	// The bundled skill is installed from the one text this binary carries. There
+	// used to be a schema-keyed catalog, because the resolved layout selected
+	// which text was canonical; with one layout there is one text, and it is the
+	// one the repository records. This is what keeps a fresh repository
+	// byte-identical to the skill this checkout ships: see
 	// `agents drift` immediately calls customized.
 	for _, skillName := range bundledSkills {
 		assetPath, err := SkillAssetPath(skillName)

@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 )
@@ -111,25 +110,6 @@ func TestSkillsReportsMissingCustomizedAndPresent(t *testing.T) {
 			t.Fatalf("customized skill = %+v, want one OK; a repository's own edits are not a fault", got)
 		}
 	})
-}
-
-// The freshness check reads one fixed store path. An absent store is not
-// applicable rather than a failure, because most repositories have not adopted
-// it and a check that fails everywhere teaches people to ignore the report.
-func TestQNAFreshnessTreatsAnAbsentStoreAsNotAFailure(t *testing.T) {
-	got := checkQNAFreshness(t.TempDir(), time.Now())
-	if got.Status != OK {
-		t.Errorf("absent store = %q, want %q: %s", got.Status, OK, got.Detail)
-	}
-}
-
-func TestQNAFreshnessReadsTheNewestEntry(t *testing.T) {
-	root := t.TempDir()
-	writeJSON(t, filepath.Join(root, "docs", "qna", "an-entry.md"), "# an entry\n")
-	got := checkQNAFreshness(root, time.Now())
-	if got.Status != OK {
-		t.Errorf("store with an entry = %q, want %q: %s", got.Status, OK, got.Detail)
-	}
 }
 
 // The rendered report carries a status and a name per check, and the caller

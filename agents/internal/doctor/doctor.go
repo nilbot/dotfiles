@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
@@ -298,44 +297,6 @@ func commandsIn(harnessName string, cfg map[string]any) []string {
 }
 
 var installedHookNames = []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"}
-
-// repository last learned something it wrote down.
-//
-// It reads docs/qna, the one store path this tool writes. The store is fixed
-// rather than resolved from a layout, which is what makes this check cheap
-// enough to run on every invocation.
-//
-// It is deliberately weak, and the weakness is the point. It cannot tell a
-// quiet fortnight from a broken habit, and it says nothing about whether an
-// entry was ever read. An absent store is not a failure: most repositories have
-// not adopted this, and a check that fails everywhere teaches people to ignore
-// the whole report.
-func checkQNAFreshness(repoRoot string, now time.Time) Check {
-	const name = "recording:freshness"
-	dir := filepath.Join(repoRoot, "docs", "qna")
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return Check{Name: name, Status: OK, Detail: "docs/qna: no such store in this repository"}
-	}
-	newest := time.Time{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(newest) {
-			newest = info.ModTime()
-		}
-	}
-	if newest.IsZero() {
-		return Check{Name: name, Status: OK, Detail: "docs/qna: empty store; nothing recorded yet"}
-	}
-	return Check{Name: name, Status: OK,
-		Detail: fmt.Sprintf("docs/qna: newest entry is %s old", now.Sub(newest).Round(time.Hour))}
-}
 
 // checkScaffold reports the state of the three files `init` writes that make
 // the two-tier context work.

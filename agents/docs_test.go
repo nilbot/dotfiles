@@ -72,7 +72,17 @@ var commandSpan = regexp.MustCompile("`agents ([a-z][a-z -]*)`")
 // longer exists, and a record silently rewritten to stay true is not a record.
 func livingDocuments(t *testing.T, root string) []string {
 	t.Helper()
-	targets := []string{"README.md", filepath.Join("agents", "README.md"), "CLAUDE.md", filepath.Join("claude", "CLAUDE.md")}
+	// global/AGENTS.md is the machine-global instruction file: one source,
+	// symlinked to every harness's path. It replaced claude/CLAUDE.md on
+	// 2026-09-21, and this list has to follow it -- the entry is what puts a file
+	// in front of the "names only real commands" check, and a path that no
+	// longer exists is skipped in silence.
+	targets := []string{
+		"README.md",
+		filepath.Join("agents", "README.md"),
+		"CLAUDE.md",
+		filepath.Join("global", "AGENTS.md"),
+	}
 	for _, dir := range []string{filepath.Join("claude", "skills"), filepath.Join(".agents", "skills")} {
 		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
@@ -208,3 +218,150 @@ func TestInstalledSkillNamesNoDeletedCommand(t *testing.T) {
 // agentSpanPattern captures the command path in a backticked `agents ...` span,
 // stopping at a flag, a quote, or a closing backtick.
 var agentSpanPattern = regexp.MustCompile("`agents ([a-z][a-z0-9 -]*[a-z0-9])")
+
+// A living document may not name a command the tool no longer has, unless it
+// says the command is gone.
+//
+// This is the gap that let a green gate sit on top of stale documentation. The
+// scan above covers the READMEs, the instruction files and the skill trees, and
+// the design and Q&A stores were outside it -- so the stores an agent is told to
+// read before asserting, and the store the repository calls the design still in
+// force, could describe commands that no longer exist with nothing to notice.
+//
+// The exemption is a marker on the same line, because a document has a
+// legitimate reason to name a deleted command: to record that it was deleted.
+// The markers are deliberately few and literal. A document that wants to discuss
+// a removal writes "removed" or "deleted" or "no longer" beside it, which is
+// also what makes the sentence useful to a reader -- a bare `agents layout` in a
+// living document tells them to run something that will fail.
+func TestLivingDocumentsNameNoDeletedCommand(t *testing.T) {
+	root := task18RepoRoot(t)
+
+	// Commands this tool had and no longer has. Each is a whole name: matching
+	// on `layout` as free text would flag every discussion of layout as a
+	// concept, which several documents legitimately contain.
+	deleted := []string{
+		"agents drift", "agents layout", "agents trace", "agents save",
+		"agents ls", "agents update", "agents hook",
+	}
+	// A line carrying one of these says the command is gone, which is the one
+	// thing a living document may say about it.
+	historical := []string{"removed", "deleted", "no longer", "retired", "gone", "archived"}
+
+	// A document may declare itself a record rather than live design, and then
+	// its references are history. The marker is deliberately explicit and has to
+	// appear near the top: an implicit claim ("this is a spec, it must be
+	// historical") is how a store of eighty documents ends up describing a tool
+	// that does not exist. A document that carries this is announcing that it no
+	// longer describes the present, which is also the thing a reader needs told.
+	const recordMarker = "SUPERSEDED:"
+
+	// A document that carries a dated follow-up has declared that part of it is
+	// history, and its original body may keep the names it was written with.
+	//
+	// This is the Q&A store's own contract rather than an exemption invented to
+	// make the check pass. An entry is a dated answer; the way this repository
+	// records that an answer stopped being true is to leave the answer alone and
+	// append what changed. Demanding a marker on the same physical line as the
+	// original reference fought that convention: it forced the correction to be
+	// woven through the original prose, which erases the boundary between what
+	// was believed and what replaced it -- the one thing the store exists to
+	// preserve. Line-local markers were also demonstrably fragile: a follow-up
+	// that said "neither `agents update` nor `agents drift` exists any more" was
+	// itself flagged, because "any more" is not on the marker list.
+	//
+	// A file with no follow-up gets no exemption, so a document that simply went
+	// stale is still caught. The check's teeth are in the requirement to have
+	// recorded the change, not in where the words sit.
+	const followUpMarker = "## Follow-up, "
+
+	flagged := 0
+	for _, rel := range append(livingDocuments(t, root), docsStores(t, root)...) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			continue
+		}
+		body := string(data)
+		if declaresItselfARecord(body, recordMarker) {
+			continue
+		}
+		hasFollowUp := strings.Contains(body, followUpMarker)
+		for n, line := range strings.Split(string(data), "\n") {
+			lower := strings.ToLower(line)
+			// Only an inline code span is a claim about a command: prose that
+			// says "layout" is talking about a concept, and several documents
+			// legitimately do.
+			// Longest match wins, so `agents layout show` is reported once as
+			// itself rather than also as the `agents layout` inside it.
+			var worst string
+			for _, m := range commandSpan.FindAllStringSubmatch(line, -1) {
+				if isDeletedCommand(m[1], deleted) && len(m[1]) > len(worst) {
+					worst = m[1]
+				}
+			}
+			if worst == "" {
+				continue
+			}
+			saysGone := hasFollowUp
+			for _, marker := range historical {
+				if strings.Contains(lower, marker) {
+					saysGone = true
+					break
+				}
+			}
+			if !saysGone {
+				flagged++
+				t.Errorf("%s:%d names `agents %s` without saying it is gone:\n  %s", rel, n+1, worst, strings.TrimSpace(line))
+			}
+		}
+	}
+	if flagged == 0 {
+		t.Logf("no living document names a deleted command outside a removal note")
+	}
+}
+
+// declaresItselfARecord reports whether a document says, near its top, that it
+// is a record rather than a description of the present.
+//
+// The window is the first 25 lines because a reader has to meet the marker
+// before the content that depends on it; a marker buried at the end is a
+// disclaimer nobody sees in time.
+func declaresItselfARecord(body, marker string) bool {
+	lines := strings.Split(body, "\n")
+	if len(lines) > 25 {
+		lines = lines[:25]
+	}
+	return strings.Contains(strings.Join(lines, "\n"), marker)
+}
+
+// isDeletedCommand reports whether a span names one of the retired commands.
+// The comparison is on whole words, so `agents layout` matches the deleted
+// `agents layout` entry and not a surviving command that merely starts with it.
+func isDeletedCommand(span string, deleted []string) bool {
+	span = strings.TrimSpace(span)
+	for _, d := range deleted {
+		name := strings.TrimPrefix(d, "agents ")
+		if span == name || strings.HasPrefix(span, name+" ") {
+			return true
+		}
+	}
+	return false
+}
+
+// docsStores are the two stores an agent is told to read: the Q&A answers and
+// the design still in force.
+func docsStores(t *testing.T, root string) []string {
+	t.Helper()
+	var out []string
+	for _, dir := range []string{"docs/qna", "docs/design"} {
+		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
+				if rel, relErr := filepath.Rel(root, p); relErr == nil {
+					out = append(out, rel)
+				}
+			}
+			return nil
+		})
+	}
+	return out
+}
