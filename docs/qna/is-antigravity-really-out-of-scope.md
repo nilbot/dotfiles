@@ -113,3 +113,24 @@ Related: [how-do-i-confirm-something-is-not-wired](how-do-i-confirm-something-is
 and [can-this-check-actually-fail](can-this-check-actually-fail.md) — this is
 both of them at once, plus a third failure they do not cover: a measurement that
 was true when taken and expired without anyone noticing.
+
+## Follow-up, 2026-09-21
+
+**The scope verdict is unaffected. One sentence above has become false.**
+
+Antigravity still loads a workspace-local `.agents/hooks.json` once the folder is
+trusted, its five events are still the five named here, and `PreToolUse` matched
+against `invoke_subagent` is still an untested candidate for the subagent moment.
+
+The sentence is: *"That is the load-bearing gap: the transcript cache exists
+because Claude Code deletes subagent transcripts mid-session."* The cache was
+deleted on 2026-09-21, with the trace store, the session record and the commands
+that read them. There is no cache on any harness now, so nothing is hanging on an
+event name here and the missing `SubagentStart`/`SubagentStop` costs nothing
+today. Read the gap as it was written — a reason the cache could not be ported to
+Antigravity — rather than as a live constraint.
+
+The rest of the entry is measurement and stands. The `Narrowed` note above is
+now the more durable half of it: the prior question was always whether Antigravity
+*needs* a transcript rescue, and with no rescue built anywhere, that question is
+the only one left.

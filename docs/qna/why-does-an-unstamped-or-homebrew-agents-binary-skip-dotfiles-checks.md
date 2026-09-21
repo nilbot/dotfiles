@@ -40,3 +40,36 @@ With `AGENTS_DOTFILES_ROOT` exported in the environment:
 - `DotfilesRoot()` resolves to the configured directory.
 - `agents doctor` validates machine-level dotfiles health, global hooks in `$AGENTS_DOTFILES_ROOT/git/hooks.d`, and global `~/.gitattributes`.
 - Git hook multi-call dispatches personal hook stages from `$AGENTS_DOTFILES_ROOT/git/hooks/*`.
+
+## Follow-up, 2026-09-21
+
+**The resolution contract is unchanged; one bullet in §2 is now wrong.**
+
+The bullet listing what runs in full in Standalone Mode still names transcript
+recording, trace indexing and pointer checks. All three were deleted on
+2026-09-21, with the trace store, the session record and the fleet registry they
+belonged to. The rest of that bullet — PATH resolution, harness wiring, trust
+verification, secret scanning and documentation freshness — is still what runs.
+
+The bullet listing what is skipped is still right, and was re-measured in
+operator mode on this machine:
+
+```text
+$ agents doctor
+ok    root:exists                  the stamped checkout exists
+ok    git-hooks:global             global core.hooksPath is exact
+ok    git-hooks:local              no repository-local core.hooksPath override
+ok    git-hooks:effective          effective core.hooksPath is exact
+ok    git-hooks:unmanaged          no unowned hook links dangle
+ok    git-attributes               global and repository attributes are exact
+```
+
+The three-step order — link-time stamp, then `AGENTS_DOTFILES_ROOT`, then
+Standalone Mode — is untouched, and so is the reason for it: a binary that
+belongs to no checkout must not guess at one.
+
+One consequence of the reduction does land here. With no session record and no
+transcript cache, a Standalone Mode binary has no machine-local state to write at
+all: it scaffolds on request, strips wiring on request, and otherwise reports.
+The mode difference is now about which machine-level checks run, not about where
+anything is stored.

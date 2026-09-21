@@ -29,7 +29,7 @@ doctor consume the resolved layout instead of joining `docs/`.
 `crypto/sha256`), `agents/internal/repo` for Git, Markdown assets embedded with
 `embed.FS`, GitHub Actions release workflow.
 
-**Spec:** [docs/design/2026-09-18-layout-manifest-and-store-root-design.md](../design/2026-09-18-layout-manifest-and-store-root-design.md)
+**Spec:** [docs/design/2026-09-18-layout-manifest-and-store-root-design.md](../archive/design/2026-09-18-layout-manifest-and-store-root-design.md)
 
 **Playbook:** [docs/plans/2026-09-18-layout-v2-migration-playbook.md](2026-09-18-layout-v2-migration-playbook.md)
 

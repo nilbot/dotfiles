@@ -80,3 +80,31 @@ was noticed.
 example command: one example reads the same whether the entries came from one
 renamed build or from several unrelated tools, and the deletion is per-file
 either way.
+
+## Follow-up, 2026-09-21
+
+**The boundary is unchanged, and it was re-measured rather than assumed.**
+
+A `.claude/settings.json` holding
+`/tmp/agents-new hook stop --harness claude-code` was written into a throwaway
+repository and put through the current binary:
+
+```text
+$ agents wire
+wired claude-code -> /private/tmp/wire-probe/.claude/settings.json
+$ agents doctor
+warn  wiring:claude-code   1 entry(ies) in the generated shape but under a binary
+                           this tool does not own: /tmp/agents-new hook stop --harness claude-code
+```
+
+The entry survived the strip and `doctor` reported it. `isOwnedBinary` still
+accepts exactly the same three basenames, so a renamed dev build is still shaped
+like ours and owned by nobody, and the "What to do" remedy is still the only one.
+
+Two things in the Context have gone. The tests it names — the one that fails with
+*"wire deleted a hook it could not prove was ours"* and the one that pins the
+report — were both removed on 2026-09-21; the probe above is what re-checks the
+property they held. And the accumulation they describe cannot happen again:
+`wire` no longer writes hook entries at all, it only strips them, so no run adds
+a command that a later run has to remove. The remedy is unchanged, and it is now
+the whole of it: nothing stale will be replaced for you.

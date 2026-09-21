@@ -109,3 +109,22 @@ not without a bypass flag. Hook *firing* semantics are unlikely to differ betwee
 products that share a harness, but this was not shown. The same run's claim about
 how the app grants trust is separately unsupported — see
 [spec 4 §9](../design/2026-08-07-spec-4-wiring-dsl.md), which records why.
+
+## Follow-up, 2026-09-21
+
+**The measurements stand. The section above about the cache no longer has a
+subject.**
+
+"It does not change the transcript cache" was true when written and is now moot:
+the cache was deleted on 2026-09-21, along with the trace store, the session
+record and the commands that read them, and `agents wire` no longer writes the
+`subagent-stop` hook that fed it. Antigravity's not pruning is still true and
+still the reason nothing needed rescuing there — but that conclusion now holds
+vacuously, because nothing rescues anything anywhere.
+
+The "What follows" answer to the 2026-08-19 redesign's open question is in the
+same position. `PreInvocation` firing inside children and being able to return
+`injectSteps` is a fact about Antigravity and is unaffected. What has gone is its
+consumer: the read trigger belonged to the capture apparatus, and none of the six
+commands the tool has now implements one, so the question is again answerable and
+again unowned.

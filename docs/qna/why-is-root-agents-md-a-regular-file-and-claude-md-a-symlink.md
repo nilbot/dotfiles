@@ -50,3 +50,22 @@ if err := linkIfAbsent(filepath.Join(root, "CLAUDE.md"), "AGENTS.md"); err != ni
 ```
 
 If a repository has `AGENTS.md -> CLAUDE.md`, `scaffold.Create` treats `AGENTS.md` as present (skipping write) and `linkIfAbsent(CLAUDE.md, "AGENTS.md")` fails because `CLAUDE.md` exists. Having `AGENTS.md` as regular file matches canonical scaffold generation across all newly initialized repositories.
+
+## Follow-up, 2026-09-21
+
+**The answer was re-measured and holds. One name in §1 has gone.**
+
+`agents init` on a fresh repository writes `AGENTS.md` as a regular file and
+`CLAUDE.md` as a relative symlink to it, and `agents doctor` reports the result:
+`ok scaffold:symlink  CLAUDE.md is a relative symlink to AGENTS.md`.
+`safeio.ReadRegular` is unchanged and still refuses a leaf symlink with
+`O_NOFOLLOW`, and `scaffold.Create` still gates both files on absence. All three
+reasons above stand, and the multi-harness argument for `AGENTS.md` being the
+authoritative name has not weakened.
+
+The stale part is the mechanism named in §1: the `candidates` list and
+`checkScaffoldInstruction` are no longer in `agents/internal/doctor/doctor.go`.
+The scaffold is checked by three checks now — `scaffold:router`,
+`scaffold:symlink` and `scaffold:domain` — and the symlink check is the one that
+enforces the direction this entry argues for. The conclusion is unaffected; only
+the function a reader would go looking for has moved.

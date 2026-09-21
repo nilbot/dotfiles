@@ -10,10 +10,10 @@ paperbubble stays frozen and no fleet repository is migrated.
 **Applies to:** `agents` CLI (`layout`, `scaffold`, `drift`, `doctor`, `init`,
 `update`), the root router (`AGENTS.md` / `CLAUDE.md`), `.agents/AGENTS.md`,
 `.agents/skills/`, and the physical location of the four documentation stores.
-**Depends on:** [Two-Tier Agent Context](2026-08-29-two-tier-context-and-llm-migration-architecture.md)
-(including its 2026-09-01 Amendment 1), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md),
-[why the migration skill shipped hollow](../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md),
-[why `agents init` never updates existing instructions](../qna/why-does-agents-init-never-update-existing-instructions.md).
+**Depends on:** [Two-Tier Agent Context](../../design/2026-08-29-two-tier-context-and-llm-migration-architecture.md)
+(including its 2026-09-01 Amendment 1), [Knowledge is Documentation](../../design/2026-08-19-knowledge-is-documentation.md),
+[why the migration skill shipped hollow](../../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md),
+[why `agents init` never updates existing instructions](../../qna/why-does-agents-init-never-update-existing-instructions.md).
 **Amends:** the assumption in the Two-Tier design §2, §3, §4, §5, §6, and §7
 that the four stores are always `docs/{design,plans,journal,qna}`. Everything
 else in that design stands.
@@ -77,7 +77,7 @@ ledger records each, and Q3, Q8, and Q9 have their own sections in
 §0.2–§0.4; Q4–Q7 were resolved in the second pass and are recorded in
 §0.5–§0.8. The measurements behind the second pass, and the two plan
 defects it found, are recorded in the
-[2026-09-18 journal](../journal/2026-09-18-why-v0-6-0-keeps-the-v1-skill-text-canonical.md).
+[2026-09-18 journal](../../journal/2026-09-18-why-v0-6-0-keeps-the-v1-skill-text-canonical.md).
 
 | # | Anchored to | Question | Status |
 |---|---|---|---|
@@ -220,7 +220,7 @@ raw-JSON preservation on rewrite, and a profile migration path — real
 machinery for a label that only supplied defaults. If a concrete
 machine-readable semantic label is needed later, it can be added with a new
 schema version and a migration; the protobuf-style identity rules are recorded
-in the [2026-09-18 journal](../journal/2026-09-18-why-layout-has-no-persisted-profile.md).
+in the [2026-09-18 journal](../../journal/2026-09-18-why-layout-has-no-persisted-profile.md).
 
 ### 0.5 Q4 resolution (resolved in review 2026-09-18): the migration is a frozen plan
 
@@ -297,7 +297,7 @@ mixes meta artifacts with content needs no rule of its own. Four reasons:
 - the tool cannot classify content mechanically — §7.3 already concedes that a
   `*-plan.md` note in a vault is not an agents artifact;
 - every content-dependent rule in this area has already produced a defect: the
-  [2026-09-01 journal](../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md)
+  [2026-09-01 journal](../../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md)
   row 5, and `drift`'s walk of all of `docs/`;
 - the repository's own contract is written about the **location**
   (`.agents/AGENTS.md`: `docs/archive/` is strictly immutable), not about

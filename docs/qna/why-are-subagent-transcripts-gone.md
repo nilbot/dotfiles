@@ -51,3 +51,24 @@ claim about now, and the gap between the two can be minutes.
 This is the reason the transcript cache survived the 2026-08-19 redesign that
 retired the rest of the capture apparatus: an instruction cannot copy a file that
 the harness deletes mid-session.
+
+## Follow-up, 2026-09-21
+
+**The harness finding is untouched; the remedy it justified is gone.** Claude Code
+still prunes subagent transcripts mid-session, and nothing here has been observed
+to stop — but nothing captures them any more either.
+
+The 2026-08-19 redesign retired the rest of the capture apparatus and kept the
+cache. The 2026-09-21 refactor retired the cache with it: the trace store, the
+session record, the `subagent-stop` hook that cached a child transcript at the
+earliest moment one existed, and the commands that read the result were all
+deleted. `agents wire` now strips this tool's hook entries rather than writing
+them, so a repository wired today runs no capture hook at all. The old store
+under `.git/agents/traces` is still on disk here as a frozen leftover, last
+written 2026-09-19; nothing reads or writes it.
+
+What survives is the measurement and the rule it produced — the loss is not
+age-ordered, so a policy shaped as "cache things once they get old" salvages the
+wrong set, and `pointer_verified: true` still says only that the path existed
+when recorded. That rule has no consumer in this tool until something captures
+transcripts again, and the argument for it now belongs to whatever builds that.

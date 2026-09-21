@@ -1,9 +1,11 @@
 # Knowledge is documentation, not a subsystem
 
 **Date:** 2026-08-19
-**Status:** executed 2026-08-20 — the retired code and stores are deleted
+**Status:** executed 2026-08-20 — the retired code and stores are deleted; **amended 2026-09-21 — the trace cache, which this document kept, was deleted too**
 **Retires:** spec 7's capture half (queue, review, promotion); spec 3 in full
-**Leaves intact:** spec 1's placement rule, tiers and record schema; specs 2, 5, 6
+**Leaves intact:** spec 1's placement rule and tiers; specs 2, 5, 6. (This line
+read "and record schema" until 2026-09-21; the record schema is now deleted — see
+[what stays](#what-retires-and-what-stays).)
 
 This document is deliberately short. A redesign whose central finding is that
 20,000 lines of specification produced four documents should not open with
@@ -171,15 +173,16 @@ they concluded; a reader arrives with a question, not a conclusion. No
 frontmatter, no schema, no generated index — `ls` is the index at this scale and
 `grep` is the query.
 
-`docs/journal/` is not named `docs/trace/`: `agents trace` survives this redesign
+`docs/journal/` is not named `docs/trace/`: the now-deleted `agents trace` survived this redesign
 as the transcript cache, which is tier 3 and machine-bound, and one word must not
-span two tiers.
+span two tiers. (That command and the cache are deleted 2026-09-21; the naming
+rule stands on its own and nothing under `docs/` is named for a tool.)
 
 ## Delivery
 
 | tier | carries | lives in |
 |---|---|---|
-| Global | *when* to record, *what shape* | `claude/CLAUDE.md` + a fleet skill, symlinked from dotfiles |
+| Global | *when* to record, *what shape* | `global/AGENTS.md` + a fleet skill, symlinked from dotfiles |
 | Per-repo | *where*, and domain conventions | that repository's own `CLAUDE.md` |
 | Machine | raw material, never authoritative | harness dirs, pointed at |
 
@@ -198,15 +201,22 @@ deleting code that exists, which is cheap and reversible.
 **Stays, each on its own merit:**
 
 - **spec 5's verification gate** — merged, independent, found five real defects.
-- **`agents trace` and the `subagent-stop` cache** — the one thing an instruction
-  physically cannot do. Transcripts are deleted mid-session; capture is
-  now-or-never, and the loss is not age-ordered.
 - **`agents doctor`** — narrowed to mechanical facts about the machine: wiring,
-  hooks, gitleaks, fleet.
-- **`agents init` / `wire`** — hook wiring only.
+  hooks, gitleaks.
+- **`agents init` / `wire`** — scaffolding and hook wiring only.
 - **`.agents/skills/`** — the only part of `.agents/` that `autogo-mlx` used
   organically.
 - **spec 1's placement rule and the exit-code vocabulary** — good invariants.
+
+**Deleted since, by the 2026-09-21 reduction, and removed from the list above:**
+the deleted `agents trace` and the deleted `subagent-stop` cache — the one thing
+an instruction
+physically cannot do. Transcripts were deleted mid-session, so capture was
+now-or-never and the loss was not age-ordered. The reduction deleted it anyway,
+along with the deleted `agents drift`, the deleted `agents update` and the fleet registry that `doctor`
+reported on; that is a reversal of this document's judgement, not a correction of
+it, and it is recorded here so the next reader knows the argument was made and
+lost rather than never made.
 
 ## Deliberately not decided
 

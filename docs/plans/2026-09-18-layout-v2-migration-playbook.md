@@ -8,7 +8,7 @@ resolves that binary on `PATH`, and the §6 approval gate is passed.
 **Scope:** exactly one repository, `/Users/nilbot/gist/paperbubble`. It does not
 migrate dotfiles, cowork, autogo-mlx, lewm-mlx, or desktop_pet; §12 records the
 measured state of each and why.
-**Design:** [layout manifest and store-root freedom](../design/2026-09-18-layout-manifest-and-store-root-design.md)
+**Design:** [layout manifest and store-root freedom](../archive/design/2026-09-18-layout-manifest-and-store-root-design.md)
 **Plan:** [layout manifest implementation plan](2026-09-18-layout-manifest-implementation-plan.md)
 
 ## 0. What the read-only preflight already established

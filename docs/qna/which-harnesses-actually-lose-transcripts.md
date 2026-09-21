@@ -72,3 +72,22 @@ Antigravity figure counts *conversations*, which include subagents (each gets
 its own `conversationId`), but no Antigravity hook has ever run here, so no
 record distinguishes parent from child. It shows the store is not pruned; it does
 not separately confirm that a *subagent's* transcript outlives its parent's turn.
+
+## Follow-up, 2026-09-21
+
+**The measurement stands; the instrument that took it does not.** The record
+store this entry reads — the machine-local trace store under the git common
+directory — was deleted on 2026-09-21, along with the pointer resolver, the
+transcript cache and the command that queried them. The store's directory is
+still on disk here as a frozen leftover, last written 2026-09-19. The 304-and-14
+counts above cannot be taken again from this repository; they are a reading of
+2026-08-22, and there is no live store to re-read.
+
+The conclusion is unaffected where it matters. Claude Code is still the only
+harness shown to lose subagent transcripts; Codex still has never been shown to;
+Antigravity still does not prune. The shape the entry is for — a need that is
+harness-specific, and a capability cell that can be empty for lack of need rather
+than lack of capability — outlives the cache the need was about.
+
+The caution at the end is now the whole of it: with no cache and no records,
+there is no instrument here that could overturn the Codex figure.

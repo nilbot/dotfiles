@@ -427,30 +427,37 @@ disk, so `wiring:antigravity` goes red in every registered repository the moment
 the new binary is installed, and stays red until each is rewired. This phase is
 not optional cleanup; it is the second half of shipping the change.
 
-**`agents update --all --apply` is not sufficient on its own.** It calls
+**The deleted `agents update --all --apply` was not sufficient on its own.** It called
 `wireAll`, which loops `harness.All()` calling `a.Wire` and nothing else
-(`cmd_init.go:81`); it never runs `scaffold.Create`. The two new exclusion lines
+(`cmd_init.go:81`); it never ran `scaffold.Create`. The two new exclusion lines
 in §4.1 are written by `scaffold.Create`, so on a repository onboarded before
 this change `update --apply` would write `.agents/hooks.json` into a `.agents/`
 that git tracks, with no matching entry in `.git/info/exclude`. The file §1.3
 requires to be machine-local would then sit untracked and visible, one `git add
--A` away from being committed and distributed. The migration therefore runs
+-A` away from being committed and distributed. The migration therefore ran
 `init`, not `update`.
 
-1. **Enumerate the fleet and count what is affected**:
+> **Amended 2026-09-21.** This phase is a record of the 2026-08-28 rollout, and
+> the two commands it enumerates are deleted: `agents ls` went with the fleet
+> registry, and the deleted `agents update` with the layout and drift subsystems. The
+> `init`-not-`update` conclusion is untouched and still the reason
+> `.git/info/exclude` is written by `scaffold.Create`. The `recording:*` doctor
+> checks named in the step-4 assertions below are deleted too.
+
+1. **Enumerate the fleet and count what is affected** (both commands below are deleted 2026-09-21):
    ```bash
    agents ls
    agents update --all
    ```
-   `update --all` without `--apply` is a dry run and exits `Advisory` by design;
-   it is used here only for the count and the missing/unknown lines.
+   The deleted `update --all` without `--apply` was a dry run and exited
+   `Advisory` by design; it was used here only for the count and the missing/unknown lines.
 2. **Re-run `init` in each registered repository.** `scaffold.Create` is
    idempotent — `appendMissingLines` adds only absent lines, and
    `writeIfAbsent`/`linkIfAbsent` never overwrite an existing instruction file —
    so this adds the two exclusions and rewires all three harnesses without
    touching anything already correct:
    ```bash
-   agents ls   # then, in each listed repository root:
+   agents ls   # deleted 2026-09-21; then, in each repository root:
    agents init
    ```
 3. **Assert the exclusion landed before trusting the wiring.** In each migrated
