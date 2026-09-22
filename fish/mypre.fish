@@ -350,3 +350,8 @@ if test -d $HOME/.cache/lm-studio
     set -gx LMSTUDIO_INSTALL $HOME/.cache/lm-studio
     fish_add_path $LMSTUDIO_INSTALL/bin
 end
+
+# bend (higher order company's experimental language)
+if test -e $HOME/.bend/bin/bend
+    fish_add_path $HOME/.bend/bin
+end
