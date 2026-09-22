@@ -105,6 +105,7 @@ expect "fixture reproduces the collation trap (amd64 listed before arm64)" \
 cat > "${WORK}/bin/gh" <<'GH'
 #!/usr/bin/env bash
 [ "${1:-}" = api ] || { echo "stub gh: unhandled $*" >&2; exit 1; }
+printf 'call\n' >> "${STUB_CALLS:?}"
 shift
 jq_expr=""; method="GET"
 while [ $# -gt 0 ]; do
@@ -125,11 +126,21 @@ esac
 GH
 chmod +x "${WORK}/bin/gh"
 
+# A stub that is never invoked is indistinguishable from a stub that is not on
+# PATH -- and in the second case the commands would reach the real GitHub API
+# with whatever credentials the environment happens to carry. That is not
+# hypothetical: a formula carrying this file's fixture digests reached the live
+# tap during v0.7.0, and no invocation record survived to say by which path. So
+# every stub call is counted, and `run` refuses to accept a result that produced
+# no stub traffic.
+STUB_CALLS="${WORK}/stub-calls"
+
 # run <formula> <dist-dir> — sets RC and PUSHED.
 run() {
   : > "${WORK}/record"
+  : > "${STUB_CALLS}"
   PUSHED=""
-  STUB_FORMULA="$1" STUB_RECORD="${WORK}/record" \
+  STUB_FORMULA="$1" STUB_RECORD="${WORK}/record" STUB_CALLS="${STUB_CALLS}" \
   PATH="${WORK}/bin:${PATH}" HOMEBREW_TAP_TOKEN=stub-token \
     bash "${SCRIPT}" "${TAG}" "$2" > "${WORK}/out" 2>&1
   RC=$?
@@ -261,6 +272,18 @@ if command -v gh >/dev/null 2>&1 \
   fi
 else
   printf '  SKIP  no gh, or no network\n'
+fi
+
+# The stub must have been used. `plausible_digests` runs before any request, so
+# some refusal scenarios legitimately make no calls; but if NO scenario reached
+# the stub, then `gh` resolved to the real one and every conclusion above is
+# about the live API with whatever credentials the environment carries. That is
+# not hypothetical -- see the note where STUB_CALLS is defined.
+echo
+if [ -s "${STUB_CALLS}" ]; then
+  ok "the stub handled every call; the real API was never reached"
+else
+  bad "no scenario called the stub, so these results do not describe it"
 fi
 
 echo
