@@ -69,14 +69,39 @@ bootstrap.d before it can do anything: in run 35980296271 the container logged
 
 ## 4. What it measured
 
-The PR's own runs. The first meets three new keys cold (two archive entries, two
-container build caches) and saves them; the second restores.
+Run 35981119794, both attempts. Attempt 1 met the two new keys cold (they saved)
+and the archive key restored through its prefix; attempt 2 restored all three.
 
-- keep if `hygiene` lands near its longest leg (about 39s) rather than its sum,
-  and the archive post-save disappears from the step list;
-- keep if the stage-zero `apply workstation` step loses about 9s to the restored
-  build cache;
-- revert the archive key if the restore key does not find the old entries, which
-  would show as a cold `apt-get install` on the first run.
+| job | before | attempt 1 | attempt 2 |
+|---|---|---|---|
+| `hygiene` | 75s | 41s (legs 31 / 41 / 22) | **41s** (legs 36 / 41 / 36) |
+| `linux-stage-zero` (debian) | 78s | 72s | **67s** |
+| `test (macos-latest, agents)` | 44–75s | 39s | 72s |
+| `test (ubuntu-latest, bootstrap.d)` | 55s | 57s | 56s |
 
-The numbers land below once the two runs are in.
+Inside the Debian leg, attempt 2:
+
+| step | before | after |
+|---|---|---|
+| cache package archives | 4s | 4s, and the post step is **0s** where it was 5–8s |
+| prerequisites (apt) | 12s | 12s |
+| cache the Homebrew prefix | 20s | 18s |
+| cache the container's Go build cache | — | 2s (saved 2s on attempt 1) |
+| provision | 21s | **15s** |
+| — of which `bootstrap: building` | 8.9s | **4.1s** |
+| teardown | 8s | 7s |
+
+The archive step is the one to read twice: it restored
+`stage-zero-debian:stable-slim-35980845003` — an entry written before this change,
+through the prefix restore key — and on the second run the post step did nothing
+at all, where it used to spend 5–8s writing 159–189 MB that the next run would
+have restored in 4s.
+
+**What is left.** `linux-stage-zero` is now 67s: 5s of container, 12s of apt
+prerequisites, 18s of Homebrew restore, 15s of apply, 7s of teardown. The
+Homebrew restore and the apt prerequisites are 30s of that and neither is
+structural — the first is the one entry that pays for itself seven times over
+(101s of install against 18s of restore), the second is `apt-get update` plus six
+packages a fresh container cannot do without. The macOS leg's 39–72s across runs
+is runner variance, not work: the same steps, the same caches, different
+neighbours.
