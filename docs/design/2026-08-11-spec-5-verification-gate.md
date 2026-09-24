@@ -286,7 +286,7 @@ Stated once so each phase can say which job it creates or extends.
 | `test` (matrix) | `agents` on `{ubuntu-latest, ubuntu-24.04-arm, macos-latest}`; `bootstrap.d` on `{ubuntu-latest}` | phase 1 | **amended 2026-09-20** (Amendment 1) |
 | `secrets` | `ubuntu-latest` | phase 1 | — |
 | `gate` | `ubuntu-latest` | phase 1 | every later phase adds to `needs:` |
-| `hygiene` | `ubuntu-latest` | phase 2 | — |
+| `hygiene` | `ubuntu-latest` | phase 2 | **amended 2026-09-24** — three legs: containment for `agents`, containment for `bootstrap.d`, and bootstrap.d under a restrictive umask. The job id and the gate's `needs:` are unchanged; the two properties stopped sharing a job because it cost their sum (75s) instead of their longest (39s) |
 | `docs` | `ubuntu-latest` | **phase 3** (help coverage) | **phase 4** (README block, backward check, skill coverage) |
 | `linux-dotfiles` | container | phase 5 | — |
 | `macos-dotfiles` | `macos-latest` | **amended 2026-09-20** (Amendment 1) | — |
