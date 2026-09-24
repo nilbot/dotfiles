@@ -416,6 +416,42 @@ jobs:
           echo "root ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/ci
           chmod 0440 /etc/sudoers.d/ci
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # `hashFiles` returns the EMPTY STRING for a path that matches nothing,
+      # and an empty hash keys every run alike -- so a renamed or emptied
+      # Brewfile would restore one stale Homebrew prefix for as long as the
+      # cache lived, silently. Nothing downstream would notice: the apply step
+      # below REPORTS its exit code rather than asserting it, so a `brew bundle`
+      # that never installed anything still exits the job green. This is the one
+      # guard that fails closed, and it is why the key can be trusted.
+      - name: the file the Homebrew cache key hashes is present
+        run: test -s bootstrap.d/Brewfile || { echo "bootstrap.d/Brewfile is missing or empty; the Homebrew cache key would hash nothing" >&2; exit 1; }
+      # Homebrew's prefix, cached. In run 35975118898 this was 101 of the
+      # Debian leg's 161 seconds -- 17s for the installer, then 84s for `brew
+      # bundle` over the Brewfile's 30 formulae -- and it is a function of the
+      # Brewfile and of nothing else a PR might touch. Restoring it leaves the
+      # installer to re-init, fetch and check out its latest stable tag, and
+      # `brew bundle` finds the formulae already poured.
+      #
+      # The key is that file's hash, and there is deliberately NO restore-key
+      # under it. The one edit that can regress "this list installs on a clean
+      # machine" is an edit to the list, and the strict key is what makes that
+      # edit MISS and install from nothing -- in the very PR that could regress
+      # it. A restore-key would hand that PR the previous prefix instead, which
+      # trades the property away quietly on the single run it was needed.
+      #
+      # Measured in run 35976648444 and its successor. Warm, the Debian leg's
+      # `apply workstation` is 116s -> 20s: the installer 17s -> 5s and `brew
+      # bundle` 84s -> 1s, for a 19-21s restore (615 MB; the Arch leg restores
+      # 576 MB in 16s). The pull request's wall clock went 2m50s -> 1m27s, and
+      # the critical path moved to `test (macos-latest, agents)` at 1m14s.
+      # Cold, run 35976648444's first attempt paid 73s to WRITE the entry --
+      # paid by a Brewfile edit, and by the first run on each ref, which is the
+      # trade docs/design/2026-09-24-stage-zero-brew-prefix-cache.md records.
+      - name: cache the Homebrew prefix
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /home/linuxbrew/.linuxbrew
+          key: stage-zero-brew-${{ matrix.image }}-${{ hashFiles('bootstrap.d/Brewfile') }}
       # --system, not --global, for the reason the linux-dotfiles job gives:
       # `git config --global` creates ~/.gitconfig, which the config phase then
       # declines to overwrite, and check reports the machine unconverged.
