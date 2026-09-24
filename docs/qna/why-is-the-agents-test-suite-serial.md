@@ -76,3 +76,40 @@ it is worth doing for the local loop and for five CI legs at once, but it is not
 a few-seconds tweak, and the leg it would help is no longer the gate's critical
 path — `linux-stage-zero` is (see
 [trimming the two slow legs](../design/2026-09-24-trimming-the-slow-legs.md)).
+
+## Amended 2026-09-24 — it was done, and this is what it bought
+
+The refactor above landed the same day, in two pieces:
+
+- **`install_hooks_test.go` needed nothing but `t.Parallel()`**: its fixtures are
+  per-test temp directories and it already hands every subprocess an explicit
+  environment (`isolatedGitEnvironment`). 26 tests, none of their assertions
+  changed.
+- **`githook_main_test.go`'s three spawning tests** carry their environment in
+  the fixture now — `liveHookRepo.env`, built by `childEnv` — instead of pinning
+  the process with `t.Setenv`. That is the actual `t.Setenv` → explicit-env
+  change, and it is also the more faithful test: a hook is a grandchild of the
+  command that starts it, and
+  `TestMulticallDispatcherRunsOrdinaryWrapperWithInheritedEnvironment` is about
+  exactly that inheritance, which the process environment was hiding.
+
+Measured on the same machine, whole root package, repeated runs:
+
+| `go test -parallel` | before | after |
+|---|---|---|
+| 1 (the old behaviour) | 17.9s | 14.4s |
+| 3 (the CI runner's core count) | 17.9s | **10.0–10.6s** |
+
+The two watchdogs (the installer's and the dispatcher's) went from 2s to 10s:
+they exist to catch a hang, and a hang detector that fires on a loaded runner is
+a flake, not a finding.
+
+**What stays serial, and why.** The three tests in `githook_main_test.go` that
+call `runGitHook` in process, and the four `cmd_*` files, resolve their
+repository from the process's working directory (`t.Chdir`) or from its
+environment; two of them also mutate the `dotfilesRoot` build stamp.
+`t.Parallel` and `t.Chdir` are as exclusive as `t.Parallel` and `t.Setenv`.
+Making those parallel means running the built binary as a subprocess — a
+different test, one that no longer exercises the in-process command — or
+threading a root through the command, which is a different API. Neither is a
+test-only change, and the 4.3s they hold between them is not worth either.
