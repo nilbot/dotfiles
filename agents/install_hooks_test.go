@@ -91,6 +91,7 @@ func isolatedGitEnvironment(t *testing.T, home, globalConfig string) []string {
 }
 
 func TestIsolatedGitEnvironmentPinsGoCachePaths(t *testing.T) {
+	t.Parallel()
 	output, err := exec.Command("go", "env", "GOPATH", "GOMODCACHE").Output()
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +180,11 @@ func runHookInstallerWithTimeout(t *testing.T, fixture hookInstallFixture, mode 
 	select {
 	case err := <-done:
 		return output.String(), err, false
-	case <-time.After(2 * time.Second):
+	// A watchdog, not a performance assertion: the property is "does not block
+	// forever", and these tests run in parallel with each other and with the
+	// rest of the package, so the budget has to sit far above a loaded run.
+	// Ten seconds is a hang, not a slow machine.
+	case <-time.After(10 * time.Second):
 		processGroup := -command.Process.Pid
 		_ = syscall.Kill(processGroup, syscall.SIGKILL)
 		<-done
@@ -335,6 +340,7 @@ func runHookSequence(t *testing.T, root, home, globalConfig string) (string, err
 }
 
 func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalPath(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	output, err := runHookInstaller(t, fixture, "install")
 	if err != nil {
@@ -375,6 +381,7 @@ func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalP
 }
 
 func TestHookInstallerRefusesRedirectedGlobalConfigBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	trackedSource := filepath.Join(task18RepoRoot(t), "git", "gitconfig.shared")
 	trackedContents, err := os.ReadFile(trackedSource)
@@ -411,6 +418,7 @@ func TestHookInstallerRefusesRedirectedGlobalConfigBeforeAnyMutation(t *testing.
 }
 
 func TestHookInstallerRefusesSymlinkedPrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	fixture.globalConfig = filepath.Join(fixture.home, ".gitconfig")
 	sharedConfig := filepath.Join(fixture.repoRoot, "git", "shared tracked global config")
@@ -443,6 +451,7 @@ func TestHookInstallerRefusesSymlinkedPrimaryGlobalConfigBeforeAnyMutation(t *te
 }
 
 func TestHookInstallerRefusesDanglingPrimaryGlobalConfigSymlinkBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	missingTarget := filepath.Join(fixture.repoRoot, "git", "missing global config target")
 	if err := os.Symlink(missingTarget, fixture.globalConfig); err != nil {
@@ -470,6 +479,7 @@ func TestHookInstallerRefusesDanglingPrimaryGlobalConfigSymlinkBeforeAnyMutation
 }
 
 func TestHookInstallerRefusesHardLinkedPrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	sharedConfig := filepath.Join(fixture.repoRoot, "git", "hard-linked tracked global config")
 	if err := os.WriteFile(sharedConfig, []byte("[user]\n\tname = Preserved Hard Link Target\n"), 0o600); err != nil {
@@ -506,6 +516,7 @@ func TestHookInstallerRefusesHardLinkedPrimaryGlobalConfigBeforeAnyMutation(t *t
 }
 
 func TestHookInstallerRefusesNonRegularPrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		configure func(*testing.T, hookInstallFixture) func()
@@ -570,6 +581,7 @@ func TestHookInstallerRefusesNonRegularPrimaryGlobalConfigBeforeAnyMutation(t *t
 }
 
 func TestHookInstallerRefusesUnwritablePrimaryGlobalConfigBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("permission check is not meaningful as root")
 	}
@@ -598,6 +610,7 @@ func TestHookInstallerRefusesUnwritablePrimaryGlobalConfigBeforeAnyMutation(t *t
 }
 
 func TestHookInstallerRevalidatesBinaryImmediatelyBeforeGlobalConfigWrite(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name        string
 		replacement string
@@ -674,6 +687,7 @@ exec "$TEST_REAL_GIT" "$@"
 }
 
 func TestHookInstallerRefusesInitiallyInvalidBinaryBeforeManagedLinks(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		configure func(*testing.T, hookInstallFixture)
@@ -730,6 +744,7 @@ func TestHookInstallerRefusesInitiallyInvalidBinaryBeforeManagedLinks(t *testing
 }
 
 func TestHookInstallerRefusesForeignGlobalBeforeAnyMutation(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	if err := os.WriteFile(fixture.globalConfig, []byte("[core]\n\thooksPath = /foreign/hooks\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -768,6 +783,7 @@ func TestHookInstallerRefusesForeignGlobalBeforeAnyMutation(t *testing.T) {
 }
 
 func TestGitHookSequenceBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testing.T) {
+	t.Parallel()
 	root := temporaryDotfilesCopy(t)
 	home := filepath.Join(t.TempDir(), "temporary home with spaces")
 	if err := os.MkdirAll(home, 0o755); err != nil {
@@ -829,6 +845,7 @@ func TestGitHookSequenceBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testin
 // bootstrap.d/internal/phase/devtools_test.go asserts preflight's position
 // relative to the build by index.
 func TestHookInstallerPreflightRefusesForeignGlobalWithoutMutating(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	before := []byte("[core]\n\thooksPath = /preserved/foreign/hooks\n")
 	if err := os.WriteFile(fixture.globalConfig, before, 0o600); err != nil {
@@ -854,6 +871,7 @@ func TestHookInstallerPreflightRefusesForeignGlobalWithoutMutating(t *testing.T)
 }
 
 func TestHookInstallerSecondRunPreservesExactInstalledObjectsAndTrackedConfig(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	trackedConfig := filepath.Join(fixture.repoRoot, "git", "gitconfig.shared")
 	trackedBytes := []byte("[core]\n\tattributesfile = ~/.gitattributes\n")
@@ -912,6 +930,7 @@ func TestHookInstallerSecondRunPreservesExactInstalledObjectsAndTrackedConfig(t 
 }
 
 func TestHookInstallerRefusesIncludedOriginAndMultipleGlobalValues(t *testing.T) {
+	t.Parallel()
 	t.Run("included origin", func(t *testing.T) {
 		fixture := newHookInstallFixture(t)
 		included := filepath.Join(filepath.Dir(fixture.globalConfig), "included global config")
@@ -965,6 +984,7 @@ func TestHookInstallerRefusesIncludedOriginAndMultipleGlobalValues(t *testing.T)
 }
 
 func TestHookInstallerRefusesForeignOwnedEntriesAndAttributes(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		path      func(hookInstallFixture) string
@@ -1043,6 +1063,7 @@ func TestHookInstallerRefusesForeignOwnedEntriesAndAttributes(t *testing.T) {
 }
 
 func TestHookInstallerConfigWriteFailureLeavesLinksInactive(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -1088,6 +1109,7 @@ func TestHookInstallerConfigWriteFailureLeavesLinksInactive(t *testing.T) {
 }
 
 func TestHookInstallerUsesExplicitHomeForGitWhenAmbientHomeDiffers(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	ambientHome := filepath.Join(t.TempDir(), "unrelated ambient home")
 	if err := os.MkdirAll(ambientHome, 0o755); err != nil {
@@ -1129,6 +1151,7 @@ func runIsolatedGit(t *testing.T, dir, home, globalConfig string, args ...string
 }
 
 func TestTask18HookDirectoryIgnoresMachineLinksButTracksItsIgnoreFile(t *testing.T) {
+	t.Parallel()
 	sourceRoot := task18RepoRoot(t)
 	root := filepath.Join(t.TempDir(), "ignore behavior repo")
 	home := filepath.Join(t.TempDir(), "isolated git home")
@@ -1164,6 +1187,7 @@ func TestTask18HookDirectoryIgnoresMachineLinksButTracksItsIgnoreFile(t *testing
 // to be free of private paths: core.attributesFile points at it, and it is
 // tracked in a public repository.
 func TestTask18TrackedAttributesCarryNoRulesAndNoPrivatePaths(t *testing.T) {
+	t.Parallel()
 	root := task18RepoRoot(t)
 	contents, err := os.ReadFile(filepath.Join(root, "git", "gitattributes"))
 	if err != nil {
@@ -1185,6 +1209,7 @@ func TestTask18TrackedAttributesCarryNoRulesAndNoPrivatePaths(t *testing.T) {
 }
 
 func TestTask18RetiresTemplateAndClaudeHookInstallers(t *testing.T) {
+	t.Parallel()
 	root := task18RepoRoot(t)
 	retired := []string{
 		"git/templates/hooks/commit-msg",
@@ -1275,6 +1300,7 @@ func installedHookTargets(t *testing.T, fixture hookInstallFixture) map[string]s
 // the next package upgrade, which is the whole reason the stable path is the
 // one worth accepting.
 func TestHookInstallerAcceptsASymlinkThatResolvesIntoAKeg(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	keg, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
 
@@ -1302,6 +1328,7 @@ func TestHookInstallerAcceptsASymlinkThatResolvesIntoAKeg(t *testing.T) {
 // offer --adopt-owned: adopting here would replace a path that survives
 // upgrades with one that does not.
 func TestHookInstallerRefusesAKegPathWhenTheStablePathIsInstalled(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	keg, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
 	if output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, stable); err != nil {
@@ -1330,6 +1357,7 @@ func TestHookInstallerRefusesAKegPathWhenTheStablePathIsInstalled(t *testing.T) 
 // is off and nothing says so until this refusal. Default stays strict; the flag
 // is what repairs it, and only for links that are ours.
 func TestHookInstallerAdoptsOwnedLinksFromAnEarlierBinary(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
 	stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
@@ -1364,6 +1392,7 @@ func TestHookInstallerAdoptsOwnedLinksFromAnEarlierBinary(t *testing.T) {
 // Adoption is scoped to links this installer could have written. A link to
 // another program stays refused with the flag, and nothing is mutated.
 func TestHookInstallerRefusesToAdoptForeignLinks(t *testing.T) {
+	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
 	foreign := filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit")
@@ -1389,6 +1418,7 @@ func TestHookInstallerRefusesToAdoptForeignLinks(t *testing.T) {
 // doctor prints the first form, and a remedy the human has to edit first is not
 // a remedy.
 func TestHookInstallerAcceptsTheAdoptFlagOnEitherSideOfTheMode(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{
 		{"install", "--adopt-owned"},
 		{"--adopt-owned", "install"},
