@@ -203,11 +203,29 @@ jobs:
       - name: scan
         run: gitleaks git --config git/gitleaks.toml --redact --exit-code 1
 
-  # Two checks, one property: the tools are a function of the repository, not of
-  # the machine. See the spec's phase 2 -- the first check asserts CONTAINMENT
-  # (the suite must not write to $HOME), not portability. The suite already
-  # passes under a synthetic HOME; that was never the question.
+  # Two properties, and they are different properties: the suite must not write
+  # to $HOME (CONTAINMENT -- see the spec's phase 2; the suite already passes
+  # under a synthetic HOME, that was never the question), and bootstrap.d must
+  # survive a restrictive umask.
+  #
+  # Three legs, not one step looping over both modules plus a second step for
+  # the umask. The loop-then-rerun shape made this job 75s -- 44s for both
+  # modules' containment, then 22s for bootstrap.d again -- which put it level
+  # with the slowest leg in the workflow, for two properties that do not depend
+  # on each other. Split, containment costs its own longest module rather than
+  # their sum (measured 2026-09-24: agents 14s, bootstrap.d 30s, umask 22s),
+  # and a failure says which module broke containment.
   hygiene:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: agents
+            property: home
+          - module: bootstrap.d
+            property: home
+          - module: bootstrap.d
+            property: umask
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -228,16 +246,20 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           # agents/go.mod, not agents/go.sum: that module has no external
           # dependencies any more, so go.sum is deleted and would be a cache key
-          # naming a file that does not exist. This job runs both modules' suites
-          # but after the test matrix on the same OS and architecture, so it
-          # restores that cache rather than seeding one.
+          # naming a file that does not exist. Per module, because each leg
+          # builds one: a key shared with the test matrix would let either seed
+          # a cache the other cannot use, which is the failure the test job's
+          # comment describes at length.
           cache-dependency-path: |
-            agents/go.mod
+            ${{ matrix.module }}/go.mod
             .github/go-build-cache-epoch
       # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
-      # deliberate design -- it errors rather than skips), and this job's own
-      # `go test` runs exercise that command, same as the test job's matrix.
+      # deliberate design -- it errors rather than skips), so the leg that runs
+      # the agents suite installs its own checksum-verified copy. bootstrap.d's
+      # suite does not need it: the test matrix's bootstrap.d leg already passes
+      # without this step, which is the evidence this condition rests on.
       - name: install gitleaks, checksum-verified
+        if: matrix.module == 'agents'
         run: |
           set -euo pipefail
           url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -250,6 +272,7 @@ jobs:
           installed="$(gitleaks version)"
           [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
       - name: suites must not write to $HOME
+        if: matrix.property == 'home'
         run: |
           set -euo pipefail
           # Pin Go's own caches outside the synthetic HOME, so the only writer that
@@ -262,11 +285,9 @@ jobs:
           GOMODCACHE_REAL=$(go env GOMODCACHE)
           GOPATH_REAL=$(go env GOPATH)
           H=$(mktemp -d); X=$(mktemp -d)
-          for module in agents bootstrap.d; do
-            ( cd "$module" && HOME="$H" XDG_CACHE_HOME="$X" XDG_CONFIG_HOME="$X/config" \
-                GOMODCACHE="$GOMODCACHE_REAL" GOPATH="$GOPATH_REAL" \
-                go test -count=1 ./... )
-          done
+          ( cd "${{ matrix.module }}" && HOME="$H" XDG_CACHE_HOME="$X" XDG_CONFIG_HOME="$X/config" \
+              GOMODCACHE="$GOMODCACHE_REAL" GOPATH="$GOPATH_REAL" \
+              go test -count=1 ./... )
           # Without this guard the check passes vacuously if $H is gone: find
           # errors, the substitution is empty, and the surrounding `if` suppresses
           # errexit. An absent HOME is not a contained one.
@@ -277,6 +298,7 @@ jobs:
             exit 1
           fi
       - name: bootstrap.d under a restrictive umask
+        if: matrix.property == 'umask'
         run: ( umask 077 && cd bootstrap.d && go test -count=1 ./... )
 
   # Derived-artifact checks: the command surface must describe itself honestly.
@@ -478,12 +500,27 @@ jobs:
     container:
       image: ${{ matrix.image }}
       options: --user root
+    env:
+      # The container's Go build cache, named explicitly so it can be cached.
+      # `./bootstrap` compiles bootstrap.d before it does anything else, and in
+      # a fresh container that is a cold build: 8.9s of the 21s `apply
+      # workstation` step in run 35980296271 (`bootstrap: building` at
+      # 09:17:56.0, preflight at 09:18:04.9). It is a content-addressed cache,
+      # so a restored entry can never be used for sources it did not compile.
+      GOCACHE: /tmp/go-build-cache
     steps:
+      # Keyed on the archive set's own version rather than on github.run_id,
+      # which is what it used to be: a key that is new on EVERY run means the
+      # post step re-saves 159-189 MB every run, and that save is inside the
+      # job -- 8s of the Debian leg's 78s in run 35980296271, on the critical
+      # path, for archives a later run would have restored for 4s. The restore
+      # key below still matches the run_id entries, so the first run against
+      # this key restores one of them rather than starting cold.
       - name: cache package archives
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ matrix.pkg_cache }}
-          key: stage-zero-${{ matrix.image }}-${{ github.run_id }}
+          key: stage-zero-${{ matrix.image }}-v1
           restore-keys: |
             stage-zero-${{ matrix.image }}-
       - name: prerequisites and passwordless sudo
@@ -498,10 +535,14 @@ jobs:
       # Brewfile would restore one stale Homebrew prefix for as long as the
       # cache lived, silently. Nothing downstream would notice: the apply step
       # below REPORTS its exit code rather than asserting it, so a `brew bundle`
-      # that never installed anything still exits the job green. This is the one
-      # guard that fails closed, and it is why the key can be trusted.
-      - name: the file the Homebrew cache key hashes is present
-        run: test -s bootstrap.d/Brewfile || { echo "bootstrap.d/Brewfile is missing or empty; the Homebrew cache key would hash nothing" >&2; exit 1; }
+      # that never installed anything still exits the job green. The epoch file
+      # is named by a key below for the same reason. This is the one guard that
+      # fails closed, and it is why those keys can be trusted.
+      - name: the files the cache keys hash are present
+        run: |
+          set -eu
+          test -s "$GITHUB_WORKSPACE/bootstrap.d/Brewfile" || { echo "bootstrap.d/Brewfile is missing or empty; the Homebrew cache key would hash nothing" >&2; exit 1; }
+          test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; the Go build cache key would hash nothing" >&2; exit 1; }
       # Homebrew's prefix, cached. In run 35975118898 this was 101 of the
       # Debian leg's 161 seconds -- 17s for the installer, then 84s for `brew
       # bundle` over the Brewfile's 30 formulae -- and it is a function of the
@@ -529,6 +570,17 @@ jobs:
         with:
           path: /home/linuxbrew/.linuxbrew
           key: stage-zero-brew-${{ matrix.image }}-${{ hashFiles('bootstrap.d/Brewfile') }}
+      # The container's Go build cache -- what `./bootstrap` spends its first 9
+      # seconds on. Keyed on the epoch that rotates every Go cache in this
+      # workflow, and with no restore-key under it: the key has to CHANGE for a
+      # re-seed to be possible at all (actions/cache does not overwrite a key
+      # that exists), and a prefix hit could only ever be a different epoch,
+      # which is the one thing a bump is asking not to reuse.
+      - name: cache the container's Go build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.GOCACHE }}
+          key: stage-zero-gobuild-${{ matrix.image }}-${{ hashFiles('.github/go-build-cache-epoch') }}
       # --system, not --global, for the reason the linux-dotfiles job gives:
       # `git config --global` creates ~/.gitconfig, which the config phase then
       # declines to overwrite, and check reports the machine unconverged.
