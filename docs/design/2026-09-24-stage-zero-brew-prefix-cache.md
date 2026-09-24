@@ -1,8 +1,8 @@
 # Stage zero keeps Homebrew's prefix between runs
 
 **Date:** 2026-09-24
-**Status:** implemented in `.github/workflows/verify.yml`; §5 is the measurement
-that decides whether it stays.
+**Status:** in force. Implemented in `.github/workflows/verify.yml`; §5 is the
+measurement that decided it — kept, at 2m50s → 1m41s per pull request.
 **Related:** [spec 5 — the verification gate](2026-08-11-spec-5-verification-gate.md),
 [Debian container package cache fix](2026-08-29-ci-debian-package-cache-fix.md)
 
@@ -109,23 +109,59 @@ if `packages` succeeded. A warm bundle reaches them sooner rather than later, an
 the job's exit-code-tolerant shape means the difference between "reached" and
 "did not reach" is exactly this.
 
-**Measurement protocol.** The first run against a new key is cold and saves; a
-re-run of that same run restores from the cache its first attempt wrote, which is
-the only way to time a restore before the entry reaches `master`. Both are read
-from `GET /repos/{owner}/{repo}/actions/jobs/{id}` (step timings) and
-`/actions/caches` (entry size):
+## 5. What it measured
 
-- keep if the Debian leg drops well below its 2m41s baseline — the floor is
-  `test (macos, agents)` at 1m46s, which becomes the critical path;
-- revert if the restore plus re-run installer costs what the install cost, or if
-  the entry is large enough to evict the archives and `setup-go` caches it sits
-  beside.
+The first run against a new key is cold and writes the entry; a re-run of that
+same run reads the entry its first attempt wrote, which is the only way to time a
+restore before the copy on `master` exists. Both are run 35976648444.
 
-**The cache budget is real.** At the time of writing `actions/cache/usage`
-reports 11.27 GB (10.5 GiB) active across 73 entries against GitHub's documented
-10 GB per repository, and the largest entries are the per-`run_id` stage-zero
-archives (159 MB Debian, 189 MB Arch) that every run writes a fresh copy of. The
-brew entry therefore has to be read on every run to stay resident, which it is:
-both legs restore it before anything else. If it turns out to be evicted instead,
-the entry is re-created on the next run and the leg costs what it costs today —
-slower, not wrong.
+| | Debian leg | Arch leg | pull request wall clock | critical path |
+|---|---|---|---|---|
+| baseline, run 35975118898 | 2m41s | 2m07s | 2m50s | `linux-stage-zero` (Debian) |
+| attempt 1, cold | 3m34s | 2m14s | 3m41s | `linux-stage-zero` (Debian), **+73s writing the entry** |
+| attempt 2, warm | **1m10s** | **54s** | **1m41s** | `test (macos-latest, agents)`, 1m27s |
+
+Restore is 21s of the Debian leg and 10s of the Arch leg (615 MB and 576 MB
+written). Inside the Debian leg's `apply workstation`:
+
+| step | cold (baseline) | warm |
+|---|---|---|
+| apt stage zero | 2s | 2s |
+| Homebrew installer over the restored prefix | 17s | 5s |
+| `brew bundle` | 84s | 1s |
+| `config` + `fish` (`source fish/mypre.fish; install_fisher`) | 1s | 1s |
+| `devtools` | 2s | 1s |
+
+**Kept.** The steady state is 1m09s faster per pull request, the critical path
+moved off stage zero exactly as predicted, and the cold penalty lands on
+Brewfile edits — the runs that have something to prove.
+
+### 5.1 The entry has to reach `master` before a pull request can read it
+
+Cache entries are scoped to a ref, and while a pull request reads the base
+branch's entries it cannot read another pull request's. So this is cold twice
+before it is warm for everyone: once in the pull request that writes the entry
+its own re-runs read, and once in the first `master` run after the merge, whose
+copy is what later pull requests restore. Both are paid after review except the
+first, which is why the re-run above — not attempt 1 — is the number that
+describes the steady state.
+
+### 5.2 What would get this reverted
+
+- A restore growing to the size of the install it replaces. It is 21s against
+  101s.
+- An entry large enough to evict what it sits beside. It writes 1.19 GB against
+  a budget the API reports at 10.06 GiB across 68 entries — at GitHub's
+  documented 10 GB per repository, with eviction therefore already active. What
+  keeps the entry resident is that both legs read it at the top of every run,
+  while the archives beside it are rewritten per `run_id`: the entry is never
+  the least recently used. If it is evicted anyway, the run is slower, not
+  wrong.
+- A `brew bundle` that stops being a no-op on a warm prefix, which would mean
+  the restored prefix had stopped matching what the Brewfile asks for.
+
+The lever for the budget pressure is not this cache but the one under it: the
+per-`run_id` archive entries write 348 MB on *every* run and can never be
+restored by a later one, which is what fills a 10 GB budget with 68 entries.
+That is a separate change to `stage-zero-<image>-<run_id>` and it is not made
+here.
