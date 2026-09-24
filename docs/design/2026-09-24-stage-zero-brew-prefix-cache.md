@@ -119,10 +119,13 @@ restore before the copy on `master` exists. Both are run 35976648444.
 |---|---|---|---|---|
 | baseline, run 35975118898 | 2m41s | 2m07s | 2m50s | `linux-stage-zero` (Debian) |
 | attempt 1, cold | 3m34s | 2m14s | 3m41s | `linux-stage-zero` (Debian), **+73s writing the entry** |
-| attempt 2, warm | **1m10s** | **54s** | **1m41s** | `test (macos-latest, agents)`, 1m27s |
+| attempt 2, warm | 1m10s | 54s | 1m41s | `test (macos-latest, agents)`, 1m27s |
+| the next commit, run 35977353146 | 1m16s | 1m13s | **1m27s** | `test (macos-latest, agents)`, 1m14s |
 
-Restore is 21s of the Debian leg and 10s of the Arch leg (615 MB and 576 MB
-written). Inside the Debian leg's `apply workstation`:
+The last row is the steady state, and it is a different commit: the key is the
+Brewfile's hash, not the tree's, so the next push to the same pull request hits
+the same entry — 19s to restore on the Debian leg and 16s on the Arch leg, with
+nothing written back. Inside the Debian leg's `apply workstation`:
 
 | step | cold (baseline) | warm |
 |---|---|---|
@@ -132,7 +135,7 @@ written). Inside the Debian leg's `apply workstation`:
 | `config` + `fish` (`source fish/mypre.fish; install_fisher`) | 1s | 1s |
 | `devtools` | 2s | 1s |
 
-**Kept.** The steady state is 1m09s faster per pull request, the critical path
+**Kept.** The steady state is 2m50s → 1m27s per pull request, the critical path
 moved off stage zero exactly as predicted, and the cold penalty lands on
 Brewfile edits — the runs that have something to prove.
 

@@ -439,14 +439,14 @@ jobs:
       # it. A restore-key would hand that PR the previous prefix instead, which
       # trades the property away quietly on the single run it was needed.
       #
-      # Measured in run 35976648444. Warm, the Debian leg's `apply workstation`
-      # is 116s -> 20s: the installer 17s -> 5s and `brew bundle` 84s -> 1s, for
-      # a 21s restore (615 MB; the Arch leg restores 576 MB in 10s). The pull
-      # request's wall clock went 2m50s -> 1m41s and the critical path moved to
-      # `test (macos-latest, agents)` at 1m27s. Cold, that same run's first
-      # attempt paid 73s to WRITE the entry -- paid by a Brewfile edit, and by
-      # the first run on each ref, which is the trade
-      # docs/design/2026-09-24-stage-zero-brew-prefix-cache.md records.
+      # Measured in run 35976648444 and its successor. Warm, the Debian leg's
+      # `apply workstation` is 116s -> 20s: the installer 17s -> 5s and `brew
+      # bundle` 84s -> 1s, for a 19-21s restore (615 MB; the Arch leg restores
+      # 576 MB in 16s). The pull request's wall clock went 2m50s -> 1m27s, and
+      # the critical path moved to `test (macos-latest, agents)` at 1m14s.
+      # Cold, run 35976648444's first attempt paid 73s to WRITE the entry --
+      # paid by a Brewfile edit, and by the first run on each ref, which is the
+      # trade docs/design/2026-09-24-stage-zero-brew-prefix-cache.md records.
       - name: cache the Homebrew prefix
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
