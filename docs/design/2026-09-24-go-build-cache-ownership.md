@@ -97,17 +97,52 @@ dependencies, last changed 2026-09-21, so the hash in the key is a constant.
   cache's key and the path it restores all read it, so a bump is one edit rather
   than four that can disagree.
 
-## 4. What it measured, and what would revert it
+## 4. What it measured
 
-Two runs against the new keys: the first misses everything and saves, the second
-restores both the build cache and the toolchain. Keep it if
+Run 35979821906, both attempts. Attempt 1 met every new key cold and saved;
+attempt 2 restored them.
 
-- the macOS `build` step drops to about a second and the race step loses its
-  ~13s compile share;
-- the saved macOS entry is around 50 MB rather than 8.9 MB, which is the direct
-  test of §2's claim about who was seeding it;
-- `setup-go` reports finding the toolchain rather than installing it — if it
-  installs anyway, the toolchain step is dead weight and comes out.
+| leg | before (35977829906) | cold, attempt 1 | warm, attempt 2 |
+|---|---|---|---|
+| `test (macos-latest, agents)` | **105s** | 72s | **44s** |
+| `test (ubuntu-latest, agents)` | 53s | 50s | 28s |
+| `test (ubuntu-24.04-arm, agents)` | 36s | 53s | 32s |
+| whole run, to the gate | 2m00s | 1m27s | **1m24s** |
+
+The macOS steps, which is where the money was:
+
+| step | before | cold | warm |
+|---|---|---|---|
+| `setup-go` | 23s | 3s | 2s |
+| `build` | 8s | 6s | 1s |
+| `vet` | 4s | 3s | 0s |
+| `test` | 19s | 16s | 13s |
+| `test -race` | 39s | 27s | 17s |
+
+`setup-go` now logs `Found in cache @ /Users/runner/hostedtoolcache/go/1.26.6/arm64`
+instead of installing Go, and the go-build cache it restores is the agents leg's
+own: 35.7 MB, where the macOS entry had been 8.9 MB seeded by `macos-dotfiles`.
+That 35.7 MB is not the 50.4 MB §1 compresses to locally — that measurement is
+`go1.27.1` on this machine and the runner pins `go1.26.6`, so the sizes are not
+comparable across Go versions. What is comparable is the work: `build` 1s and
+`vet` 0s on a warm macOS runner, where the entry used to leave 12s of compiling
+behind it.
+
+**The critical path moved.** With the macOS leg at 44s the gate now waits on
+`linux-stage-zero` (78s: 22s restoring the Homebrew prefix, 21s applying, 13s of
+apt) and on `hygiene` (75s: 44s running both suites under a synthetic `$HOME` and
+22s more running bootstrap.d under a restrictive umask). The next lever is
+there, not on macOS — and the two Go legs that still outrun the macOS one,
+bootstrap.d at 55s and hygiene, are the ones that spend their time spawning
+`./bootstrap` rather than compiling.
+
+## 5. What would revert it
+
+- The toolchain step: if `setup-go` stops finding the restored toolchain and
+  installs anyway, the step is dead weight and comes out.
+- The epoch: if a rotation does not produce a bigger entry than the one it
+  replaced (8.9 → 35.7 MB on macOS here), the seeding story in §2 was wrong and
+  the per-job keys are not doing what they were added for.
 
 The costs are one cold run per rotation and about 200 MB of cache storage
 (three toolchain entries, read on every run, plus one go-build entry per key).
