@@ -91,9 +91,12 @@ jobs:
       # hashFiles returns the empty string for a path that matches nothing, and
       # setup-go throws only when EVERY named path matches nothing -- so a
       # deleted epoch file would fall back to the pre-epoch key in silence. The
-      # guard below is the one thing that fails closed.
+      # guard below is the one thing that fails closed, and it names
+      # $GITHUB_WORKSPACE because this job runs `run:` steps from the module
+      # directory (defaults.run.working-directory): the first version of it used
+      # the relative path and failed all four legs of run 35979538540.
       - name: the cache key's epoch file is present
-        run: test -s .github/go-build-cache-epoch || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
       # Setup-go downloads and installs this toolchain on every run -- 23s on
       # macOS, 13 of them copying the extracted tree into the runner's tool
       # cache. Restoring that tree instead lets setup-go find the version it was
@@ -214,7 +217,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # See the test job for what these three steps do and why the guard exists.
       - name: the cache key's epoch file is present
-        run: test -s .github/go-build-cache-epoch || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
       - name: cache the Go toolchain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -290,7 +293,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # See the test job for what these three steps do and why the guard exists.
       - name: the cache key's epoch file is present
-        run: test -s .github/go-build-cache-epoch || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
       - name: cache the Go toolchain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -418,7 +421,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # See the test job for what these three steps do and why the guard exists.
       - name: the cache key's epoch file is present
-        run: test -s .github/go-build-cache-epoch || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
       - name: cache the Go toolchain
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

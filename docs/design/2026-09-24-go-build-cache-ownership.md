@@ -80,7 +80,12 @@ dependencies, last changed 2026-09-21, so the hash in the key is a constant.
   if the file is missing: `hashFiles` returns the empty string for a path that
   matches nothing, and setup-go throws only when *every* named path matches
   nothing, so a deleted epoch file would otherwise fall back to the pre-epoch
-  key in silence.
+  key in silence. The guard names `$GITHUB_WORKSPACE` and not a relative path:
+  the `test` job runs its `run:` steps from the module directory
+  (`defaults.run.working-directory`), and the first version of this guard failed
+  on all four legs of run 35979538540 for that reason. Rotating the epoch was
+  the repair; the run that failed had already let the three jobs that outlived
+  it seed the new keys from their own partial builds.
 - **The toolchain is cached.** `macos-dotfiles` and the macOS matrix leg both
   pay 23s in `setup-go` — 5s downloading Go and 13s copying the extracted tree
   into the runner's tool cache. An `actions/cache` step on
