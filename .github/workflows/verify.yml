@@ -30,6 +30,11 @@ env:
   # A stray go.work -- a runner's or a contributor's -- must never change what
   # CI resolves. Spec 2 §11 chose two modules with no workspace deliberately.
   GOWORK: off
+  # Exact patch, and one source for it: setup-go's input, the toolchain cache's
+  # key and the path that cache restores all read this, so bumping Go is one
+  # edit instead of four that can disagree. Never go-version-file -- `go 1.26`
+  # in a go.mod floats to whatever the runner happens to ship.
+  GO_VERSION: '1.26.6'
 
 jobs:
   test:
@@ -60,19 +65,57 @@ jobs:
         working-directory: ${{ matrix.module }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The Go caches. Four measured facts decide their shape; the full record is
+      # docs/design/2026-09-24-go-build-cache-ownership.md.
+      #
+      # setup-go keys its cache on the files in cache-dependency-path, restores
+      # with NO restore-key, and returns early from its save when the primary key
+      # already exists. An unrotated key is therefore frozen at whatever the
+      # FIRST job to finish with that key had in GOCACHE -- and every job on the
+      # same OS and architecture used to share one, so the first to finish was
+      # the fastest, not the one that builds the most. Measured 2026-09-24: on
+      # macOS the 43s `macos-dotfiles` had seeded the agents leg's key with
+      # 8.9 MB of bootstrap.d artifacts, on Linux x64 the 20s `docs` job with
+      # 17.3 MB of doctest build, and only arm64 -- alone on its key -- with a
+      # complete 33.7 MB. A complete cache of this module is 50.4 MB. The bill
+      # was `build` 8s on macOS against 0.4s where the cache was complete, and
+      # `-race` 26.1s against 9.3s on arm64, which had nothing left to compile.
+      #
+      # So each job names what IT builds, and .github/go-build-cache-epoch
+      # rotates every key at once -- the lever that did not exist when those
+      # snapshots froze. Do not turn the cache off instead: setup-go caches the
+      # go-build cache as well as the module cache, and losing it costs 4-6s per
+      # job in recompilation (measured: 0-2s for `build` across five runs
+      # before, 5s and 7s after).
+      #
+      # hashFiles returns the empty string for a path that matches nothing, and
+      # setup-go throws only when EVERY named path matches nothing -- so a
+      # deleted epoch file would fall back to the pre-epoch key in silence. The
+      # guard below is the one thing that fails closed, and it names
+      # $GITHUB_WORKSPACE because this job runs `run:` steps from the module
+      # directory (defaults.run.working-directory): the first version of it used
+      # the relative path and failed all four legs of run 35979538540.
+      - name: the cache key's epoch file is present
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+      # Setup-go downloads and installs this toolchain on every run -- 23s on
+      # macOS, 13 of them copying the extracted tree into the runner's tool
+      # cache. Restoring that tree instead lets setup-go find the version it was
+      # about to install. Keyed by OS, architecture and version only: the
+      # toolchain is the same for every job, so sharing it here is the point.
+      - name: cache the Go toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Exact patch, never go-version-file: `go 1.26` in go.mod floats to
-          # whatever the runner happens to ship.
-          go-version: '1.26.6'
-          # Keep the cache, and key it on go.mod. `go.sum` is deleted now that
-          # this module's last two third-party dependencies went with the code
-          # that imported them, so the default key would name a file that does
-          # not exist. Turning the cache off instead is the mistake this line
-          # exists to avoid: setup-go caches the go-build cache as well as the
-          # module cache, and losing it costs 4-6s per job in recompilation --
-          # measured, 0-2s for `build` across five runs before, 5s and 7s after.
-          cache-dependency-path: agents/go.mod
+          go-version: ${{ env.GO_VERSION }}
+          # Per module, not agents/go.mod for both legs: the bootstrap.d leg
+          # builds the other module, and a key shared between them means the
+          # faster leg seeds a cache the slower one cannot use.
+          cache-dependency-path: |
+            ${{ matrix.module }}/go.mod
+            .github/go-build-cache-epoch
       - name: build
         run: go build ./...
       - name: gofmt
@@ -172,13 +215,25 @@ jobs:
       GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # See the test job for what these three steps do and why the guard exists.
+      - name: the cache key's epoch file is present
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+      - name: cache the Go toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
+          go-version: ${{ env.GO_VERSION }}
           # agents/go.mod, not agents/go.sum: that module has no external
           # dependencies any more, so go.sum is deleted and would be a cache key
-          # naming a file that does not exist.
-          cache-dependency-path: agents/go.mod
+          # naming a file that does not exist. This job runs both modules' suites
+          # but after the test matrix on the same OS and architecture, so it
+          # restores that cache rather than seeding one.
+          cache-dependency-path: |
+            agents/go.mod
+            .github/go-build-cache-epoch
       # agents/internal/guard hard-requires gitleaks on PATH (spec 1 §7's
       # deliberate design -- it errors rather than skips), and this job's own
       # `go test` runs exercise that command, same as the test job's matrix.
@@ -236,13 +291,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # See the test job for what these three steps do and why the guard exists.
+      - name: the cache key's epoch file is present
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+      - name: cache the Go toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
-          # agents/go.mod, not agents/go.sum: that module has no external
-          # dependencies any more, so go.sum is deleted and would be a cache key
-          # naming a file that does not exist.
-          cache-dependency-path: agents/go.mod
+          go-version: ${{ env.GO_VERSION }}
+          # Keyed on the list this job exists to run, not on the module: this is
+          # the fastest job on Linux, and while it shared the test matrix's key
+          # it seeded every other job's go-build cache from a doctest-only build
+          # -- 17.3 MB where a complete one is 50.4 MB.
+          cache-dependency-path: |
+            agents/doctests.txt
+            .github/go-build-cache-epoch
       - name: every command carries help, an audience, and honest flags
         run: |
           set -euo pipefail
@@ -353,13 +419,24 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # See the test job for what these three steps do and why the guard exists.
+      - name: the cache key's epoch file is present
+        run: test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; every Go cache key would fall back to a frozen snapshot" >&2; exit 1; }
+      - name: cache the Go toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.tool_cache }}/go/${{ env.GO_VERSION }}
+          key: go-toolchain-${{ runner.os }}-${{ runner.arch }}-${{ env.GO_VERSION }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.26.6'
-          # agents/go.mod, not agents/go.sum: that module has no external
-          # dependencies any more, so go.sum is deleted and would be a cache key
-          # naming a file that does not exist.
-          cache-dependency-path: agents/go.mod
+          go-version: ${{ env.GO_VERSION }}
+          # Keyed on bootstrap.d, which `./bootstrap plan` builds -- not on
+          # agents. On macOS this job is the fast one, and while it shared the
+          # agents key it seeded that leg's cache with 8.9 MB of this module's
+          # artifacts where a complete agents cache is 50.4 MB.
+          cache-dependency-path: |
+            bootstrap.d/go.mod
+            .github/go-build-cache-epoch
       - name: plan
         run: ./bootstrap plan dotfiles
 
