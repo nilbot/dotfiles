@@ -125,7 +125,14 @@ restore before the copy on `master` exists. Both are run 35976648444.
 The last row is the steady state, and it is a different commit: the key is the
 Brewfile's hash, not the tree's, so the next push to the same pull request hits
 the same entry — 19s to restore on the Debian leg and 16s on the Arch leg, with
-nothing written back. Inside the Debian leg's `apply workstation`:
+nothing written back on either. Across the three warm runs the stage-zero legs
+sat at 1m10s–1m23s against a 2m07s–2m41s baseline, and the run after the last
+row measured 2m02s of wall clock because the gate now waits on `test
+(macos-latest, agents)`, whose own time moved 1m14s–1m45s across those runs.
+What a pull request waits for now is the Go suite on a macOS runner, which is
+where a wait belongs; stage zero is no longer part of it.
+
+Inside the Debian leg's `apply workstation`:
 
 | step | cold (baseline) | warm |
 |---|---|---|
@@ -135,9 +142,9 @@ nothing written back. Inside the Debian leg's `apply workstation`:
 | `config` + `fish` (`source fish/mypre.fish; install_fisher`) | 1s | 1s |
 | `devtools` | 2s | 1s |
 
-**Kept.** The steady state is 2m50s → 1m27s per pull request, the critical path
-moved off stage zero exactly as predicted, and the cold penalty lands on
-Brewfile edits — the runs that have something to prove.
+**Kept.** The stage-zero legs fell by more than half and the critical path moved
+off them exactly as predicted. The cold penalty lands on Brewfile edits — the
+runs that have something to prove.
 
 ### 5.1 The entry has to reach `master` before a pull request can read it
 
