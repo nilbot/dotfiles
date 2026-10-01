@@ -416,6 +416,15 @@ not merely portable in principle, it is deployed. And the shared config holds
 the CLI's own settings file, which is why the app's trust mechanism is still the
 open question in §9 and not answered by finding the shared directory.
 
+*(Measured again 2026-10-01: the deployment this paragraph leans on is gone.
+`~/.gemini/skills` is not on this machine, as it was not on 2026-09-21 when the
+manifest rows for both harness skill trees were deleted — the entry
+[why is `~/.claude/skills` a real directory](../qna/why-is-claude-skills-a-real-directory.md)
+has that history — and
+the `gemini/` directory the link pointed into is deleted with this change. Skills
+are placed per repository now: `.agents/skills/`, with `.claude/skills` and
+`.codex/skills` as relative symlinks that `agents init` writes.)*
+
 **`hook-cwd: config-dir` breaks a silent assumption.** Antigravity runs the hook
 from the directory containing `hooks.json`. Every relative path in a generated
 command would resolve differently there. `HookCommand` already emits an absolute

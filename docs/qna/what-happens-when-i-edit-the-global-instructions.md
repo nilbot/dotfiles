@@ -31,6 +31,16 @@ next session on this machine, in every repository and under every harness, with
 no distribution step. Other machines get it when their dotfiles checkout is
 updated.
 
+**Checking anything else out replaces the instructions too.** The symlinks point
+at the working-tree file, not at a branch or a commit, so in this checkout `git
+switch`, `git checkout <old commit>` and an interrupted merge all change what the
+next session reads. Measured 2026-10-01: after merging a change here, a `git
+switch master` left master one merge behind, and the rules were gone from the
+working tree until `git fetch && git merge --ff-only origin/master` ran. Reach for
+that rather than `git pull` when the working tree has unrelated changes: with
+`pull.rebase` set, `git pull` refuses outright and leaves the checkout where it
+was.
+
 ### What reacts to an edit
 
 Nothing classifies instruction files: `agents drift` and `agents update` were deleted

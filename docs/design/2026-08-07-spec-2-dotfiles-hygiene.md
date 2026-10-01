@@ -652,7 +652,9 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
   and none of `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip`
   resolves inside it.
 - `gnupg/`, `gemini/skills/` and `macOS/iterm2/` are tracked and referenced by
-  no target.
+  no target. *(All three are gone now. `gnupg/` and `macOS/iterm2/` went in
+  `ac5286a` on 2026-08-11; `gemini/skills/` was still linked by a manifest row
+  then, and went on 2026-10-01 once that row had been deleted.)*
 - `bin/rgr.bin` and `bin/git-chdate.bin` have never worked (§9.2).
 
 ### Go module layout
