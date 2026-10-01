@@ -320,6 +320,142 @@ func TestLivingDocumentsNameNoDeletedCommand(t *testing.T) {
 	}
 }
 
+// pathSpan matches an inline code span that names a path into this repository:
+// one or more segments joined by `/`, with an optional `:line` or `:from-to`
+// suffix a reader can follow.
+//
+// A span opening with `~`, `/`, `./` or `..` cannot match, and that is
+// deliberate: those are a home path, an absolute path, a command, and a path
+// out of the tree. None of them is this check's business.
+var pathSpan = regexp.MustCompile("`(\\.?[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)*/?)(?::\\d+(?:-\\d+)?)?`")
+
+// pathsOutsideTheCheckout are the path spans a living document may name that
+// this checkout does not contain. Each is either written onto a machine at
+// runtime or belongs to another repository:
+//
+//   - `.agents/hooks.json`, `.claude/settings.json` and `.codex/hooks.json` are
+//     the harness wiring `agents init` writes per repository. All three are
+//     git-excluded (`.gitignore:21`, `:4`, `:22`), so no checkout contains them.
+//   - `nilbot/homebrew-tap` is a GitHub repository, named owner/name.
+//   - `agents/vX.Y.Z` is a module tag name inside it, not a path here.
+//   - `info/exclude` is git's own `.git/info/exclude`.
+//
+// The list is written out one path at a time rather than matched by a pattern.
+// A pattern would quietly grow to cover the next real mistake, which is the one
+// thing this check exists to catch.
+var pathsOutsideTheCheckout = map[string]bool{
+	".agents/hooks.json":    true,
+	".claude/settings.json": true,
+	".codex/hooks.json":     true,
+	"nilbot/homebrew-tap":   true,
+	"agents/vX.Y.Z":         true,
+	"info/exclude":          true,
+}
+
+// A living document may only name a path this repository contains, or one that
+// is deliberately elsewhere.
+//
+// This is the check the command-name scans cannot make. A stale command is
+// caught because there is a registry to resolve it against; a stale path has
+// only the tree. A document that grows a path from another repository —
+// `tools/doc_drift.py`, `docs/CONTRIBUTING.md` — reads as authoritative to the
+// agent that goes looking for it, and on 2026-10-01 the first draft of the
+// global writing rule did exactly that with nothing failing.
+//
+// Three decisions keep it honest:
+//
+//   - Only inline code spans, never fenced blocks. A fenced block is a
+//     transcript: its paths are arguments, output lines and placeholders, and
+//     requiring a documented command to be runnable as written is a different
+//     check with a different answer.
+//   - Only spans carrying a `/`. A bare `AGENTS.md` is usually a filename being
+//     discussed rather than a path being pointed at.
+//   - A span resolves at the repository root, or under another path the same
+//     line names: the root README's Layout table writes `docs/` and then the
+//     four stores inside it.
+func TestLivingDocumentsNameOnlyResolvablePaths(t *testing.T) {
+	root := task18RepoRoot(t)
+
+	spans := 0
+	for _, rel := range livingDocuments(t, root) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			continue // an optional document that does not exist yet
+		}
+		for n, line := range linesWithoutFences(string(data)) {
+			var named []string
+			for _, m := range pathSpan.FindAllStringSubmatch(line, -1) {
+				if strings.Contains(m[1], "/") {
+					named = append(named, m[1])
+				}
+			}
+			for _, path := range named {
+				spans++
+				if pathsOutsideTheCheckout[path] {
+					continue
+				}
+				if resolvesInTheTree(root, path, named) {
+					continue
+				}
+				t.Errorf("%s:%d names `%s`, which is not in this checkout", rel, n+1, path)
+			}
+		}
+	}
+	// Measured 2026-10-01: the living documents hold 75 path spans, so a floor
+	// this far below it catches a pattern that stopped matching rather than a
+	// document that stopped naming paths.
+	if spans < 20 {
+		t.Fatalf("found only %d path spans; this check would prove little", spans)
+	}
+}
+
+// linesWithoutFences returns a document's lines with every fenced code block
+// blanked out, so a caller scans prose and still reports the line number the
+// reader sees.
+func linesWithoutFences(body string) []string {
+	lines := strings.Split(body, "\n")
+	inFence := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			lines[i] = ""
+			continue
+		}
+		if inFence {
+			lines[i] = ""
+		}
+	}
+	return lines
+}
+
+// resolvesInTheTree reports whether a span names something that exists: at the
+// repository root, or inside another path the same line names and which is a
+// directory.
+func resolvesInTheTree(root, span string, named []string) bool {
+	if existsInTree(filepath.Join(root, span)) {
+		return true
+	}
+	for _, other := range named {
+		if other == span {
+			continue
+		}
+		base := filepath.Join(root, other)
+		info, err := os.Stat(base)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if existsInTree(filepath.Join(base, span)) {
+			return true
+		}
+	}
+	return false
+}
+
+func existsInTree(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // declaresItselfARecord reports whether a document says, near its top, that it
 // is a record rather than a description of the present.
 //
