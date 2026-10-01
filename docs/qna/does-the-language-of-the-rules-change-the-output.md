@@ -41,9 +41,36 @@ runs in *both* arms removed 兜底 and 前置 from their drafts. A short list of
 words does bite. What could not generalize was rule 6's long offender table, which is
 why the table moved out of the file; this finding does not argue against that move.
 
+## Round 2: a non-technical task
+
+Run the same day, because the human's reading of round 1 was that the technical
+register has no good Chinese models to imitate and that a non-technical subject
+would show a difference if one existed. The task was a message to a family group
+about a National Day visit to a grandmother — same design, six subagents per
+variant, same prompt, the variant delivered by swapping the file the symlinks point
+at.
+
+- **Quality: no difference again, and the sign flipped again.** Blind, on one
+  scale: mixed 5.33 against English 6.00. Round 1 had mixed ahead by 0.50; round 2
+  has it behind by 0.67. Pooled over both rounds the arms are 6.75 and 6.83.
+- **Compliance did not replicate.** Both arms ran the self-review and reported it,
+  6/6 each, where round 1 was 6/6 against 3/6. That behavioural gap was a property
+  of the task, not of the rule's language.
+- **What the task changed was what failed.** Every arm scored below its round-1
+  counterpart (5.33–6.00 against 7.67–8.17), and the failures were no longer about
+  wording: the judge penalised six runs for inventing commitments the material
+  never contained — buying the handrail, splitting the shopping, telling the
+  neighbour, promising photographs — and three for getting the timeline or the
+  direction wrong (who drives down, who goes back, which day). Nothing in
+  `global/AGENTS.md` forbids adding an action nobody agreed to. Rule 5 is about
+  what a reader must be told, not about what a writer must not make up.
+
 ## What follows
 
-The case for writing those rules in Chinese is compliance and the human's reading
-cost — not prose quality. "It makes the writing better" is not supported here.
-Anyone repeating this should use more samples and a harder task: this one was a
-translation of a fact sheet, which every arm handled competently.
+Neither round supports a quality claim in either direction, and the compliance edge
+did not survive a second task. What is left is the reason this design cannot
+measure: the human reads and edits the file, and rules about Chinese prose written
+in Chinese do not have to be translated back to be judged. The human's own reading
+of round 1 — they preferred the mixed arm's outputs while the blind judge called it
+a tie — is the signal that matters for that purpose, and it is not the signal these
+two rounds collected.
