@@ -91,48 +91,12 @@ stand on its own.
    sentence — each bets that the reader already knows what you left out.
 5. **Assume they have read nothing else.** "Fixed now" tells them neither what
    changed nor how you checked it.
-6. **Read the draft back with a checklist, sentence by sentence — and report what
-   you checked.** The five rules above cover references and definitions; none of
-   them looks at wording. Drafting from an English-shaped plan produces literal
-   renderings in which every word is correct and none of it is how anyone speaks.
-
-   "Re-read it for translationese" is not a step you can honestly tell yourself you
-   did — that exact phrasing stood here, and the very next document shipped
-   「A 和 B 都需要你各启动一次游戏」. Ask these instead, one sentence at a time:
-
-   - **Pronouns** — does 这 / 那 / 它 / 其 / 该 / 此 point at something named in the
-     previous sentence? If not, write the name.
-   - **Quantity words** — 各 / 均 / 分别 / 共同 need a plural subject.
-     「A 和 B 都需要你各启动一次游戏」falls apart because 你 is singular; write
-     「A 要做一次，B 也要做一次；每次都需要你启动一遍游戏」.
-   - **Noun piles** — 引用版本, 版本标记状态, 语料规模. Expand to a clause: the version
-     of the assembly being *referenced*; the mark recording *which version this
-     document was checked against*.
-   - **Squeezed verbs** — 编过, 跑过, 挂掉, 降级通过. Write the verb out: 编译通过,
-     运行过, 崩溃, 把程序集版本降到 6.0 后编译通过.
-   - **Say it aloud** — if the sentence is not something a person would say to
-     another person, rewrite it.
-   - **Register** — 收盘 for "end of session" borrows the stock market; plain is
-     这次会话结束时.
-
-   **Report the outcome of that pass in the delivery** — name the sentences you
-   rewrote. A check whose result is invisible is a check that did not happen, and
-   the human can only conclude you skipped it.
-
-   Known offenders, appended whenever the human points at one:
-
-   | written | why it fails | plain |
-   |---|---|---|
-   | 安静地给出残缺结果 | "silently" rendered literally | 不报错，但输出的结果是残缺的 |
-   | 更干净的编译 | "clean build" | 编译时不会再有那 33 条警告 |
-   | 收盘 | stock-market close for "end of session" | 这次会话结束时 |
-   | 各启动一次 | 各 needs a plural subject; 你 is singular | A 要做一次，B 也要做一次，每次都要你启动一遍 |
-   | 引用版本 | noun pile from "reference version" — of what? | 引用到的程序集版本 |
-   | 能编过 / 降级通过 | squeezed verb; says something changed, not what | 能编译通过 / 把程序集版本降到 6.0 后编译通过 |
-
-   **This table grows only when the human points at a sentence.** Patterns already
-   in it you will catch with the checklist; patterns that are not, you will not — so
-   when the human flags one, fix the text and add the row in the same turn.
+6. **Read your draft back as a native reader, not as its author.** A plan shaped
+   in English comes out literal: every word correct, none of it how anyone
+   speaks. Assume you are the student who scores 130+ on the Chinese Gaokao
+   language paper — in another language, its best reader — and rewrite everything
+   awkward, everything that stops being fluent, and everything that jumps context
+   without saying how the two things connect. Name the sentences you rewrote.
 
 The test is not "is it accurate" but "can someone who was not here act on it?" —
 including the next session of you, with only the repository in front of it.
