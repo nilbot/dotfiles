@@ -113,7 +113,8 @@ agents help --render=markdown
 | `agents/` | the `agents` binary — repository scaffold, harness wiring, the git hook dispatcher, and the pre-commit guard |
 | `AGENTS.md`, `CLAUDE.md` | Tier 1 canonical root router and harness compatibility symlink |
 | `.agents/` | Tier 2 repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and Antigravity's wiring config (`.agents/hooks.json`) |
-| `fish/`, `tmux/`, `claude/`, `gemini/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
+| `fish/`, `tmux/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
+| `gemini/` | one skill left in the tree; the manifest dropped `gemini/skills` on 2026-09-21, and no phase or script reads it |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
 | `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question, `archive/` immutable pre-2026-08-20 history |
 

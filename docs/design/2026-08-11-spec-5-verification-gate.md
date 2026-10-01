@@ -569,24 +569,27 @@ does not define. The check scans inline code spans and fenced blocks for
 the direction that hurts: a document confidently naming a command that no longer
 exists.
 
-**Scope of the backward check:** `README.md`, both `CLAUDE.md` files — the
-project one and the tracked global `global/AGENTS.md` — and everything under
-`claude/skills/` and `.agents/skills/`. It **excludes**
+**Scope of the backward check:** `README.md`, `agents/README.md`, the project
+`CLAUDE.md` and the tracked global `global/AGENTS.md`, and every `.md` under
+`.agents/skills/` — the walk also covers `claude/skills/`, which no longer
+exists, and a walk over a directory that is not there finds nothing and reports
+nothing. It **excludes**
 `docs/archive/plans/` and `docs/design/`: those are dated records
 of what was true when written, the executed bootstrap plan legitimately names
 `make githooks`, and a record silently rewritten to stay true is not a record.
 
 **Harness guidance lives in `claude/skills/`** — not in either `CLAUDE.md`, and
-not in `.agents/skills/`. `bootstrap.d/links.manifest:20-21` symlinks
-`claude/skills` → `~/.claude/skills` and `global/AGENTS.md` → `~/.claude/CLAUDE.md`
-on every provisioned machine, so `claude/skills/` is fleet-wide while
-`.agents/skills/` is per-repository procedure. `agents` was a fleet-wide tool: the
+not in `.agents/skills/`. `bootstrap.d/links.manifest` used to symlink
+`claude/skills` → `~/.claude/skills` on every provisioned machine, so
+`claude/skills/` was fleet-wide while `.agents/skills/` is per-repository
+procedure. `agents` was a fleet-wide tool: the
 deleted `agents ls` listed registered repositories, and the
 deleted `agents update --all` rewired every one of them — so `.agents/skills/`
 would give the guidance to the one repository that
 needs it least. *(The fleet machinery is deleted 2026-09-21; `agents` is now a
 per-repository tool with no fleet scope, so the argument now rests only on which
-tier the guidance belongs to.)*
+tier the guidance belongs to. `claude/` went with it, and the manifest's three
+global rows are `:22-24` today.)*
 
 The two artifacts answer different questions and only one can be generated. The
 rendered block answers *what is this command*; the skill answers *which command
