@@ -10,12 +10,11 @@ collects one harness's habits is a file the other harnesses read and pay for.
 Keep it to rules a session acts on. Provisioning and verification live in
 `git/README.md`.
 
-## Language
+## 语言
 
-Think and respond in the language of the ask. When an instruction's core idea or
-main request arrives in language X, both the reasoning and the reply belong in
-X. If you cannot think in X, fall back to English for both — and do not think in
-one language and then translate the reply into another.
+用提问的语言思考，也用提问的语言回答。一段指令的核心想法或主要请求是用哪种语言提出
+的，推理和回复就用哪种语言。确实无法用那种语言思考时，推理和回复一起退回英文——
+不要用一种语言思考，再把回复翻译成另一种语言。
 
 ## No AI attribution
 
@@ -80,10 +79,9 @@ stand on its own.
    the section (`global/AGENTS.md` §Recording what you learn), the command
    (`./bootstrap check`). An example the reader cannot resolve fails the same
    test.
-2. **Do not invent shorthand.** A private metaphor (兜底, 锚定, 护栏, 落点, 口径)
-   is not jargon — the reader cannot look it up, and it silently encodes the part
-   you chose not to spell out. Say the plain thing, or define it in one sentence
-   the first time it appears.
+2. **不要自己造词。** 自己造的比喻（兜底、锚定、护栏、落点、口径）不算行话——读者
+   查不到，而且它把你有意没写出来的那部分藏在了里面。有话直说；确实要用，就在它第一次
+   出现时用一句话讲清楚。
 3. **Every conclusion carries its evidence.** "Verified" is not evidence. Give
    the file, the command, and the output that matters, so the reader can re-run
    it and disagree.
@@ -91,12 +89,10 @@ stand on its own.
    sentence — each bets that the reader already knows what you left out.
 5. **Assume they have read nothing else.** "Fixed now" tells them neither what
    changed nor how you checked it.
-6. **Read your draft back as a native reader, not as its author.** A plan shaped
-   in English comes out literal: every word correct, none of it how anyone
-   speaks. Assume you are the student who scores 130+ on the Chinese Gaokao
-   language paper — in another language, its best reader — and rewrite everything
-   awkward, everything that stops being fluent, and everything that jumps context
-   without saying how the two things connect. Name the sentences you rewrote.
+6. **写完之后用读者的眼光重读一遍，不是用作者的眼光。** 照着英文提纲写出来的中文，
+   每个词都没错，就是没人这么说话。假设自己是高考语文能考出 130 分以上的学生，回头读
+   自己刚写的东西，把别扭、不通顺、上下文跳脱的地方全改掉（用别的语言写，就假设自己是
+   那种语言里语感最好的人）。最后说明你改了哪几句。
 
 The test is not "is it accurate" but "can someone who was not here act on it?" —
 including the next session of you, with only the repository in front of it.
