@@ -45,12 +45,13 @@ No production code reads the file either. The only command that inspects any
 `AGENTS.md` (`agents/internal/doctor/doctor.go:329`) and `.agents/AGENTS.md`
 (`:388`).
 
-Three checks do read it, all three run in CI, and all three passed on the edit
+Four checks do read it, all four run in CI, and all four passed on the edit
 above:
 
 | Check | Where | What it enforces |
 |---|---|---|
 | `TestLivingDocumentsNameOnlyRealCommands` | the file is listed at `agents/docs_test.go:84`, the test is at `:107`, and the name is required by `agents/doctests.txt:43` | every code span naming an `agents` subcommand resolves to a command the registry defines |
+| `TestLivingDocumentsNameOnlyResolvablePaths` | added 2026-10-01, in `agents/docs_test.go`, named in `agents/doctests.txt` | every inline code span naming a path resolves in the checkout |
 | `TestTask18RetiresTemplateAndClaudeHookInstallers` | `agents/install_hooks_test.go:1211-1244` | the file does not advertise retired hook artifacts (`git/templates`, `check-commits.sh`, `~/.claude/commit-msg`, …) |
 | `bootstrap check` | `bootstrap.d/links.manifest:22-24` | the declared links have sources in the checkout; on 2026-10-01 it printed `8 ok, 0 warn, 0 fail`, including `manifest-kinds 12 rows, each present and of its declared kind` |
 
