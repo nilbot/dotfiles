@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -329,13 +330,15 @@ func TestLivingDocumentsNameNoDeletedCommand(t *testing.T) {
 // out of the tree. None of them is this check's business.
 var pathSpan = regexp.MustCompile("`(\\.?[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)*/?)(?::\\d+(?:-\\d+)?)?`")
 
-// pathsOutsideTheCheckout are the path spans a living document may name that
-// this checkout does not contain. Each is either written onto a machine at
+// pathsOutsideTheRepository are the path spans a living document may name that
+// this repository does not track. Each is either written onto a machine at
 // runtime or belongs to another repository:
 //
-//   - `.agents/hooks.json`, `.claude/settings.json` and `.codex/hooks.json` are
-//     the harness wiring `agents init` writes per repository. All three are
-//     git-excluded (`.gitignore:21`, `:4`, `:22`), so no checkout contains them.
+//   - `.claude/`, `.claude/skills`, `.claude/settings.json`, `.codex/skills`,
+//     `.codex/hooks.json` and `.agents/hooks.json` are the harness wiring
+//     `agents init` writes into a repository and `agents wire` cleans up. All
+//     six are git-excluded (`.gitignore:4`, `:21`, `:22`), so a clone has none
+//     of them and a wired machine has several.
 //   - `nilbot/homebrew-tap` is a GitHub repository, named owner/name.
 //   - `agents/vX.Y.Z` is a module tag name inside it, not a path here.
 //   - `info/exclude` is git's own `.git/info/exclude`.
@@ -343,17 +346,20 @@ var pathSpan = regexp.MustCompile("`(\\.?[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0
 // The list is written out one path at a time rather than matched by a pattern.
 // A pattern would quietly grow to cover the next real mistake, which is the one
 // thing this check exists to catch.
-var pathsOutsideTheCheckout = map[string]bool{
+var pathsOutsideTheRepository = map[string]bool{
 	".agents/hooks.json":    true,
+	".claude/":              true,
 	".claude/settings.json": true,
+	".claude/skills":        true,
 	".codex/hooks.json":     true,
-	"nilbot/homebrew-tap":   true,
+	".codex/skills":         true,
 	"agents/vX.Y.Z":         true,
 	"info/exclude":          true,
+	"nilbot/homebrew-tap":   true,
 }
 
-// A living document may only name a path this repository contains, or one that
-// is deliberately elsewhere.
+// A living document may only name a path this repository tracks, or one that is
+// deliberately elsewhere.
 //
 // This is the check the command-name scans cannot make. A stale command is
 // caught because there is a registry to resolve it against; a stale path has
@@ -373,8 +379,19 @@ var pathsOutsideTheCheckout = map[string]bool{
 //   - A span resolves at the repository root, or under another path the same
 //     line names: the root README's Layout table writes `docs/` and then the
 //     four stores inside it.
+//
+// It resolves against `git ls-files` rather than the working tree, and that is
+// not a detail. A wired machine carries `.claude/skills`, `.codex/skills` and
+// `.agents/hooks.json` on disk while a fresh clone carries none of them, so a
+// filesystem check answers differently in the two places that run it. Measured
+// 2026-10-01: the filesystem version of this test passed here and failed in CI
+// on exactly those three spans.
 func TestLivingDocumentsNameOnlyResolvablePaths(t *testing.T) {
 	root := task18RepoRoot(t)
+	tracked := trackedPaths(t, root)
+	if len(tracked) < 100 {
+		t.Fatalf("git ls-files returned %d paths; this check would prove little", len(tracked))
+	}
 
 	spans := 0
 	for _, rel := range livingDocuments(t, root) {
@@ -391,13 +408,13 @@ func TestLivingDocumentsNameOnlyResolvablePaths(t *testing.T) {
 			}
 			for _, path := range named {
 				spans++
-				if pathsOutsideTheCheckout[path] {
+				if pathsOutsideTheRepository[path] {
 					continue
 				}
-				if resolvesInTheTree(root, path, named) {
+				if resolvesInTheRepository(tracked, path, named) {
 					continue
 				}
-				t.Errorf("%s:%d names `%s`, which is not in this checkout", rel, n+1, path)
+				t.Errorf("%s:%d names `%s`, which this repository does not track", rel, n+1, path)
 			}
 		}
 	}
@@ -428,32 +445,59 @@ func linesWithoutFences(body string) []string {
 	return lines
 }
 
-// resolvesInTheTree reports whether a span names something that exists: at the
-// repository root, or inside another path the same line names and which is a
-// directory.
-func resolvesInTheTree(root, span string, named []string) bool {
-	if existsInTree(filepath.Join(root, span)) {
+// trackedPaths returns the paths this repository tracks, relative to its root.
+func trackedPaths(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	if err != nil {
+		t.Fatalf("git ls-files in %s: %v", root, err)
+	}
+	tracked := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		if line != "" {
+			tracked[line] = true
+		}
+	}
+	return tracked
+}
+
+// tracks reports whether a span names something tracked: a file, or a directory
+// that holds one. `docs/` and `.agents/skills/` are directories no index entry
+// names directly, and a document is entitled to point at the directory rather
+// than at a file inside it.
+func tracks(tracked map[string]bool, span string) bool {
+	if tracked[span] {
 		return true
 	}
-	for _, other := range named {
-		if other == span {
-			continue
-		}
-		base := filepath.Join(root, other)
-		info, err := os.Stat(base)
-		if err != nil || !info.IsDir() {
-			continue
-		}
-		if existsInTree(filepath.Join(base, span)) {
+	prefix := strings.TrimSuffix(span, "/") + "/"
+	for path := range tracked {
+		if strings.HasPrefix(path, prefix) {
 			return true
 		}
 	}
 	return false
 }
 
-func existsInTree(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
+// resolvesInTheRepository reports whether a span names something this repository
+// tracks: at its root, or inside another path the same line names.
+func resolvesInTheRepository(tracked map[string]bool, span string, named []string) bool {
+	if tracks(tracked, span) {
+		return true
+	}
+	for _, other := range named {
+		// A tracked path is a file, and a file holds nothing.
+		if other == span || tracked[other] {
+			continue
+		}
+		base := strings.TrimSuffix(other, "/")
+		if !tracks(tracked, base) {
+			continue
+		}
+		if tracks(tracked, base+"/"+strings.TrimPrefix(span, "/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // declaresItselfARecord reports whether a document says, near its top, that it
