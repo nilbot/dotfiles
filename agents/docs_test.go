@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -318,6 +319,185 @@ func TestLivingDocumentsNameNoDeletedCommand(t *testing.T) {
 	if flagged == 0 {
 		t.Logf("no living document names a deleted command outside a removal note")
 	}
+}
+
+// pathSpan matches an inline code span that names a path into this repository:
+// one or more segments joined by `/`, with an optional `:line` or `:from-to`
+// suffix a reader can follow.
+//
+// A span opening with `~`, `/`, `./` or `..` cannot match, and that is
+// deliberate: those are a home path, an absolute path, a command, and a path
+// out of the tree. None of them is this check's business.
+var pathSpan = regexp.MustCompile("`(\\.?[A-Za-z0-9_][A-Za-z0-9_.-]*(?:/[A-Za-z0-9_.-]+)*/?)(?::\\d+(?:-\\d+)?)?`")
+
+// pathsOutsideTheRepository are the path spans a living document may name that
+// this repository does not track. Each is either written onto a machine at
+// runtime or belongs to another repository:
+//
+//   - `.claude/`, `.claude/skills`, `.claude/settings.json`, `.codex/skills`,
+//     `.codex/hooks.json` and `.agents/hooks.json` are the harness wiring
+//     `agents init` writes into a repository and `agents wire` cleans up. All
+//     six are git-excluded (`.gitignore:4`, `:21`, `:22`), so a clone has none
+//     of them and a wired machine has several.
+//   - `nilbot/homebrew-tap` is a GitHub repository, named owner/name.
+//   - `agents/vX.Y.Z` is a module tag name inside it, not a path here.
+//   - `info/exclude` is git's own `.git/info/exclude`.
+//
+// The list is written out one path at a time rather than matched by a pattern.
+// A pattern would quietly grow to cover the next real mistake, which is the one
+// thing this check exists to catch.
+var pathsOutsideTheRepository = map[string]bool{
+	".agents/hooks.json":    true,
+	".claude/":              true,
+	".claude/settings.json": true,
+	".claude/skills":        true,
+	".codex/hooks.json":     true,
+	".codex/skills":         true,
+	"agents/vX.Y.Z":         true,
+	"info/exclude":          true,
+	"nilbot/homebrew-tap":   true,
+}
+
+// A living document may only name a path this repository tracks, or one that is
+// deliberately elsewhere.
+//
+// This is the check the command-name scans cannot make. A stale command is
+// caught because there is a registry to resolve it against; a stale path has
+// only the tree. A document that grows a path from another repository —
+// `tools/doc_drift.py`, `docs/CONTRIBUTING.md` — reads as authoritative to the
+// agent that goes looking for it, and on 2026-10-01 the first draft of the
+// global writing rule did exactly that with nothing failing.
+//
+// Three decisions keep it honest:
+//
+//   - Only inline code spans, never fenced blocks. A fenced block is a
+//     transcript: its paths are arguments, output lines and placeholders, and
+//     requiring a documented command to be runnable as written is a different
+//     check with a different answer.
+//   - Only spans carrying a `/`. A bare `AGENTS.md` is usually a filename being
+//     discussed rather than a path being pointed at.
+//   - A span resolves at the repository root, or under another path the same
+//     line names: the root README's Layout table writes `docs/` and then the
+//     four stores inside it.
+//
+// It resolves against `git ls-files` rather than the working tree, and that is
+// not a detail. A wired machine carries `.claude/skills`, `.codex/skills` and
+// `.agents/hooks.json` on disk while a fresh clone carries none of them, so a
+// filesystem check answers differently in the two places that run it. Measured
+// 2026-10-01: the filesystem version of this test passed here and failed in CI
+// on exactly those three spans.
+func TestLivingDocumentsNameOnlyResolvablePaths(t *testing.T) {
+	root := task18RepoRoot(t)
+	tracked := trackedPaths(t, root)
+	if len(tracked) < 100 {
+		t.Fatalf("git ls-files returned %d paths; this check would prove little", len(tracked))
+	}
+
+	spans := 0
+	for _, rel := range livingDocuments(t, root) {
+		data, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			continue // an optional document that does not exist yet
+		}
+		for n, line := range linesWithoutFences(string(data)) {
+			var named []string
+			for _, m := range pathSpan.FindAllStringSubmatch(line, -1) {
+				if strings.Contains(m[1], "/") {
+					named = append(named, m[1])
+				}
+			}
+			for _, path := range named {
+				spans++
+				if pathsOutsideTheRepository[path] {
+					continue
+				}
+				if resolvesInTheRepository(tracked, path, named) {
+					continue
+				}
+				t.Errorf("%s:%d names `%s`, which this repository does not track", rel, n+1, path)
+			}
+		}
+	}
+	// Measured 2026-10-01: the living documents hold 75 path spans, so a floor
+	// this far below it catches a pattern that stopped matching rather than a
+	// document that stopped naming paths.
+	if spans < 20 {
+		t.Fatalf("found only %d path spans; this check would prove little", spans)
+	}
+}
+
+// linesWithoutFences returns a document's lines with every fenced code block
+// blanked out, so a caller scans prose and still reports the line number the
+// reader sees.
+func linesWithoutFences(body string) []string {
+	lines := strings.Split(body, "\n")
+	inFence := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			lines[i] = ""
+			continue
+		}
+		if inFence {
+			lines[i] = ""
+		}
+	}
+	return lines
+}
+
+// trackedPaths returns the paths this repository tracks, relative to its root.
+func trackedPaths(t *testing.T, root string) map[string]bool {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "ls-files").Output()
+	if err != nil {
+		t.Fatalf("git ls-files in %s: %v", root, err)
+	}
+	tracked := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		if line != "" {
+			tracked[line] = true
+		}
+	}
+	return tracked
+}
+
+// tracks reports whether a span names something tracked: a file, or a directory
+// that holds one. `docs/` and `.agents/skills/` are directories no index entry
+// names directly, and a document is entitled to point at the directory rather
+// than at a file inside it.
+func tracks(tracked map[string]bool, span string) bool {
+	if tracked[span] {
+		return true
+	}
+	prefix := strings.TrimSuffix(span, "/") + "/"
+	for path := range tracked {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvesInTheRepository reports whether a span names something this repository
+// tracks: at its root, or inside another path the same line names.
+func resolvesInTheRepository(tracked map[string]bool, span string, named []string) bool {
+	if tracks(tracked, span) {
+		return true
+	}
+	for _, other := range named {
+		// A tracked path is a file, and a file holds nothing.
+		if other == span || tracked[other] {
+			continue
+		}
+		base := strings.TrimSuffix(other, "/")
+		if !tracks(tracked, base) {
+			continue
+		}
+		if tracks(tracked, base+"/"+strings.TrimPrefix(span, "/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // declaresItselfARecord reports whether a document says, near its top, that it

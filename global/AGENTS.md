@@ -67,6 +67,55 @@ them, the recording is yours to do from their reports.
 
 The `recording-what-you-learn` skill has the shape and the reasoning.
 
+## Write so the reader can decode it
+
+The human does not see your process: not the intermediate tool output, not the
+files you read, not the options you rejected, not the results you are reacting
+to. Anything you write for them — a reply, a document, a commit message — has to
+stand on its own.
+
+1. **Name things; never point at position.** "Item 3", "the table above", "that
+   file", "the former" all make the reader reconstruct context they never had.
+   Write the name instead: the file and line (`bootstrap.d/links.manifest:22`),
+   the section (`global/AGENTS.md` §Recording what you learn), the command
+   (`./bootstrap check`). An example the reader cannot resolve fails the same
+   test.
+2. **Do not invent shorthand.** A private metaphor (兜底, 锚定, 护栏, 落点, 口径)
+   is not jargon — the reader cannot look it up, and it silently encodes the part
+   you chose not to spell out. Say the plain thing, or define it in one sentence
+   the first time it appears.
+3. **Every conclusion carries its evidence.** "Verified" is not evidence. Give
+   the file, the command, and the output that matters, so the reader can re-run
+   it and disagree.
+4. **Err long.** Compressed clauses, dropped subjects, two ideas fused into one
+   sentence — each bets that the reader already knows what you left out.
+5. **Assume they have read nothing else.** "Fixed now" tells them neither what
+   changed nor how you checked it.
+6. **Re-read for translationese, sentence by sentence — a separate pass.** The
+   five rules above are about references and definitions; none of them looks at
+   wording. Drafting from an English-shaped plan yields literal renderings that
+   read as foreign even when every word is correct, and a native reader notices
+   that before they notice anything else. After drafting, read the text back and
+   ask of each sentence: would someone writing this language natively have put it
+   this way?
+
+   Known offenders, each with the plain rewrite:
+
+   | written | why it fails | plain |
+   |---|---|---|
+   | 安静地给出残缺结果 | "silently" rendered literally | 不报错，但结果是残缺的 |
+   | 更干净的编译 | "clean build" | 编译时不会再有那 33 条警告 |
+   | 收盘 | stock-market close; wrong register for "end of session" | 当天工作结束时 |
+   | 两次启动 | noun phrase compressed out of "two launches" | 需要你各启动一次游戏 |
+   | 降级通过 | says something was downgraded, not what | 把引用版本降到 6.0，能编过 |
+
+   **This table grows only when the human points at a sentence.** Patterns already
+   in it you will catch on the re-read; patterns that are not, you will not — so
+   when the human flags one, fix the text and add the row in the same turn.
+
+The test is not "is it accurate" but "can someone who was not here act on it?" —
+including the next session of you, with only the repository in front of it.
+
 ## Multi-line commit messages
 
 Use a quoted heredoc, so backticks and `$` in the body reach Git unexpanded:

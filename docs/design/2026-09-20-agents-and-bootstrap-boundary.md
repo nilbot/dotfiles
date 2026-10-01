@@ -99,7 +99,9 @@ instead of being aimed at the checkout from `$HOME`.
 > `claude/CLAUDE.md` while the manifest names `global/AGENTS.md`. That is the
 > machine-global instruction file being re-homed, a different change with its own
 > owner; it is recorded here only so the exit-2 above is not misread as this
-> declaration surviving.
+> declaration surviving. *(Resolved 2026-10-01: the re-homing finished —
+> `readlink ~/.claude/CLAUDE.md` names `/Users/nilbot/dotfiles/global/AGENTS.md`,
+> and `./bootstrap plan workstation` exits 0 with `8 ok, 0 warn, 0 fail`.)*
 
 ### (c) Two writers of `~/.gitconfig`
 

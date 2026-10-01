@@ -182,9 +182,16 @@ rule stands on its own and nothing under `docs/` is named for a tool.)
 
 | tier | carries | lives in |
 |---|---|---|
-| Global | *when* to record, *what shape* | `global/AGENTS.md` + a fleet skill, symlinked from dotfiles |
+| Global | *when* to record, *what shape* | `global/AGENTS.md`, symlinked from dotfiles to `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` and `~/.dsh/AGENTS.md`, plus the `recording-what-you-learn` skill `agents init` writes into a repository |
 | Per-repo | *where*, and domain conventions | that repository's own `CLAUDE.md` |
 | Machine | raw material, never authoritative | harness dirs, pointed at |
+
+*(Amended 2026-10-01.)* The Global cell used to read "`global/AGENTS.md` + a fleet
+skill, symlinked from dotfiles". The fleet skill was `migrating-fleet-context`,
+deleted 2026-09-21 and kept as evidence in
+`../archive/skills/migrating-fleet-context/`. The skill this tool ships now is
+`recording-what-you-learn`: embedded in the binary and written into each
+repository by `agents init`, not symlinked from this checkout.
 
 The global tier is already delivered by symlinks this repository maintains, so
 adopting a repository needs no scaffolding written into it and no `doctor` check
