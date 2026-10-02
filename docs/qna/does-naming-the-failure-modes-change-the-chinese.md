@@ -129,14 +129,36 @@ actual finding: **when the source names an implementation instead of the need, t
 move is to resolve the need, not to rephrase the sentence** — and no counter built on
 phrase shapes can see the difference.
 
+To measure that rather than assert it, one line of the material changed and nothing else:
+「a phone she can reach from the floor」 became 「a way for her to call for help if she falls
+and cannot get up」. Twelve samples, current rules, no length asked for:
+
+| setup | texts | flagged | the `…够得着` family | other families | mean length |
+|---|---|---|---|---|---|
+| old material, 250–350 asked | 16 | **16 (100%)** | 12 | 6 | 312 |
+| old material, no length asked | 12 | **6 (50%)** | 5 | 1 | 342 |
+| need material, no length asked | 12 | **1 (8%)** | **0** | 1 | 322 |
+
+The construction this entry spent its length counting does not appear at all once the
+material states the need, and what comes out is ordinary Chinese:
+「再给她弄个摔倒起不来时能喊人的办法」, 「再想个办法，让她万一摔倒起不来的时候能喊到人」,
+「再给她配上摔倒了能喊人的东西——真起不来的时候，她不能只能躺在地上等人听见」.
+
+So the two variables were the material and the budget, and the guide was neither. What is
+left of the defect rate under a fair setup is one text in twelve, of the other families —
+register borrowings like 死线, which the need-framing does not touch.
+
 ## What this does not show
 
 - **The counter and the guide were written from the same three modes**, so this measures
   suppression of those modes, not Chinese quality. A text can pass the counter and still
   be awkward; only the human hears that.
-- One task, one material, 12 to 24 samples per arm. The baseline sits at 100% under the
-  budget, which makes an effect easy to see and says nothing about texts that are already
-  clean.
+- One task, one material, 12 to 24 samples per arm; the need-material arm is twelve texts
+  and one flagged, which bounds nothing tightly.
+- The need-framing result says the *source* decides whether the sentence can be coherent.
+  It does not say the agent's own prose — written from its own plan rather than from a
+  bullet — has the same cause, which is the question that started all of this and is still
+  not measured.
 
 **And the old judge, shown the same thirty-two texts blind, scored the guided arm lower**
 — 5.88 against 6.94 — because it was penalising length, which the guide had inflated.
