@@ -93,16 +93,50 @@ the defect: 「再给她配一部她躺在地上也够得着的手机」.
 v1 still pays for its result in length, overshooting the stated 250–350 in eleven texts
 of sixteen (mean 387, longest 666) where v2 overshoots in six of twenty-four.
 
+## The effect was the character budget
+
+The human said they would take longer output in exchange for something coherent to read,
+which removes the reason the task ever specified 250–350 characters. Dropping that line
+from the task text and running both arms again, twelve samples each:
+
+| arm | texts | mention both agreed items | flagged | mean length |
+|---|---|---|---|---|
+| baseline, 250–350 asked | 16 | 16 | **16 (100%)** | 312 |
+| guide v1, 250–350 asked | 16 | 16 | **7 (44%)** | 387 |
+| baseline, no length asked | 12 | 12 | **6 (50%)** | 342 |
+| guide v1, no length asked | 12 | 12 | **6 (50%)** | 369 |
+
+**The guide adds nothing once the budget is gone.** Compressed into 250–350 characters,
+the model attaches the requirement to the handset as a modifier; given room, it writes a
+separate clause by itself and the flagged rate halves with no guide at all. The earlier
+comparison measured the budget, not the guide, and every text in every arm still mentions
+both agreed items — so this is not texts dropping the requirement to score clean.
+
+## The material was the experimenter's, and it named an implementation
+
+The bullet was 「a phone she can reach from the floor」, written by the agent running the
+experiment. It names an implementation where the material's own logic — she lay on the
+floor for two hours before a neighbour heard her — calls for a need: when she falls, she
+has to be able to call for help. The human's reading of the intended idea is a health
+monitor that raises an alarm on a fall: 「能在老人跌倒的时候自动发出报警的健康监控设备」.
+
+Rendered as that need, the Chinese is ordinary — 「一摔倒就能叫人」. Rendered
+word-for-word, no phrasing of the phone clause can be coherent, because the sentence would
+have to describe a handset that is easy to reach from the floor, which is either a
+tautology or a product feature nobody sells. Every repair in this entry, including the one
+the human demolished, was an attempt to make a broken concept sound natural. That is the
+actual finding: **when the source names an implementation instead of the need, the correct
+move is to resolve the need, not to rephrase the sentence** — and no counter built on
+phrase shapes can see the difference.
+
 ## What this does not show
 
 - **The counter and the guide were written from the same three modes**, so this measures
   suppression of those modes, not Chinese quality. A text can pass the counter and still
   be awkward; only the human hears that.
-- One task, one material, 16 to 24 samples per arm. The baseline sits at 100%, which
-  makes the effect easy to see and says nothing about texts that are already clean.
-- The reading of the repairs — 「再给奶奶配一部手机，万一她再摔一次，躺在地上也能够得着」
-  against 「再给她备一个从地上也够得着的手机」 — is the agent's, and the agent's reading is
-  the instrument that failed earlier in this investigation.
+- One task, one material, 12 to 24 samples per arm. The baseline sits at 100% under the
+  budget, which makes an effect easy to see and says nothing about texts that are already
+  clean.
 
 **And the old judge, shown the same thirty-two texts blind, scored the guided arm lower**
 — 5.88 against 6.94 — because it was penalising length, which the guide had inflated.
@@ -112,16 +146,24 @@ counts constructions instead of asking for a score.
 
 ## What follows
 
-The v1 wording is the one worth considering: three modes, seven lines of Chinese, and
-repairs written as separate clauses rather than as subjects pushed inside a phrase. It is
-**not** in `global/AGENTS.md` — that file's space belongs to its author, and this evidence
-is one task wide. What the evidence does support is the shape: name the failure mode, say
-that the repair is a rephrasing rather than an addition, and keep the repair out of the
-noun phrase.
+**Nothing from this line goes into `global/AGENTS.md`.** The guide's measured effect was
+the length budget in disguise, its mode-one repair instruction produces a sentence the
+human rejected as illogical, and the sentence it was repairing came from the experimenter's
+own material. Three strikes, and the file's space belongs to its author.
 
-The larger lesson is about the instruments, and it is now twice over. A judge scored the
-guided arm lower while being unable to see the defect. A counter, written by the same
-agent that wrote the guide, was then relaxed until it stopped seeing the construction that
-guide produced. Both times the instrument agreed with the thing being measured. The only
-check that has held up in this investigation is the human reading the output — the
-counter is useful for counting what the human has already named, and for nothing else yet.
+Two things do transfer, and neither is a phrase-shape rule:
+
+- **Do not compress a requirement into a modifier to fit a length.** Under a tight budget
+  the model put the requirement inside the noun phrase and produced the tautology; with
+  room it wrote a clause and the defect disappeared. That is the same principle rule 4 was
+  rewritten to state, arrived at from the other side.
+- **When the source names an implementation, find the need before writing.** The material
+  wanted "she can call for help after a fall"; it said "a phone she can reach from the
+  floor". Resolving that is a reading step, and it is upstream of every wording rule.
+
+The instrument lesson is now three times over. A judge scored the guided arm lower while
+unable to see the defect. A counter, written by the same agent that wrote the guide, was
+relaxed until it stopped seeing the guide's output. And the comparison that looked
+significant was driven by a line in the task text rather than by the thing being tested.
+The only check that has held up in this investigation is the human reading the output; the
+counter is good for counting what the human has already named, and for nothing else yet.
