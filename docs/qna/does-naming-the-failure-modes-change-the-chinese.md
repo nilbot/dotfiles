@@ -24,20 +24,28 @@ measure — because the measure is a counter, not an opinion.
 
 ## The counter
 
-Four patterns and one function, roughly forty lines:
+Four patterns, roughly forty lines:
 
 | detector | fires on |
 |---|---|
-| subject capture | `够得着/够得到/能自己打的(电话\|手机)` with no person in the eight characters before the verb |
+| subject capture | `够得着/够得到/能自己打的(电话\|手机)` — reachability as a property of the handset |
 | objectless verb | `别提` immediately before punctuation |
 | domain verb | `必须交/要交/得交` before punctuation, or `交完` not followed by 活/差/工 |
 | loan rendering | `死线`, `交期` |
 | wrong register | `家族群` |
 
-The first version of the subject detector was a bare pattern and fired on the repair as
-well as the defect — 「**她**躺在地上也够得着的手机」 is correct Chinese — which inflated the
-guided arms by about ten points each. The person check in front of the verb is what
-separates them, and it was added after reading the hits.
+**A person check was added to the first detector and then removed again, and that
+mistake is the most useful thing in this entry.** The first version fired on
+「她躺在地上也够得着的手机」, which was taken to be the repair; the check suppressed it.
+The human then pointed out that the sentence is illogical on its own terms: it puts the
+phone on the floor and her on the floor, and reaching something on the ground from the
+ground is the easy case, so the 「也」 marks the wrong condition as the hard one. What the
+material describes is a situation — after a fall, unable to get up, she has to be able to
+call for help — and any 「…的 + 手机」 converts that situation into a feature of the
+handset. Inserting the subject does not fix the frame; it only hides it.
+
+So the strict counter is right and the person check was a false negative that flattered
+the arm it was written for. The subject-inserted form stays counted.
 
 Run over the earlier corpus of 114 generated texts, **86 carry at least one of these
 constructions**. That is the number the judge could not see.
@@ -48,31 +56,42 @@ Same task as the earlier rounds — a 250–350 character Chinese message to a f
 from the same eight English notes — with one correction: the task text now says 家庭群,
 where the experimenter had written 家族群. Same real 9084-character DSH system prompt,
 same rules message (this repository's own `global/AGENTS.md`), `deepseek-flash`,
-250–350 characters asked for. Two guides, differing only in how they phrase the repair:
+250–350 characters asked for. Two guides. Modes two and three are identical in both:
 
-> 一、**动词的主语不要省。** 省掉之后，最近的那个名词会把它抢走：「掉在地上也够得着的手机」
-> 读起来是手机够得着，不是她够得着。把主语写进那个词组里：「她躺在地上也够得着的手机」。
 > 二、**动词要带足搭配。** 单一个「提」「交」不成话：是「提起」「别说」，是「做完」不是「交完」。
 > 三、**别把别的领域的词搬进来。** 工作上的「死线」「交期」，或行政口径的「家族群」，写家里
 > 的事时都不该出现。
 >
 > 这三条是换说法，不是加话：改完不该比原来长。
 
-The first guide instead told the model to turn the clause into a separate sentence; the
-second tells it to put the subject inside the phrase. Nothing else differs.
+They differ in one sentence, the repair instruction for mode one:
 
-| arm | texts | carrying a flagged construction | over 350 characters | mean length |
-|---|---|---|---|---|
-| baseline, no guide | 16 | **16 (100%)** | 1 | 312 |
-| guide v1, repair as a separate clause | 16 | **7 (44%)** | 11 | 387 |
-| guide v2, repair inside the phrase | 24 | **10 (42%)** | 6 | 344 |
+> 一、**动词的主语不要省。** 省掉之后，最近的那个名词会把它抢走：「掉在地上也够得着的手机」
+> 读起来是手机够得着，不是她够得着。**把主语写出来，或者改成一个独立分句。** ← guide v1
+>
+> 一、……**把主语写进那个词组里**：「她躺在地上也够得着的手机」。 ← guide v2, and wrong
 
-Baseline against v2: Fisher exact p < 0.001. Baseline against v1: p = 0.001. The two
-guides against each other: p = 1.00 on defects — and they are not equivalent, because
-v1 pays for its result in length, overshooting the stated 250–350 in eleven texts of
-sixteen (mean 387, longest 666) where v2 overshoots in six of twenty-four. Among texts
-that stayed inside the range, 15 of 15 baseline texts carry a defect against 6 of 18 for
-v2.
+The second instruction produces a sentence that is still illogical, for the reason the
+human gave when they read it: it puts the phone on the floor and her on the floor, and
+reaching something on the ground from the ground is the easy case, so the 「也」 marks the
+wrong condition as the hard one. What the material describes is a situation, and the only
+repair that leaves the situation outside the noun phrase is v1's.
+
+| arm | texts | uses the `…够得着的(手机\|电话)` frame | count, strict | over 350 characters | mean length |
+|---|---|---|---|---|---|
+| baseline, no guide | 16 | 14 | **16 (100%)** | 1 | 312 |
+| guide v1, repair as a separate clause | 16 | 7 | **9 (56%)** | 11 | 387 |
+| guide v2, repair inside the phrase | 24 | 15 | **17 (71%)** | 6 | 344 |
+
+Baseline against v1: Fisher exact p = 0.007. Baseline against v2: p = 0.03. **v1 is the
+better guide**, which is the opposite of what this entry first reported: with the person
+check active, v2 looked like 42% against v1's 44%. It was not the guide that improved v2
+— it was the counter, which had been taught to look away from exactly the construction
+v2's wording produces. Most of the v2 outputs that looked like repairs are examples of
+the defect: 「再给她配一部她躺在地上也够得着的手机」.
+
+v1 still pays for its result in length, overshooting the stated 250–350 in eleven texts
+of sixteen (mean 387, longest 666) where v2 overshoots in six of twenty-four.
 
 ## What this does not show
 
@@ -93,8 +112,16 @@ counts constructions instead of asking for a score.
 
 ## What follows
 
-The v2 guide is the one worth considering: three modes, seven lines of Chinese, and a
-counter that a session can run on its own output without a judge. It is **not** in
-`global/AGENTS.md` yet — that file's space belongs to its author, and this evidence is
-one task wide. What the evidence does support is the shape: name the failure mode, and
-say that the repair is a rephrasing rather than an addition.
+The v1 wording is the one worth considering: three modes, seven lines of Chinese, and
+repairs written as separate clauses rather than as subjects pushed inside a phrase. It is
+**not** in `global/AGENTS.md` — that file's space belongs to its author, and this evidence
+is one task wide. What the evidence does support is the shape: name the failure mode, say
+that the repair is a rephrasing rather than an addition, and keep the repair out of the
+noun phrase.
+
+The larger lesson is about the instruments, and it is now twice over. A judge scored the
+guided arm lower while being unable to see the defect. A counter, written by the same
+agent that wrote the guide, was then relaxed until it stopped seeing the construction that
+guide produced. Both times the instrument agreed with the thing being measured. The only
+check that has held up in this investigation is the human reading the output — the
+counter is useful for counting what the human has already named, and for nothing else yet.
