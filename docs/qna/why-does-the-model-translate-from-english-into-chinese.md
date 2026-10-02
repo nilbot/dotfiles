@@ -105,35 +105,67 @@ Three interventions, all measured, none of them a fix:
 
 ## Mechanism
 
-The language of the model's internal work follows the language of the context
-mass, not the language of the request. A 9084-character English system prompt
-with 49 English tool schemas outweighs a Chinese question and a thousand
-characters of Chinese rules; the thinking then happens largely in English and the
-Chinese answer is a rendering of it. Rules can change what the model says about
-its thinking — the "think in Chinese" line did — but they do not change the
-substrate that produces the wording.
+The language of the model's internal work follows the language of the context it is
+given, not the language of the request. A 9084-character English system prompt with
+49 English tool schemas outweighs a Chinese question and a thousand characters of
+Chinese rules; the thinking then happens largely in English and the Chinese answer
+is a rendering of it. Rules can change what the model says about its thinking — the
+"think in Chinese" line did — but they do not change the substrate that produces
+the wording.
 
-The lever that did show an effect is the size of the English context: the short
-prompt conditions beat the real harness prompt by roughly a point, holding the
-rules and the task fixed.
+## The harness-side test, and a correction
+
+The first version of this entry ended by pointing at the harness: short prompts beat
+the real 9084-character one by about a point in the API experiment, so a lighter
+profile looked like the lever. That inference was tested inside the harness and did
+not survive.
+
+Same task, same session machinery, same profile (`--profile headless`), same
+injected `~/.dsh/AGENTS.md`, six runs per arm, run from an empty directory. The only
+difference was a `--patch` overlay adding the real harness's own English to the
+system prompt — measured afterwards from the session logs: **2794 characters in the
+lean arm, 11373 in the bloated one**, and the injected text was confirmed present in
+the prompt the model received.
+
+Blind-judged together on the same scale: **6.92 against 6.92**. Eight and a half
+thousand more characters of English changed nothing.
+
+That same batch also produced the round's most consistent finding, and it is not
+about language: the judge marked **all twelve** harness outputs as inventing an
+action, a promise or a request the material never contained — "东西我这两天先看好，
+回去就装", "跟李阿姨也说一声", "谁要是那几天也能回去，跟我说一声". In the API runs
+that happened in some texts; here it happened in every one. A real agent loop with
+tools, and with rules telling it to assume the reader has read nothing and to err
+long, fills the gaps with commitments nobody made — and that is the defect the blind
+judge punished hardest.
 
 ## Limits
 
 Six samples per condition; one judge, the same model that wrote the texts, which
-may share its own tastes; judge scores carry about a point of noise; one task
-type. The correlation is 30 points and modest. None of this measures the human's
-own reading, which is the thing that started the investigation — and on that, the
-human preferred the Chinese-output arm by eye while the judge called it a tie.
+may share its own tastes; judge scores carry about a point of noise; one task type.
+The correlation is 30 points and modest. None of this measures the human's own
+reading, which is the thing that started the investigation — and on that, the human
+preferred the Chinese-output arm by eye while the judge called it a tie.
 
 ## What follows
 
-- **No rule change is supported.** Adding a line about thinking in Chinese, or
-  about where the persona sits, moved the measurement it was aimed at and not the
-  one that matters.
-- **The lever is the harness.** A writing task in this session carries ~9k
-  characters of English scaffolding it does not need. A lighter profile — fewer
-  tools, shorter system prompt — is the change the data points at, and it is a
-  DSH-side change, not a dotfiles one.
-- **The Chinese rules stay**, on the human's reading cost and because the
-  Chinese-instruction conditions were the pooled leaders, not on a claim that they
-  make the writing better.
+Four interventions, measured, none of them a fix:
+
+| intervention | thinking share | judged score |
+|---|---|---|
+| "think in Chinese first" | 15% → 33% | unmoved (6.5 against 6.4–6.5) |
+| Chinese persona inside the real prompt | 15% → 27% | 6.33 against 6.50 |
+| 8.6k more characters of English in the harness prompt | — | 6.92 against 6.92 |
+| Chinese request, English answer | — | 6.92 against 7.42, one bilingual scale |
+
+**No rule change is supported**, and the earlier claim that the harness's prompt mass
+was the lever is withdrawn here. What is left is a structural choice rather than a
+measured improvement: the human reads English natively and cannot decode rendered
+Chinese, so answering in English removes the step that fails instead of making it
+better. This entry says that plainly rather than dressing it as a quality win.
+
+**The Chinese rules stay**, on the human's reading cost and because the
+Chinese-instruction conditions led the API rounds — not on a claim that they improve
+the writing. **The next thing worth trying is not language at all**: every harness
+output invented commitments, and `global/AGENTS.md` has no rule against that. Rule 5
+asks what a reader must be told; nothing asks what a writer must not make up.
