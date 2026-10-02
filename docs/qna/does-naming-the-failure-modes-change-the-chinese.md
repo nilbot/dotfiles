@@ -93,24 +93,52 @@ the defect: 「再给她配一部她躺在地上也够得着的手机」.
 v1 still pays for its result in length, overshooting the stated 250–350 in eleven texts
 of sixteen (mean 387, longest 666) where v2 overshoots in six of twenty-four.
 
-## The effect was the character budget
+## One measure, re-run on every arm
 
 The human said they would take longer output in exchange for something coherent to read,
-which removes the reason the task ever specified 250–350 characters. Dropping that line
-from the task text and running both arms again, twelve samples each:
+which removes the reason the task ever specified 250–350 characters. Dropping that line and
+running both arms again, twelve samples each. Every number below is the **strict** counter,
+which counts the construction regardless of who stands in front of the verb; the column
+"as first reported" is the loosened counter this entry used earlier, and the difference
+between the two columns is the subject of the next section.
 
-| arm | texts | mention both agreed items | flagged | mean length |
+| arm | texts | strict | as first reported | mean length |
 |---|---|---|---|---|
-| baseline, 250–350 asked | 16 | 16 | **16 (100%)** | 312 |
-| guide v1, 250–350 asked | 16 | 16 | **7 (44%)** | 387 |
-| baseline, no length asked | 12 | 12 | **6 (50%)** | 342 |
-| guide v1, no length asked | 12 | 12 | **6 (50%)** | 369 |
+| baseline, 250–350 asked | 16 | **16 (100%)** | 16 | 312 |
+| guide v1, 250–350 asked | 16 | **9 (56%)** | 7 | 387 |
+| guide v2, 250–350 asked | 24 | **17 (71%)** | 10 | 344 |
+| baseline, no length asked | 12 | **10 (83%)** | 6 | 342 |
+| guide v1, no length asked | 12 | **8 (67%)** | 6 | 369 |
+| baseline, need material, no length asked | 12 | **1 (8%)** | 1 | 322 |
 
-**The guide adds nothing once the budget is gone.** Compressed into 250–350 characters,
-the model attaches the requirement to the handset as a modifier; given room, it writes a
-separate clause by itself and the flagged rate halves with no guide at all. The earlier
-comparison measured the budget, not the guide, and every text in every arm still mentions
-both agreed items — so this is not texts dropping the requirement to score clean.
+What the strict column supports:
+
+- **The budget on its own is a minor factor**: 16 of 16 to 10 of 12, Fisher p = 0.28.
+- **The guide helps only under the budget**: 16 → 9 of 16 there (p = 0.007), 10 → 8 of 12
+  without it (p = 0.65). A guide that says "keep the repair out of the noun phrase" matters
+  to a writer who is squeezing a requirement into a character count, and not otherwise.
+- **The material dominates**: the same twelve samples with the bullet rewritten as a need
+  drop from 10 of 12 to 1 of 12 (p = 0.0004), and the `…够得着` family goes to zero.
+
+Every text in every arm still mentions both agreed items, so no arm scores clean by
+dropping the requirement.
+
+## The counter had two versions, and the looser one was in the tables
+
+The first version was a bare pattern. It fired on 「**她**躺在地上也够得着的手机」, which the
+agent believed was the repair, so a person check was added: skip any modifier whose verb has
+她/他/奶奶/自己/老人/让 in the eight characters before it. That check is what produced every
+number in this entry's earlier drafts — and it is wrong twice over. It has no principled
+window (a person nine characters away does not count, one eight away does), and it was added
+because the instrument disagreed with the hypothesis, which is the definition of fitting the
+measure to the answer. The human then read the sentence and pointed out it is illogical on
+its own terms, so the loosened version was counting nothing at all: nine of the twenty-four
+v2 texts passed it wrongly, and four of the twelve no-budget baseline texts did.
+
+Consequences, stated plainly: the row "baseline, no length asked, 50%" that an earlier
+version of this entry reported was really 83%, so the budget was never the whole story, and
+the guide's apparent effect without the budget was never there. The strict column above is
+the one to read, and it is the same code path in every row.
 
 ## The material was the experimenter's, and it named an implementation
 
@@ -133,20 +161,20 @@ To measure that rather than assert it, one line of the material changed and noth
 「a phone she can reach from the floor」 became 「a way for her to call for help if she falls
 and cannot get up」. Twelve samples, current rules, no length asked for:
 
-| setup | texts | flagged | the `…够得着` family | other families | mean length |
-|---|---|---|---|---|---|
-| old material, 250–350 asked | 16 | **16 (100%)** | 12 | 6 | 312 |
-| old material, no length asked | 12 | **6 (50%)** | 5 | 1 | 342 |
-| need material, no length asked | 12 | **1 (8%)** | **0** | 1 | 322 |
+| setup | texts | strict flagged | the `…够得着` family | other families |
+|---|---|---|---|---|
+| old material, 250–350 asked | 16 | **16 (100%)** | 14 | 2 |
+| old material, no length asked | 12 | **10 (83%)** | 10 | 0 |
+| need material, no length asked | 12 | **1 (8%)** | **0** | 1 |
 
 The construction this entry spent its length counting does not appear at all once the
 material states the need, and what comes out is ordinary Chinese:
 「再给她弄个摔倒起不来时能喊人的办法」, 「再想个办法，让她万一摔倒起不来的时候能喊到人」,
 「再给她配上摔倒了能喊人的东西——真起不来的时候，她不能只能躺在地上等人听见」.
 
-So the two variables were the material and the budget, and the guide was neither. What is
-left of the defect rate under a fair setup is one text in twelve, of the other families —
-register borrowings like 死线, which the need-framing does not touch.
+So the material is the variable that matters, the budget is a minor one, and the guide
+matters only under the budget. What is left of the defect rate under a fair setup is one
+text in twelve, of the register-borrowing family, which the need-framing does not touch.
 
 ## What this does not show
 
