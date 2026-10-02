@@ -63,6 +63,12 @@ a family group about a National Day visit. Six samples per condition per
 generation, two generations; judged blind in batches carrying two samples from
 every condition, so a batch effect lands on all conditions equally.
 
+The task text itself was written by the agent running the experiment, and it said
+「发到家族群里」. 家族群 is a clan; the natural term for a family chat is 家庭群. No
+output adopted the term — 0 of 114 texts contain either word — so the error stayed in
+the prompt rather than spreading into the results, but it was the register the task
+was framed in, and it was the experimenter's.
+
 | # | system prompt | rules message | task | generation 1 | generation 2 |
 |---|---|---|---|---|---|
 | A | English, 2 lines | English AGENTS.md | Chinese | 7.33 | 7.50 |
@@ -225,6 +231,29 @@ measured the judge's strictness as much as the model's behaviour, and the honest
 position is that this investigation has **no reliable measure of invented content at
 all** — which is why no rule about it is proposed here, and why the line above stays
 a candidate that the author of this file is free to reject outright.
+
+**And the audit made the same mistake it was auditing.** It sorted sentences by *what
+they added* and never asked whether they were Chinese. The human read the table and
+stopped at the examples it had filed as innocent:
+
+- 「二号有个推不掉的活，必须交，交完就往回赶」 — 交 belongs with 交工 and 交差; on
+  its own it is not how anyone says "when the job is done". Filed as a travel detail.
+  Judge score 7.7, and the same sentence form scored 8.3 in another run; a third run's
+  「2号有工作死线」 — 死线, the literal rendering of "deadline" — scored 5.0.
+- 「也麻烦李婶先别提」 — an objectless 提 wants its complement (提起), and in speech it
+  is 先别说. Filed as an errand.
+- 「再给她配一部掉在地上也能够得着的电话」 — 够得着 has no subject, so the nearest
+  noun takes it and the *phone* acquires the feature of being reachable while lying on
+  the floor. The material said "a phone she can reach from the floor", which names her.
+  Filed as a paraphrase, which by content it is. Judge scores: 8.0 here, 8.3 for the
+  「躺在地上也够得着的电话」 form.
+
+The same model gets it right elsewhere — 「给她配一部电话，就算躺在地上也够得着，摔了能自己
+打出去」 — so this is a rate, not an incapacity; and no judge in this investigation saw
+it. Texts carrying 交完, 死线 and an unassigned 够得着 scored 7.3 to 8.3, the same range
+as everything else. Every number in this entry is therefore "a model judging model
+output", and the wording judgements in it come from the human, who is the only
+instrument here that hears the difference.
 
 ## Rules 4 and 5 were rewritten, on accuracy rather than on a measured effect
 
