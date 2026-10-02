@@ -173,11 +173,27 @@ texts, generation 1 of the conditions in the table above.
 Three batches, three different winners (C, A, B), and every reason names a phrase:
 「现在想起来都后怕」, 「那就依她，我们只把屋子弄安全些」, 「两个钟头」.
 
-Two things follow. The ranking discriminates where the absolute scores did not, so this is
-the shape to use for this question. And it does not reproduce what the table at the top of
-this entry concluded: read by a reader ranking rather than a scorer awarding, D — the
-configuration this machine actually runs — is second, not last. Six texts per condition,
-one pass, one judge: a first read, not a verdict.
+**Both of those attempts are withdrawn, and the ranking is the worse of the two.** The
+human read the rubric and named the error: "if you ask the judge not to care this, not to
+care that, basically don't care about anything, and ask it to judge beauty, what are you
+trying to convey?"
+
+Naturalness is not a property of a string. It is what happens when a particular reader, who
+wants something from the message, tries to get it. The rubric stripped the reader's stake —
+no completeness, no belonging, no count — and then asked for 读感. With nothing to want and
+nothing to stumble on, every text is equally fine: that is why the scores saturated, and it
+is why the ranking that followed is noise ordered. Reporting mean ranks from it was the
+counter error one level up, a number from an instrument with nothing to measure. "Judge
+beauty" is a category error: a utilitarian message has no beauty apart from whether it works
+and reads effortlessly.
+
+Where the reader has to sit is where the human sat. They knew the notes, they were the
+recipient, and they read once — and every real defect in this investigation came from that
+reading (先别提, 交完, the tautology), while every judge and counter produced nothing usable.
+A perceptual evaluation has to give the reader the situation and the audience, which is not
+a fact-check but the reader's knowledge, and ask for a reading: where did you stop, what did
+you picture, what did you read twice, would you believe your sister wrote it. The
+notes-versus-string distinction is the whole design, and this entry got it wrong twice.
 
 ## Limits
 
