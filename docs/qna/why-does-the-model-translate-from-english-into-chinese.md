@@ -145,6 +145,40 @@ tools, and with rules telling it to assume the reader has read nothing and to er
 long, fills the gaps with commitments nobody made — and that is the defect the blind
 judge punished hardest.
 
+## A blind perceptual read, which the scores above were not
+
+The human drew the line the earlier rounds missed: a reader is the right instrument for
+naturalness, perception and aesthetics, and the wrong instrument for facts, counts and
+length. Asking a reader to police invented content is how the +编 flag came to mark a
+paraphrase; asking a script for beauty is how the counter came to mark nothing.
+
+First attempt at a perceptual read: absolute 0–10 scores for naturalness, readability and
+overall impression, no fact sheet, no invention penalty, thirty texts. **It saturated** —
+twenty-five of thirty scored 9 on naturalness, including one the judge's own note quoted
+「我2号有个推不掉的交期」 about and still scored 9. A reader asked for a number, with no
+scale, has no scale.
+
+So the design became a forced ranking: ten texts per batch, two from each condition, read
+once, ranked from most natural to least with a one-line reason. Three batches, thirty
+texts, generation 1 of the conditions in the table above.
+
+| condition | texts | mean rank (1 = most natural) |
+|---|---|---|
+| B — all Chinese | 6 | **4.17** |
+| D — the real DSH prompt | 6 | **5.00** |
+| C — English persona, Chinese rules | 6 | **5.50** |
+| A — all English | 6 | **6.00** |
+| E — English task | 6 | **6.83** |
+
+Three batches, three different winners (C, A, B), and every reason names a phrase:
+「现在想起来都后怕」, 「那就依她，我们只把屋子弄安全些」, 「两个钟头」.
+
+Two things follow. The ranking discriminates where the absolute scores did not, so this is
+the shape to use for this question. And it does not reproduce what the table at the top of
+this entry concluded: read by a reader ranking rather than a scorer awarding, D — the
+configuration this machine actually runs — is second, not last. Six texts per condition,
+one pass, one judge: a first read, not a verdict.
+
 ## Limits
 
 Six samples per condition; one judge, the same model that wrote the texts, which
