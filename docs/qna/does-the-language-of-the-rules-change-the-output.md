@@ -74,3 +74,11 @@ in Chinese do not have to be translated back to be judged. The human's own readi
 of round 1 — they preferred the mixed arm's outputs while the blind judge called it
 a tie — is the signal that matters for that purpose, and it is not the signal these
 two rounds collected.
+
+**Both rounds were then superseded on method.** The human pointed out that a
+subagent is still a product of this harness, so neither round controlled the whole
+prompt the model saw. `why-does-the-model-translate-from-english-into-chinese.md`
+does that with direct API calls and finds the mechanism these rounds were feeling
+for: the language of the thinking follows the language of the context mass, and the
+real DSH system prompt is 9084 characters of English against a thousand characters
+of Chinese rules.
