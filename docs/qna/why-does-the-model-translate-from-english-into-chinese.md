@@ -187,11 +187,15 @@ output 0 or 1 time out of 6; the pro condition, 3 out of 6. *(The pro endpoint w
 removed from this machine's configuration on 2026-10-02, after the measurement; the
 row is what was measured before that, and the instruction now is flash only.)*
 
-**No rule change is supported**, and the earlier claim that the harness's prompt mass
+**No rule change is supported by anything above** — the earlier claim that the harness's prompt mass
 was the lever is withdrawn here. What is left is a structural choice rather than a
 measured improvement: the human reads English natively and cannot decode rendered
 Chinese, so answering in English removes the step that fails instead of making it
 better. This entry says that plainly rather than dressing it as a quality win.
+
+What does support a rule is a different measure, and it is not in this entry:
+`does-naming-the-failure-modes-change-the-chinese.md` counts the three constructions the
+human named, and a guide that names them cuts the rate from 16 of 16 texts to 10 of 24.
 
 **The Chinese rules stay**, on the human's reading cost and because the
 Chinese-instruction conditions led the API rounds — not on a claim that they improve
