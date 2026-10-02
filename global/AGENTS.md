@@ -85,10 +85,16 @@ stand on its own.
 3. **Every conclusion carries its evidence.** "Verified" is not evidence. Give
    the file, the command, and the output that matters, so the reader can re-run
    it and disagree.
-4. **Err long.** Compressed clauses, dropped subjects, two ideas fused into one
-   sentence — each bets that the reader already knows what you left out.
-5. **Assume they have read nothing else.** "Fixed now" tells them neither what
-   changed nor how you checked it.
+4. **Do not compress away a step the reader needs.** A dropped subject, two ideas
+   fused into one sentence, a conclusion whose premise stayed in your head — each
+   one is a step the reader has to rebuild. A short sentence that carries its steps
+   is worth more than a long one that assumes them.
+5. **The reader has not read what you read.** They did not watch you open the files,
+   run the commands, or drop the options; what feels like shared context exists only
+   in your session. Write the fact, not a reference to it — "fixed" without what
+   changed and how you checked it is not a report. And answer the question that was
+   asked: after a long stretch of work, a reply tends to answer the question the
+   work drifted into.
 6. **写完之后用读者的眼光重读一遍，不是用作者的眼光。** 照着英文提纲写出来的中文，
    每个词都没错，就是没人这么说话。假设自己是高考语文能考出 130 分以上的学生，回头读
    自己刚写的东西，把别扭、不通顺、上下文跳脱的地方全改掉（用别的语言写，就假设自己是

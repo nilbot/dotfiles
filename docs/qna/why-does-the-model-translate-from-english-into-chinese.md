@@ -177,7 +177,9 @@ the identical prompt the pro model emitted raw tool-call markup — `<tool_calls
 `<invoke name="bash">` — in half its runs instead of a message, and the three runs
 that did produce a message scored below flash's. Across every run in this
 investigation (around 150 samples) the flash conditions produced that malformed
-output 0 or 1 time out of 6; the pro condition, 3 out of 6.
+output 0 or 1 time out of 6; the pro condition, 3 out of 6. *(The pro endpoint was
+removed from this machine's configuration on 2026-10-02, after the measurement; the
+row is what was measured before that, and the instruction now is flash only.)*
 
 **No rule change is supported**, and the earlier claim that the harness's prompt mass
 was the lever is withdrawn here. What is left is a structural choice rather than a
@@ -205,3 +207,36 @@ outputs set aside the two are 7.25 and 7.33. The measure that does track the rul
 the behaviour it names: flagged invention falls from 11 of 15 texts to 8 of 15 when
 the two batches are pooled. That is a weak signal at this size, not a significant
 one, so the line stays a candidate rather than a change to the file.
+
+## Rules 4 and 5 were rewritten, on accuracy rather than on a measured effect
+
+The human read the rule list and rejected two of them on grounds that have nothing to
+do with any measurement: the rules named the wrong thing.
+
+- **"Err long"** is an idiom-plus-adjective ("err on the side of caution" with the
+  noun replaced), and it points at the proxy rather than the property. What the rule
+  wants is that every step the reader needs is on the page; length is a side effect
+  of not compressing those steps away. A rule whose stated goal is *more words* is
+  satisfied by padding, and padding needs material, which is a plausible route to the
+  invented commitments the judge keeps flagging. It is also unverifiable: nobody can
+  ask "am I long enough?" and get an answer, while "is every step on the page?" is
+  checkable.
+- **"Assume they have read nothing else"** states as a hypothesis what is a fact.
+  The reader has not read what the session read — that is not a stance to adopt, it
+  is the situation. "Assume" also oversteers towards explaining what the reader
+  already knows, while the actual failure is a reply aimed at the context the *work*
+  built up instead of at the question that was asked.
+
+Both are now written that way in `global/AGENTS.md`: rule 4 says not to compress away
+a step the reader needs and says outright that a short sentence carrying its steps
+beats a long one that assumes them; rule 5 says the reader has not read what you
+read, and ends by pointing at the drift — after a long stretch of work, a reply tends
+to answer the question the work drifted into.
+
+**The hypothesis that "err long" caused the invented commitments did not survive its
+test.** Six runs with the file as it was against six with rules 4 and 5 replaced,
+judged in one batch: 5.67 against 5.75, invented content flagged in six of six on
+both sides, and the rewritten arm was not shorter (330 characters against 311). The
+fabrication rate sits at 60–100% in every configuration measured, so a six-sample
+test cannot separate small effects — but it does mean removing the length rule did
+not remove the invention. Whatever produces it is not the wording of rule 4.
