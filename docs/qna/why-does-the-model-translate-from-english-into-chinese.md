@@ -155,7 +155,7 @@ does not work, and the drift is larger than most of the effects being measured.
 
 ## What follows
 
-Five interventions, measured, none of them a fix:
+Six interventions, measured, none of them a fix:
 
 | intervention | thinking share | judged score |
 |---|---|---|
@@ -164,6 +164,13 @@ Five interventions, measured, none of them a fix:
 | 8.6k more characters of English in the harness prompt | — | 6.92 against 6.92 |
 | Chinese request, English answer | — | 6.92 against 7.42, one bilingual scale |
 | `deepseek-v4-pro` instead of `deepseek-flash` | 15% (unchanged) | 3 of 6 outputs were tool-call markup; the 3 clean ones 6.67 against 7.58 |
+| 18.8k characters of English tool output in the history | 15% → 39% | 6.92 against 7.00 |
+
+The last row is the shape every real session has: the Chinese answer is written after
+tens of thousands of characters of English tool output, and the suspicion was that
+the history — not the system prompt — was doing it. It is not. The blob was real
+output from this repository, inserted between the rules and the task; the thinking
+share went *up*, and the judged score did not move.
 
 The model was the last lever nobody had pulled, and it is not a fix either. Under
 the identical prompt the pro model emitted raw tool-call markup — `<tool_calls>`,
