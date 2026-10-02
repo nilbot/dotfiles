@@ -190,7 +190,11 @@ make up. A candidate rule was measured — the same six runs, one line added:
 > 材料里没有的，不要替读者加。对方给的材料里没有的行动、承诺、请求、分工，不要写进去
 > ——「我先买好」「大家分一下」「跟李阿姨也说一声」这类都是替人做主。
 
-In one blind batch the baseline scored 7.50 and the rule 7.75, with invention marks
-falling from 4 of 6 to 3 of 6. The direction is the one the judge punishes hardest
-and the size is inside the noise, so it is recorded as a candidate, not adopted on
-this evidence.
+In the first blind batch the baseline scored 7.50 and the rule 7.75, with invention
+marks falling from 4 of 6 to 3 of 6. Doubled to nine judged samples per arm the gap
+between the means looks wider — 6.44 against 7.33 — and that is an artefact: the
+baseline's mean carries one malformed output that scored zero, and with malformed
+outputs set aside the two are 7.25 and 7.33. The measure that does track the rule is
+the behaviour it names: flagged invention falls from 11 of 15 texts to 8 of 15 when
+the two batches are pooled. That is a weak signal at this size, not a significant
+one, so the line stays a candidate rather than a change to the file.
