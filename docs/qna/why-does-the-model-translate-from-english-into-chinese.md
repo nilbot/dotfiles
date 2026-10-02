@@ -147,6 +147,12 @@ The correlation is 30 points and modest. None of this measures the human's own
 reading, which is the thing that started the investigation — and on that, the human
 preferred the Chinese-output arm by eye while the judge called it a tie.
 
+**The absolute scores drift between judge calls, measurably.** The same six D texts
+scored 6.42, 6.50 and 7.50 in three different batches. Every comparison above is
+made *within* one batch with each condition weighted equally in every batch, so the
+drift cancels inside a comparison; reading the numbers across sections as one scale
+does not work, and the drift is larger than most of the effects being measured.
+
 ## What follows
 
 Four interventions, measured, none of them a fix:
@@ -166,6 +172,17 @@ better. This entry says that plainly rather than dressing it as a quality win.
 
 **The Chinese rules stay**, on the human's reading cost and because the
 Chinese-instruction conditions led the API rounds — not on a claim that they improve
-the writing. **The next thing worth trying is not language at all**: every harness
-output invented commitments, and `global/AGENTS.md` has no rule against that. Rule 5
-asks what a reader must be told; nothing asks what a writer must not make up.
+the writing.
+
+**The next thing worth trying is not language at all.** Every harness output invented
+commitments the material never contained, and `global/AGENTS.md` has no rule against
+that: rule 5 asks what a reader must be told, nothing asks what a writer must not
+make up. A candidate rule was measured — the same six runs, one line added:
+
+> 材料里没有的，不要替读者加。对方给的材料里没有的行动、承诺、请求、分工，不要写进去
+> ——「我先买好」「大家分一下」「跟李阿姨也说一声」这类都是替人做主。
+
+In one blind batch the baseline scored 7.50 and the rule 7.75, with invention marks
+falling from 4 of 6 to 3 of 6. The direction is the one the judge punishes hardest
+and the size is inside the noise, so it is recorded as a candidate, not adopted on
+this evidence.
