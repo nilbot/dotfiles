@@ -155,7 +155,7 @@ does not work, and the drift is larger than most of the effects being measured.
 
 ## What follows
 
-Four interventions, measured, none of them a fix:
+Five interventions, measured, none of them a fix:
 
 | intervention | thinking share | judged score |
 |---|---|---|
@@ -163,6 +163,14 @@ Four interventions, measured, none of them a fix:
 | Chinese persona inside the real prompt | 15% → 27% | 6.33 against 6.50 |
 | 8.6k more characters of English in the harness prompt | — | 6.92 against 6.92 |
 | Chinese request, English answer | — | 6.92 against 7.42, one bilingual scale |
+| `deepseek-v4-pro` instead of `deepseek-flash` | 15% (unchanged) | 3 of 6 outputs were tool-call markup; the 3 clean ones 6.67 against 7.58 |
+
+The model was the last lever nobody had pulled, and it is not a fix either. Under
+the identical prompt the pro model emitted raw tool-call markup — `<tool_calls>`,
+`<invoke name="bash">` — in half its runs instead of a message, and the three runs
+that did produce a message scored below flash's. Across every run in this
+investigation (around 150 samples) the flash conditions produced that malformed
+output 0 or 1 time out of 6; the pro condition, 3 out of 6.
 
 **No rule change is supported**, and the earlier claim that the harness's prompt mass
 was the lever is withdrawn here. What is left is a structural choice rather than a
