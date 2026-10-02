@@ -191,10 +191,10 @@ better. This entry says that plainly rather than dressing it as a quality win.
 Chinese-instruction conditions led the API rounds — not on a claim that they improve
 the writing.
 
-**The next thing worth trying is not language at all.** Every harness output invented
-commitments the material never contained, and `global/AGENTS.md` has no rule against
-that: rule 5 asks what a reader must be told, nothing asks what a writer must not
-make up. A candidate rule was measured — the same six runs, one line added:
+**The next thing worth trying is not language at all** — that was the claim, and it did
+not survive being checked either. Every harness output was flagged as inventing a
+commitment, and `global/AGENTS.md` has no rule against that. A candidate rule was
+measured — the same six runs, one line added:
 
 > 材料里没有的，不要替读者加。对方给的材料里没有的行动、承诺、请求、分工，不要写进去
 > ——「我先买好」「大家分一下」「跟李阿姨也说一声」这类都是替人做主。
@@ -203,10 +203,28 @@ In the first blind batch the baseline scored 7.50 and the rule 7.75, with invent
 marks falling from 4 of 6 to 3 of 6. Doubled to nine judged samples per arm the gap
 between the means looks wider — 6.44 against 7.33 — and that is an artefact: the
 baseline's mean carries one malformed output that scored zero, and with malformed
-outputs set aside the two are 7.25 and 7.33. The measure that does track the rule is
-the behaviour it names: flagged invention falls from 11 of 15 texts to 8 of 15 when
-the two batches are pooled. That is a weak signal at this size, not a significant
-one, so the line stays a candidate rather than a change to the file.
+outputs set aside the two are 7.25 and 7.33. Flagged invention falls from 11 of 15
+texts to 8 of 15 when the two batches are pooled: a weak signal at this size.
+
+**Then the flag itself was audited, and it does not mean what it looks like.** The
+rubric told the judge to count any action, promise or request the material did not
+contain as a defect, and the judge did exactly that. Reading all 155 unique flagged
+sentences across every run and bucketing them by shape:
+
+| what was flagged | count | example |
+|---|---|---|
+| paraphrase of a material bullet | 18 | 「再给她配一部掉在地上也够得着的手机」 — that is the material |
+| social move in a family message | 33 | 「谁要是那几天也有空，言语一声」 |
+| travel or timing detail the notes left open | 56 | 「交完就赶回去」 |
+| errand or arrangement | 9 | 「也麻烦李婶先别提」 |
+| residual, and the only real defects | 39 | one wrong number (three hours for two), 「死线」, four malformed tool-call markers |
+
+The buckets come from keyword matching, so the split is approximate; the conclusion
+is not. A flag rate is not a fabrication rate, the candidate rule's 11/15 → 8/15
+measured the judge's strictness as much as the model's behaviour, and the honest
+position is that this investigation has **no reliable measure of invented content at
+all** — which is why no rule about it is proposed here, and why the line above stays
+a candidate that the author of this file is free to reject outright.
 
 ## Rules 4 and 5 were rewritten, on accuracy rather than on a measured effect
 
@@ -237,6 +255,7 @@ to answer the question the work drifted into.
 test.** Six runs with the file as it was against six with rules 4 and 5 replaced,
 judged in one batch: 5.67 against 5.75, invented content flagged in six of six on
 both sides, and the rewritten arm was not shorter (330 characters against 311). The
-fabrication rate sits at 60–100% in every configuration measured, so a six-sample
-test cannot separate small effects — but it does mean removing the length rule did
-not remove the invention. Whatever produces it is not the wording of rule 4.
+flag rate sits at 60–100% in every configuration measured — though, as the audit
+above shows, most of what it counted is not invention — so a six-sample test cannot
+separate small effects. What it does establish is that removing the length rule did
+not change the output in any way this design can see.
