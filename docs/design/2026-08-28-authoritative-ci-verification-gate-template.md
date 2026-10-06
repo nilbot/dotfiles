@@ -1,9 +1,18 @@
 # Authoritative CI Verification Gate Template Design
 
 **Date:** 2026-08-28  
-**Status:** Designed  
+**Status:** Designed 2026-08-28; superseded in part — see the amendment below  
 **Context:** Phase 4 of [Contributor Guardrails & Scaffold Decoupling](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md)  
 **Depends on:** [Spec 5](2026-08-11-spec-5-verification-gate.md), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md)  
+
+> **Amended 2026-10-06.** The pins and job names in §2 and §3 are the original
+> 2026-08-28 design and are not maintained. `actions/checkout@11d5960a… # v4.4.0`
+> became `3d3c42e5… # v7.0.1` in `ef4cdb7` (2026-08-29), and the jobs that shipped
+> are `secrets`, `context`, `quality` and `gate` — the `test`/`lint` and
+> `scaffold` names below appear in no version of the file. The authority is
+> `template/ci/verify.yml`, `template/ci/README.md`, and the test that keeps the
+> template and this repository's own gate from drifting apart,
+> `bootstrap.d/ci_template_test.go`.
 
 ---
 
