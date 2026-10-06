@@ -1,9 +1,18 @@
 # Authoritative CI Verification Gate Template
-# See template/ci/README.md for customization and adoption instructions.
+# See template/ci/README.md for adoption, customization, and the hardening rules
+# this file is built from.
 #
 # Every `uses:` action reference is pinned to an immutable commit SHA with a
-# trailing version comment. Tags are mutable pointers and must not be used in
-# security-sensitive verification workflows.
+# trailing version comment. A tag is a mutable pointer: `@v4` resolves to
+# whatever the action's maintainer moved it to since the last run, so a tag
+# reference means this gate's own definition can change under it without a
+# commit here. The comment is what a version bump edits alongside the SHA; the
+# SHA is what is enforced.
+#
+# There are deliberately no `paths:` filters. A required check that a path
+# filter skips stays "Expected" on the pull request forever and blocks it rather
+# than passing it, and the filter also skips verification for exactly the edits
+# a cached test run is least likely to notice.
 name: verify
 
 on:
@@ -26,6 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # `gitleaks git` walks commits, so a shallow checkout would scan only
+          # the tip of a pull request.
           fetch-depth: 0
       - name: install gitleaks, checksum-verified
         run: |
@@ -35,12 +46,25 @@ jobs:
           echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tar.gz" | sha256sum -c -
           tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
           sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          # The checksum proves the archive. These two prove the binary the scan
+          # will actually run: PATH can resolve a preinstalled gitleaks first.
           resolved="$(command -v gitleaks)"
           [ "$resolved" = /usr/local/bin/gitleaks ] || { echo "gitleaks resolves to $resolved, not the checksum-verified install" >&2; exit 1; }
           installed="$(gitleaks version)"
           [ "$installed" = "${GITLEAKS_VERSION}" ] || { echo "gitleaks reports $installed, expected ${GITLEAKS_VERSION}" >&2; exit 1; }
       - name: scan commit history for secrets
-        run: gitleaks git --redact --exit-code 1
+        run: |
+          set -euo pipefail
+          # A repository that must allowlist a path or a synthetic fixture puts
+          # its config at .gitleaks.toml and it is used automatically. Without
+          # one, gitleaks' default rules run. The flag is added by an `if`, not
+          # `[ -f x ] && ...`, because under `set -e` that idiom exits the script
+          # whenever the file is absent.
+          config=()
+          if [ -f .gitleaks.toml ]; then
+            config=(--config .gitleaks.toml)
+          fi
+          gitleaks git "${config[@]}" --redact --exit-code 1
 
   context:
     name: Repository Context & Guardrails
@@ -59,10 +83,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -d .agents ]; then
-            if [ ! -f .gitattributes ] || ! grep -q "^\.agents/\*\*.*linguist-generated=true" .gitattributes; then
-              echo "Error: .agents directory is present, but .gitattributes does not configure '.agents/** linguist-generated=true'." >&2
-              exit 1
-            fi
+            # Matched as a whole line, because `agents doctor` matches the line
+            # exactly: a substring match would accept a near miss such as
+            # `.agents/** linguist-generated` or a trailing suffix that git
+            # ignores.
+            grep -qxF '.agents/** linguist-generated=true' .gitattributes 2>/dev/null \
+              || { echo "Error: .agents/ is present, but the root .gitattributes has no exact line '.agents/** linguist-generated=true'." >&2; exit 1; }
           fi
 
   quality:
@@ -71,23 +97,32 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Customize language toolchain and verification commands for your project.
-      # See template/ci/README.md for Go, Python, and TypeScript / Web configurations.
-      - name: lint and formatting check
+      # REPLACE THIS STEP BEFORE RELYING ON THE GATE. See the examples in
+      # template/ci/README.md.
+      #
+      # It fails closed on purpose. The first version of this template echoed a
+      # placeholder and exited 0, which made `gate` green on a repository where
+      # nothing had been verified -- a check that cannot fail, which is the
+      # defect the gate exists to catch. An adopter should see red until this
+      # job runs their project's real lint and tests.
+      - name: lint, format and test (template placeholder)
         run: |
-          echo "Customize this step with project linting (e.g. gofmt, ruff, eslint)"
-      - name: automated test suites
-        run: |
-          echo "Customize this step with project tests (e.g. go test, pytest, npm test)"
+          echo "Error: the quality job is still the template placeholder." >&2
+          echo "Replace it with your project's lint, format and test commands." >&2
+          echo "See template/ci/README.md for Go, Python, Node/TypeScript and static examples." >&2
+          exit 1
 
   gate:
-    name: Verification Gate
+    # Deliberately no `name:`. The required status check's context is the job id,
+    # `gate`, and a ruleset names that exact string; a pretty display name would
+    # change the context and the ruleset would then wait for a check that never
+    # appears.
     if: always()
     needs: [secrets, context, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: assert all verification jobs passed
+      - name: require every verification job to have succeeded
         run: |
           echo "secrets: ${{ needs.secrets.result }}"
           echo "context: ${{ needs.context.result }}"
