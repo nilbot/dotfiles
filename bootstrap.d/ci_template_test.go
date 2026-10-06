@@ -2,6 +2,7 @@ package main_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -292,17 +293,59 @@ func TestGateWorkflowsHaveNoPathsFilter(t *testing.T) {
 	}
 }
 
+// qualityShell returns the shell the template's quality job runs, dedented out
+// of its `run: |` block so it can be executed.
+func qualityShell(t *testing.T, quality string) string {
+	t.Helper()
+	lines := strings.Split(quality, "\n")
+	start := -1
+	for i, line := range lines {
+		if strings.TrimRight(line, " \t") == "        run: |" {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatalf("the template's quality job has no `run: |` block:\n%s", quality)
+	}
+	var body []string
+	for _, line := range lines[start+1:] {
+		if strings.TrimSpace(line) == "" {
+			body = append(body, "")
+			continue
+		}
+		if !strings.HasPrefix(line, "          ") {
+			break
+		}
+		body = append(body, strings.TrimPrefix(line, "          "))
+	}
+	if len(body) == 0 {
+		t.Fatal("the template's quality job has an empty `run:` block")
+	}
+	return strings.Join(body, "\n")
+}
+
 // The template's quality job must fail closed. A placeholder that prints a
 // message and exits 0 makes `gate` green on a repository where nothing was
 // verified, which is a check that cannot fail -- the defect
-// docs/qna/tests-that-pass-no-matter-what.md records. The first version of the
-// template shipped exactly that.
+// docs/qna/tests-that-pass-no-matter-what.md records, and what the first
+// version of the template shipped.
+//
+// The script is RUN, not searched for `exit 1`. Reading for the literal was the
+// first version of this check, and it has both failure modes at once: it passes
+// for an `exit 1` in a branch that is never taken, and it fails for a script
+// that exits non-zero some other way (`false`, a failing linter run last). What
+// the property needs is the exit status, so that is what is asserted.
 func TestTemplateQualityJobFailsClosed(t *testing.T) {
 	quality := jobBlock(readRepoFile(t, templateWorkflow), "quality")
 	if quality == "" {
 		t.Fatal("the template has no quality job")
 	}
-	if !strings.Contains(quality, "exit 1") {
-		t.Error("the template's quality job never exits non-zero, so an adopter's gate would pass before anything was verified")
+	script := qualityShell(t, quality)
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Dir = t.TempDir()
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Errorf("the template's quality job exits 0, so an adopter who copies the template before configuring anything gets a green gate; it printed:\n%s", out)
 	}
 }
