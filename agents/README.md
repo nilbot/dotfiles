@@ -43,10 +43,15 @@ Releases are cut from tags by
 archives plus `checksums.txt`, and the workflow asserts the packaged binary
 reports the tag's version and commit before publishing them.
 
-**Releasing does not update the tap.** There is no sync step: a release publishes
-the archives, and the tap's formula is pointed at the new checksums separately.
-Until that happens `brew upgrade agents` keeps installing the previous version,
-so a release being published is not the same as it being installable.
+**Releasing updates the tap from the release itself.** `release.yml` runs
+`script/sync-homebrew-formula.sh` after it publishes the archives, then runs it
+again with `--check` to assert the tap moved. The script reads the formula the
+tap already has through the Contents API and rewrites only its four `url` and
+four `sha256` lines, so `nilbot/homebrew-tap` stays the single source of truth
+and this repository keeps no copy of the formula. The step needs the
+`HOMEBREW_TAP_TOKEN` secret; without it the job fails *after* the release is
+published, and the tap keeps pointing at the previous version until the sync is
+run.
 
 A release carries the tree at its tag, which is not necessarily the tree you are
 reading. The module has no `agents/vX.Y.Z` tags, so
