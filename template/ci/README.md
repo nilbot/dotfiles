@@ -210,9 +210,9 @@ For Python applications with Ruff and Pytest:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.14'
           cache: 'pip'
       - name: install dependencies
         run: |
@@ -238,9 +238,9 @@ For Node.js / TypeScript applications:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
       - name: install dependencies
         run: npm ci
@@ -307,22 +307,41 @@ evidence is in the reference workflow's comments and in `docs/design/`.
 
 ## Keeping the template current
 
-This directory has no consumer and no test, so nothing fails when it drifts from
-the reference implementation. It did drift: its last change was `ef4cdb7`
-(2026-08-29), while `.github/workflows/verify.yml` changed through `f274bc8`
-(2026-09-24), and the one documented adopter,
+Nothing runs this directory, so it drifted once already: its last change was
+`ef4cdb7` (2026-08-29), while `.github/workflows/verify.yml` changed through
+`f274bc8` (2026-09-24), and the one documented adopter,
 `/Users/nilbot/devel/nilbot.net/toolshed/cowork`, has no
-`.github/workflows/verify.yml` today.
+`.github/workflows/verify.yml`. Two mechanisms keep it honest now.
 
-The rule that keeps it honest:
+**A test, for the parts that can be compared.**
+`bootstrap.d/ci_template_test.go` reads the reference workflow, this template,
+and this README's YAML examples. It fails when a `uses:` is not a 40-character
+commit SHA; when the same action is pinned to different commits in two of those
+files; when the `gate` job carries a `name:`; when `gate`'s `needs` list misses a
+job or `gate` lacks `if: always()`; when a `paths:` filter appears; or when the
+template's `quality` job exits 0.
 
-> A change to a **generic** mechanism — an action pin, the secret scan, the cache
-> scheme, the job set that `gate` aggregates — updates `template/ci/verify.yml`
-> and this README in the same pull request. A change that is specific to this
-> repository (a Linux provisioning job, a doctest list) does not.
+**A stated rule, for the parts that cannot be compared.** A change to a
+*generic* mechanism — an action pin, the secret scan, the cache scheme, the job
+set `gate` aggregates — updates `template/ci/verify.yml` and this README in the
+same pull request. A change specific to this repository (a Linux provisioning
+job, a doctest list) does not.
 
-The obvious enforcement is a test that parses both files and asserts they agree
-on the things that can be compared mechanically: the pinned SHAs for actions
-both files use, the presence of `if: always()` and a complete `needs:` list on
-`gate`, and the absence of `paths:` filters. Until that exists, the rule is prose
-and a reviewer has to hold it.
+The test cannot see `actions/setup-python` and `actions/setup-node`: they appear
+in this README and nowhere else, so there is no second pin to compare them
+against. Re-resolve one by hand with:
+
+```bash
+gh api repos/<owner>/<repo>/commits/<tag> --jq .sha
+```
+
+Last swept 2026-10-07. Already current: `actions/checkout` v7.0.1,
+`actions/setup-go` v7.0.0, `actions/cache` v6.1.0, gitleaks v8.30.1. Moved on
+that sweep: `actions/setup-python` v5.4.0 → v7.0.0 and `actions/setup-node`
+v4.0.3 → v7.0.0; `node-version` 20 → 24, because Node 20 reached end of life on
+2026-04-30; `python-version` 3.12 → 3.14, because 3.12 left bugfix support on
+2025-04-02.
+
+`go-version` stays at the reference workflow's `1.26.6` on purpose: Go 1.26 is
+still supported, the pin exists to be exact rather than newest, and this
+repository's `GO_VERSION` is the single source for its own CI.
