@@ -67,71 +67,83 @@ not silently permit it.
   `Cellar/agents/<version>/`. Homebrew deletes the old keg when it upgrades, so a
   chain that names a keg path breaks on the next upgrade.
 
-## 2. Why we cannot have the elegant version today
+## 2. What we cannot change
 
-Each constraint below is a fact about Git, Homebrew, or this repository, with the
-evidence that makes it a constraint rather than a preference.
+Five items decide the shape of this design: four facts about Git, Homebrew and
+this repository's own configuration, and one rule this repository holds itself to.
+Each item states the fact, the evidence for it, and the consequence it forces. The table at the end
+records decisions, not constraints.
 
-**C1 — Git's only hook interface is a directory of files.** There is no setting
-that names a program. So a chain directory must exist, and something must create
-it and keep it correct. Any design that hopes to avoid "a directory of launchers"
-is hoping for a Git feature that does not exist.
+**The version we would prefer.** Hook installation would be a single command with
+no launcher directory, and the tool would learn which checkout it belongs to from
+where it is installed. Neither is available. Section 5 describes the full picture.
 
-**C2 — An installed binary's path says nothing about which checkout built it.**
-The personal build is installed to `~/bin/agents`; the released build to
-`/opt/homebrew/bin/agents`. Neither path contains a checkout, so no derivation —
-`realpath`, `command -v`, or anything else — can recover the checkout from it. The
-checkout has to be recorded at build time (`Makefile:38-41`,
-`bootstrap.d/internal/phase/devtools.go:88`), or stated at install time.
+### Facts about the platform and this repository
 
-**C3 — Homebrew deletes version-pinned paths, and Git runs a broken hook as if no
-hook existed.** This is measured, not theoretical. On 2026-09-20 all four links
-pointed at `Cellar/agents/0.5.1/bin/agents`; `brew upgrade` deleted that keg; and
-`git commit` then exited 0 with no warning while the guard was gone
-([the incident](../qna/why-does-a-brew-upgrade-stop-my-commit-guard.md)). The
-installer therefore refuses to record a resolved keg path and requires the stable
-`bin/agents` symlink, which Homebrew repoints on every upgrade
-([why the installer refuses a keg path](../qna/why-does-install-hooks-refuse-symlinks-like-opt-homebrew-bin-agents.md)).
-**This is also why the obvious answer — "just run `realpath $(which agents)`" — is
-wrong**, and it is worth stating plainly because it is the first question anyone
-asks.
+**F1. Git runs hooks by looking in a directory.** `core.hooksPath` names one
+directory, and Git executes the file in it whose name matches the hook event. Git has no setting that names a program. `git/install-hooks.sh`, the shell
+installer, must therefore create a directory and keep four executable files
+correct inside it. The launcher directory is the
+only shape Git supports, and it is not a choice this design made.
 
-**C4 — An ambient input is invisible and untestable.** With the environment
-variable `AGENTS_DOTFILES_ROOT` set, `agents doctor` reports 18 checks; with it
-unset, 13. The five that vanish are `root:exists`, `git-hooks:global`,
-`git-hooks:effective`, `git-hooks:links` and `git-hooks:unmanaged`, and nothing in
-the output says a mode was entered or left. The variable is set by a hand-written
-line in `~/.config/fish/config.fish:19`, in a file this repository declares as a
-`seed` — copied once by `bootstrap` and never rewritten
-(`bootstrap.d/links.manifest:29`). No tracked *provisioner* writes it into the
-machine — `git log -S AGENTS_DOTFILES_ROOT -- bootstrap.d fish` is empty — so
-nothing installs it and nothing verifies it. The only tracked mentions are
-documentation and tests: `agents/README.md:118` tells a reader to export it by
-hand, and the suite has **eight** places across two test files that must set it (or
-spawn a child with a fabricated `HOME`) to reach the code under test. An ambient
-input is one a test cannot supply honestly.
+**F2. An installed binary's path does not say which checkout built it.** The
+personal build is installed at `~/bin/agents`, the released build at
+`/opt/homebrew/bin/agents`. A checkout appears in neither path, so `realpath`,
+`command -v` and every other derivation fail to recover one. The checkout has to be
+recorded when the binary is built (`Makefile:38-41`,
+`bootstrap.d/internal/phase/devtools.go:88`), or stated when it is installed.
 
-**C5 — A check must not be derived from the value it checks.** `agents/root.go:12`
-records this argument: the machine-level check compares `core.hooksPath` with the
-root, so a root derived *from* `core.hooksPath` would pass by construction, and "a
-guard that cannot fail is worse than no guard". This constraint shapes the design
-in two directions and the design has to pay for it honestly:
+**F3. An upgrade deletes the binary the hooks point at, and Git reports
+nothing.** On 2026-09-20 the four installed links named
+`Cellar/agents/0.5.1/bin/agents`. `brew upgrade` deleted that directory, and the
+next `git commit` exited 0 with no warning while the commit guard was gone
+([the incident](../qna/why-does-a-brew-upgrade-stop-my-commit-guard.md)). Anything
+recorded must therefore name Homebrew's stable `bin/agents` symlink, which is
+repointed on every upgrade. The installer refuses a resolved keg path for this
+reason ([why it refuses
+one](../qna/why-does-install-hooks-refuse-symlinks-like-opt-homebrew-bin-agents.md)).
+The first repair anyone reaches for, `realpath $(which agents)`, fails here, and
+the table below records it.
 
-- It is why the stamp exists at all, and why the design keeps it — as *provenance*,
-  the one independent statement of what built this binary.
-- It is why the design does **not** claim a machine-level check that the old
-  `root:exists` provided. See §4, "what we give up".
+**F4. `AGENTS_DOTFILES_ROOT` is set by hand, and no test supplies it honestly.**
+The variable is a hand-written line in `~/.config/fish/config.fish:19`, inside a
+file that `bootstrap` copies once and never rewrites
+(`bootstrap.d/links.manifest:29`). No tracked file writes it into the
+environment: `git log -S AGENTS_DOTFILES_ROOT -- bootstrap.d fish` returns nothing,
+and `Makefile:35` mentions the variable in a comment, which installs nothing. The
+only tracked mentions are documentation and tests, and the tests show the cost.
+Eight lines across two test files set the variable, or spawn a child with a
+fabricated `HOME`, to reach the code under test. Measured 2026-10-07: with the
+variable set, `agents doctor` reports 18 checks; with it unset, 13. The five that disappear are
+`root:exists`, `git-hooks:global`, `git-hooks:effective`, `git-hooks:links` and
+`git-hooks:unmanaged`, and no line of output says which behaviour is in force.
 
-**Constraints we are choosing to respect rather than fight.**
+### A rule we hold ourselves to
 
-| alternative | why not |
+**R1. A check must not be derived from the value it compares against
+(`core.hooksPath`).** `agents/root.go:12`
+records the argument: the machine-level check compares `core.hooksPath` against the
+known root, so a root derived from `core.hooksPath` would pass by construction. The
+design pays for the rule twice. It keeps the build-time stamp, the one statement of
+the binary's origin that the hooks path cannot influence. It gives up the
+machine-level check that compared the stamp against the filesystem, and section 4
+accounts for that as a cost.
+
+### Alternatives we rejected
+
+The items above rule out several designs that look simpler. This table records each
+decision with the fact behind it, so that nobody proposes the alternative again
+without the reason.
+
+| alternative | the fact that rules it out |
 |---|---|
-| `realpath $(which agents)` | C3: resolves to the keg the next upgrade deletes |
-| `command -v agents` **inside** an entry | a lookup re-takes a decision on every commit against an environment the record cannot see; the record should state the decision once |
-| keep `AGENTS_DOTFILES_ROOT` as an override | C4: an override needed to make the common case work is not an override, it is the mechanism |
-| `$HOME/dotfiles` if it exists | removed 2026-08-28 for exactly this reason: it silently activated the operator behaviour on any machine with such a directory |
-| put the chain inside the checkout | measured: `core.hooksPath` naming a directory that does not exist commits at exit 0 with no output, so deleting or moving the checkout switches the guard off in silence |
-| a second config file beside `core.hooksPath` | two writers for one fact; `bootstrap.d/links.manifest:10` already states the rule — "one owner per path" |
+| `realpath $(which agents)` | F3: it resolves to the keg the next upgrade deletes |
+| `command -v agents` inside a chain entry | F4: a lookup re-decides on every commit, against an environment the record cannot see |
+| keep `AGENTS_DOTFILES_ROOT` as an override | F4: an override the common case depends on is the mechanism, not an override |
+| `$HOME/dotfiles` when it exists | removed 2026-08-28 for F4's reason: it switched on the operator behaviour on any machine with that directory |
+| keep the chain inside the checkout | F3's mechanism in a new place: when `core.hooksPath` names a missing directory, Git commits at exit 0, so a deleted checkout switches the guard off silently |
+| a second config file beside `core.hooksPath` | `bootstrap.d/links.manifest:10` states the rule: "one owner per path" |
+
 
 ## 3. What we will build
 
