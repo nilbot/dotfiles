@@ -30,7 +30,10 @@ func newHookInstallFixture(t *testing.T) hookInstallFixture {
 		globalConfig: filepath.Join(home, ".gitconfig"),
 	}
 	fixture.binary = filepath.Join(fixture.home, "bin", "agents")
-	if err := os.MkdirAll(filepath.Join(fixture.repoRoot, "git", "hooks.d"), 0o755); err != nil {
+	// The chain directory is deliberately NOT created here: stage 2's installer
+	// creates the machine directory itself, and a fixture that had it already
+	// would never exercise that.
+	if err := os.MkdirAll(filepath.Join(fixture.repoRoot, "git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Dir(fixture.binary), 0o755); err != nil {
@@ -204,8 +207,14 @@ var hookInstallHookNames = []string{"pre-commit", "commit-msg", "post-merge", "p
 // missing banner there must not fail a `git checkout` or a `git switch`.
 var hookInstallObservational = map[string]bool{"post-merge": true, "post-checkout": true}
 
+// chainDir is where the chain lives after stage 2: machine-owned, under the
+// home directory, outside every checkout. Nothing else may write there.
+func chainDir(fixture hookInstallFixture) string {
+	return filepath.Join(fixture.home, ".config", "agents", "hooks.d")
+}
+
 func hookEntryPath(fixture hookInstallFixture, hook string) string {
-	return filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)
+	return filepath.Join(chainDir(fixture), hook)
 }
 
 func allHookEntryPaths(fixture hookInstallFixture) []string {
@@ -217,7 +226,18 @@ func allHookEntryPaths(fixture hookInstallFixture) []string {
 }
 
 func chainRecordPath(fixture hookInstallFixture) string {
-	return filepath.Join(fixture.repoRoot, "git", "hooks.d", "chain.env")
+	return filepath.Join(chainDir(fixture), "chain.env")
+}
+
+// ensureChainDir creates the machine chain directory for the cases that put
+// something in it BEFORE running the installer -- a fixture link, a foreign
+// file, a read-only directory. A fresh install must find the directory missing,
+// because creating it is part of stage 2, so only those cases call this.
+func ensureChainDir(t *testing.T, fixture hookInstallFixture) {
+	t.Helper()
+	if err := os.MkdirAll(chainDir(fixture), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func hookInstallManagedPaths(fixture hookInstallFixture) []string {
@@ -311,7 +331,7 @@ func assertEntriesInstalled(t *testing.T, fixture hookInstallFixture, wantBinary
 // directory git reads is the last place a half-written hook may sit.
 func assertNoHookInstallTemps(t *testing.T, fixture hookInstallFixture) {
 	t.Helper()
-	entries, err := os.ReadDir(filepath.Join(fixture.repoRoot, "git", "hooks.d"))
+	entries, err := os.ReadDir(chainDir(fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +426,8 @@ func TestInstallPreflightNeedsNoBinary(t *testing.T) {
 func TestInstallLeavesNoTemporaryFileWhenAPublishFails(t *testing.T) {
 	t.Parallel()
 	fixture := newHookInstallFixture(t)
-	hooksDir := filepath.Join(fixture.repoRoot, "git", "hooks.d")
+	ensureChainDir(t, fixture)
+	hooksDir := chainDir(fixture)
 	if err := os.Chmod(hooksDir, 0o555); err != nil {
 		t.Fatal(err)
 	}
@@ -520,7 +541,7 @@ func temporaryDotfilesCopy(t *testing.T) string {
 	// introduced; they exist unconditionally now, so a missing one is a broken
 	// checkout and should fail loudly in setup.
 	for _, relative := range []string{
-		"agents", "git/install-hooks.sh", "git/gitattributes", "git/hooks.d/.gitignore",
+		"agents", "git/install-hooks.sh", "git/gitattributes",
 	} {
 		copyPathForHookInstallTest(t, filepath.Join(sourceRoot, relative), filepath.Join(destinationRoot, relative))
 	}
@@ -608,7 +629,7 @@ func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalP
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantHooksPath := filepath.Join(fixture.repoRoot, "git", "hooks.d") + "\n"
+	wantHooksPath := chainDir(fixture) + "\n"
 	if string(configured) != wantHooksPath {
 		t.Errorf("core.hooksPath = %q, want %q", configured, wantHooksPath)
 	}
@@ -1005,10 +1026,10 @@ func TestHookInstallerRefusesForeignGlobalBeforeAnyMutation(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join(fixture.home, ".gitattributes"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "commit-msg"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "post-merge"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "post-checkout"),
+		hookEntryPath(fixture, "pre-commit"),
+		hookEntryPath(fixture, "commit-msg"),
+		hookEntryPath(fixture, "post-merge"),
+		hookEntryPath(fixture, "post-checkout"),
 	} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("refusal created %s: %v", path, err)
@@ -1058,7 +1079,7 @@ func TestGitHookSequenceBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(physicalRoot, "git", "hooks.d") + "\n"; string(configuredPath) != want {
+	if want := filepath.Join(home, ".config", "agents", "hooks.d") + "\n"; string(configuredPath) != want {
 		t.Errorf("configured core.hooksPath = %q, want %q", configuredPath, want)
 	}
 }
@@ -1116,7 +1137,7 @@ func TestHookInstallerSecondRunPreservesExactInstalledObjectsAndTrackedConfig(t 
 
 	paths := []string{filepath.Join(fixture.home, ".gitattributes")}
 	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		paths = append(paths, filepath.Join(fixture.repoRoot, "git", "hooks.d", hook))
+		paths = append(paths, hookEntryPath(fixture, hook))
 	}
 	beforeInfo := make(map[string]os.FileInfo, len(paths))
 	for _, path := range paths {
@@ -1165,7 +1186,7 @@ func TestHookInstallerRefusesIncludedOriginAndMultipleGlobalValues(t *testing.T)
 	t.Run("included origin", func(t *testing.T) {
 		fixture := newHookInstallFixture(t)
 		included := filepath.Join(filepath.Dir(fixture.globalConfig), "included global config")
-		hooksPath := filepath.Join(fixture.repoRoot, "git", "hooks.d")
+		hooksPath := chainDir(fixture)
 		if err := os.WriteFile(included, []byte("[core]\n\thooksPath = "+hooksPath+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -1192,7 +1213,7 @@ func TestHookInstallerRefusesIncludedOriginAndMultipleGlobalValues(t *testing.T)
 
 	t.Run("multiple values", func(t *testing.T) {
 		fixture := newHookInstallFixture(t)
-		hooksPath := filepath.Join(fixture.repoRoot, "git", "hooks.d")
+		hooksPath := chainDir(fixture)
 		configBytes := []byte("[core]\n\thooksPath = " + hooksPath + "\n\thooksPath = /foreign/hooks\n")
 		if err := os.WriteFile(fixture.globalConfig, configBytes, 0o600); err != nil {
 			t.Fatal(err)
@@ -1224,7 +1245,7 @@ func TestHookInstallerRefusesForeignOwnedEntriesAndAttributes(t *testing.T) {
 		{
 			name: "regular owned hook",
 			path: func(f hookInstallFixture) string {
-				return filepath.Join(f.repoRoot, "git", "hooks.d", "pre-commit")
+				return hookEntryPath(f, "pre-commit")
 			},
 			configure: func(t *testing.T, path string) {
 				if err := os.WriteFile(path, []byte("foreign hook\n"), 0o755); err != nil {
@@ -1235,7 +1256,7 @@ func TestHookInstallerRefusesForeignOwnedEntriesAndAttributes(t *testing.T) {
 		{
 			name: "foreign owned hook symlink",
 			path: func(f hookInstallFixture) string {
-				return filepath.Join(f.repoRoot, "git", "hooks.d", "commit-msg")
+				return hookEntryPath(f, "commit-msg")
 			},
 			configure: func(t *testing.T, path string) {
 				if err := os.Symlink("/preserved/foreign/hook", path); err != nil {
@@ -1265,6 +1286,9 @@ func TestHookInstallerRefusesForeignOwnedEntriesAndAttributes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			fixture := newHookInstallFixture(t)
+			// The foreign object goes where the installer is about to install,
+			// so the machine directory has to exist first.
+			ensureChainDir(t, fixture)
 			foreignPath := test.path(fixture)
 			test.configure(t, foreignPath)
 			before, err := os.Lstat(foreignPath)
@@ -1362,7 +1386,7 @@ func TestHookInstallerUsesExplicitHomeForGitWhenAmbientHomeDiffers(t *testing.T)
 	if err != nil {
 		t.Fatalf("explicit home was not configured: %v", err)
 	}
-	want := filepath.Join(fixture.repoRoot, "git", "hooks.d") + "\n"
+	want := chainDir(fixture) + "\n"
 	if string(value) != want {
 		t.Fatalf("explicit-home core.hooksPath = %q, want %q", value, want)
 	}
@@ -1383,36 +1407,49 @@ func runIsolatedGit(t *testing.T, dir, home, globalConfig string, args ...string
 	return string(output)
 }
 
-func TestTask18HookDirectoryIgnoresMachineLinksButTracksItsIgnoreFile(t *testing.T) {
+// The chain is machine-owned now, and this is the property that buys in the
+// checkout: an install leaves the repository reporting nothing untracked.
+//
+// Stage 1 bought it with a tracked git/hooks.d/.gitignore, which stage 2
+// retires along with the directory; leaving the four entries there instead
+// shows them as four untracked files (measured in a scratch repository), which
+// is exactly what this case would catch.
+func TestInstallLeavesTheCheckoutClean(t *testing.T) {
 	t.Parallel()
-	sourceRoot := task18RepoRoot(t)
-	root := filepath.Join(t.TempDir(), "ignore behavior repo")
+	root := temporaryDotfilesCopy(t)
 	home := filepath.Join(t.TempDir(), "isolated git home")
-	if err := os.MkdirAll(filepath.Join(root, "git", "hooks.d"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	copyPathForHookInstallTest(t,
-		filepath.Join(sourceRoot, "git", "hooks.d", ".gitignore"),
-		filepath.Join(root, "git", "hooks.d", ".gitignore"))
-	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		if err := os.Symlink("/private/machine/path/bin/agents", filepath.Join(root, "git", "hooks.d", hook)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	globalConfig := filepath.Join(home, "global config")
+	globalConfig := filepath.Join(home, ".gitconfig")
 	runIsolatedGit(t, root, home, globalConfig, "init", "-q")
-	runIsolatedGit(t, root, home, globalConfig, "add", "git/hooks.d")
-	tracked := runIsolatedGit(t, root, home, globalConfig, "ls-files", "--cached")
-	if tracked != "git/hooks.d/.gitignore\n" {
-		t.Fatalf("tracked hook-directory files = %q", tracked)
+	runIsolatedGit(t, root, home, globalConfig, "add", "-A")
+	runIsolatedGit(t, root, home, globalConfig, "commit", "-qm", "init")
+
+	binary := filepath.Join(home, "bin", "agents")
+	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fixture := hookInstallFixture{repoRoot: root, home: home, binary: binary, globalConfig: globalConfig}
+	output, err := runHookInstallerArgs(t, fixture, "install", root, home, binary)
+	if err != nil {
+		t.Fatalf("install failed: %v\n%s", err, output)
+	}
+
 	status := runIsolatedGit(t, root, home, globalConfig, "status", "--short", "--untracked-files=all")
-	if status != "A  git/hooks.d/.gitignore\n" {
-		t.Fatalf("machine-specific links leaked into status: %q", status)
+	if status != "" {
+		t.Fatalf("the install left the checkout reporting changes:\n%s", status)
 	}
+	if _, err := os.Lstat(filepath.Join(root, "git", "hooks.d")); !os.IsNotExist(err) {
+		t.Errorf("the stage-1 chain directory still exists: %v", err)
+	}
+	assertEntriesInstalled(t, fixture, binary, root)
 }
 
 // The global attributes file carries no rules since the trace merge=union
@@ -1587,6 +1624,7 @@ func TestHookInstallerAdoptsOwnedLinksFromAnEarlierBinary(t *testing.T) {
 	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+	ensureChainDir(t, fixture)
 	stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
 	for _, hook := range hookInstallHookNames {
 		if err := os.Symlink(stale, hookEntryPath(fixture, hook)); err != nil {
@@ -1628,7 +1666,8 @@ func TestHookInstallerRefusesToAdoptForeignLinks(t *testing.T) {
 	t.Parallel()
 	fixture := newHookInstallFixture(t)
 	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
-	foreign := filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit")
+	ensureChainDir(t, fixture)
+	foreign := hookEntryPath(fixture, "pre-commit")
 	if err := os.Symlink("/preserved/foreign/hook", foreign); err != nil {
 		t.Fatal(err)
 	}
@@ -1659,6 +1698,7 @@ func TestHookInstallerAcceptsTheAdoptFlagOnEitherSideOfTheMode(t *testing.T) {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			fixture := newHookInstallFixture(t)
 			_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
+			ensureChainDir(t, fixture)
 			stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
 			if err := os.Symlink(stale, hookEntryPath(fixture, "pre-commit")); err != nil {
 				t.Fatal(err)
@@ -1691,6 +1731,7 @@ func TestInstallConversionTable(t *testing.T) {
 	// symlinks into four entries, so an exact link must not be a success state.
 	t.Run("an exact symlink this installer wrote", func(t *testing.T) {
 		fixture := newHookInstallFixture(t)
+		ensureChainDir(t, fixture)
 		for _, hook := range hookInstallHookNames {
 			if err := os.Symlink(fixture.binary, hookEntryPath(fixture, hook)); err != nil {
 				t.Fatal(err)
@@ -1726,6 +1767,7 @@ func TestInstallConversionTable(t *testing.T) {
 	t.Run("a symlink to something else", func(t *testing.T) {
 		for _, adopt := range []bool{false, true} {
 			fixture := newHookInstallFixture(t)
+			ensureChainDir(t, fixture)
 			foreign := hookEntryPath(fixture, "pre-commit")
 			if err := os.Symlink("/preserved/foreign/hook", foreign); err != nil {
 				t.Fatal(err)
@@ -1751,6 +1793,7 @@ func TestInstallConversionTable(t *testing.T) {
 	t.Run("a regular file this installer did not write", func(t *testing.T) {
 		for _, adopt := range []bool{false, true} {
 			fixture := newHookInstallFixture(t)
+			ensureChainDir(t, fixture)
 			foreign := hookEntryPath(fixture, "pre-commit")
 			if err := os.WriteFile(foreign, []byte("foreign hook\n"), 0o755); err != nil {
 				t.Fatal(err)
@@ -1958,4 +2001,165 @@ func TestInstallObservationalEntriesReportAMissingBinaryAtExitZero(t *testing.T)
 			t.Errorf("%s must name the record it could not read: %q", hook, output)
 		}
 	}
+}
+
+// generatedEntryFor is the text git/install-hooks.sh generates, reproduced here
+// so a case can lay out the stage-1 chain the move has to find.
+func generatedEntryFor(root, hook string) string {
+	return "#!/bin/sh\n" +
+		"# Written by git/install-hooks.sh for " + root + ".\n" +
+		"# The checkout is read from our own header, so a broken record is still repairable.\n" +
+		"exec \"$binary\" githook " + hook + " --checkout \"$checkout\" \"$@\"\n"
+}
+
+func generatedRecordFor(binary, checkout string) string {
+	return "# Written by git/install-hooks.sh. Re-run the installer to change it.\n" +
+		"format=1\nbinary=" + binary + "\ncheckout=" + checkout + "\n"
+}
+
+// configureGlobalHooksPath writes the machine-local global config with exactly
+// this core.hooksPath value, which is what the installer's own guard reads.
+func configureGlobalHooksPath(t *testing.T, fixture hookInstallFixture, hooksPath string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(fixture.globalConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.globalConfig, []byte("[core]\n\thooksPath = "+hooksPath+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func installedGlobalHooksPath(t *testing.T, fixture hookInstallFixture) string {
+	t.Helper()
+	command := exec.Command("git", "config", "--global", "--get-all", "core.hooksPath")
+	command.Env = isolatedGitEnvironment(t, fixture.home, fixture.globalConfig)
+	out, err := command.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSuffix(string(out), "\n")
+}
+
+// The move, end to end. A stage-1 machine's config names the chain inside the
+// checkout; the installer must accept that VALUE (the origin test is unchanged),
+// write the machine-owned chain, repoint the key, and retire what stage 1 left
+// in the checkout -- otherwise the checkout reports four untracked files.
+func TestInstallMovesTheChainOutOfTheCheckout(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	legacy := filepath.Join(fixture.repoRoot, "git", "hooks.d")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range hookInstallHookNames {
+		path := filepath.Join(legacy, hook)
+		if err := os.WriteFile(path, []byte(generatedEntryFor(fixture.repoRoot, hook)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "chain.env"),
+		[]byte(generatedRecordFor(fixture.binary, fixture.repoRoot)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configureGlobalHooksPath(t, fixture, legacy)
+
+	output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, fixture.binary)
+	if err != nil {
+		t.Fatalf("the move refused the stage-1 value: %v\n%s", err, output)
+	}
+	if got := installedGlobalHooksPath(t, fixture); got != chainDir(fixture) {
+		t.Errorf("core.hooksPath = %q, want the machine directory %q", got, chainDir(fixture))
+	}
+	assertEntriesInstalled(t, fixture, fixture.binary, fixture.repoRoot)
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Errorf("the stage-1 chain directory survived the move: %v", err)
+	}
+}
+
+// Retirement is narrow: it removes what this installer wrote and nothing else.
+// A file the human put in the stage-1 directory keeps both its bytes and the
+// directory, because the directory is theirs once it holds their file.
+func TestInstallRetirementKeepsForeignFilesInTheStageOneChain(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	legacy := filepath.Join(fixture.repoRoot, "git", "hooks.d")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, hook := range hookInstallHookNames {
+		if err := os.WriteFile(filepath.Join(legacy, hook),
+			[]byte(generatedEntryFor(fixture.repoRoot, hook)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "chain.env"),
+		[]byte(generatedRecordFor(fixture.binary, fixture.repoRoot)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(legacy, "pre-push")
+	if err := os.WriteFile(foreign, []byte("#!/bin/sh\necho mine\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configureGlobalHooksPath(t, fixture, legacy)
+
+	if output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, fixture.binary); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, output)
+	}
+	if contents, err := os.ReadFile(foreign); err != nil || string(contents) != "#!/bin/sh\necho mine\n" {
+		t.Errorf("the foreign file was touched: %q %v", contents, err)
+	}
+	for _, hook := range hookInstallHookNames {
+		if _, err := os.Lstat(filepath.Join(legacy, hook)); !os.IsNotExist(err) {
+			t.Errorf("%s was not retired from the stage-1 directory: %v", hook, err)
+		}
+	}
+	assertEntriesInstalled(t, fixture, fixture.binary, fixture.repoRoot)
+}
+
+// The machine directory this installer owns must not itself be a symlink: a
+// link can be aimed back inside a checkout, which is the property the move
+// exists to buy. A missing directory is fine -- install creates it.
+func TestInstallRefusesASymlinkedMachineChainDirectory(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	if err := os.MkdirAll(filepath.Join(fixture.home, ".config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(fixture.repoRoot, "git", "elsewhere")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(fixture.home, ".config", "agents")); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Fatal("a symlinked chain directory was accepted")
+	}
+	if !strings.Contains(output, "must not be a symlink") {
+		t.Errorf("the refusal must say why a symlink is wrong here: %q", output)
+	}
+	if _, err := os.Lstat(filepath.Join(target, "chain.env")); !os.IsNotExist(err) {
+		t.Errorf("the refusal wrote through the symlink: %v", err)
+	}
+}
+
+// Preflight runs before anything is written and must leave the machine exactly
+// as it found it -- including not creating the chain directory, which is
+// install's job.
+func TestInstallPreflightCreatesNothing(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	output, err := runHookInstaller(t, fixture, "preflight")
+	if err != nil {
+		t.Fatalf("preflight refused a fresh machine: %v\n%s", err, output)
+	}
+	if _, err := os.Lstat(chainDir(fixture)); !os.IsNotExist(err) {
+		t.Errorf("preflight created the chain directory: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(fixture.home, ".config", "agents")); !os.IsNotExist(err) {
+		t.Errorf("preflight created the agents directory: %v", err)
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
 }

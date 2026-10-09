@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
@@ -37,7 +38,35 @@ func runGithook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, usageFor("githook"))
 		return exitcode.Malformed
 	}
-	return runHookChain(name, personalStagesDir(checkout), hookArgs, stdin, stdout, stderr)
+	extras := personalStagesDir(checkout)
+	reportMissingPersonalStages(name, checkout, extras, stderr)
+	return runHookChain(name, extras, hookArgs, stdin, stdout, stderr)
+}
+
+// reportMissingPersonalStages names the loss when the record pointed at a
+// checkout whose personal stages are not there.
+//
+// Stage 2 is what makes this the case worth a line rather than a broken
+// machine: the chain is machine-owned, so deleting or moving the checkout no
+// longer takes the commit guard with it. The guard still runs; what is now
+// missing is the stages the checkout used to supply, and nothing else would
+// say so -- githook.Chain reads an absent directory as "no personal stages" and
+// carries on at exit 0.
+//
+// `-` is the record declaring there are none, and that stays silent. One line
+// on stderr, never an exit code: a missing banner must not fail a `git
+// checkout` or a `git switch`.
+func reportMissingPersonalStages(name, checkout, extras string, stderr io.Writer) {
+	if extras == "" {
+		return
+	}
+	info, err := os.Stat(extras)
+	if err == nil && info.IsDir() {
+		return
+	}
+	fmt.Fprintf(stderr,
+		"agents: %s: the personal stages under %s are missing; the record names %s as the checkout\n",
+		name, extras, checkout)
 }
 
 // parseGithookArgs reads exactly the invocation the installer generates and

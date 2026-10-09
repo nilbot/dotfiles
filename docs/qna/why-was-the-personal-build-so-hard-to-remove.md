@@ -78,3 +78,36 @@ route; and `bootstrap.d/Brewfile` gains `brew "nilbot/tap/agents"` so provisioni
 delivers the binary the builders used to produce. `runHookSequence`
 (`agents/install_hooks_test.go:298-338`) stays: it builds its own temporary fixture and
 is the only test of the devtools sequence.
+
+## Follow-up, 2026-10-09
+
+**The list above is executed, and the order it gives is the order it happened in.**
+
+- **Everything on it landed the same day.** The devtools build and its output path
+  went first, with `bootstrap.d/Brewfile` gaining `brew "nilbot/tap/agents"` and
+  the phase resolving that binary and passing `--adopt-owned` to both installer
+  invocations, so an existing chain is converted rather than refused. The
+  `Makefile` and its two targets, the drift pins in `makefile_test.go`, the check
+  text that said the devtools phase builds the binary, and the README sections
+  describing the build-from-source route followed.
+- **One item was fixed earlier than the removal, deliberately.** Doctor's remedy
+  stopped naming the build before the build went, because a remedy has to keep
+  working while the thing it repairs still exists: it derives the checkout from the
+  chain's own location now.
+- **Two corrections to the item list, worth having rather than the plan.** The
+  stamp pins in `devtools_test.go` were not edited — the whole build step they
+  pinned was deleted. And `runHookSequence` did stay, as predicted: it builds its
+  own temporary fixture and is the only test of the devtools sequence, so its shape
+  survived with the build step removed from it.
+
+The answer itself is untouched, because the diagnosis was right: what made this
+hard was never the deletion. It was the *binding* — a checkout recovered at run
+time from a compile-time stamp or a hand-written environment line — and moving that
+into the chain record is what turned a decision recorded on 2026-09-21 and never
+executed into an afternoon's work.
+
+Sibling entries in this store and in `docs/design/` still cite `Makefile:` line
+numbers and `makefile_test.go`. Those are kept as records under the convention
+[where else does this command name live](where-else-does-this-command-name-live.md)
+gives; a dated answer is not rewritten, and a path that has gone is part of what
+the answer was about.

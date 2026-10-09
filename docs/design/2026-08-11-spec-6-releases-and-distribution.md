@@ -90,7 +90,7 @@ This specification defines the build, packaging, release, and distribution pipel
 Released binaries are built without a stamped checkout root (`main.dotfilesRoot == ""`).
 
 ~~`DotfilesRoot()` in `agents/root.go` resolves via an explicit 2-tier contract without `$HOME/dotfiles` existence heuristics:~~
-1. ~~**Link-Time Stamp (`main.dotfilesRoot`)**: Set by `make agents` and `./bootstrap apply workstation` to bind the binary to a specific dotfiles checkout root (activating Dotfiles Operator Mode).~~ **Deleted 2026-10-09: the devtools producer is already gone, `make agents` is retiring with the test pins that assert it, and in neither case does the flag name a variable any more.**
+1. ~~**Link-Time Stamp (`main.dotfilesRoot`)**: Set by `make agents` and `./bootstrap apply workstation` to bind the binary to a specific dotfiles checkout root (activating Dotfiles Operator Mode).~~ **Deleted 2026-10-09: both producers are gone — the devtools build with the tap change, the `make agents` target with the Makefile and its test pins — and in neither case does the flag name a variable any more.**
 2. ~~**Environment Variable (`AGENTS_DOTFILES_ROOT`)**: Explicit runtime override for operators running unstamped or Homebrew-installed binaries who wish to bind them to their personal dotfiles.~~ **Deleted 2026-10-09.**
 3. ~~**Standalone Fallback (`""`)**: An unstamped binary with no environment variable returns `""` and operates in **Standalone Mode** regardless of what exists in the user's home directory.~~ **Deleted 2026-10-09: there are no modes.**
 
@@ -132,11 +132,10 @@ When `DotfilesRoot() == ""` (`deps.Root == ""`):
 >
 > The release consequences here are otherwise unchanged: a release is still built
 > with no checkout stamped into it, and `nilbot/tap/agents` remains the
-> distribution route. The personal build that `make agents` and the devtools phase
-> produced is retiring — decided 2026-10-09, with the devtools producer already
-> gone and the `make agents` target going with the test pins that assert it — so
-> before long no builder will be left that could stamp a checkout even if
-> something still read it. See
+> distribution route. The personal build is gone as of 2026-10-09 — the devtools
+> producer with the tap change, the `make agents` target with the Makefile and its
+> test pins — so no builder is left that could stamp a checkout even if something
+> still read it. See
 > [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
 
 ---

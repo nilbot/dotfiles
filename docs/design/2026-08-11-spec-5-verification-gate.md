@@ -176,8 +176,10 @@ masquerade as source verification." The filter is the hazard, and it is the same
 hazard as the Go build cache in different clothing. The obvious filter is
 `paths: ['agents/**', 'bootstrap.d/**']` — which skips verification for a change
 to `Makefile` or `git/gitconfig.shared`. The `Makefile` half went with the file on
-2026-10-09, which took `bootstrap.d/makefile_test.go` with it; `agents/internal/doctor/doctor_test.go` still reads `git/gitconfig.shared`. Those are exactly the edits that break tests, and exactly
-the edits a cached `go test` already fails to notice.
+2026-10-09, and took `bootstrap.d/makefile_test.go` with it;
+`agents/internal/doctor/doctor_test.go` still reads `git/gitconfig.shared`. Those
+are exactly the edits that break tests, and exactly the edits a cached `go test`
+already fails to notice.
 
 **The rule: no path filter may exclude a file that any test reads.** That set is
 not the set under the module directories, nothing keeps it enumerable, and
@@ -760,8 +762,9 @@ running it from a linked worktree publishes a binary stamped to a path that will
 not survive. Delete the worktree and `githook.go:127` reads the missing extras
 directory as "no personal hooks": the chain silently runs none, at exit `0`, and
 `AGENTS_DOTFILES_ROOT` cannot rescue it because the stamp deliberately wins.~~
-**Superseded 2026-10-09:** `make agents` is retiring with the personal build — the
-devtools producer is already gone — the stamp names no variable, and
+**Superseded 2026-10-09:** `make agents` and the Makefile that carried it are
+deleted with the personal build — the devtools producer went ahead of them — the
+stamp names no variable, and
 `AGENTS_DOTFILES_ROOT` is deleted rather than defeated. The *hazard* this
 paragraph describes — a hook chain that stops running and says nothing — is what
 the re-aimed check below still guards.

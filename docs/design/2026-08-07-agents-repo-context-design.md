@@ -532,6 +532,15 @@ names fired correctly as each, and received git's arguments
 > four symlinks; it now says on stderr that the personal stages are unavailable on
 > that route, rather than running none of them in silence.
 >
+> **Where the chain lives moved too, and that is stage 2.** §8.2's figure puts it
+> inside the checkout, at `~/dotfiles/git/hooks.d/`, and stage 1 kept it there. A
+> checkout is a directory a person moves and deletes, so deleting one took the
+> commit guard with it while Git reported nothing — the same silence this section
+> exists to remove. The installer now writes the chain to
+> `~/.config/agents/hooks.d/`, which no package manager and no checkout cleanup
+> touches, repoints `core.hooksPath` at it, and retires what stage 1 left in the
+> checkout.
+>
 > See [`One record for binary identity`](2026-10-07-one-record-for-binary-identity.md),
 > and §8.5 below for the link-and-upgrade consequences this replaces.
 

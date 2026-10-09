@@ -24,8 +24,8 @@ moment, named after that moment: `pre-commit`, `commit-msg`, `post-merge`,
 only "look in this directory".
 
 There is **one build** of `agents` on a machine like this one: the released binary,
-installed by Homebrew. A checkout build also exists — `make agents`, and
-`bootstrap`'s devtools phase — and it is being removed
+installed by Homebrew. The checkout build that also existed — `make agents`, and
+`bootstrap`'s devtools phase — **was deleted on 2026-10-09**
 ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md)). A
 developer may still build one to try a change; it installs nothing and wires
 nothing.
@@ -141,7 +141,8 @@ never rewrites (`bootstrap.d/links.manifest:29` declares it a `seed` row). The
 tracked template `fish/config.fish.template` does not contain the line, so **no
 automated path writes this variable or could rewrite it**. Nothing tracked writes
 it either: `git log -S AGENTS_DOTFILES_ROOT -- bootstrap.d fish` returns nothing,
-and `Makefile:35` mentions it in a comment, which installs nothing. The tests show
+and the one tracked mention of it — a comment at `Makefile:35` — installed
+nothing and went with that file on 2026-10-09. The tests show
 what an unowned binding costs: eight lines across two test files set the variable,
 or spawn a child with a fabricated `HOME`, to reach the code under test. Measured
 2026-10-07: with it set, `agents doctor` reports 18 checks; with it unset, 13 — and

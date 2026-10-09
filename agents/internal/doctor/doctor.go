@@ -600,23 +600,23 @@ func checkAttributesGlobal(repoRoot string, deps Dependencies) Check {
 // hookInstallerRemedy renders the command that repairs what a chain check
 // reports.
 //
-// The checkout is read from the chain's own location: stage 1 writes the chain
-// at <checkout>/git/hooks.d, and no compiled stamp exists any more to name the
-// checkout independently of it. When the directory does not have that shape, or
-// the installer is not where that shape says it should be, the remedy falls back
-// to the sentence that names no path rather than printing a command that cannot
-// run.
+// The checkout comes from the RECORD's `checkout` key, which is the machine's
+// own statement of where the personal stages and the installer live. Stage 1
+// read it from the chain's location instead -- <checkout>/git/hooks.d -- and
+// stage 2 moved the chain to ~/.config/agents/hooks.d, where no checkout
+// appears in any path. When the record is unreadable, or the installer is not
+// at <checkout>/git/install-hooks.sh, the remedy falls back to the sentence
+// that names no path rather than printing a command that cannot run.
 //
 // The arguments matter as much as the path: an upgrade deletes the versioned
 // path a pinned link points at, git runs a dangling hook as if no hook existed,
 // and the installer then refuses the entry it wrote itself unless it is handed
 // --adopt-owned.
-func hookInstallerRemedy(chainDir string, deps Dependencies, adoptOwned bool) string {
+func hookInstallerRemedy(checkout string, deps Dependencies, adoptOwned bool) string {
 	root := ""
-	if chainDir != "" && filepath.Base(chainDir) == "hooks.d" && filepath.Base(filepath.Dir(chainDir)) == "git" {
-		candidate := filepath.Dir(filepath.Dir(chainDir))
-		if info, err := os.Stat(filepath.Join(candidate, "git", "install-hooks.sh")); err == nil && info.Mode().IsRegular() {
-			root = candidate
+	if checkout != "" && checkout != "-" {
+		if info, err := os.Stat(filepath.Join(checkout, "git", "install-hooks.sh")); err == nil && info.Mode().IsRegular() {
+			root = checkout
 		}
 	}
 	home := ""

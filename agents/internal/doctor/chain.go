@@ -14,11 +14,13 @@ import (
 // The chain is the directory the global core.hooksPath names: one record and
 // four entries Git executes. Doctor reads it and never writes it.
 //
-// Stage 1 reads the chain WHEREVER that setting points -- today inside a
-// checkout, at <checkout>/git/hooks.d. Nothing here assumes that location, and
-// nothing here holds a checkout root of its own: the record's `checkout` is the
-// machine's statement of where the personal stages live, which is a different
-// fact from where the chain itself sits.
+// It reads the chain WHEREVER that setting points, and holds no checkout root
+// of its own. Stage 1 wrote it inside a checkout, at <checkout>/git/hooks.d;
+// stage 2 moved it to the machine-owned ~/.config/agents/hooks.d, where a moved
+// or deleted checkout cannot take the guard with it. Nothing here assumes
+// either location: the record's `checkout` is the machine's statement of where
+// the personal stages live, which is a different fact from where the chain
+// itself sits.
 
 const (
 	chainRecordName         = "chain.env"
@@ -115,14 +117,24 @@ func chainChecks(repoRoot, binary string, deps Dependencies) []Check {
 		return append(checks, checkChainLocal(repoRoot, deps.Git), checkChainLegacy(repoRoot, deps))
 	}
 	record, recordErr := readChainRecord(chainDir)
+	// The remedy names the installer, and the checkout it lives in comes from
+	// the RECORD. A machine-owned chain has no checkout in its path, so the
+	// record's `checkout` key is the only statement of which checkout supplies
+	// the stages -- and of where git/install-hooks.sh is. A record that will
+	// not parse leaves the remedy as the sentence that names no path: printing
+	// a guessed command is worse than printing none.
+	remedyCheckout := ""
+	if recordErr == nil && record.Checkout != "-" {
+		remedyCheckout = record.Checkout
+	}
 	checks = append(checks,
-		checkChainEntries(chainDir, deps),
-		checkChainRecord(chainDir, record, recordErr, deps),
-		checkChainUnmanaged(chainDir, deps),
+		checkChainEntries(chainDir, remedyCheckout, deps),
+		checkChainRecord(chainDir, record, recordErr, remedyCheckout, deps),
+		checkChainUnmanaged(chainDir, remedyCheckout, deps),
 		checkChainLocal(repoRoot, deps.Git),
 		checkChainLegacy(repoRoot, deps),
-		checkChainRunning(record, recordErr, binary, chainDir, deps),
-		checkChainCheckout(record, recordErr, chainDir, deps),
+		checkChainRunning(record, recordErr, binary, remedyCheckout, deps),
+		checkChainCheckout(record, recordErr, remedyCheckout, deps),
 	)
 	return checks
 }
@@ -169,9 +181,9 @@ func readChainRecord(chainDir string) (chainRecord, error) {
 	return parseChainRecord(path, contents)
 }
 
-func checkChainEntries(chainDir string, deps Dependencies) Check {
+func checkChainEntries(chainDir, remedyCheckout string, deps Dependencies) Check {
 	const name = "chain:entries"
-	remedy := hookInstallerRemedy(chainDir, deps, false)
+	remedy := hookInstallerRemedy(remedyCheckout, deps, false)
 	if info, err := os.Stat(chainDir); err != nil || !info.IsDir() {
 		// The one silence §4 names: Git looks in a directory that is not there,
 		// runs nothing, and reports nothing. doctor is the only thing that can
@@ -209,9 +221,9 @@ func checkChainEntries(chainDir string, deps Dependencies) Check {
 	return Check{Name: name, Status: OK, Detail: "all four entries are present, executable and carry the generated header"}
 }
 
-func checkChainRecord(chainDir string, record chainRecord, recordErr error, deps Dependencies) Check {
+func checkChainRecord(chainDir string, record chainRecord, recordErr error, remedyCheckout string, deps Dependencies) Check {
 	const name = "chain:record"
-	remedy := hookInstallerRemedy(chainDir, deps, false)
+	remedy := hookInstallerRemedy(remedyCheckout, deps, false)
 	if recordErr != nil {
 		return Check{Name: name, Status: Fail, Detail: recordErr.Error(), Remedy: remedy}
 	}
@@ -227,9 +239,9 @@ func checkChainRecord(chainDir string, record chainRecord, recordErr error, deps
 // as facts with no failure would make doctor print ok while the binary you
 // invoke is not the binary your commits run -- the disagreement the 2026-08-20
 // upgrade incident was made of.
-func checkChainRunning(record chainRecord, recordErr error, binary, chainDir string, deps Dependencies) Check {
+func checkChainRunning(record chainRecord, recordErr error, binary, remedyCheckout string, deps Dependencies) Check {
 	const name = "chain:running"
-	remedy := hookInstallerRemedy(chainDir, deps, false)
+	remedy := hookInstallerRemedy(remedyCheckout, deps, false)
 	if recordErr != nil {
 		return Check{Name: name, Status: Fail, Detail: "the record cannot be read, so the binary Git runs cannot be compared with " + binary, Remedy: remedy}
 	}
@@ -254,9 +266,9 @@ func checkChainRunning(record chainRecord, recordErr error, binary, chainDir str
 // It reports the COUNT rather than mere presence: this repository's git/hooks/
 // carries two tracked files, so "the directory is not empty" is true of any
 // checkout of it, and zero is the state the check exists to notice.
-func checkChainCheckout(record chainRecord, recordErr error, chainDir string, deps Dependencies) Check {
+func checkChainCheckout(record chainRecord, recordErr error, remedyCheckout string, deps Dependencies) Check {
 	const name = "chain:checkout"
-	remedy := hookInstallerRemedy(chainDir, deps, false)
+	remedy := hookInstallerRemedy(remedyCheckout, deps, false)
 	if recordErr != nil {
 		return Check{Name: name, Status: Warn, Detail: "the record cannot be read, so the checkout it names cannot be reported", Remedy: remedy}
 	}
@@ -312,7 +324,7 @@ func personalStageCount(checkout string) int {
 // Two shapes: a symlink left by an earlier installer that no longer resolves --
 // it dangles forever and no other check names it -- and a generated entry under
 // a name Git never runs, which looks installed and is not.
-func checkChainUnmanaged(chainDir string, deps Dependencies) Check {
+func checkChainUnmanaged(chainDir, remedyCheckout string, deps Dependencies) Check {
 	const name = "chain:unmanaged"
 	entries, err := os.ReadDir(chainDir)
 	if err != nil {
@@ -358,7 +370,7 @@ func checkChainUnmanaged(chainDir string, deps Dependencies) Check {
 		Name:   name,
 		Status: Warn,
 		Detail: strings.Join(findings, "; "),
-		Remedy: "delete them, or repoint them deliberately: " + hookInstallerRemedy(chainDir, deps, false),
+		Remedy: "delete them, or repoint them deliberately: " + hookInstallerRemedy(remedyCheckout, deps, false),
 	}
 }
 

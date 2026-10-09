@@ -545,9 +545,10 @@ func newChainFixture(t *testing.T) chainFixture {
 	if err := os.Chmod(f.binary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The installer has to be where the remedy's shape says it is, or the
-	// remedy falls back to the sentence that names no path.
-	writeFixture(t, filepath.Join(root, "git", "install-hooks.sh"), "#!/bin/sh\n")
+	// The installer has to be at <checkout>/git/install-hooks.sh -- the record's
+	// checkout is where the remedy reads it from -- or the remedy falls back to
+	// the sentence that names no path.
+	writeFixture(t, filepath.Join(f.checkout, "git", "install-hooks.sh"), "#!/bin/sh\n")
 	for _, name := range installedHookNames {
 		path := filepath.Join(f.chain, name)
 		writeFixture(t, path, generatedEntry(f.checkout, name))
@@ -1363,25 +1364,37 @@ func TestCheckAttributesGlobalReportsTheRepositoryHalfFirst(t *testing.T) {
 	}
 }
 
-// The remedy is the installer command, and it is only printable when the
-// installer is where the chain's shape says it is. A checkout that is not at
-// <chain>/../../git/install-hooks.sh must not produce a command that cannot run.
+// The remedy is the installer command, and it names the checkout the RECORD
+// names -- the machine chain has no checkout in its path any more. When the
+// record names no checkout, or the installer is not there, the remedy falls
+// back to the sentence that names no path rather than printing a command that
+// cannot run.
 func TestHookInstallerRemedyNamesTheInstallerOnlyWhenItExists(t *testing.T) {
-	root := t.TempDir()
-	chain := filepath.Join(root, "git", "hooks.d")
-	writeFixture(t, filepath.Join(root, "git", "install-hooks.sh"), "#!/bin/sh\n")
-	deps := Dependencies{GlobalGitConfig: filepath.Join(root, "home", ".gitconfig")}
+	checkout := t.TempDir()
+	writeFixture(t, filepath.Join(checkout, "git", "install-hooks.sh"), "#!/bin/sh\n")
+	home := t.TempDir()
+	deps := Dependencies{GlobalGitConfig: filepath.Join(home, ".gitconfig")}
 
-	got := hookInstallerRemedy(chain, deps, true)
-	for _, want := range []string{filepath.Join(root, "git", "install-hooks.sh"), "--adopt-owned", root} {
+	got := hookInstallerRemedy(checkout, deps, true)
+	for _, want := range []string{filepath.Join(checkout, "git", "install-hooks.sh"), "--adopt-owned", checkout, home} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the remedy must carry %q: %s", want, got)
 		}
 	}
 
-	elsewhere := filepath.Join(t.TempDir(), "not-a-checkout", "git", "hooks.d")
-	if got := hookInstallerRemedy(elsewhere, deps, false); got != "run the reviewed global hook installer" {
-		t.Errorf("a chain with no installer beside it = %q, want the sentence that names no path", got)
+	for _, tc := range []struct {
+		name     string
+		checkout string
+	}{
+		{"the record declares no checkout", "-"},
+		{"the record names no checkout at all", ""},
+		{"the checkout is gone", filepath.Join(t.TempDir(), "gone")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hookInstallerRemedy(tc.checkout, deps, false); got != "run the reviewed global hook installer" {
+				t.Errorf("remedy = %q, want the sentence that names no path", got)
+			}
+		})
 	}
 }
 

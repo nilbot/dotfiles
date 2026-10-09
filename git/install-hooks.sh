@@ -57,8 +57,16 @@ for value in "$root" "$install_home" "$binary"; do
 	esac
 done
 
-hooks_dir=$root/git/hooks.d
+# The chain is MACHINE-owned. Stage 1 kept it inside the checkout, where a
+# deleted or moved checkout takes the commit guard with it and Git reports
+# nothing; stage 2 writes it under the home directory, which no package manager
+# and no checkout cleanup touches, and points core.hooksPath at it.
+hooks_dir=$install_home/.config/agents/hooks.d
 chain_record=$hooks_dir/chain.env
+# Where stage 1 wrote the chain. Both are read -- the record for the keg-path
+# guard, the directory for retirement -- and neither is written.
+legacy_hooks_dir=$root/git/hooks.d
+legacy_chain_record=$legacy_hooks_dir/chain.env
 attributes_source=$root/git/gitattributes
 attributes_link=$install_home/.gitattributes
 hook_names='pre-commit commit-msg post-merge post-checkout'
@@ -133,10 +141,28 @@ inspect_global_hooks_path() {
 	origin=${config_output%%"$tab"*}
 	configured_path=${config_output#*"$tab"}
 	expected_origin=file:$global_config
-	if [ "$configured_path" != "$hooks_dir" ] || [ "$origin" != "$expected_origin" ]; then
-		refuse "global core.hooksPath is already configured as '$configured_path' from '$origin'; preserve it or run 'git config --global --unset-all core.hooksPath' deliberately, then retry"
+	# The ORIGIN test is unchanged: the value must come from the machine-local
+	# primary config, not an include, whatever it says.
+	#
+	# The VALUE has two accepted spellings. The machine directory is what this
+	# script installs into. The checkout directory is what stage 1 wrote, and
+	# after the move every wired machine's config still names it -- so accepting
+	# it is what lets the move happen at all, rather than making the operator
+	# unset the key by hand first. Accepting the old value sets no
+	# config_correct: the write below repoints it.
+	if [ "$origin" != "$expected_origin" ]; then
+		refuse "global core.hooksPath comes from '$origin', not '$expected_origin'; preserve it or run 'git config --global --unset-all core.hooksPath' deliberately, then retry"
 	fi
-	config_correct=1
+	case "$configured_path" in
+		"$hooks_dir")
+			config_correct=1
+			return 0
+			;;
+		"$legacy_hooks_dir")
+			return 0
+			;;
+	esac
+	refuse "global core.hooksPath is already configured as '$configured_path'; preserve it or run 'git config --global --unset-all core.hooksPath' deliberately, then retry"
 }
 
 check_exact_symlink_or_absent() {
@@ -320,15 +346,56 @@ owned_link_target() {
 # ownership -- a missing or malformed record is one of the states the repair
 # command exists for, and ownership is read from the entry itself.
 chain_recorded_binary() {
-	if [ -f "$chain_record" ]; then
-		sed -n 's/^binary=//p' "$chain_record" | head -n 1
-		return 0
-	fi
-	if [ -L "$hooks_dir/pre-commit" ]; then
-		readlink "$hooks_dir/pre-commit"
-		return 0
-	fi
+	for record in "$chain_record" "$legacy_chain_record"; do
+		if [ -f "$record" ]; then
+			sed -n 's/^binary=//p' "$record" | head -n 1
+			return 0
+		fi
+	done
+	for path in "$hooks_dir/pre-commit" "$legacy_hooks_dir/pre-commit"; do
+		if [ -L "$path" ]; then
+			readlink "$path"
+			return 0
+		fi
+	done
 	printf '\n'
+}
+
+# retire_legacy_chain removes what THIS installer wrote into the stage-1
+# directory: the four entries (or the symlinks of an even earlier install) and
+# its record. It is what keeps the checkout clean -- with the tracked
+# .gitignore gone, four entries left behind would show up as four untracked
+# files in `git status` -- and it is deliberately narrow:
+#
+#   * a name this installer did not write is left exactly where it is, and the
+#     directory stays, because the human owns it;
+#   * the directory itself is removed only when it is empty afterwards, so an
+#     rmdir that fails is the ordinary case for a repository with its own files
+#     in there, not an error.
+#
+# The tracked .gitignore is NOT removed here. That is a repository change, made
+# once in history, not something an installer does to a working tree.
+retire_legacy_chain() {
+	[ -d "$legacy_hooks_dir" ] || return 0
+	for hook in $hook_names; do
+		path=$legacy_hooks_dir/$hook
+		if [ -L "$path" ]; then
+			got=$(readlink "$path") || continue
+			if [ "$got" = "$binary" ] || owned_link_target "$got"; then
+				rm -f "$path"
+				printf 'install-hooks: retired %s from %s\n' "$hook" "$legacy_hooks_dir" >&2
+			fi
+			continue
+		fi
+		if [ -f "$path" ] && entry_is_generated "$path" "$hook"; then
+			rm -f "$path"
+			printf 'install-hooks: retired %s from %s\n' "$hook" "$legacy_hooks_dir" >&2
+		fi
+	done
+	if [ -f "$legacy_chain_record" ]; then
+		rm -f "$legacy_chain_record"
+	fi
+	rmdir "$legacy_hooks_dir" 2>/dev/null || true
 }
 
 validate_binary() {
@@ -494,9 +561,19 @@ publish_record() {
 }
 
 preflight() {
-	if [ ! -d "$hooks_dir" ] || [ -L "$hooks_dir" ]; then
-		refuse "hooks directory '$hooks_dir' must be an existing real directory"
-	fi
+	# The chain directory is created by `install`, so preflight cannot require
+	# it to exist -- but it must refuse the shapes `mkdir -p` would either fail
+	# on or silently follow. A symlink at either name is the dangerous one: it
+	# would put the chain back inside something a checkout can move or delete,
+	# which is the whole property stage 2 buys.
+	for dir in "$install_home/.config/agents" "$hooks_dir"; do
+		if [ -L "$dir" ]; then
+			refuse "'$dir' must not be a symlink; the commit guard has to live in a machine-owned directory"
+		fi
+		if [ -e "$dir" ] && [ ! -d "$dir" ]; then
+			refuse "'$dir' exists and is not a directory; preserve or move it aside deliberately, then retry"
+		fi
+	done
 	if [ ! -f "$attributes_source" ] || [ -L "$attributes_source" ]; then
 		refuse "tracked attributes source '$attributes_source' must be a regular file"
 	fi
@@ -525,6 +602,14 @@ fi
 
 validate_binary
 
+# The one thing the installer creates rather than converges: the machine's own
+# chain directory. `-p` also makes the `agents` level, and preflight has already
+# refused a symlink or a non-directory at either name.
+if [ ! -d "$hooks_dir" ]; then
+	mkdir -p "$hooks_dir" ||
+		refuse "could not create the chain directory '$hooks_dir'; nothing was activated"
+fi
+
 if [ ! -L "$attributes_link" ]; then
 	ln -s "$attributes_source" "$attributes_link"
 fi
@@ -540,6 +625,14 @@ validate_binary
 if [ "$config_correct" -eq 0 ]; then
 	git config --global core.hooksPath "$hooks_dir"
 fi
+
+# Retirement comes AFTER the repoint, deliberately. Removing the stage-1 chain
+# first would leave any failure between the two steps with core.hooksPath
+# naming a directory this script had just emptied -- the guard off, Git silent.
+# Done in this order there is a moment where both chains exist, which is
+# harmless: Git reads one directory, and it is the one just written.
+retire_legacy_chain
+
 printf '%s\n' "install-hooks: installed global Git hooks"
 if is_keg_agents_path "$binary"; then
 	# The install is valid, so this is a note and not a refusal: the hooks work

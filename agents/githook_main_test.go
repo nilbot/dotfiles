@@ -205,8 +205,11 @@ func newLiveHookRepo(t *testing.T, home, chainRoot string) liveHookRepo {
 // binary no longer has.
 func installHookChain(t *testing.T, binary, home string) string {
 	t.Helper()
+	// The chain directory is deliberately NOT created: stage 2's installer
+	// creates the machine-owned one under the home it is handed, and a fixture
+	// that had it already would never exercise that.
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "git", "hooks.d"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "git"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "git", "gitattributes"),
@@ -602,5 +605,51 @@ func TestSymlinkShimDoesNotProbeARelativePersonalStagesDir(t *testing.T) {
 	if _, err := os.Stat(ran); !os.IsNotExist(err) {
 		t.Fatalf("the shim probed and executed a relative personal stage; it is told no "+
 			"checkout and must not look for one\n%s", output)
+	}
+}
+
+// §8 test 3. Stage 1 could not pass this: the chain lived inside the checkout,
+// so deleting the checkout deleted the guard. Stage 2 moved the chain under the
+// home directory, and the two halves of the row are what this asserts --
+//
+//	the built-in guard still runs, and the personal stages are reported missing
+//
+// The second half is the one worth a line of output. githook treats an absent
+// extras directory as "no personal stages" and carries on at exit 0, so without
+// the report a machine would have lost its personal stages with Git, the guard
+// and the commit all saying nothing.
+func TestTheGuardSurvivesADeletedCheckout(t *testing.T) {
+	t.Parallel()
+	binary := buildTemporaryAgentsBinary(t)
+	gitBinary, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	checkout := installHookChain(t, binary, home)
+	writeLiveFile(t, checkout, "git/hooks/a.pre-commit", "#!/bin/sh\nexit 0\n", 0o755)
+
+	repo := newLiveHookRepo(t, home, checkout)
+	// A scanner that always reports a finding, so "the guard ran" is visible as
+	// a refused commit rather than as prose.
+	repo = repo.withEnv("PATH=" + hookTestPath(t, gitBinary, `printf '[{"RuleID":"fixture-rule","StartLine":1}]\n'; exit 1`))
+	writeLiveFile(t, repo.root, ".agents/note.md", "agent note\n", 0o644)
+	stageLive(t, repo.root, repo.env)
+
+	if err := os.RemoveAll(checkout); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := gitAttempt(repo.root, repo.env, "commit", "-m", "the checkout is gone")
+	if err == nil {
+		t.Fatalf("the guard did not run after the checkout was deleted:\n%s", out)
+	}
+	if !bytes.Contains(out, []byte("[fixture-rule]")) {
+		t.Errorf("the built-in guard's finding is missing from the refusal:\n%s", out)
+	}
+	for _, want := range []string{"personal stages", "are missing", checkout} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("the report must say %q:\n%s", want, out)
+		}
 	}
 }

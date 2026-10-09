@@ -81,7 +81,7 @@ To eliminate false mode inferences and guarantee predictable behavior across all
 ### 2.1 Resolution Rules *(superseded 2026-10-09 — see the amendment above)*
 
 ~~An `agents` binary is bound to a dotfiles checkout if and only if:~~
-1. ~~**Link-Time Stamp (Highest Precedence)**: The binary was compiled with `-ldflags "-X main.dotfilesRoot=<path>"`. This is set by `make agents` and `./bootstrap apply workstation`.~~ **Deleted 2026-10-09: the devtools producer is gone, `make agents` is retiring with the test pins that assert it, and the flag names no variable.**
+1. ~~**Link-Time Stamp (Highest Precedence)**: The binary was compiled with `-ldflags "-X main.dotfilesRoot=<path>"`. This is set by `make agents` and `./bootstrap apply workstation`.~~ **Deleted 2026-10-09: both producers are gone — the devtools build with the tap change, the `make agents` target with the Makefile and its test pins — and the flag names no variable.**
 2. ~~**Explicit Environment Variable**: `AGENTS_DOTFILES_ROOT=<path>` is non-empty in the process environment.~~ **Deleted 2026-10-09.**
 3. ~~**Standalone Fallback (Default)**: In all other cases, `DotfilesRoot()` returns `""` (empty string).~~ **Deleted 2026-10-09: there are no modes.**
 
@@ -170,7 +170,7 @@ When invoked as a Git hook (`pre-commit`, `commit-msg`, `post-merge`, `post-chec
 ## 5. Documentation Updates
 
 1. **`docs/design/2026-08-11-spec-6-releases-and-distribution.md`**: Update Section 2 to document explicit resolution without `$HOME/dotfiles` directory fallback.
-2. **`Makefile` & `bootstrap.d/internal/phase/devtools.go`**: Update code comments regarding unstamped binaries operating in Standalone Mode.
+2. **`Makefile` & `bootstrap.d/internal/phase/devtools.go`**: Update code comments regarding unstamped binaries operating in Standalone Mode. ~~**Done, and then both files went further than the task:** the comments were corrected, and then the `Makefile` and the devtools build were deleted with the personal build (2026-10-09), so there is no unstamped-binary comment left to update.~~
 3. **`docs/qna/why-does-an-unstamped-or-homebrew-agents-binary-skip-dotfiles-checks.md`**: New Q&A documenting Standalone Mode mechanics and `AGENTS_DOTFILES_ROOT`.
 
 ---

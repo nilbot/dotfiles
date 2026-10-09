@@ -44,12 +44,13 @@ nerd font — are recorded with the rest in
 which is the authority. This paragraph is a summary of it and will go stale
 first.
 
-## The Makefile
+## The personal build, and the Makefile that produced it
 
-**Retiring: decided 2026-10-09.** Provisioning has stopped building `agents` — the
-devtools phase now resolves the released binary and passes `--adopt-owned` to the
-installer. Nothing is left of it: the `make agents` target and the test pins that
-asserted it were deleted on 2026-10-09. It compiled this checkout into
+**Deleted 2026-10-09.** Provisioning stopped building `agents` — the devtools
+phase resolves the released binary now and passes `--adopt-owned` to the
+installer. Nothing is left of it: the `make agents` target, the Makefile that
+carried it, and the test pins that asserted it all went the same day. That build
+compiled this checkout into
 `~/bin/agents`, a second `agents` beside the released one, and the two owners
 disagreed about which binary the hook chain ran — measured here as
 `bootstrap apply workstation` exiting 2 in the devtools preflight. The decision,
@@ -58,8 +59,8 @@ its evidence and the order the removal lands in are in
 Provisioning belongs to `./bootstrap`. For an inner loop,
 `go build -o /tmp/agents .` writes no global path and installs nothing.
 
-`make release` runs `script/package-release.sh` and nothing else; the script is
-the entry point.
+`make release` ran `script/package-release.sh` and nothing else; the script is
+the entry point, and the Makefile that wrapped it is gone.
 
 **Why the target was dangerous — kept, because the reasoning outlives it.** The
 binary was stamped with the checkout it was built from, and the target wrote the
