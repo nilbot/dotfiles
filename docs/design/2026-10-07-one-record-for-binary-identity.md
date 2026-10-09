@@ -492,11 +492,11 @@ it can find at a hook name. `--adopt-owned` keeps its meaning from today: it is 
 flag that lets the installer replace something that is already there. What changes
 is what counts as **owned**. For an entry, ownership is decided from the entry
 alone, by three things that are all inside the file: line 1 is exactly `#!/bin/sh`;
-line 2 matches the generated form `# Written by git/install-hooks.sh for <path>.`
-with the path taken as a pattern and compared against nothing; and the last line
-execs `agents githook` for the hook name the file itself carries. The path is not
-compared with the installer's own checkout, because the table's fourth row has to
-recognise an entry generated from a different checkout and replace it.
+line 2 matches the generated form `# Written by git/install-hooks.sh for <path>.`,
+where `<path>` accepts anything between `for ` and the final period; and the last
+line execs `agents githook` for the hook name the file itself carries. The captured
+path is not compared with the installer's own checkout, because the table's fourth
+row has to recognise an entry generated from a different checkout and replace it.
 
 It must not be decided from `chain.env`, because a missing or malformed record is
 one of the states the repair command exists for, and a rule that read the record
@@ -708,10 +708,11 @@ puts these tests under the `hygiene` job's synthetic-`HOME` guard.
 
 Four things this design introduces have no test here yet, and each needs one before
 the work is planned: `provenance:checkout`'s warning; `chain:record`'s allow-list,
-which no row exercises because every row writes its record through the installer;
-`chain:legacy`; and the installer creating the chain directory on a machine that
-has none. The checks that replace today's machine checks are otherwise covered by
-the rows above — test 13 asserts `chain:entries` and test 15 asserts
+which rows 8 to 10 do not cover — those write a record by hand and assert what the
+*entry* does with it, and no row runs `doctor` over a record the installer did not
+write; `chain:legacy`; and the installer creating the chain directory on a machine
+that has none. The checks that replace today's machine checks are otherwise covered
+by the rows above — test 13 asserts `chain:entries` and test 15 asserts
 `chain:hooks-path` — and what is untested in them is the mapping from the five old
 names to the four new ones.
 
