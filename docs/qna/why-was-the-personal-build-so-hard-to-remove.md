@@ -1,0 +1,80 @@
+# Why was the personal `agents` build so hard to remove?
+
+## Context
+
+On 2026-10-09 the owner said the checkout build of `agents` — the `Makefile`'s
+`agents` target and `bootstrap`'s devtools build of `$HOME/bin/agents` — "should have
+been retired long ago", and asked why deleting it looked difficult when CI, the
+release workflow and the Homebrew tap had existed since 2026-08-28.
+
+It looked difficult because a decision to remove it had already been taken, recorded
+as executed, and never carried out. Nothing in the tree said so: `Makefile`'s header
+calls the target "a developer convenience… a shortcut, not a separate mechanism", and
+[the simplification plan](../plans/2026-09-21-simplification-plan.md) lists "Makefile
+reduced to the `agents` target" as done. The owner's decision was written nowhere —
+not in `docs/qna/`, not in `docs/journal/`, not in the boundary review.
+
+## Answer
+
+**The build is a port of a retired provisioning target, kept alive by an unimplemented
+decision.** Three parts, each with its evidence.
+
+**1. It is a retrofit of the old provisioning entry point.** The `Makefile` was how
+this machine was provisioned before `./bootstrap` existed. When the Go binaries
+arrived, `make agents` was appended to it (`ed1c4e3`, 2026-08-07) with the reason now
+deleted: *"The agents binary lives in dotfiles and is invoked by absolute path from
+generated harness configs."* The hook chain was aimed at that path three days later
+(`b87810f`, 2026-08-10), and `bootstrap`'s devtools phase — added 2026-08-11
+(`ababfd8`) — is a port of the Makefile's `githooks:` target: same three steps, same
+argument. The release channel and the tap arrived 2026-08-28, twenty-one days after
+the target.
+
+**2. It was revisited four times, and three were deferrals.**
+The boundary review of 2026-09-20 names the two-owner leak and files it open as §7
+item 2; the context design records it as a "known gap, not closed here"; the same day
+`ab2a859` gives the installer `--adopt-owned` and records that this machine was
+repaired to name `/opt/homebrew/bin/agents` — while changing `devtools.go` by comment
+only. Then on 2026-09-21 the plan answered the question and specified the change:
+
+> | Q3 | The hook chain has two owners… Who owns it? | **Bootstrap**, by passing `--adopt-owned`… |
+
+with Task 1 Step 1 giving the one-argument change and its verification.
+
+**3. The decision was never carried out, and the record said it was.**
+`git log --all -S'adopt-owned' -- bootstrap.d/` returns nothing on any branch.
+`bootstrap.d/internal/phase/devtools_test.go:23` still pins the flagless command, so a
+test enforced the state the task existed to change. The status line read
+`EXECUTED 2026-09-21` from that day until 2026-10-09, when it was corrected in
+`b301dbc` — with both of Task 1's checkboxes still unticked, two lines below the
+claim. The verification Task 1 specified — that `apply` reaches `verify` — was never
+run, and it is what would have caught the false claim.
+
+The build's original justification died the same day, unnoticed: `f3b4a74` removed
+hook rendering, so nothing this tool writes names a binary path any more.
+
+## What this cost, and what removing it takes
+
+**The cost of the missing record.** Two design documents were written, and ten review
+lens runs spent across them, against a tree whose shape the owner had already decided
+to change. The first lens to question the premise was a sequencing agent that measured
+`bootstrap apply workstation` refusing on this machine — a symptom one step away from
+the cause — and it was filed as a question for the owner instead of being traced back.
+
+**What actually depends on the route** (measured 2026-10-09): the guard's rules are
+embedded at build time and its scanner comes from `PATH`; the dispatcher is name-based.
+So nothing needs the binary *built from the checkout*. What the build uniquely supplies
+is the **binding** to a checkout, carried today by the compile-time stamp or the
+hand-written `AGENTS_DOTFILES_ROOT` line in `~/.config/fish/config.fish:19`, worth five
+`doctor` checks (18 → 13) and the personal hook stages. That binding moves to the
+chain record in
+[identity stage 1](../design/2026-10-07-one-record-for-binary-identity.md), which is
+why the tap change lands with it or after it, never before.
+
+**What it takes**: the `Makefile` and its two targets; the devtools build and its
+output path; the drift pins in `makefile_test.go` and the stamp pins in
+`devtools_test.go`; doctor's `make agents` remedy; the check text that says the
+devtools phase builds the binary; the README sections describing the build-from-source
+route; and `bootstrap.d/Brewfile` gains `brew "nilbot/tap/agents"` so provisioning
+delivers the binary the builders used to produce. `runHookSequence`
+(`agents/install_hooks_test.go:298-338`) stays: it builds its own temporary fixture and
+is the only test of the devtools sequence.
