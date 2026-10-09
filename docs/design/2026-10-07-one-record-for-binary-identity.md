@@ -240,6 +240,17 @@ case "$checkout" in -|/*) ;; *) fail "checkout in $chain/chain.env is neither - 
 exec "$binary" githook pre-commit --checkout "$checkout" "$@"
 ```
 
+**The observational entries exit 0 when the binary is missing.** §3.1's bullet 2
+and §3.6's first row say `post-merge` and `post-checkout` report and exit 0, because
+a missing banner must not fail a `git checkout` or a `git switch`. The `fail` above
+exits 1 on every rejection, so implementing it verbatim makes `post-checkout` exit
+1 — which is the failure the transition window exists to prevent, moved from the
+window into the steady state. The entry therefore branches once, on its own hook
+name: `post-merge` and `post-checkout` route the **missing binary** case through a
+`skip()` that prints the same line and exits 0, while every record, format and path
+error still goes through `fail` and exits 1 for all four names — §3.6's second row
+requires that, because a broken record is a broken guard whatever the hook is.
+
 Every rejection goes through `fail`: the chain directory cannot be resolved, the
 record cannot be read, an unknown key, a wrong `format`, a relative or missing
 `binary`, a bad `checkout`. All of them print the repair command and not just a
