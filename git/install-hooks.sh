@@ -12,12 +12,14 @@ refuse() {
 	exit 1
 }
 
-# --adopt-owned repoints links this installer wrote for an EARLIER binary.
-# Without it every existing link must already name the binary it was handed,
-# which is what keeps a foreign hook from being overwritten. It is the one flag
-# an upgrade needs: a package manager deletes the versioned path a pinned link
-# points at, git runs a dangling hook as if no hook existed, and the default
-# then refuses to repair what the upgrade broke. See
+# --adopt-owned replaces hook names this installer wrote -- a symlink it
+# installed for an EARLIER binary, or an entry naming a different checkout or
+# written by an older form of this script. Without it every name must be absent
+# or already hold the exact entry this run would write, which is what keeps a
+# foreign hook from being overwritten. It is the one flag an upgrade needs: a
+# package manager deletes the versioned path a pinned symlink points at, git
+# runs a dangling hook as if no hook existed, and the default then refuses to
+# repair what the upgrade broke. See
 # docs/qna/why-does-a-brew-upgrade-stop-my-commit-guard.md.
 adopt_owned=0
 if [ "${1-}" = "--adopt-owned" ]; then
@@ -56,6 +58,7 @@ for value in "$root" "$install_home" "$binary"; do
 done
 
 hooks_dir=$root/git/hooks.d
+chain_record=$hooks_dir/chain.env
 attributes_source=$root/git/gitattributes
 attributes_link=$install_home/.gitattributes
 hook_names='pre-commit commit-msg post-merge post-checkout'
@@ -167,6 +170,53 @@ check_exact_symlink_or_absent() {
 	fi
 }
 
+# check_hook_or_absent is the hook-name half of preflight. A symlink is still
+# decided by the rule above, so every refusal it carried is unchanged; what is
+# new is that an entry this installer generated is a success state, because the
+# install path below writes entries now rather than links, and the recheck
+# before the global key is written has to accept its own output.
+check_hook_or_absent() {
+	path=$1
+	hook=$2
+	if [ -L "$path" ]; then
+		check_exact_symlink_or_absent "$path" "$binary" "owned $hook hook"
+		return 0
+	fi
+	if [ ! -e "$path" ]; then
+		return 0
+	fi
+	if [ -f "$path" ] && entry_is_generated "$path" "$hook"; then
+		return 0
+	fi
+	refuse "'$path' already exists and is not an entry this installer wrote; preserve or move it aside deliberately, then retry"
+}
+
+# entry_is_generated decides ownership from the entry alone, never from
+# chain.env: a missing or malformed record is one of the states the repair
+# command exists for, so a rule that read the record first would refuse the
+# installer's own entries as foreign.
+#
+# The three tests are the design's, and they are all inside the file: line 1,
+# the generated header on line 2 (the path is not compared with this checkout --
+# an entry from a different checkout is still ours to recognise), and a last
+# line that execs githook for the hook name the file itself carries.
+#
+# This is only an ACCEPTANCE rule. What --adopt-owned may replace, and what each
+# shape at a hook name converts to, is the change that follows this one.
+entry_is_generated() {
+	path=$1
+	hook=$2
+	[ "$(sed -n '1p' "$path")" = '#!/bin/sh' ] || return 1
+	case "$(sed -n '2p' "$path")" in
+		'# Written by git/install-hooks.sh for '*'.') ;;
+		*) return 1 ;;
+	esac
+	case "$(tail -n 1 "$path")" in
+		'exec '*" githook $hook "*) return 0 ;;
+	esac
+	return 1
+}
+
 # resolve_path follows symlinks to the real file. realpath is in GNU coreutils
 # and in macOS; readlink -f covers systems where it is not. Failing both is a
 # refusal rather than a guess, because what gets recorded in a hook is what git
@@ -230,6 +280,102 @@ validate_binary() {
 	fi
 }
 
+# generate_entry prints the entry for one hook name. The text is the design's
+# §3.1 script with two substitutions -- the checkout in its header, and the hook
+# name on the last line -- and nothing else. The record is PARSED, never
+# sourced, which is why the allow-list and the one `fail` path have to be
+# exactly this: the entry runs at every commit, with the committing user's
+# privileges, so a record carrying `: > /tmp/pwned` must be rejected and not
+# executed, and a value the record does not define must never be guessed at.
+generate_entry() {
+	hook=$1
+	printf '%s\n' '#!/bin/sh'
+	printf '# Written by git/install-hooks.sh for %s.\n' "$root"
+	cat <<'ENTRY'
+# The checkout is read from our own header, so a broken record is still repairable.
+{ IFS= read -r _shebang; IFS= read -r _header; } < "$0"
+repair_root=${_header#*for }
+repair_root=${repair_root%.}
+fail() {
+  printf 'agents: %s\n' "$1" >&2
+  if [ -n "$repair_root" ]; then
+    printf 'agents: repair with: bash %s/git/install-hooks.sh install --adopt-owned %s "$HOME" "$(command -v agents)"\n' "$repair_root" "$repair_root" >&2
+  fi
+  exit 1
+}
+chain=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || fail "cannot locate the chain directory"
+[ -n "$repair_root" ] || repair_root=$chain
+format=; binary=; checkout=
+while IFS='=' read -r key value; do
+  case "$key" in
+    ''|\#*) ;;
+    format)   format=$value ;;
+    binary)   binary=$value ;;
+    checkout) checkout=$value ;;
+    *) fail "unknown key '$key' in $chain/chain.env" ;;
+  esac
+done < "$chain/chain.env" || fail "cannot read $chain/chain.env"
+[ "$format" = 1 ] || fail "$chain/chain.env is not format 1"
+case "$binary" in /*) ;; *) fail "binary in $chain/chain.env is not an absolute path" ;; esac
+[ -f "$binary" ] && [ -x "$binary" ] || fail "the commit guard is not installed: $binary is missing or not executable"
+case "$checkout" in -|/*) ;; *) fail "checkout in $chain/chain.env is neither - nor an absolute path" ;; esac
+ENTRY
+	printf 'exec "$binary" githook %s --checkout "$checkout" "$@"\n' "$hook"
+}
+
+# generate_record prints chain.env: a comment line, then format, binary and
+# checkout, one key=value per line. Values are literal -- no quoting, no
+# expansion, nothing after the first = is interpreted -- which is what lets a
+# path containing a space be recorded at all.
+generate_record() {
+	printf '%s\n' '# Written by git/install-hooks.sh. Re-run the installer to change it.'
+	printf 'format=1\n'
+	printf 'binary=%s\n' "$binary"
+	printf 'checkout=%s\n' "$root"
+}
+
+# publish_entry writes one entry atomically: a temporary file in the same
+# directory, its final mode set before it is visible, then mv into place. A hook
+# name that exists but is not executable is skipped by Git with a hint and exit
+# 0, so no entry may ever be seen in a partial or non-executable state -- ln -sfn
+# was atomic, and its replacement has to be too.
+#
+# A name already holding exactly these bytes is left alone, so a second install
+# preserves the inode it installed instead of replacing a working chain.
+publish_entry() {
+	hook=$1
+	path=$hooks_dir/$hook
+	if [ -f "$path" ] && [ "$(cat "$path")" = "$(generate_entry "$hook")" ]; then
+		return 0
+	fi
+	tmp=$hooks_dir/.$hook.install-hooks.$$
+	generate_entry "$hook" > "$tmp" ||
+		{ rm -f "$tmp"; refuse "could not write a temporary entry for '$hook' in '$hooks_dir'; no global key was written"; }
+	chmod 0755 "$tmp" ||
+		{ rm -f "$tmp"; refuse "could not set the mode of the temporary entry for '$hook'; no global key was written"; }
+	if [ -e "$path" ] || [ -L "$path" ]; then
+		printf 'install-hooks: replaced %s with a generated entry\n' "$hook" >&2
+	fi
+	mv -f "$tmp" "$path" ||
+		{ rm -f "$tmp"; refuse "could not publish the entry for '$hook'; no global key was written"; }
+}
+
+# publish_record writes chain.env the same way. It is written after the entries
+# and before the global key: an entry whose record is missing fails closed and
+# says so, which is the state a half-finished install leaves.
+publish_record() {
+	if [ -f "$chain_record" ] && [ "$(cat "$chain_record")" = "$(generate_record)" ]; then
+		return 0
+	fi
+	tmp=$hooks_dir/.chain.env.install-hooks.$$
+	generate_record > "$tmp" ||
+		{ rm -f "$tmp"; refuse "could not write a temporary record at '$tmp'; no global key was written"; }
+	chmod 0644 "$tmp" ||
+		{ rm -f "$tmp"; refuse "could not set the mode of the temporary record at '$tmp'; no global key was written"; }
+	mv -f "$tmp" "$chain_record" ||
+		{ rm -f "$tmp"; refuse "could not publish '$chain_record'; no global key was written"; }
+}
+
 preflight() {
 	if [ ! -d "$hooks_dir" ] || [ -L "$hooks_dir" ]; then
 		refuse "hooks directory '$hooks_dir' must be an existing real directory"
@@ -241,7 +387,7 @@ preflight() {
 	inspect_global_hooks_path
 	check_exact_symlink_or_absent "$attributes_link" "$attributes_source" "global attributes link"
 	for hook in $hook_names; do
-		check_exact_symlink_or_absent "$hooks_dir/$hook" "$binary" "owned $hook hook"
+		check_hook_or_absent "$hooks_dir/$hook" "$hook"
 	done
 }
 
@@ -257,18 +403,9 @@ if [ ! -L "$attributes_link" ]; then
 	ln -s "$attributes_source" "$attributes_link"
 fi
 for hook in $hook_names; do
-	if [ -L "$hooks_dir/$hook" ]; then
-		# Only reachable under --adopt-owned: without it preflight refused any
-		# link that does not already name $binary, and a non-symlink refused
-		# outright. The recheck below then confirms every link names $binary.
-		if [ "$(readlink "$hooks_dir/$hook")" != "$binary" ]; then
-			ln -sfn "$binary" "$hooks_dir/$hook"
-			printf 'install-hooks: repointed %s at %s\n' "$hook" "$binary" >&2
-		fi
-		continue
-	fi
-	ln -s "$binary" "$hooks_dir/$hook"
+	publish_entry "$hook"
 done
+publish_record
 
 # Recheck immediately before activating the chain. The global key is written
 # last, so a partial install cannot make Git execute an incomplete hooks dir.
