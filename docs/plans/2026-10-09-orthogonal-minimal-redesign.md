@@ -162,3 +162,29 @@ CI job runs that list by name.
 - One writer per file; the Lead reviews the diff and runs the checks.
 - A step is done when its verification has been run and its result recorded, not when
   the text says so. The 2026-09-21 plan is the worked example of the opposite.
+
+---
+
+## Status, 2026-10-09
+
+| step | state | evidence |
+|---|---|---|
+| 1 — `check` executes nothing | **landed** | `856cedf` on `design/what-a-query-is`. `Run` is out of `check.Machine`, the `packages` check and its tests are gone, and `TestNoQueryInvokesHomebrew` is in and shown falsifiable — re-adding `Run` and a `brew` call fails it with 26 bytes recorded. `go build` clean, `go test ./... -count=1` green, `gofmt -l` empty, `go vet` clean. |
+| 1 — the design's mutation row | **landed** | `45a956f`: the row now names the compile error as the safe mutation and warns that making `plan` hold an Applier executes every phase — which it did, on 2026-10-09, changing the developer's login shell. Machine verified restored afterwards. |
+| 2a — the installer | **in flight, narrowed** | One writer, one file (`git/install-hooks.sh`), one behaviour: `chain.env` plus four entries in place of four symlinks. Tests deliberately not updated yet. Four earlier rounds with the full brief produced nothing, which is why it is now one file. |
+| 2b — the Go side | **not started** | `agents githook`, the record reader, the shim with its message, the `chain:*` checks replacing `git-hooks:*`, and the reader-side stamp deletion. Owns the rest of `agents/`, disjoint from 2a. |
+| 3 — the tap | **not started** | `brew "nilbot/tap/agents"`, `resolveAgents` beside `resolveBrew`, `--adopt-owned` from devtools, the argv pins re-aimed, and `command -v agents` added to `linux-stage-zero`'s probes. |
+| 4 — convert the chain | **not started** | Needs step 3. |
+| 5 — delete the producers | **not started** | |
+| 6 — stage 2 | **not started** | |
+| 7 — the records | **partly landed** | `727d18d` (spec 2's check 8 removed and its gap closed), `eb7160a` (the design index), `dd176b8` (`git/README.md` in the documents guard, and a deleted root that no longer passes in silence), `a69329b` (the qna record), `b301dbc` (the false EXECUTED plan). Remaining: the five design documents that restate the deleted contract, and the READMEs the producer removal falsifies. |
+
+**The `mambaforge` migration** is a separate removal, approved by the owner and
+dispatched as `task-41` in this worktree: the migration, its guard, its tests and its
+fixture, plus spec 2's three references, which become statements of history.
+
+**Lesson recorded from the first implementation round:** a writer's "running" status
+is not progress, and a brief that spans a 700-line design plus an 800-line script
+produces reading rather than a diff. Narrow the brief until the deliverable is one
+file and one behaviour, and ask for it with tests failing if that is what it takes to
+see it.
