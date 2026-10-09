@@ -117,9 +117,17 @@ hook names with Git's arguments, and says on stderr that the personal stages
 are unavailable on that route, because a symlink names a program and no
 checkout. Re-running the installer converts it.
 
-`agents doctor` reports the repository-level checks only for now. Reading the
-chain is its own change; until that lands, nothing reports the state of the
-chain except the entries themselves.
+`agents doctor` reads that chain where `core.hooksPath` points it, and reports
+it by name: `chain:hooks-path` (the setting and where it comes from),
+`chain:entries` (all four names present, executable and carrying the generated
+header), `chain:record` (the record parses and the binary it names is
+executable), `chain:running` (the record names the binary that is running —
+this one fails, because a machine whose commits run something other than the
+`agents` you invoke is the disagreement the check exists to surface),
+`chain:checkout` (where the personal stages are, and how many were found),
+`chain:unmanaged` (dangling links and look-alike entries under names Git never
+runs), `chain:local` and `chain:legacy`. An unset `core.hooksPath` is reported
+as no chain installed, not as a fault.
 
 ---
 
