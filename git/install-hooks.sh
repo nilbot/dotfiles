@@ -170,25 +170,72 @@ check_exact_symlink_or_absent() {
 	fi
 }
 
-# check_hook_or_absent is the hook-name half of preflight. A symlink is still
-# decided by the rule above, so every refusal it carried is unchanged; what is
-# new is that an entry this installer generated is a success state, because the
-# install path below writes entries now rather than links, and the recheck
-# before the global key is written has to accept its own output.
+# check_hook_or_absent is the hook-name half of preflight, and the conversion
+# table in one place. What each shape it can find means:
+#
+#   nothing                       write the entry (install does)
+#   a symlink this installer made refuse without --adopt-owned; replace with it
+#   a symlink to anything else    refuse, with or without the flag
+#   our entry, current bytes      a success state: a second install changes
+#                                 nothing, inodes included
+#   our entry, other bytes        refuse without --adopt-owned; replace with it
+#   any other regular file        refuse, with or without the flag
+#
+# "Ours" for an entry is entry_is_generated, decided from the file alone -- a
+# missing or malformed record is one of the states the repair command exists
+# for, so reading chain.env first would refuse the installer's own entries as
+# foreign.
 check_hook_or_absent() {
 	path=$1
 	hook=$2
 	if [ -L "$path" ]; then
-		check_exact_symlink_or_absent "$path" "$binary" "owned $hook hook"
+		check_owned_symlink_or_absent "$path" "$hook"
 		return 0
 	fi
 	if [ ! -e "$path" ]; then
 		return 0
 	fi
 	if [ -f "$path" ] && entry_is_generated "$path" "$hook"; then
-		return 0
+		if entry_is_current "$path" "$hook"; then
+			return 0
+		fi
+		if [ "$adopt_owned" -eq 1 ]; then
+			return 0
+		fi
+		refuse "'$path' is an entry this installer wrote for another checkout or from an older generated form; re-run with --adopt-owned to replace it"
 	fi
 	refuse "'$path' already exists and is not an entry this installer wrote; preserve or move it aside deliberately, then retry"
+}
+
+# check_owned_symlink_or_absent is what a hook name holding a symlink may be.
+#
+# An exact symlink STOPPED BEING A SUCCESS STATE here, and that is the whole
+# point of the conversion: this machine is wired that way, and a success state
+# would leave four symlinks in place forever. Every refusal the old exact-link
+# rule carried is still here -- the stable-path refusal for a keg target, and
+# the foreign-link refusal -- but "it already points at the binary you handed
+# me" is now the state --adopt-owned exists to replace.
+check_owned_symlink_or_absent() {
+	path=$1
+	hook=$2
+	label="owned $hook hook"
+	got=$(readlink "$path") || refuse "cannot inspect $label at '$path'"
+	if [ "$got" = "$binary" ] || owned_link_target "$got"; then
+		# Adopting here would be a regression, not a repair. The link is already
+		# a stable path that survives upgrades, and $binary is the
+		# version-specific keg it resolves into -- the shape a caller gets from
+		# `realpath "$(command -v agents)"`, which is how the previous advice
+		# produced exactly the links an upgrade then broke. Say so instead of
+		# offering a flag that undoes the good state.
+		if ! is_keg_agents_path "$got" && is_keg_agents_path "$binary" && resolve_path "$got" >/dev/null 2>&1; then
+			refuse "$label at '$path' already points to '$got', which is the stable path and survives a package upgrade; '$binary' is the version-specific keg path that the next upgrade removes. Re-run with '$got' instead of '$binary'."
+		fi
+		if [ "$adopt_owned" -eq 1 ]; then
+			return 0
+		fi
+		refuse "$label at '$path' is a symlink this installer wrote (it points to '$got'); four symlinks have to become four entries, so re-run with --adopt-owned to replace it"
+	fi
+	refuse "$label at '$path' points to '$got', not '$binary'; move it aside deliberately, then retry"
 }
 
 # entry_is_generated decides ownership from the entry alone, never from
@@ -200,9 +247,6 @@ check_hook_or_absent() {
 # the generated header on line 2 (the path is not compared with this checkout --
 # an entry from a different checkout is still ours to recognise), and a last
 # line that execs githook for the hook name the file itself carries.
-#
-# This is only an ACCEPTANCE rule. What --adopt-owned may replace, and what each
-# shape at a hook name converts to, is the change that follows this one.
 entry_is_generated() {
 	path=$1
 	hook=$2
@@ -215,6 +259,16 @@ entry_is_generated() {
 		'exec '*" githook $hook "*) return 0 ;;
 	esac
 	return 1
+}
+
+# entry_is_current is ownership plus currency: the bytes on disk are exactly
+# what this run would write. That is the difference between a second install --
+# which must change nothing, inodes included -- and an entry for another
+# checkout or an older form, which --adopt-owned is required to replace.
+entry_is_current() {
+	path=$1
+	hook=$2
+	[ -f "$path" ] && [ "$(cat "$path")" = "$(generate_entry "$hook")" ]
 }
 
 # resolve_path follows symlinks to the real file. realpath is in GNU coreutils
@@ -255,6 +309,26 @@ owned_link_target() {
 	fi
 	resolved=$(resolve_path "$1" 2>/dev/null) || return 1
 	is_keg_agents_path "$resolved"
+}
+
+# chain_recorded_binary reports the binary the chain already names, or the empty
+# string when there is none.
+#
+# It exists ONLY for the keg-path guard in preflight: installing through a
+# version-specific keg path over a chain that names a stable path re-pins the
+# hooks to a directory the next upgrade removes. It is never used to decide
+# ownership -- a missing or malformed record is one of the states the repair
+# command exists for, and ownership is read from the entry itself.
+chain_recorded_binary() {
+	if [ -f "$chain_record" ]; then
+		sed -n 's/^binary=//p' "$chain_record" | head -n 1
+		return 0
+	fi
+	if [ -L "$hooks_dir/pre-commit" ]; then
+		readlink "$hooks_dir/pre-commit"
+		return 0
+	fi
+	printf '\n'
 }
 
 validate_binary() {
@@ -303,6 +377,25 @@ fail() {
   fi
   exit 1
 }
+ENTRY
+	# The one branch on the entry's own hook name. A missing binary is a lost
+	# banner for post-merge and post-checkout, and reporting it at exit 0 is
+	# what keeps `git checkout` and `git switch` working; for the two guard
+	# names it blocks the commit, which is the whole point of a guard. Every
+	# record, format and path error still goes through fail, for all four: a
+	# broken record is a broken guard whatever the hook is.
+	if is_observational_hook "$hook"; then
+		cat <<'ENTRY'
+skip() {
+  printf 'agents: %s\n' "$1" >&2
+  if [ -n "$repair_root" ]; then
+    printf 'agents: repair with: bash %s/git/install-hooks.sh install --adopt-owned %s "$HOME" "$(command -v agents)"\n' "$repair_root" "$repair_root" >&2
+  fi
+  exit 0
+}
+ENTRY
+	fi
+	cat <<'ENTRY'
 chain=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || fail "cannot locate the chain directory"
 [ -n "$repair_root" ] || repair_root=$chain
 format=; binary=; checkout=
@@ -317,10 +410,25 @@ while IFS='=' read -r key value; do
 done < "$chain/chain.env" || fail "cannot read $chain/chain.env"
 [ "$format" = 1 ] || fail "$chain/chain.env is not format 1"
 case "$binary" in /*) ;; *) fail "binary in $chain/chain.env is not an absolute path" ;; esac
-[ -f "$binary" ] && [ -x "$binary" ] || fail "the commit guard is not installed: $binary is missing or not executable"
+ENTRY
+	if is_observational_hook "$hook"; then
+		printf '%s\n' '[ -f "$binary" ] && [ -x "$binary" ] || skip "the commit guard is not installed: $binary is missing or not executable"'
+	else
+		printf '%s\n' '[ -f "$binary" ] && [ -x "$binary" ] || fail "the commit guard is not installed: $binary is missing or not executable"'
+	fi
+	cat <<'ENTRY'
 case "$checkout" in -|/*) ;; *) fail "checkout in $chain/chain.env is neither - nor an absolute path" ;; esac
 ENTRY
 	printf 'exec "$binary" githook %s --checkout "$checkout" "$@"\n' "$hook"
+}
+
+# is_observational_hook is true for the two hook names that report rather than
+# guard: a missing banner there must not fail a `git checkout` or a `git switch`.
+is_observational_hook() {
+	case "$1" in
+		post-merge|post-checkout) return 0 ;;
+	esac
+	return 1
 }
 
 # generate_record prints chain.env: a comment line, then format, binary and
@@ -345,7 +453,7 @@ generate_record() {
 publish_entry() {
 	hook=$1
 	path=$hooks_dir/$hook
-	if [ -f "$path" ] && [ "$(cat "$path")" = "$(generate_entry "$hook")" ]; then
+	if entry_is_current "$path" "$hook"; then
 		return 0
 	fi
 	tmp=$hooks_dir/.$hook.install-hooks.$$
@@ -385,6 +493,15 @@ preflight() {
 	fi
 	validate_global_config_target
 	inspect_global_hooks_path
+	# A string comparison of two paths, never a stat: preflight runs before a
+	# binary exists, and must stay blind to whether the one it is handed is
+	# real. Only install validates it.
+	if is_keg_agents_path "$binary"; then
+		recorded=$(chain_recorded_binary)
+		if [ -n "$recorded" ] && ! is_keg_agents_path "$recorded"; then
+			refuse "the hook chain already names '$recorded', which is the stable path and survives a package upgrade; '$binary' is the version-specific keg path that the next upgrade removes. Re-run with '$recorded' instead of '$binary'."
+		fi
+	fi
 	check_exact_symlink_or_absent "$attributes_link" "$attributes_source" "global attributes link"
 	for hook in $hook_names; do
 		check_hook_or_absent "$hooks_dir/$hook" "$hook"
