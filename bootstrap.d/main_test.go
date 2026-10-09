@@ -143,19 +143,18 @@ func runShimIn(t *testing.T, dir, shim, home string, extraEnv []string, cold boo
 	// A stub brew and a stub fish, for the same reason XDG_CACHE_HOME is
 	// redirected above: without them these cases are not hermetic.
 	//
-	// `plan workstation` reaches the verify phase, and phase.Verify deliberately
-	// builds a real Applier rather than using the Planner it was handed -- a check
-	// that asked its question through a Planner would read its recorded nil as
-	// success. So the packages check really does execute
-	// `brew bundle check --file <this repo's Brewfile>`, against the developer's
-	// own Homebrew, and the result depends on what they happen to have installed
-	// rather than on anything in this repository. Measured: two real invocations
-	// per suite run, once bootstrap.d/Brewfile existed.
+	// brew is RESOLVED, never executed. `plan workstation` reaches the packages
+	// phase, whose homebrew() asks PATH for brew and then hands the resolved
+	// path to Run -- which under `plan` is the Planner, and the Planner records
+	// the command without running it. check cannot execute anything at all:
+	// Run is not in its Machine interface, so a check that ran a command would
+	// not compile. TestNoQueryInvokesHomebrew is what holds both halves to
+	// that, with a brew of its own that records every invocation.
 	//
 	// This is the funnel every helper passes through, so hermeticity is a property
 	// of the harness rather than of each case remembering to ask for it. extraEnv
-	// is still appended AFTER, and a later duplicate key wins, so the one case
-	// that needs a brew with a particular exit status keeps supplying its own.
+	// is still appended AFTER, and a later duplicate key wins, so a case that
+	// needs its own PATH replaces this one deliberately.
 	cmd.Env = append(cmd.Env,
 		"PATH="+stubToolDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	cmd.Env = append(cmd.Env, extraEnv...)
@@ -198,8 +197,9 @@ const stubLoginShell = "/bin/bash"
 // go through misresolvingPATH, and TestMissingGoRefusesWithTheInstallCommand.
 // That is load-bearing, not trivia: a case added later that supplied its own
 // PATH under plan, apply or check would reach the real tools, and nothing would
-// say so. The one such case that exists today (the packages verdict) puts
-// stubToolDir back in deliberately.
+// say so. The one such case that exists today, TestNoQueryInvokesHomebrew, puts
+// stubToolDir back in deliberately -- behind its recording brew, so the stubs
+// still answer for dscl and getent.
 //
 // Both stubs REJECT an argv they do not recognise, with exit 64, rather than
 // answering anyway. A stub that replies to any question cannot tell a correct
@@ -214,11 +214,13 @@ const stubLoginShell = "/bin/bash"
 // answer stubLoginShell in the shape the real tools use: `UserShell: <path>` for
 // dscl, a seven-field passwd line for getent.
 //
-// brew is EXECUTED. It only ever answers `brew bundle check`, which reads and
-// reports. Exit 0 -- "every Brewfile entry is installed" -- is the choice that
-// keeps the cases using it deterministic; none of them asserts the packages
-// verdict, and the one that does supplies its own brew with the exit status it
-// needs.
+// brew is only ever RESOLVED. `plan workstation` reaches the packages phase,
+// whose homebrew() asks PATH for brew before it hands the resolved path to Run,
+// and under `plan` that Run is the Planner's: it records the command without
+// running it. No check can run one at all -- Run is not in check.Machine. Exit 0
+// keeps LookPath's answer a path rather than a refusal; the body is never
+// executed, and TestNoQueryInvokesHomebrew is what proves that rather than
+// asserting it.
 //
 // fish is only ever RESOLVED. `plan workstation` reaches the fish phase, whose
 // first act is LookPath("fish"), and Planner.LookPath consults the real PATH --
@@ -386,9 +388,9 @@ func TestPlanRunsFromAnyDirectoryAndNamesItsPhases(t *testing.T) {
 }
 
 // The assertion is on each phase's banner rather than on its bare name: the
-// verify phase reports a check called "packages", correctly, as not applicable
-// under this profile, and a substring test cannot tell that from the phase
-// having run.
+// verify phase runs under this profile, so the plan always prints a
+// `fish-source` row and the word "fish" appears whether or not the fish phase
+// ran. Only the banner says which.
 func TestDotfilesProfileSkipsPrivilegedPhases(t *testing.T) {
 	stdout, stderr, code := runShim(t, tempHome(t), "plan", "dotfiles")
 	if code != 0 {
@@ -398,6 +400,12 @@ func TestDotfilesProfileSkipsPrivilegedPhases(t *testing.T) {
 		if strings.Contains(stdout, forbidden) {
 			t.Errorf("dotfiles must not run the %q phase:\n%s", forbidden, stdout)
 		}
+	}
+	// The reason the banner is the assertion, checked rather than asserted:
+	// "fish" alone must be present, from the check row.
+	if !strings.Contains(stdout, "fish-source") {
+		t.Errorf("the plan prints no fish-source row, so the bare-name trap this "+
+			"case guards against is no longer there to guard:\n%s", stdout)
 	}
 }
 
@@ -497,9 +505,9 @@ func TestPreflightDeclaresPrivilegeAndNetwork(t *testing.T) {
 // status and the name -- because the column layout is deliberately not a
 // contract.
 //
-// The first field must be one of the four statuses. Without that the phase
-// banner "== packages (not implemented)" parses as a check named "packages"
-// with status "==", and a case comparing two runs reads that as a verdict.
+// The first field must be one of the four statuses. Without that a phase banner
+// parses as a verdict: `== packages` reads as a check named "packages" whose
+// status is "==", and a case comparing two runs would believe it.
 func checkStatus(stdout, name string) string {
 	for _, line := range strings.Split(stdout, "\n") {
 		fields := strings.Fields(line)
@@ -517,9 +525,9 @@ func checkStatus(stdout, name string) string {
 // A bare $HOME is unhealthy, and check must say so in a way a human can act on:
 // a non-zero code and the names of the rows that are not there.
 //
-// The three machine-wide checks are asserted n/a rather than fail. Under the
+// The two machine-wide checks are asserted n/a rather than fail. Under the
 // dotfiles profile they cover state that profile deliberately does not manage,
-// and three false problems in every container run is how a report stops being
+// and two false problems in every container run is how a report stops being
 // read.
 func TestCheckOnABareHomeNamesTheMissingRows(t *testing.T) {
 	stdout, stderr, code := runShim(t, tempHome(t), "check", "dotfiles")
@@ -531,7 +539,7 @@ func TestCheckOnABareHomeNamesTheMissingRows(t *testing.T) {
 			t.Errorf("check does not name the missing row %s:\n%s", want, stdout)
 		}
 	}
-	for _, name := range []string{"login-shell", "agents", "packages"} {
+	for _, name := range []string{"login-shell", "agents"} {
 		if got := checkStatus(stdout, name); got != "n/a" {
 			t.Errorf("%s = %q under the dotfiles profile, want n/a:\n%s", name, got, stdout)
 		}
@@ -623,71 +631,100 @@ func TestCheckOnAnUnreadableManifestBlocks(t *testing.T) {
 	}
 }
 
-// A check must never be handed a Planner.
+// A query executes nothing, and this is the only place that can see all of it.
 //
-// A Planner's Run records the command and returns nil without running it, so a
-// check that asks a question by running one reads that nil as success. That is a
-// false ok in the layer whose entire job is catching silent failures -- and it
-// would appear only under `plan`, where nobody is looking for it. phase.Verify
-// therefore builds its own Applier instead of using c.Change.
+// Dropping Run from check.Machine is a compile error for a new call INSIDE the
+// check package, and it says nothing about the phases. `plan workstation`
+// reaches the packages phase, whose homebrew() resolves brew off PATH and hands
+// it to Run -- which under `plan` is the Planner, the one place a command could
+// still be executed by a verb that promises not to. So the claim is asserted at
+// the process boundary instead: put a brew on PATH that records every
+// invocation, run both queries, and require the record to stay empty.
 //
-// The comparison is `plan` against `check` rather than against `apply`
-// deliberately: `plan` is the verb that carries the Planner and so the only one
-// that can exhibit the fault, and both of these verbs mutate nothing on any
-// future task. Once Task 12 makes the packages phase real, a test that ran
-// `apply workstation` would install Homebrew.
-//
-// Three things make this discriminate, and it proves nothing without all of
-// them: a Brewfile must exist (otherwise packages fails at its first arm before
-// any command), brew must resolve on PATH (otherwise it fails at the second),
-// and brew must answer non-zero -- which is what the stub is for. The verdict is
-// asserted to be "fail" as well as equal, because two "ok"s would agree without
-// either having asked anything.
-func TestPlanAndCheckAgreeOnThePackagesVerdict(t *testing.T) {
-	alt := altCheckout(t)
-	// A manifest with no rows: config then has nothing to refuse, so `plan`
-	// reaches the verify phase over a two-directory checkout.
-	if err := os.WriteFile(filepath.Join(alt, "bootstrap.d", "links.manifest"),
-		[]byte("# no rows\n"), 0o644); err != nil {
-		t.Fatal(err)
+// The recorder is proved before it is trusted. A case whose only evidence is an
+// empty file passes for the wrong reason when the file is unwritable or the
+// stub never reached PATH, so this invokes the same stub once directly and
+// fails if the file did not grow. One directory handle serves both halves:
+// stubToolDir mints a fresh temporary directory on every call, so a second call
+// would put a different brew on PATH from the one whose recorder was proved.
+func TestNoQueryInvokesHomebrew(t *testing.T) {
+	dir, recorder := recordingBrewDir(t)
+
+	// Prove the recorder, then clear it.
+	probe := exec.Command(filepath.Join(dir, "brew"), "bundle", "check", "--file", "probe")
+	if out, err := probe.CombinedOutput(); err != nil {
+		t.Fatalf("the recording brew could not run: %v: %s", err, out)
 	}
-	if err := os.WriteFile(filepath.Join(alt, "bootstrap.d", "Brewfile"),
-		[]byte("brew \"jq\"\n"), 0o644); err != nil {
+	written, err := os.ReadFile(recorder)
+	if err != nil || len(written) == 0 {
+		t.Fatalf("the recording brew wrote nothing when invoked directly "+
+			"(err %v, %d bytes); the rest of this case would pass for the wrong reason",
+			err, len(written))
+	}
+	if err := os.WriteFile(recorder, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	// A brew that reports the bundle unsatisfied. Prepended, not replacing PATH:
-	// the shim needs go, dirname, cksum and find.
-	stubDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(stubDir, "brew"),
-		[]byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// This PATH is appended after the one runShimIn builds and so replaces it,
-	// which would drop the stub fish along with the stub brew. stubToolDir goes
-	// back in behind this case's own brew -- which therefore still wins -- so
-	// `plan workstation` reaches the fish phase on a machine that has no fish.
+	// The recorder ahead of stubToolDir, which stays on PATH behind it so dscl
+	// and getent are still answered by stubs, and PATH itself stays behind both
+	// because the shim needs go, dirname, cksum and find.
 	env := []string{"PATH=" + strings.Join(
-		[]string{stubDir, stubToolDir(t), os.Getenv("PATH")},
+		[]string{dir, stubToolDir(t), os.Getenv("PATH")},
 		string(os.PathListSeparator))}
 
 	home := tempHome(t)
-	shim := filepath.Join(alt, "bootstrap")
+	shim := filepath.Join(repoRoot(t), "bootstrap")
 	planned, stderr, code := runShimEnv(t, shim, home, env, "plan", "workstation")
 	if code != 0 {
 		t.Fatalf("plan exit %d:\n%s%s", code, planned, stderr)
 	}
-	checked, _, _ := runShimEnv(t, shim, home, env, "check", "workstation")
+	checked, stderr, _ := runShimEnv(t, shim, home, env, "check", "workstation")
+	// A bare $HOME fails rows, so the exit code is not the assertion here. What
+	// matters is that the check verb reached its checks: a run that exited
+	// before them would leave the recorder empty for a reason having nothing to
+	// do with brew.
+	if got := checkStatus(checked, "login-shell"); got == "" {
+		t.Fatalf("check workstation printed no login-shell row, so it never "+
+			"reached its checks:\n%s%s", checked, stderr)
+	}
 
-	got, want := checkStatus(planned, "packages"), checkStatus(checked, "packages")
-	if got != want {
-		t.Errorf("packages = %q under plan but %q under check; a check was handed "+
-			"a Planner, whose Run returns nil without running anything:\n%s", got, want, planned)
+	if data, err := os.ReadFile(recorder); err != nil {
+		t.Fatal(err)
+	} else if len(data) != 0 {
+		t.Errorf("a query executed brew, %d byte(s) recorded:\n%s", len(data), data)
 	}
-	if want != "fail" {
-		t.Fatalf("packages = %q under check, want fail; the fixture is not "+
-			"exercising brew and this case proves nothing:\n%s", want, checked)
+}
+
+// recordingBrewDir returns a directory holding one executable `brew` that
+// appends its arguments to a file, and the path of that file.
+//
+// The recorder's path is written into the script rather than passed in the
+// environment on purpose: the query under test builds its own environment, so a
+// variable this stub depended on could be dropped by the very change the case
+// exists to catch -- and the stub would then run, record nothing, and pass.
+func recordingBrewDir(t *testing.T) (dir, recorder string) {
+	t.Helper()
+	dir = t.TempDir()
+	recorder = filepath.Join(dir, "brew-invocations")
+	body := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + shellSingleQuote(recorder) + "\n"
+	path := filepath.Join(dir, "brew")
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	// Set rather than requested, for the reason stubToolDir gives: the umask
+	// masks os.WriteFile's mode and exec.LookPath rejects a file it cannot
+	// execute.
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir, recorder
+}
+
+// shellSingleQuote wraps s for a POSIX shell, so a temp path carrying a space
+// or a quote is recorded as itself. t.TempDir paths are usually plain; the
+// helper exists because "usually" is how a recorder silently stops recording.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // The fish stub's source line, end to end, and the one case that proves
