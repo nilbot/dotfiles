@@ -13,10 +13,10 @@ import (
 	"github.com/nilbot/dotfiles/agents/internal/exitcode"
 )
 
-func TestMulticallDispatcherRejectsIndirectSameHookRecursion(t *testing.T) {
+func TestSymlinkShimRejectsIndirectSameHookRecursion(t *testing.T) {
 	t.Parallel()
 	binary := buildTemporaryAgentsBinary(t)
-	repo := newLiveHookRepo(t, binary)
+	repo := newLiveHookRepo(t, t.TempDir(), "")
 	dispatcherHook := filepath.Join(t.TempDir(), "post-merge")
 	if err := os.Symlink(binary, dispatcherHook); err != nil {
 		t.Fatal(err)
@@ -58,10 +58,10 @@ func TestMulticallDispatcherRejectsIndirectSameHookRecursion(t *testing.T) {
 // else. Which is why the values below are the spawned process's, not this
 // process's: t.Setenv would have made the test's own environment the carrier,
 // and the assertion would hold even for a dispatcher that invented the values.
-func TestMulticallDispatcherRunsOrdinaryWrapperWithInheritedEnvironment(t *testing.T) {
+func TestSymlinkShimRunsOrdinaryWrapperWithInheritedEnvironment(t *testing.T) {
 	t.Parallel()
 	binary := buildTemporaryAgentsBinary(t)
-	repo := newLiveHookRepo(t, binary)
+	repo := newLiveHookRepo(t, t.TempDir(), "")
 	dispatcherHook := filepath.Join(t.TempDir(), "post-merge")
 	if err := os.Symlink(binary, dispatcherHook); err != nil {
 		t.Fatal(err)
@@ -153,16 +153,29 @@ func (r liveHookRepo) withEnv(overrides ...string) liveHookRepo {
 	return r
 }
 
-func newLiveHookRepo(t *testing.T, binary string) liveHookRepo {
+// newLiveHookRepo is a git repository whose hooks git will actually run, with
+// a home of its own so nothing here reads the developer's.
+//
+// chainRoot is the dotfiles root whose generated entries and chain.env govern
+// this repository, or "" for a fixture that runs no chain of its own. When it
+// is set, the repository carries NO local core.hooksPath: the one the installer
+// wrote into the fixture's global config is the one git finds, which is the
+// whole point of the route this fixture exists to exercise. When it is empty
+// the repository is inert -- nothing git does here runs this tool.
+func newLiveHookRepo(t *testing.T, home, chainRoot string) liveHookRepo {
 	t.Helper()
 	root := t.TempDir()
-	home := t.TempDir()
-	// The personal hooks this fixture lays out are found through DotfilesRoot.
-	// Since unstamped test binaries operate in Standalone Mode by default,
-	// AGENTS_DOTFILES_ROOT is explicitly configured to point to the fixture's
-	// dotfiles root so personal hooks under git/hooks are executed. HOME is the
-	// fixture's as well: nothing in this fixture may read the developer's.
-	env := childEnv("HOME="+home, "AGENTS_DOTFILES_ROOT="+filepath.Join(home, "dotfiles"))
+	// HOME is the fixture's, because nothing in this fixture may read the
+	// developer's, and so is the global config: with no GIT_CONFIG_GLOBAL a
+	// commit here would read whatever ~/.gitconfig the machine running it
+	// happens to have, which is the ambient input the design removes. There is
+	// deliberately no AGENTS_DOTFILES_ROOT -- that variable is gone, and a
+	// fixture that still set it would be describing a binary nobody ships.
+	env := childEnv(
+		"HOME="+home,
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, ".gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
 	emptyTemplate := t.TempDir()
 	for _, args := range [][]string{
 		{"init", "-b", "main", "--template=" + emptyTemplate},
@@ -174,23 +187,39 @@ func newLiveHookRepo(t *testing.T, binary string) liveHookRepo {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
 	}
-	hooksPath := filepath.Join(t.TempDir(), "configured-hooks")
-	if err := os.MkdirAll(hooksPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		if err := os.Symlink(binary, filepath.Join(hooksPath, name)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if out, err := gitAttempt(root, env, "config", "core.hooksPath", hooksPath); err != nil {
-		t.Fatalf("configure local core.hooksPath: %v\n%s", err, out)
-	}
-	extras := filepath.Join(home, "dotfiles", "git", "hooks")
-	if err := os.MkdirAll(extras, 0o755); err != nil {
-		t.Fatal(err)
+	var extras string
+	if chainRoot != "" {
+		extras = filepath.Join(chainRoot, "git", "hooks")
 	}
 	return liveHookRepo{root: root, home: home, extras: extras, env: env}
+}
+
+// installHookChain lays out a dotfiles root and runs the real installer against
+// it, so a fixture's hooks arrive the way a machine's do: four generated
+// entries named by core.hooksPath, each reading chain.env and exec'ing the
+// binary with an explicit --checkout.
+//
+// This is the only route from git to the dispatcher that survives the design.
+// The env var and the link-time stamp are both gone, so a fixture that still
+// reached the dispatcher by either of them would be testing a mechanism the
+// binary no longer has.
+func installHookChain(t *testing.T, binary, home string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "git", "hooks.d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "git", "gitattributes"),
+		[]byte(".agents/** linguist-generated=true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(task18RepoRoot(t), "git", "install-hooks.sh")
+	command := exec.Command("bash", script, "install", root, home, binary)
+	command.Env = isolatedGitEnvironment(t, home, filepath.Join(home, ".gitconfig"))
+	if out, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("install hook chain: %v\n%s", err, out)
+	}
+	return root
 }
 
 func gitAttempt(root string, env []string, args ...string) ([]byte, error) {
@@ -216,6 +245,14 @@ func writeLiveFile(t *testing.T, root, rel, content string, mode os.FileMode) st
 // the hooks resolve the real git, and a gitleaks stub when scannerBody is not
 // empty. Returned rather than installed into this process, because the commands
 // under test are the ones that need it.
+//
+// The system directories are appended, and they are not decoration. A chain
+// entry is a POSIX sh script that runs `dirname`, so a PATH holding only the
+// fixture's two names makes every entry fail before it reaches this binary --
+// measured: `dirname: command not found`, after which the entry's `cd` fell
+// back to the caller's working directory and reported `chain.env` missing.
+// They go AFTER the fixture's directory, so git and gitleaks still resolve to
+// the ones this case chose.
 func hookTestPath(t *testing.T, gitBinary, scannerBody string) string {
 	t.Helper()
 	bin := t.TempDir()
@@ -225,7 +262,7 @@ func hookTestPath(t *testing.T, gitBinary, scannerBody string) string {
 	if scannerBody != "" {
 		writeLiveFile(t, bin, "gitleaks", "#!/bin/sh\n"+scannerBody+"\n", 0o755)
 	}
-	return bin
+	return bin + ":/usr/bin:/bin"
 }
 
 func stageLive(t *testing.T, root string, env []string) {
@@ -235,26 +272,30 @@ func stageLive(t *testing.T, root string, env []string) {
 	}
 }
 
-func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
+func TestLiveGitCommitsThroughTheInstalledChain(t *testing.T) {
 	binary := buildTemporaryAgentsBinary(t)
 	gitBinary, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A global config of the fixture's own: without it these commits read
-	// whatever ~/.gitconfig the machine running them happens to have.
-	globalConfig := filepath.Join(t.TempDir(), "global.gitconfig")
-	if err := os.WriteFile(globalConfig, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// withScanner is what every commit below runs with: the fixture's own HOME
-	// and dotfiles root, the fixture global config, and a PATH whose git is a
-	// symlink to the real one and whose gitleaks is the stub this case wants.
-	withScanner := func(t *testing.T, repo liveHookRepo, scannerBody string, extra ...string) liveHookRepo {
+	// The machine this fixture models: a home carrying the global config and an
+	// installed hook chain. The installer writes core.hooksPath into that
+	// config, and the four entries it generates are what git runs. There is no
+	// environment variable and no link-time stamp left to route around them, so
+	// this is the only path from a commit to the dispatcher that exists.
+	//
+	// Each case installs its OWN chain, and that is not tidiness. The personal
+	// stages live in <chain>/git/hooks, so two cases sharing one chain would
+	// run each other's stages -- measured, as a hook failing on an environment
+	// variable only its owner sets.
+	withScanner := func(t *testing.T, scannerBody string, extra ...string) liveHookRepo {
 		t.Helper()
+		home := t.TempDir()
+		chainRoot := installHookChain(t, binary, home)
+		repo := newLiveHookRepo(t, home, chainRoot)
+		// PATH is whose git is a symlink to the real one and whose gitleaks is
+		// the stub this case wants.
 		return repo.withEnv(append([]string{
-			"GIT_CONFIG_GLOBAL=" + globalConfig,
-			"GIT_CONFIG_NOSYSTEM=1",
 			"PATH=" + hookTestPath(t, gitBinary, scannerBody),
 		}, extra...)...)
 	}
@@ -264,7 +305,7 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 		repoCount := filepath.Join(t.TempDir(), "repo-count")
 		extraCount := filepath.Join(t.TempDir(), "extra-count")
 		commitArgs := filepath.Join(t.TempDir(), "commit-args")
-		repo := withScanner(t, newLiveHookRepo(t, binary), "exit 0",
+		repo := withScanner(t, "exit 0",
 			"REPO_COUNT="+repoCount, "EXTRA_COUNT="+extraCount, "COMMIT_ARGS="+commitArgs)
 		writeLiveFile(t, repo.root, ".git/hooks/pre-commit", "#!/bin/sh\nprintf 'repo:%s\\n' \"$#\" >> \"$REPO_COUNT\"\n", 0o755)
 		writeLiveFile(t, repo.extras, "a.pre-commit", "#!/bin/sh\nprintf 'extra:%s\\n' \"$#\" >> \"$EXTRA_COUNT\"\n", 0o755)
@@ -297,7 +338,7 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 
 	t.Run("plain non-agent commit succeeds without scanner", func(t *testing.T) {
 		t.Parallel()
-		repo := withScanner(t, newLiveHookRepo(t, binary), "")
+		repo := withScanner(t, "")
 		writeLiveFile(t, repo.root, "plain.txt", "plain\n", 0o644)
 		stageLive(t, repo.root, repo.env)
 		if out, err := gitAttempt(repo.root, repo.env, "commit", "-m", "plain"); err != nil {
@@ -307,7 +348,7 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 
 	t.Run("scanner finding blocks without rendering staged content", func(t *testing.T) {
 		t.Parallel()
-		repo := withScanner(t, newLiveHookRepo(t, binary), `printf '[{"RuleID":"fixture-rule","StartLine":1}]\n'; exit 1`)
+		repo := withScanner(t, `printf '[{"RuleID":"fixture-rule","StartLine":1}]\n'; exit 1`)
 		privateMarker := "private staged marker"
 		writeLiveFile(t, repo.root, ".agents/note.md", privateMarker+"\n", 0o644)
 		stageLive(t, repo.root, repo.env)
@@ -322,7 +363,7 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 
 	t.Run("scanner failure blocks agent commit", func(t *testing.T) {
 		t.Parallel()
-		repo := withScanner(t, newLiveHookRepo(t, binary), "exit 9")
+		repo := withScanner(t, "exit 9")
 		writeLiveFile(t, repo.root, ".agents/note.md", "ordinary\n", 0o644)
 		stageLive(t, repo.root, repo.env)
 		out, err := gitAttempt(repo.root, repo.env, "commit", "-m", "blocked")
@@ -335,7 +376,7 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 		t.Parallel()
 		scannerMarker := filepath.Join(t.TempDir(), "scanner-ran")
 		extraMarker := filepath.Join(t.TempDir(), "extra-ran")
-		repo := withScanner(t, newLiveHookRepo(t, binary),
+		repo := withScanner(t,
 			`printf 'ran\n' > "$SCANNER_MARKER"; exit 0`,
 			"SCANNER_MARKER="+scannerMarker, "EXTRA_MARKER="+extraMarker)
 		writeLiveFile(t, repo.root, ".git/hooks/pre-commit", "#!/bin/sh\nexit 7\n", 0o755)
@@ -353,88 +394,116 @@ func TestTemporaryMulticallBinaryWithLiveGitCommits(t *testing.T) {
 	})
 }
 
-// The three tests below are deliberately NOT parallel, and cannot be without
-// changing what they test. Each calls runGitHook in process, and it resolves the
-// repository from the current working directory (t.Chdir) and the dotfiles root
-// from the process environment (t.Setenv) -- both process-global, so two of them
-// running at once would be measuring each other. The alternatives are to run the
-// built binary as a subprocess, which is a different test, or to thread a root
-// through the command, which is a different API. The tests above spawn their
-// fixtures instead of calling into the process, which is why they can run
-// together.
+// The cases below are deliberately NOT parallel with each other. Each runs the
+// binary as a subprocess, which is parallelisable, but each also takes the
+// process's HOME (for the guard's staging machinery) through t.Setenv, which is
+// not. Running the built binary rather than calling into the process is what
+// the shim's cases need: the branch they test is chosen from argv[0], and only
+// a real exec can name the program something else.
 //
-// TestRunGitHookRunsPersonalHooksFromThisBinarysCheckout pins the silent half of
-// the relocated-checkout defect. githook treats a missing extras directory as
-// "no personal hooks" and carries on at exit 0, so a dispatcher looking under
-// $HOME/dotfiles on a machine checked out anywhere else runs none of them and
-// reports nothing -- no failure, no warning, no output at all.
+// TestRunGitHookRunsPersonalHooksFromThisBinarysCheckout is GONE, and its
+// subject is not. What it pinned was that the dispatcher ran the personal
+// stages under the checkout it was TOLD about and not the ones under $HOME --
+// a real property that has simply moved: it now belongs to
+// `agents githook --checkout`, and TestGithookRunsTheRepositoryHookThenPersonalStagesThenBuiltinStages
+// holds it there, decoy under $HOME included. What cannot move is the
+// mechanism it used to name that checkout, because DotfilesRoot and
+// AGENTS_DOTFILES_ROOT are both deleted. The shim's own route has no checkout
+// to name at all, which is the subject of the case below.
+
+// The shim answers EVERY hook name, with Git's arguments, and says what it
+// cannot carry.
 //
-// The decoy under HOME is what makes this falsifiable in the useful direction.
-// Asserting only that the checkout's hook ran would also pass for a dispatcher
-// that ran both; asserting that nothing ran under HOME would pass for one that
-// ran neither.
+// Every name, not just pre-commit: a commit runs pre-commit AND commit-msg, so
+// a shim that only recognised the bare `pre-commit` form leaves the second one
+// failing every commit with an unknown-command error. Git's arguments are
+// asserted through the repository's own hook, which sees exactly what git
+// passed.
 //
-// post-merge rather than pre-commit: the chain is identical, and pre-commit
-// additionally runs the guard, whose scanner and staging machinery has nothing
-// to do with which directory the personal hooks were found in.
-//
-// Both ways of naming the checkout are exercised. The build stamp case is not
-// redundant with root_test.go: it is the only place a consumer proves it honours
-// the stamp, and the two builders that set it landed with this change.
-func TestRunGitHookRunsPersonalHooksFromThisBinarysCheckout(t *testing.T) {
+// The notice is the other half, and it is the reason this case exists rather
+// than being folded into the chain cases. With the stamp and
+// AGENTS_DOTFILES_ROOT gone the shim cannot find the personal stages, and
+// githook.Chain reads a missing extras directory as "no personal hooks" and
+// returns 0 -- so without a line on stderr the machine is told nothing while
+// its `<anything>.<hook>` stages stop running. That is the failure class this
+// redesign exists to remove, and a shim that reintroduced it silently would be
+// the redesign's own defect wearing the migration's clothes.
+func TestSymlinkShimAnswersEveryHookNameAndReportsTheMissingCheckout(t *testing.T) {
+	binary := buildTemporaryAgentsBinary(t)
+	gitBinary, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name string
-		// nameCheckout points the binary at checkout the way one builder or one
-		// operator would, and leaves the other way empty so each case pins one
-		// branch of DotfilesRoot on its own.
-		nameCheckout func(t *testing.T, checkout string)
+		// args is what Git hands the hook, filled in below for commit-msg
+		// because that one names a file that has to exist.
+		args []string
 	}{
-		{"build stamp", func(t *testing.T, checkout string) {
-			stampRoot(t, checkout)
-			t.Setenv("AGENTS_DOTFILES_ROOT", "")
-		}},
-		{"environment", func(t *testing.T, checkout string) {
-			stampRoot(t, "")
-			t.Setenv("AGENTS_DOTFILES_ROOT", checkout)
-		}},
+		{"pre-commit", nil},
+		{"commit-msg", []string{"<message file>"}},
+		{"post-merge", []string{"1"}},
+		{"post-checkout", []string{"old-sha", "new-sha", "1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			root := newRepo(t)
-			checkout := t.TempDir()
 			home := t.TempDir()
-			t.Setenv("HOME", home)
-			tc.nameCheckout(t, checkout)
+			repo := newLiveHookRepo(t, home, "")
+			args := tc.args
+			if tc.name == "commit-msg" {
+				args = []string{writeLiveFile(t, repo.root, ".git/COMMIT_EDITMSG", "subject\n", 0o644)}
+			}
+			seen := filepath.Join(t.TempDir(), "repository hook args")
+			// A `for` loop rather than `printf ... "$@"`: with no arguments
+			// printf still runs its format once and writes a bare `<>`, so the
+			// zero-argument pre-commit case could not tell "no arguments" from
+			// "one empty argument". A loop writes nothing when there is
+			// nothing, which is the property this case is asserting.
+			writeLiveFile(t, repo.root, ".git/hooks/"+tc.name,
+				"#!/bin/sh\nfor arg do printf '<%s>\\n' \"$arg\"; done > "+shellQuote(seen)+"\n", 0o755)
+			writeLiveFile(t, repo.root, "plain.txt", "plain\n", 0o644)
 
-			ran := filepath.Join(t.TempDir(), "ran")
-			t.Setenv("PERSONAL_HOOK_RAN", ran)
-			writeLiveFile(t, checkout, "git/hooks/a.post-merge",
-				"#!/bin/sh\nprintf 'checkout\\n' >> \"$PERSONAL_HOOK_RAN\"\n", 0o755)
-			writeLiveFile(t, home, "dotfiles/git/hooks/a.post-merge",
-				"#!/bin/sh\nprintf 'home\\n' >> \"$PERSONAL_HOOK_RAN\"\n", 0o755)
+			// The old wiring, exactly: a symlink named for the hook, pointing
+			// at this binary. Nothing else names the checkout.
+			shim := filepath.Join(t.TempDir(), tc.name)
+			if err := os.Symlink(binary, shim); err != nil {
+				t.Fatal(err)
+			}
+			env := repo.withEnv("PATH=" + hookTestPath(t, gitBinary, "exit 0")).env
+			stageLive(t, repo.root, env)
 
-			t.Chdir(root)
+			command := exec.Command(shim, args...)
+			command.Dir = repo.root
+			command.Env = env
 			var stdout, stderr bytes.Buffer
-			if code := runGitHook("post-merge", nil, strings.NewReader(""), &stdout, &stderr); code != exitcode.OK {
-				t.Fatalf("runGitHook exit=%d want=%d stdout=%q stderr=%q",
-					code, exitcode.OK, stdout.String(), stderr.String())
+			command.Stdout, command.Stderr = &stdout, &stderr
+			if err := command.Run(); err != nil {
+				t.Fatalf("%s through the symlink failed: %v\nstdout: %s\nstderr: %s",
+					tc.name, err, stdout.String(), stderr.String())
 			}
 
-			got, err := os.ReadFile(ran)
-			if err != nil {
-				t.Fatalf("no personal hook ran at all (%v); a missing extras directory "+
-					"is not an error to githook, so this is exactly how a relocated "+
-					"checkout loses its hooks without a word", err)
+			data, readErr := os.ReadFile(seen)
+			if readErr != nil {
+				t.Fatalf("the repository's own %s hook did not run: %v\nstderr: %s",
+					tc.name, readErr, stderr.String())
 			}
-			if string(got) != "checkout\n" {
-				t.Errorf("personal hooks that ran = %q, want %q; the dispatcher looked "+
-					"under HOME instead of the checkout this binary belongs to",
-					got, "checkout\n")
+			var want strings.Builder
+			for _, a := range args {
+				want.WriteString("<" + a + ">\n")
+			}
+			if string(data) != want.String() {
+				t.Errorf("Git's arguments reached the repository hook as %q, want %q",
+					data, want.String())
+			}
+			for _, phrase := range []string{tc.name, "symlink", "personal stages", "install-hooks.sh"} {
+				if !strings.Contains(stderr.String(), phrase) {
+					t.Errorf("the shim's notice does not name %q:\n%s", phrase, stderr.String())
+				}
 			}
 		})
 	}
 }
 
-func TestRunGitHookMapsGuardExitClassesExactly(t *testing.T) {
+func TestSymlinkShimMapsGuardExitClassesExactly(t *testing.T) {
 	gitBinary, err := exec.LookPath("git")
 	if err != nil {
 		t.Fatal(err)
@@ -485,20 +554,20 @@ func TestRunGitHookMapsGuardExitClassesExactly(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newRepo(t)
+			// Empty HOME is how this case says "no personal stages". There is
+			// no environment variable left that could answer instead: the shim
+			// has no checkout at all, which is what
+			// TestSymlinkShimAnswersEveryHookNameAndReportsTheMissingCheckout
+			// is about.
 			t.Setenv("HOME", t.TempDir())
-			// Empty HOME is how this case says "no personal hooks". Since the
-			// dispatcher asks DotfilesRoot, an exported AGENTS_DOTFILES_ROOT
-			// would answer first and run the real checkout's personal hooks
-			// against this fixture's staged content.
-			t.Setenv("AGENTS_DOTFILES_ROOT", "")
 			t.Setenv("PATH", hookTestPath(t, gitBinary, tc.scannerBody))
 			tc.seed(t, root)
 			stageLive(t, root, childEnv())
 			t.Chdir(root)
 			var stdout, stderr bytes.Buffer
-			got := runGitHook("pre-commit", nil, strings.NewReader(""), &stdout, &stderr)
+			got := runGitHookShim("pre-commit", nil, strings.NewReader(""), &stdout, &stderr)
 			if got != tc.want {
-				t.Fatalf("runGitHook exit=%d want=%d stdout=%q stderr=%q", got, tc.want, stdout.String(), stderr.String())
+				t.Fatalf("runGitHookShim exit=%d want=%d stdout=%q stderr=%q", got, tc.want, stdout.String(), stderr.String())
 			}
 			if tc.wantOutput != "" && !strings.Contains(stdout.String(), tc.wantOutput) {
 				t.Fatalf("stdout missing %q: %q", tc.wantOutput, stdout.String())
@@ -507,25 +576,31 @@ func TestRunGitHookMapsGuardExitClassesExactly(t *testing.T) {
 	}
 }
 
-func TestRunGitHookStandaloneModeDoesNotProbeRelativeExtrasDir(t *testing.T) {
-	stampRoot(t, "")
-	t.Setenv("AGENTS_DOTFILES_ROOT", "")
-	t.Setenv("HOME", t.TempDir())
-
-	root := newRepo(t)
+// The shim has no checkout, so it must not go looking for one. The decoy is the
+// relative git/hooks/ inside the repository, which is what a dispatcher
+// resolving personal stages against its own working directory would find --
+// the guess that used to make a relocated checkout lose its hooks in silence.
+func TestSymlinkShimDoesNotProbeARelativePersonalStagesDir(t *testing.T) {
+	binary := buildTemporaryAgentsBinary(t)
+	repo := newLiveHookRepo(t, t.TempDir(), "")
 	ran := filepath.Join(t.TempDir(), "relative-hook-ran")
-	t.Setenv("RELATIVE_HOOK_RAN", ran)
-	writeLiveFile(t, root, "git/hooks/a.post-merge",
-		"#!/bin/sh\nprintf 'relative\\n' >> \"$RELATIVE_HOOK_RAN\"\n", 0o755)
+	writeLiveFile(t, repo.root, "git/hooks/a.post-merge",
+		"#!/bin/sh\nprintf 'relative\\n' >> "+shellQuote(ran)+"\n", 0o755)
 
-	t.Chdir(root)
-	var stdout, stderr bytes.Buffer
-	if code := runGitHook("post-merge", nil, strings.NewReader(""), &stdout, &stderr); code != exitcode.OK {
-		t.Fatalf("runGitHook exit=%d want=%d stdout=%q stderr=%q",
-			code, exitcode.OK, stdout.String(), stderr.String())
+	shim := filepath.Join(t.TempDir(), "post-merge")
+	if err := os.Symlink(binary, shim); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(shim)
+	command.Dir = repo.root
+	command.Env = repo.env
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the shim failed: %v\n%s", err, output)
 	}
 
 	if _, err := os.Stat(ran); !os.IsNotExist(err) {
-		t.Fatalf("standalone mode probed and executed relative git/hooks; ExtrasDir must be empty when DotfilesRoot() is empty")
+		t.Fatalf("the shim probed and executed a relative personal stage; it is told no "+
+			"checkout and must not look for one\n%s", output)
 	}
 }

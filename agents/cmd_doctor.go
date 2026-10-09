@@ -29,7 +29,14 @@ type doctorCommandDependencies struct {
 func defaultDoctorCommandDependencies() doctorCommandDependencies {
 	// The scaffold checks ask whether the resolved layout admits this binary
 	// (design §5.3), so the running version -- not a literal -- reaches them.
-	doctorDeps := doctor.DependenciesFor(DotfilesRoot())
+	//
+	// No checkout root is read here any more, and the empty string is not a
+	// placeholder waiting for one. The link-time stamp named a root and the
+	// reader for it went with the mode matrix, so there is nothing left for
+	// doctor to derive a machine-level check from. Reading the chain instead is
+	// its own task; until then these are the questions a repository answers on
+	// its own.
+	doctorDeps := doctor.DependenciesFor("")
 	return doctorCommandDependencies{
 		Getwd:      os.Getwd,
 		Discover:   repo.Discover,

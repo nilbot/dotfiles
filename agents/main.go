@@ -22,12 +22,23 @@ var (
 
 func main() {
 	if name := filepath.Base(os.Args[0]); githook.IsHookName(name) {
-		os.Exit(runGitHook(name, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+		os.Exit(runGitHookShim(name, os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 	}
 	os.Exit(run(os.Args[1:]))
 }
 
-func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+// runHookChain runs one hook in the three parts the design names, in order: the
+// repository's own hook of that name, then the executable personal stages
+// `<anything>.<name>` under extrasDir, then the built-in stage. On pre-commit
+// the built-in guard runs last, and its advisory result is mapped to success
+// because a warning must not abort a commit.
+//
+// Both routes into this binary share this one function: the `githook`
+// subcommand, which is handed the directory the chain record named, and the
+// symlink shim, which has no directory to hand it. Keeping the order and the
+// guard mapping in one place is what stops the two from drifting apart while
+// both exist.
+func runHookChain(name, extrasDir string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintln(stderr, "agents: git hook could not resolve the current directory")
@@ -42,14 +53,6 @@ func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.W
 	if err != nil {
 		fmt.Fprintln(stderr, "agents: git hook could not resolve the dispatcher executable")
 		return exitcode.Malformed
-	}
-	// DotfilesRoot(), not $HOME/dotfiles: githook treats a missing extras
-	// directory as "no personal hooks" and carries on, so a binary that looked
-	// for them under a checkout that is not this one would run none of them and
-	// say nothing about it.
-	var extrasDir string
-	if root := DotfilesRoot(); root != "" {
-		extrasDir = filepath.Join(root, "git", "hooks")
 	}
 	chain := githook.Chain{
 		RepoHooksDir:   repoHooksDir,
@@ -67,6 +70,36 @@ func runGitHook(name string, args []string, stdin io.Reader, stdout, stderr io.W
 		return exitcode.OK
 	}
 	return code
+}
+
+// runGitHookShim is the compatibility route for a machine still wired the old
+// way: four symlinks in the hooks directory, each naming this binary, each
+// invoking it under a hook's own name. It answers all four names -- a commit
+// runs pre-commit AND commit-msg, so a shim that only recognised the bare
+// pre-commit form leaves the second one failing every commit -- and it passes
+// Git's arguments through untouched.
+//
+// What it cannot carry is the personal stages, and it has to say so. A symlink
+// names a program and nothing else: the checkout used to arrive from the
+// link-time stamp or from AGENTS_DOTFILES_ROOT, and both readers are gone.
+// githook.Chain reads a missing extras directory as "no personal hooks" and
+// returns 0, so a silent shim is a machine whose `<anything>.<hook>` stages
+// stopped running with nothing anywhere to say it -- the failure class this
+// redesign exists to remove. The notice is one line on stderr and never
+// changes an exit code: the guard names still guard, and a stale banner must
+// not fail a `git checkout`.
+//
+// Added in v0.8.0, with the generated entries that replace the symlinks.
+// Remove no earlier than v0.9.0 (2027-04-09): an install that has re-run
+// git/install-hooks.sh writes four entries, and those never reach this branch.
+func runGitHookShim(name string, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fmt.Fprintf(stderr,
+		"agents: %s ran through a hook symlink, which names a program and no checkout, "+
+			"so the personal stages under <checkout>/git/hooks are not running. "+
+			"Re-run the installer to replace the four symlinks with chain entries: "+
+			"bash <checkout>/git/install-hooks.sh install --adopt-owned <checkout> \"$HOME\" \"$(command -v agents)\"\n",
+		name)
+	return runHookChain(name, "", args, stdin, stdout, stderr)
 }
 
 func run(args []string) int {
