@@ -100,8 +100,8 @@ table at the end of this section records the alternatives this rejected; it is a
 record of decisions, not a constraint.
 
 **The version we would prefer.** Hook installation would be a single command with
-no hooks directory, and the tool would learn which checkout it belongs to from
-where it is installed. Neither is available. Section 5 describes the full picture.
+no hooks directory, and the tool would learn which checkout supplies the personal
+stages from where it is installed. Neither is available. Section 5 describes the full picture.
 
 ### Facts about the platform and this repository
 
@@ -339,7 +339,7 @@ and the chain, instead of from a compiled-in root:
 | `chain:legacy` | the exact retired dispatcher, if one is still installed | `git-hooks:legacy` |
 | `chain:running` | the binary the record names beside the binary that is running; **fails when they are not the same file** | the old `binary` check's implicit "the" binary |
 | `attributes:global` | `~/.gitattributes` is a link whose target exists | `git-attributes` |
-| `chain:checkout` | the record's `checkout` is `-`, or a directory that exists and holds at least one `<anything>.<hook>` file — a bare `git/hooks/` proves nothing, since every checkout of this repository carries two tracked files there, one of which is the state the check exists to notice. A warning, where `root:exists` was a failure | `root:exists`, and the `provenance:checkout` of the earlier draft, which read the stamp instead |
+| `chain:checkout` | the record's `checkout` is `-`, or a directory that exists and is not empty of `<anything>.<hook>` files. The two tracked files in this repository's `git/hooks/` make that true of any checkout, so the condition catches only a directory that has been emptied — which is why the check reports the count it found, since zero is the state it exists to notice. A warning, where `root:exists` was a failure | `root:exists`, and the `provenance:checkout` of the earlier draft, which read the stamp instead |
 
 **Path shape is not identity.** Today the binary is recognised in six different
 ways: the compiled stamp, the environment variable, the name the process was
@@ -430,7 +430,7 @@ machine-owned and no package manager touches it; the detector is `doctor`.
 If the constraints in §2 did not exist, this is what we would have:
 
 - **One record, one writer, one reader each.** The machine's wiring states which
-  binary Git runs and which checkout it belongs to; the binary asks nothing of its
+  binary Git runs and which checkout supplies the personal stages; the binary asks nothing of its
   environment; `doctor` reports what the record says and never reconstructs it.
 - **No stamp.** The checkout would be a property of the installation rather than of
   the build. That is now the case (§3.3), and it is the change this document's
@@ -625,7 +625,7 @@ what the change makes of it:
 | **The builders** — `script/package-release.sh:7-10` (version and commit), `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the release builder keeps stamping version and commit; the `-X main.dotfilesRoot` flag and the two build commands that pass it go with the personal build ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6), and with them the exact-command pins in `devtools_test.go:22,153` and `makefile_test.go:110,165` |
 | **The release path** — `release.yml:57-97` (version and SHA), `:120` (`package-release.sh` is passed the version, not the commit, which is why the script derives it a second time), `:134-138` (archive name and the version-output glob), `:190-201` (the tap) | one fact — the commit — is derived twice today. This design does not change that, and whoever sequences this work should decide whether to fix it here or separately |
 | **The installer** — `git/install-hooks.sh` in full: `:61` (the four names), `:139-168` (the symlink checks), `:191-208` (keg path shape), `:259-279` (the writes), `:281-287` (the keg note) | rewritten to write entries, with the table above as its specification |
-| **The consumers** — `agents/cmd_version.go:12`, `agents/root.go:15-30`, `agents/cmd_doctor.go:71-80`, `agents/internal/doctor/doctor.go:149-173` and `:621-644`, `agents/main.go:24-58` | the stamp goes and `doctor` reads the record instead; the multicall becomes `githook`; the link comparison becomes `chain:running` |
+| **The consumers** — `agents/cmd_version.go:12`, `agents/root.go:15-30`, `agents/cmd_doctor.go:29-40` (the root read, at `:32`), `agents/internal/doctor/doctor.go:149-173` and `:621-644`, `agents/main.go:24-58` | the stamp goes and `doctor` reads the record instead; the multicall becomes `githook`; the link comparison becomes `chain:running`. `cmd_doctor.go:71-80` is unaffected: it reads the running binary's own path |
 | **`bootstrap`** — `bootstrap.d/internal/check/checks.go:317-324` (`agentsOnPath` is `LookPath("agents")`) | unchanged, and worth knowing: the provisioner's whole opinion of the binary stays "a name resolves somewhere" |
 | **The documentation still in force** — `2026-08-11-spec-6-releases-and-distribution.md:90-97`, `2026-08-11-spec-5-verification-gate.md:734-790`, `2026-08-07-agents-repo-context-design.md` §8, `2026-09-20-agents-and-bootstrap-boundary.md` §3, `2026-08-28-contributor-guardrails-and-scaffold-decoupling.md:17` | each restates the deleted contract and must be amended in the same change |
 | **`git/README.md`** | states the install and upgrade rule, and is **not** in `livingDocuments` (`agents/docs_test.go:80-84`), unlike `agents/README.md`, which is checked three ways. The file most likely to be left stating the old rule is the one with nothing watching it |
@@ -674,8 +674,9 @@ sequences tested rather than reasoned about.
 ## 7. What enforces the old behaviour today
 
 Each of these asserts the contract this design deletes, or pins a string it
-changes. They are the work a plan must schedule, and the reason renaming
-`DotfilesRoot()` to `BuildCheckout()` cannot be done by editing one file.
+changes. They are the work a plan must schedule, and the reason deleting the stamp
+cannot be done by editing one file: it has a reader in every layer, including the
+compatibility shim that stays for a release.
 
 | site | what it pins |
 |---|---|
@@ -729,7 +730,7 @@ machine-owned.
 | 9 | a record truncated after `binary`: every entry refuses, naming the missing key | default the absent keys; an empty `--checkout` is forwarded and the wrong directory, or none, is consulted |
 | 10 | a record whose `binary` names a directory: the entry refuses | test `[ -x ]` alone, which is true for a directory; `exec` then fails with exit 126 |
 | 11 | a record naming a binary whose path contains a space: it runs | quote-strip or word-split the value; the space path fails with `not found` |
-| 12 | the compatibility shim: invoked as `commit-msg` with a message-file argument, it still runs the guard | narrow the shim to a bare `pre-commit`; every commit fails at `commit-msg` with an unknown-command error |
+| 12 | the compatibility shim: invoked as `commit-msg` with a message-file argument, it still runs the guard; invoked through an old symlink with no record, it runs the guard, runs no personal hooks, and **says so** | narrow the shim to a bare `pre-commit`; every commit fails at `commit-msg` with an unknown-command error. Then drop the message: a symlink-route machine loses its personal stages in silence, which is the state this design exists to end |
 | 13 | an entry whose mode is not executable: `doctor` reports it, and a commit **succeeds** — Git prints its hint and runs nothing, so the guard is off and only the hint says so | write the entry and `chmod` after; the same thing happens, which is why publication is atomic (§6) |
 | 14 | the chain names a binary other than the running one: `doctor` **fails** and prints both paths | report both as facts with no failure; the machine looks healthy while commits run a different binary |
 | 15 | `core.hooksPath` is unset: `doctor` reports that no chain is installed, and the repository-level checks still run | make the absence an error; `doctor` fails on a machine that never had a chain |
