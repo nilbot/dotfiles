@@ -54,11 +54,21 @@ not silently permit it.
 
 - **Chain** — the directory `core.hooksPath` names, together with the files in it.
 - **Entry** — one file in the chain, named after one hook event. Git executes it.
-- **Record** — the two-line file inside the chain that states which binary to run
-  and which checkout supplies the extra stages.
+- **Record** — the file `chain.env` inside the chain: a comment line, then
+  `format`, `binary` and `checkout`. It states which binary to run and which
+  checkout supplies the extra stages.
 - **Personal stage** — an extra program in `<checkout>/git/hooks/`, named
   `<anything>.<hook>` (for example `recent.post-merge`). The tool runs these after
   the repository's own hook.
+- **Repository hook** — the hook file a repository keeps in its own hooks directory
+  for an event. The dispatcher runs it before the personal stages, and skips it only
+  when that file *is* the dispatcher.
+- **Installer mode** — `git/install-hooks.sh` runs as `preflight` or `install`.
+  `preflight` reports and exits before the binary is built, and is deliberately
+  blind to it; `install` runs after the build and validates the binary it is handed.
+- **`--adopt-owned`** — the installer flag that permits replacing a hook entry this
+  installer previously wrote. Without it, anything already at a hook name is a
+  refusal.
 - **The stamp** — the checkout path compiled into a personal build, written by the
   linker flag `-X main.dotfilesRoot=<path>`. It answers "what built me".
 - **Mode** — today's word for the two behaviours: "Operator Mode" (a personal build
@@ -79,7 +89,8 @@ not silently permit it.
 Five items decide the shape of this design: four facts about Git, Homebrew and
 this repository's own configuration, and one rule this repository holds itself to.
 Each item states the fact, the evidence for it, and the consequence it forces. The
-tables at the end record decisions, not constraints.
+two tables at the end of this section record the alternatives this rejected; they
+are decisions, not constraints.
 
 **The version we would prefer.** Hook installation would be a single command with
 no launcher directory, and the tool would learn which checkout it belongs to from
@@ -89,10 +100,12 @@ where it is installed. Neither is available. Section 5 describes the full pictur
 
 **F1. Git runs hooks by looking in a directory.** `core.hooksPath` names one
 directory, and Git executes the file in it whose name matches the hook event. Git
-has no setting that names a program. `git/install-hooks.sh`, the shell installer,
-must therefore create a directory and keep four executable files correct inside it.
-The launcher directory is the only shape Git supports, and it is not a choice this
-design made.
+has no setting that names a program: the configuration reference lists
+`core.hooksPath` and its siblings, and none of the four files in `git/hooks.d` is
+invoked as a program — each is a file in the directory Git is told to look in.
+`git/install-hooks.sh`, the shell installer, must therefore create a directory and
+keep four executable files correct inside it. A hooks directory is the only shape
+Git supports, and it is not a choice this design made.
 
 **F2. An installed binary's path does not say which checkout built it.** The
 personal build is installed at `~/bin/agents`, the released build at
@@ -119,7 +132,8 @@ what the refusal exists to stop, and the table below records it.
 **F4. `AGENTS_DOTFILES_ROOT` is set by hand, and no test supplies it honestly.**
 The variable is a hand-written line in `~/.config/fish/config.fish:19`, inside a
 file that `bootstrap` copies once and never rewrites
-(`bootstrap.d/links.manifest:29` names it as a `seed` row). The tracked template
+(`bootstrap.d/links.manifest:29` declares it a `seed` row — a file `bootstrap`
+writes once from a tracked template and never rewrites). The tracked template
 `fish/config.fish.template` does not contain the line, so **no automated path
 writes this variable or could rewrite it** — it is the only on-disk statement
 binding this machine's installed binary to this checkout. No tracked file writes it
@@ -154,13 +168,22 @@ against the filesystem, and §4 accounts for that as a cost.
 | keep the chain inside the checkout | F3's mechanism in a new place: when `core.hooksPath` names a missing directory, Git commits at exit 0, so a deleted checkout switches the guard off silently |
 | a second config file beside `core.hooksPath` | `bootstrap.d/links.manifest:10` states the rule: "one owner per path" |
 
-## 3. What we will build
+## 3. What we will build — the shape both stages end at
+
+Section 6 stages the work; this section describes the end state. One part of it is
+not true after stage 1 alone, and it is the part a reader is most likely to trip
+on: **where the chain lives.** Stage 1 keeps it inside the checkout — the shape
+§2's table records as an alternative this design rejects, and rejects because a
+deleted checkout then switches the guard off silently — and stage 2 moves it to the
+machine, which is what makes the guard outlive the checkout. The record, the
+entries, the `githook` subcommand and the `doctor` checks are all built by stage 1.
 
 ### 3.1 The chain holds a record and four entries
 
-The chain lives at **`~/.config/agents/hooks.d/`** — machine-owned, outside any
-checkout, and not a cache directory, because a cleaner must never be able to delete
-the commit guard. Git reaches it through `core.hooksPath`.
+The chain lives, once stage 2 has run, at **`~/.config/agents/hooks.d/`** —
+machine-owned, outside any checkout, and not a cache directory, because a cleaner
+must never be able to delete the commit guard. Git reaches it through
+`core.hooksPath`.
 
 It holds a record, `chain.env`, and the record is **data, not code**:
 
@@ -218,9 +241,11 @@ shell code at every commit, with the committing user's privileges, so a record
 carrying `: > /tmp/pwned` would execute it — and it would let a record rewrite
 `PATH` or `IFS` inside the process that is about to decide whether the commit is
 allowed. A symbolic link cannot execute anything; this can. The allow-list above
-exists for that reason, and every rejection exits non-zero: **R1's companion rule
-is that ambiguity refuses.** A truncated record — which is what a concurrent write
-leaves — must refuse rather than forward an empty `--checkout`.
+exists for that reason, and every rejection exits non-zero. The rule it enforces
+belongs here rather than in §2, because it is about this file and not about the
+platform: **a value the record does not define is a value the entry must not guess
+at.** A truncated record — which is what a concurrent write leaves — must refuse
+rather than forward an empty `--checkout`.
 
 An entry replaces a symbolic link, and buys three things a symlink cannot:
 
@@ -237,9 +262,12 @@ An entry replaces a symbolic link, and buys three things a symlink cannot:
 
 ### 3.2 The binary is told, not asked
 
-`agents githook <name> --checkout <path>` runs one hook: the repository's own hook
-first, then the personal stages under `<path>/git/hooks/` when `<path>` is not `-`,
-then the built-in stages. It reads no record and derives nothing. This replaces the
+`agents githook <name> --checkout <path>` runs one hook in three parts: the
+repository's own hook — the file the repository keeps in its own hooks directory,
+which the dispatcher runs unless it is the dispatcher itself
+(`agents/internal/githook/githook.go:110-119`, `:156-172`) — then the personal
+stages under `<path>/git/hooks/` when `<path>` is not `-`, then the built-in
+stages. It reads no record and derives nothing. This replaces the
 multicall, which is the implicit binding this design removes. The tool does not
 gain a way to be a hook; it changes its one way.
 
@@ -261,7 +289,9 @@ The linker stamp keeps one job: saying which checkout built this binary.
 `agents version` prints it (`built from /Users/nilbot/dotfiles`, or `release build`
 for a released binary — the exact text is an open question, §9.1). `agents doctor`
 reports it, and warns when the named directory no longer exists, which is the
-hazard `Makefile` documents for a binary built in a linked worktree.
+hazard `Makefile` documents for a binary built in a linked worktree — a second
+checkout of the same repository created by `git worktree add`, whose directory can
+be removed while a binary compiled from it survives and still names it.
 
 It never changes a decision. A stamped binary and an unstamped binary, given the
 same chain, do the same thing.
@@ -279,7 +309,7 @@ and the chain, instead of from a compiled-in root:
 | check | reads | replaces |
 |---|---|---|
 | `chain:hooks-path` | `git config --global core.hooksPath` | `git-hooks:global`, `git-hooks:effective` |
-| `chain:entries` | each of the four names is a regular file carrying the generated header **and is executable** — Git skips a non-executable hook with a hint and exit 0 | `git-hooks:links` (which today *requires* a symlink, `doctor.go:632`) |
+| `chain:entries` | each of the four names is a regular file carrying the generated header **and is executable** — Git skips a non-executable hook with a hint and exit 0 (measured 2026-10-09, Git 2.54) | `git-hooks:links` (which today *requires* a symlink, `doctor.go:632`) |
 | `chain:record` | `chain.env` parses under the allow-list: `format=1`, `binary` an absolute path to an executable regular file, `checkout` `-` or absolute | new |
 | `chain:unmanaged` | look-alikes under other names, **and dangling links** an earlier installer left behind | `git-hooks:unmanaged` |
 | `chain:local` | a repository-local `core.hooksPath` override, which bypasses the chain by choice | `git-hooks:local` |
@@ -294,11 +324,22 @@ invoked as (`agents/main.go:24`), the basename in `isOwnedBinary`
 (`agents/internal/harness/harness.go:174-176`, which accepts `agents`,
 `agents-test-bin` and `agents-standalone`), the shape `*/Cellar/agents/*/bin/agents`
 (`git/install-hooks.sh:191-208`), and content fingerprints of two retired shims
-(`agents/internal/githook/githook.go:151-215`). This design replaces the first two.
-It keeps the other four deliberately, and each one keeps its reason: the invoked
-name and the fingerprints are how a retired artifact is recognised and removed, the
-path shape is how the installer decides what it may adopt, and `chain:running`
-compares files rather than names.
+(`agents/internal/githook/githook.go:151-215`).
+
+Two of those decide **which binary runs** — the stamp and the environment variable
+— and this design replaces both, in different ways. The environment variable is
+deleted. The stamp is not: it is still compiled in, `doctor` still reports it, and
+no decision reads it (§3.3). That is why the two sections can both be right when
+one says the stamp is replaced and the other says it is kept — what is replaced is
+its authority over behaviour, not the value.
+
+Three of the remaining four are kept deliberately, each for its own job: the
+basename is how `agents wire` decides which harness entries are its own, the Cellar
+path shape is how the installer decides what it may adopt, and the fingerprints are
+how a dispatcher skips a retired shim and how `doctor`'s `git-hooks:legacy` warns
+about one, with the removal itself left manual. The invoked name is not kept: §6
+replaces the multicall, and the `argv[0]` branch survives only as the one-release
+shim.
 
 ### 3.5 Who reads what
 
@@ -307,7 +348,7 @@ compares files rather than names.
 | Git | which entries to run | `core.hooksPath` | — |
 | an entry | what to execute | `chain.env` | `PATH`, the environment, its own name |
 | `agents githook` | where the personal stages are | the `--checkout` its entry passed | the stamp, the environment |
-| `agents doctor` | what is installed | `core.hooksPath`, the entries, `chain.env` | a stamped root; the environment |
+| `agents doctor` | what is installed | `core.hooksPath`, the entries, `chain.env` | a stamped root as the *location* of the install; the environment. The stamp answers a different question — what built this binary — and §3.4's `provenance:checkout` reports it as provenance |
 | `agents version` | what built this binary | the stamp | — |
 | `init`, `wire` | which repository this is | the working directory | anything machine-level |
 
@@ -384,15 +425,20 @@ and makes the binding explicit. Stage 2 makes the chain machine-owned and the gu
 independent of any checkout. Neither stage needs a Git feature that does not exist;
 both are constrained only by F1–F4 and R1.
 
-## 6. What changes, in what order
+## 6. What changes, in what order — stage 1, then stage 2
 
-**Stage 1 — told, not asked.** The identity fix, in place.
+**Stage 1 — told, not asked.** The identity fix, in place. It deliberately builds
+one shape §2's table rejects — the chain inside the checkout — because the entries
+do not care where they live, and moving the directory is a separate risk with its
+own refusal to unpick (§3's opening states this too). Stage 2 removes that shape.
 
 - `DotfilesRoot()` becomes `BuildCheckout()`, read only by `version` and reported by
   `doctor`; `AGENTS_DOTFILES_ROOT` is deleted and never read.
 - `main.go`'s `argv[0]` multicall is replaced by `agents githook <name> --checkout
   <path>`, registered with the `Git`/`CI` audience and hidden from the human
-  listing, exactly as `guard` is today.
+  listing, exactly as `guard` is today. The `argv[0]` branch itself survives for one
+  release, as the compatibility shim described under "The transition window" below —
+  that shim is a change to this bullet, not an exception to it.
 - `git/install-hooks.sh` generates four entries and `chain.env` instead of four
   symlinks, and still writes `core.hooksPath` last so a partial install cannot
   activate an incomplete chain.
@@ -411,7 +457,10 @@ both are constrained only by F1–F4 and R1.
   refuses when `core.hooksPath` is already set to something other than the
   directory it is installing into, and after stage 1 every wired machine's config
   names `<root>/git/hooks.d`. `inspect_global_hooks_path` therefore gains the old
-  chain path as an accepted origin and keeps refusing every other value.
+  chain path as an accepted **value** of `core.hooksPath`. Its origin test is
+  untouched: the value must still come from `file:$HOME/.gitconfig`, and still be a
+  single value, because a `core.hooksPath` that arrived through an `include` is the
+  state the second half of that refusal exists to stop.
 - The guard now survives a moved or deleted checkout. Stage 1 does not achieve
   this.
 
@@ -421,16 +470,27 @@ Stage 1 turns four symlinks into four entries in a directory that already holds
 four symlinks, so the installer needs a statement of what it does with each shape
 it can find at a hook name. `--adopt-owned` keeps its meaning from today: it is the
 flag that lets the installer replace something that is already there. What changes
-is what counts as **owned** — for an entry, a regular file whose first two lines
-are the generated shebang and the `Written by git/install-hooks.sh for <checkout>`
-comment, carrying `format=1` in `chain.env`.
+is what counts as **owned**. For an entry, ownership is decided from the entry
+alone: a regular file whose first two lines are the generated shebang and the
+`Written by git/install-hooks.sh for <checkout>` comment, with `<checkout>` equal to
+the path that comment carries. It must not be decided from `chain.env`, because a
+missing or malformed record is one of the states the repair command exists for, and
+a rule that read the record first would refuse the installer's own entries as
+foreign. The same install that writes the entries writes the record.
+
+One consequence belongs in the open: **an exact symlink stops being a success
+state.** Today `check_exact_symlink_or_absent` (`git/install-hooks.sh:143-147`)
+returns success when the link already names the binary the installer was handed,
+which is the state this machine is in. Under this design that state is what the
+installer must convert, so it becomes a refusal naming `--adopt-owned` — otherwise
+nothing would ever turn four symlinks into four entries.
 
 | what is at the hook name | without `--adopt-owned` | with `--adopt-owned` |
 |---|---|---|
 | nothing | write the entry | write the entry |
-| a symlink this installer wrote (its target is the binary the installer was handed, or the keg path it resolved) | refuse, naming the symlink and the flag | replace it with the entry |
+| a symlink this installer wrote — its target is the binary the installer was handed, or resolves into a Homebrew keg for `agents` (`:143-163`, `:202-208`) | refuse, naming the symlink and the flag | replace it with the entry |
 | a symlink to something else, or a regular file this installer did not write | refuse, naming the file | refuse: it is not ours, and the flag does not make it ours |
-| an entry this installer wrote, at an older format | refuse, naming `format=1` | replace it |
+| an entry this installer wrote, whose header names a different checkout or an older generated form | refuse, naming the file and the flag | replace it |
 
 The third row is the one that matters: `chain:entries` will report a leftover
 symlink as wrong forever, and the person repairing it by hand must be able to. The
@@ -445,7 +505,7 @@ chain. Both orders break, and both must be handled rather than hoped away:
 
 | order | what happens |
 |---|---|
-| new binary first, old symlinks installed | the symlinks still resolve, so Git runs the new binary as `pre-commit`, `commit-msg`, `post-merge` or `post-checkout`, with Git's arguments and no `githook` subcommand. Every commit **and every `git checkout` and `git switch`** fails: with the multicall gone the binary prints a usage error and exits 3, and Git propagates it as exit 1 — a branch switch that succeeded and a command that reports failure |
+| new binary first, old symlinks installed | the symlinks still resolve, so Git runs the new binary as `pre-commit`, `commit-msg`, `post-merge` or `post-checkout`, with Git's arguments and no `githook` subcommand. Every commit **and every `git checkout` and `git switch`** fails: with the multicall gone the binary prints a usage error (measured 2026-10-09: exit 3, `agents: unknown command "…/COMMIT_EDITMSG"`), and Git propagates it as exit 1 — measured on Git 2.54, `git checkout -b other` switches the branch and then reports failure, so anything chaining on git's status breaks |
 | installer first, old binary on `PATH` | the entries call `agents githook`, which the old release does not have; the same machine-wide failure, but the installer reports success first |
 
 Two changes close it, and both belong in stage 1:
@@ -488,10 +548,11 @@ the shim lives, the install succeeds and the commits keep working.
 
 **Entries are published atomically.** A hook name that exists but is not executable
 is skipped by Git with a hint and **exit 0** — silence, and the hint can be turned
-off with `advice.ignoredHook=false`. No entry may be visible in a partial or
-non-executable state: each is written to a temporary file in the same directory
-with its final mode and `mv`ed into place, and `chain.env` the same way. `ln -sfn`
-was atomic; its replacement has to be too.
+off with `advice.ignoredHook=false`. Measured on 2026-10-09 with Git 2.54: a
+non-executable `pre-commit` prints the hint on stderr and the commit succeeds. No
+entry may be visible in a partial or non-executable state: each is written to a
+temporary file in the same directory with its final mode and `mv`ed into place, and
+`chain.env` the same way. `ln -sfn` was atomic; its replacement has to be too.
 
 **One caution for the repair text.** On this machine "re-run the installer" is not
 one action: `bootstrap`'s devtools phase installs the chain against
@@ -507,12 +568,12 @@ what the change makes of it:
 
 | surface | what the change does to it |
 |---|---|
-| **The builders** — `script/package-release.sh:7-10` (version and commit), `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the stamp's *reader* changes; both builders keep passing `-X main.dotfilesRoot=<checkout>`, and `packages_test.go`'s and `devtools_test.go:22`'s exact-command pins are edited only if the flag changes, which this design does not |
+| **The builders** — `script/package-release.sh:7-10` (version and commit), `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the stamp's *reader* changes; both builders keep passing `-X main.dotfilesRoot=<checkout>`, and the exact-command pins in `devtools_test.go:22,153` and `makefile_test.go:110,165` are edited only if the flag changes, which this design does not |
 | **The release path** — `release.yml:57-97` (version and SHA), `:120` (`package-release.sh` is passed the version, not the commit, which is why the script derives it a second time), `:134-138` (archive name and the version-output glob), `:190-201` (the tap) | one fact — the commit — is derived twice today. This design does not change that, and whoever sequences this work should decide whether to fix it here or separately |
 | **The installer** — `git/install-hooks.sh` in full: `:61` (the four names), `:139-168` (the symlink checks), `:191-208` (keg path shape), `:259-279` (the writes), `:281-287` (the keg note) | rewritten to write entries, with the table above as its specification |
 | **The consumers** — `agents/cmd_version.go:12`, `agents/root.go:15-30`, `agents/cmd_doctor.go:71-80`, `agents/internal/doctor/doctor.go:149-173` and `:621-644`, `agents/main.go:24-58` | the stamp becomes provenance; the multicall becomes `githook`; the link comparison becomes `chain:running` |
 | **`bootstrap`** — `bootstrap.d/internal/check/checks.go:317-324` (`agentsOnPath` is `LookPath("agents")`) | unchanged, and worth knowing: the provisioner's whole opinion of the binary stays "a name resolves somewhere" |
-| **The documentation still in force** — `2026-08-11-spec-6-…:90-97`, `2026-08-11-spec-5-…:734-790`, `2026-08-07-agents-repo-context-design.md` §8, `2026-09-20-agents-and-bootstrap-boundary.md` §3, `2026-08-28-contributor-guardrails-…:17` | each restates the deleted contract and must be amended in the same change |
+| **The documentation still in force** — `2026-08-11-spec-6-releases-and-distribution.md:90-97`, `2026-08-11-spec-5-verification-gate.md:734-790`, `2026-08-07-agents-repo-context-design.md` §8, `2026-09-20-agents-and-bootstrap-boundary.md` §3, `2026-08-28-contributor-guardrails-and-scaffold-decoupling.md:17` | each restates the deleted contract and must be amended in the same change |
 | **`git/README.md`** | states the install and upgrade rule, and is **not** in `livingDocuments` (`agents/docs_test.go:80-84`), unlike `agents/README.md`, which is checked three ways. The file most likely to be left stating the old rule is the one with nothing watching it |
 
 Three facts about the repository's own guards belong here, because they shape how
@@ -522,8 +583,9 @@ the work must be done:
   test must exist and pass, so a renamed test must be edited there in the same
   commit or the job fails naming it.
 - The `hygiene (agents, home)` job runs the suite with `HOME` pointed at an empty
-  directory and fails if anything appears in it. That is F4's rule about ambient
-  inputs, already enforced over the tests.
+  directory and fails if anything appears in it. F4 is the fact that ambient inputs
+  decide this tool's behaviour today; that job is the same suspicion, already
+  enforced over the tests.
 - `docs/design/` **is** covered by `docsStores` (`agents/docs_test.go:533-547`), but
   only by `TestLivingDocumentsNameNoDeletedCommand`. What is untested is whether a
   design document still *describes the contract in force*: a document restating the
@@ -544,18 +606,22 @@ of "which binary" and "which checkout".
 | `~/bin/agents` | absent here. Where it exists, it is a second owner of the chain: the devtools phase installs against it, so re-running `bootstrap apply workstation` switches which binary Git runs |
 | the Homebrew keg's `INSTALL_RECEIPT.json` | a third party's record of origin (`source.tap`, `tap_git_head`). The change coexists with it and cannot convert it |
 | `.claude`, `.codex` and `.agents` hook entries in repositories wired before 2026-09-21 | untouched: `agents wire` removes them and nothing writes them |
-| retired dispatcher shims in a repository's `.git/hooks` | untouched: recognised by size and SHA-256 (`agents/internal/githook/githook.go:151-215`) and reported by `doctor`'s `git-hooks:legacy` |
+| retired dispatcher shims in a repository's `.git/hooks` | untouched: recognised by size and SHA-256 (`agents/internal/githook/githook.go:151-215`) and reported by the check that is `git-hooks:legacy` today and `chain:legacy` after §3.4's rename |
 | `~/.cache/dotfiles-bootstrap/<cksum>/bootstrap` | `bootstrap`'s own cached binary, keyed by a checksum of the checkout path. Adjacent, not affected, and the same failure mode — a cached artifact bound to a path that can move |
 
-**This machine has never survived an upgrade.** One keg version is installed, so the
-dangling-link scenario in F3 is provisioned for and has never been exercised here.
-That is a reason to keep the rollback sequences tested rather than reasoned about.
+**What has and has not been exercised here.** The dangling-link failure itself was
+measured on this machine: F3's incident of 2026-09-20 is the qna's "upgrading this
+machine from agents v0.5.1 to v0.6.0". What is untested here is the *stable-path*
+upgrade. The four links have named `/opt/homebrew/bin/agents` since 2026-09-25, and
+no upgrade has happened since, so nothing has yet exercised Homebrew repointing
+that symlink underneath a wired chain. That is a reason to keep the rollback
+sequences tested rather than reasoned about.
 
 ## 7. What enforces the old behaviour today
 
 Each of these asserts the contract this design deletes, or pins a string it
-changes. They are the work a plan must schedule, and the reason a rename cannot be
-done by editing one file.
+changes. They are the work a plan must schedule, and the reason renaming
+`DotfilesRoot()` to `BuildCheckout()` cannot be done by editing one file.
 
 | site | what it pins |
 |---|---|
@@ -566,14 +632,18 @@ done by editing one file.
 | `agents/internal/doctor/doctor_test.go:293-353`, `:512`, `:599-715`, `:664`, `:764` | the binary comparison, the stamped-checkout check, the hooks-path checks, and the remedies that must name `install-hooks.sh` and `--adopt-owned` |
 | `bootstrap.d/internal/phase/devtools_test.go:22`, `:153`; `bootstrap.d/makefile_test.go:110,165` | the exact build command and the stamp's value, in both builders |
 | `release.yml:138` | the prefix of `agents version`'s output, matched in a glob |
-| `agents/doctests.txt:42-50` | the tests the CI `docs` job runs by name; a new subcommand fails `TestTheCommandSetIsExactlyThis` until it is declared |
-| `agents/README.md:88-121`, `:164-180`; `README.md:49-62`; `git/README.md:19-96`; two `docs/qna/` answers; five design documents | the prose that states the old rule, each guarded by a different mechanism or by none |
+| `agents/doctests.txt:28` | `TestTheCommandSetIsExactlyThis`: a new subcommand has to be declared there, or the `docs` job fails |
+| `agents/doctests.txt:42-50` | the document guards the `docs` job runs by name — the README command block, and the three living-document tests over `README.md`, `agents/README.md`, `CLAUDE.md`, `global/AGENTS.md` and the two skill trees |
+| `agents/README.md:88-121`, `:164-180`; `README.md:49-62`; `git/README.md:19-96`; the five `docs/qna/` answers that state the old rule — `why-does-an-unstamped-or-homebrew-agents-binary-skip-dotfiles-checks.md`, `why-is-agents-still-in-dotfiles-and-when-should-it-split.md`, `can-this-check-actually-fail.md`, `why-does-a-brew-upgrade-stop-my-commit-guard.md`, `why-does-install-hooks-refuse-symlinks-like-opt-homebrew-bin-agents.md`; and the five design documents listed under "What the change touches" | the prose that states the old rule, each guarded by a different mechanism or by none |
 
 ## 8. How we would know it works
 
 Each test states the mutation that should make it fail, because a guard that has
-only ever been green is not known to be a guard. Tests 1–12 are stage 1 tests;
-13–15 need stage 2.
+only ever been green is not known to be a guard. Tests 1–12, 13, 15 and 16–18 are
+stage 1 subjects. Test 3 is not: it asserts that the guard survives a deleted
+checkout, which stage 1 does not achieve, so it is written with stage 2. Test 14
+needs two installed binaries, which is easiest to arrange once the chain is
+machine-owned.
 
 | # | test | mutation that must make it fail |
 |---|---|---|
@@ -592,17 +662,23 @@ only ever been green is not known to be a guard. Tests 1–12 are stage 1 tests;
 | 13 | an entry whose mode is not executable: `doctor` reports it, and a commit **succeeds** — Git prints its hint and runs nothing, so the guard is off and only the hint says so | write the entry and `chmod` after; the same thing happens, which is why publication is atomic (§6) |
 | 14 | the chain names a binary other than the running one: `doctor` **fails** and prints both paths | report both as facts with no failure; the machine looks healthy while commits run a different binary |
 | 15 | `core.hooksPath` is unset: `doctor` reports that no chain is installed, and the repository-level checks still run | make the absence an error; `doctor` fails on a machine that never had a chain |
+| 16 | four symlinks this installer wrote, converted with `--adopt-owned`: four entries and a `chain.env` appear, and none of the symlinks remains | make the conversion a no-op; the chain keeps four symlinks and `chain:entries` reports them forever |
+| 17 | the same four symlinks, without the flag: the installer refuses, naming the file and `--adopt-owned`, and writes nothing | let the exact-link success case through (`install-hooks.sh:143-147` returns 0 today); the conversion never happens |
+| 18 | a foreign regular file at a hook name, with and without the flag: it is refused both times, and the file is left alone | treat the flag as "replace anything"; a repository's own hook is overwritten |
 
 Placement is itself a contract. Contracts about prose, the command tree and the
 generated README block belong in `agents/doctests.txt`, which the CI `docs` job
 runs by name. Package behaviour belongs in the ordinary `test` job — which also
 puts these tests under the `hygiene` job's synthetic-`HOME` guard.
 
-Tests 3 and 14 are most easily written once the chain is machine-owned, and test 3
-needs it to be. Three mechanisms this design introduces have no test here yet, and
-each needs one before the work is planned: `provenance:checkout`'s warning, the
-installer creating the chain directory on a machine that has none, and the
-replacement of the five machine checks §3.4 lists.
+Four mechanisms this design introduces have no test here yet, and each needs one
+before the work is planned: `provenance:checkout`'s warning; the installer creating
+the chain directory on a machine that has none; the five checks that replace
+today's machine checks — `chain:hooks-path` for `git-hooks:global` and
+`git-hooks:effective`, `chain:entries` for `git-hooks:links`, `chain:unmanaged` for
+`git-hooks:unmanaged`, `chain:local` for `git-hooks:local`, and
+`provenance:checkout` for `root:exists`; and the record's own parse, when the
+record is written by a test rather than by the installer.
 
 ## 9. Open questions
 
