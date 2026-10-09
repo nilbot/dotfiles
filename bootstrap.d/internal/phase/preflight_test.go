@@ -296,20 +296,19 @@ func (f *fakeChange) LookPath(n string) (string, error) {
 // record is every mutating operation: it either refuses or appends, and failOn
 // decides which.
 //
-// failOn is matched against the operation AS RECORDED -- "dir /home/bin",
-// "run go build ...", "link /home/x -> /repo/y" -- rather than against the bare
-// target. The devtools phase is why: it creates ~/bin and then names
-// ~/bin/agents in three separate commands, and ~/bin is a prefix of all of
-// them, so no substring of the directory path can select the directory step
-// alone. Matching the recorded form lets a case name exactly one operation, and
-// a case that cannot say which operation it failed cannot tell a propagated
-// error from a swallowed one.
+// failOn is matched against the operation AS RECORDED -- "dir /home/x",
+// "run bash /repo/git/install-hooks.sh preflight ...", "link /home/x -> /repo/y"
+// -- rather than against the bare target. The devtools phase is why: it runs
+// git/install-hooks.sh TWICE with the same script path in both commands, so no
+// substring of that path can select the preflight alone. Matching the recorded
+// form lets a case name exactly one operation, and a case that cannot say which
+// operation it failed cannot tell a propagated error from a swallowed one.
 //
 // Run and Sudo are covered as well as the three converging operations. Running
 // a command is a mutation like any other, and a phase whose steps are
-// preconditions for each other -- devtools builds the binary its last step
-// points four git hooks at -- can only be shown to stop at the first failure if
-// a command can be made to fail.
+// preconditions for each other -- devtools hands the binary its last step points
+// four git hooks at -- can only be shown to stop at the first failure if a
+// command can be made to fail.
 //
 // path is what the Refusal names: the target for the converging operations, the
 // command for the two that execute something. That is what lets a test assert

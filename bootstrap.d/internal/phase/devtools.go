@@ -2,15 +2,16 @@ package phase
 
 import "path/filepath"
 
-// Devtools installs the tooling that is not a package: uv, the agents binary
-// this repository builds from its own source, and the global git hooks that
-// binary backs.
+// Devtools installs the tooling that is not a package: uv, the released agents
+// binary the git hook chain points at, and the chain itself.
 //
-// The three steps are ordered by dependency, not by preference. The hooks
-// installer symlinks four hook names AT the agents binary it is handed -- a
-// regular executable, or a symlink resolving into a Homebrew keg for agents --
-// so the build has to have happened first when that target is this checkout's
-// own build.
+// It does NOT build agents. The binary comes from the tap, through the Brewfile
+// the packages phase has already run, so one owner installs it and one path
+// names it. That is the fix for the leak
+// docs/design/2026-09-20-agents-and-bootstrap-boundary.md §4a recorded: this
+// phase used to compile $HOME/bin/agents and hand the installer that path,
+// while the package manager installed its own -- "both are correct for their
+// owner; whichever runs second fails".
 func Devtools(c Context) error {
 	c.logf("== devtools")
 
@@ -47,46 +48,36 @@ func Devtools(c Context) error {
 		}
 	}
 
-	binary := filepath.Join(c.Home, "bin", "agents")
 	installer := filepath.Join(c.Root, "git", "install-hooks.sh")
 
-	// The hooks preflight runs BEFORE the build, and the reason is cost, not
-	// symmetry with the Makefile. It validates the global config, the hooks
-	// directory and the attributes link, refuses without touching anything, and
-	// returns in about a second. `install` re-runs all of it internally, so
-	// nothing goes unchecked either way -- but a machine whose ~/.gitconfig is
-	// a symlink, or whose core.hooksPath already points somewhere else, should
-	// find that out before it compiles a Go module rather than after.
-	//
-	// It is safe this early precisely because preflight mode does NOT validate
-	// the binary; only install does, after the build has produced one.
-	c.logf("   git hooks   git/install-hooks.sh")
-	if err := c.Change.Run("bash", installer,
-		"preflight", c.Root, c.Home, binary); err != nil {
+	// Resolved before anything reaches the installer, because the path is an
+	// ARGUMENT to both steps below: a machine with no binary should be told
+	// which path is missing rather than have the installer refuse a chain it
+	// cannot compare against.
+	binary, err := resolveAgents(c)
+	if err != nil {
 		return err
 	}
 
-	if err := c.Change.Dir(filepath.Dir(binary)); err != nil {
-		return err
-	}
-	// go build -C sets the build directory without a shell and without this
-	// package needing a cwd concept -- there is no cd here, and reaching for
-	// `sh -c` would put back the shell the rest of this design removed. Measured
-	// on the installed toolchain: go1.26.5 accepts -C, and `go help build`
-	// documents it as a flag that must come first on the command line, which is
-	// where it is.
+	// The hooks preflight runs BEFORE the install, and its whole value is in
+	// where it sits. It validates the global config, the hooks directory and the
+	// attributes link, refuses without touching anything, and returns in about a
+	// second -- so a machine whose ~/.gitconfig is unusable, or whose chain
+	// points somewhere this installer will not adopt, learns that before
+	// anything is linked. `install` re-runs all of it internally, so nothing
+	// goes unchecked either way.
 	//
-	// The -X stamp is what binds the built binary to this dotfiles checkout (c.Root),
-	// activating Dotfiles Operator Mode. An unstamped binary operates in Standalone
-	// Mode (DotfilesRoot() == "") where doctor skips machine-level dotfiles checks
-	// and git hook dispatching skips personal hook chains. c.Root is the only party
-	// that knows the checkout root. The repository Makefile's agents target carries
-	// the same flag.
-	c.logf("   agents      %s", binary)
-	if err := c.Change.Run("go", "build",
-		"-C", filepath.Join(c.Root, "agents"),
-		"-trimpath", "-ldflags", "-X main.dotfilesRoot="+c.Root,
-		"-o", binary, "."); err != nil {
+	// --adopt-owned is passed to BOTH invocations, and the preflight is the one
+	// that needs it explained. Without the flag the preflight refuses any
+	// existing link that does not already name $binary -- including the links
+	// this installer wrote for an earlier binary, which is exactly the machine
+	// this step exists to convert. A bare preflight would therefore stop the
+	// phase one statement before the install that carries the flag could repair
+	// it. The flag does not widen what may be adopted: only links shaped like
+	// this installer's own are repointed, foreign ones are still refused.
+	c.logf("   git hooks   git/install-hooks.sh")
+	if err := c.Change.Run("bash", installer,
+		"preflight", "--adopt-owned", c.Root, c.Home, binary); err != nil {
 		return err
 	}
 
@@ -96,5 +87,6 @@ func Devtools(c Context) error {
 	// hooks directory -- and it is tested in the module that owns it.
 	// Reimplementing it here would be a second copy of that ordering, subject to
 	// drifting out of step with the one agents/install_hooks_test.go exercises.
-	return c.Change.Run("bash", installer, "install", c.Root, c.Home, binary)
+	return c.Change.Run("bash", installer,
+		"install", "--adopt-owned", c.Root, c.Home, binary)
 }
