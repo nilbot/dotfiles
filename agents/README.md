@@ -24,9 +24,12 @@ cd agents
 go build -o ~/bin/agents .
 ```
 
-The binary is self-contained. Two builders in this repository run the same
-command with the operator-mode stamp added: `make agents` from the repository
-root, and the devtools phase of `./bootstrap apply workstation`.
+The binary is self-contained. Two builders in this repository run the build for
+you: `make agents` from the repository root, and the devtools phase of
+`./bootstrap apply workstation`. Both also pass a link-time
+`-X main.dotfilesRoot=<checkout>` stamp. Nothing in this version reads it — the
+checkout a hook needs now arrives from the chain record — and the flag and its
+two producers are removed by a later change.
 
 ### Released Binaries
 
@@ -85,40 +88,38 @@ agents doctor
 Re-run `agents wire` after upgrading from a version that installed hook entries;
 it removes them.
 
-## Operating Modes
+## Git hooks
 
-`agents` operates in two modes, chosen by whether the binary knows a dotfiles
-checkout. The stamp beats the environment variable, so a stamped binary cannot
-be redirected by `AGENTS_DOTFILES_ROOT`.
+The binary has no modes. There is one way it runs, and it is the same whether
+the binary was built from a checkout or installed from a release: the machine
+either has a hook chain, or it does not.
 
-### 1. Standalone Mode (Default)
+A chain is the directory Git's `core.hooksPath` names. `git/install-hooks.sh`
+writes it, and it holds two kinds of thing:
 
-A binary built without the stamp and without `AGENTS_DOTFILES_ROOT` operates as
-a standalone repository tool.
-- Requires no external dotfiles clone.
-- `agents doctor` reports:
-  - `binary`: whether the `agents` on `PATH` is the running executable.
-  - `wiring:<harness>`: whether a harness config still holds an entry this tool wrote and no longer answers. Failures come with `agents wire` as the remedy; an absent config is OK, not a gap.
-  - `trust:antigravity`: whether the Antigravity CLI config is readable and names this repository as trusted.
-  - `gitleaks`: scanner presence.
-  - `scaffold:router`, `scaffold:symlink`, `scaffold:domain`: the root `AGENTS.md`, its `CLAUDE.md` symlink, and `.agents/AGENTS.md`. The symlink check is the one that catches a silent failure: extracted or synced without symlink support, `CLAUDE.md` becomes a regular file whose content is the text `AGENTS.md`, and a harness then reads that one line as the whole project context.
-  - `scaffold:skill-recording`: the state of `.agents/skills/recording-what-you-learn/`. The skill is repository-customizable, so a local edit is reported as such without warning; only a missing one warns.
-  - `git-hooks:local`, `git-hooks:legacy`, `git-attributes`: a repository-local `core.hooksPath` override, an exact retired dispatcher left in the repository's hooks directory, and the repository `.gitattributes` rule.
-- Git hook dispatching executes repository-level hooks and built-in guards.
+- `chain.env`, the machine's record: `format=1`, the `binary` Git should run,
+  and the `checkout` whose `git/hooks/` supplies the personal stages — `-` when
+  there is none.
+- Four executable entries named `pre-commit`, `commit-msg`, `post-merge` and
+  `post-checkout`. Each parses the record and ends by executing
+  `agents githook <name> --checkout <checkout>` with Git's own arguments
+  untouched.
 
-### 2. Dotfiles Operator Mode
+`agents githook` runs one hook in three parts, in order: the repository's own
+hook of that name, then the executable personal stages named
+`<anything>.<hook>` under `<checkout>/git/hooks/`, then the built-in stage. It
+reads no record and derives nothing — the checkout is handed to it, and `-`
+means there is none, never that one should be guessed at.
 
-For developers managing a centralized `dotfiles` checkout with machine-level Git hook chaining:
-- **Build with Link Stamp**:
-  ```bash
-  go build -trimpath -ldflags "-X main.dotfilesRoot=$HOME/dotfiles" -o ~/bin/agents .
-  ```
-- **Or Set Environment Variable**:
-  ```bash
-  export AGENTS_DOTFILES_ROOT="$HOME/dotfiles"
-  ```
-- Operator Mode adds `root:exists` and the `git-hooks:global`, `git-hooks:effective`, `git-hooks:links` and `git-hooks:unmanaged` checks, which hold the global `core.hooksPath` and the four installed hook links in `~/dotfiles/git/hooks.d/` to what this tool expects.
-- The dispatcher runs the repository's own hook, then the executable personal hooks named `<anything>.<hook>` in `~/dotfiles/git/hooks/`; on `pre-commit` the built-in guard runs last.
+A machine still wired the old way, with four symlinks naming the binary, keeps
+working for one release through a compatibility shim. The shim answers all four
+hook names with Git's arguments, and says on stderr that the personal stages
+are unavailable on that route, because a symlink names a program and no
+checkout. Re-running the installer converts it.
+
+`agents doctor` reports the repository-level checks only for now. Reading the
+chain is its own change; until that lands, nothing reports the state of the
+chain except the entries themselves.
 
 ---
 
@@ -135,8 +136,9 @@ For developers managing a centralized `dotfiles` checkout with machine-level Git
 | `agents guard` | pre-commit checks (the only command that blocks) |
 <!-- END GENERATED -->
 
-`agents help` prints the listing a person reads, which leaves out `guard` — the
-one command only the hook invokes. `agents help --all` includes it.
+`agents help` prints the listing a person reads, which leaves out `guard` and
+`githook` — the commands git invokes, not a person. `agents help --all` includes
+them.
 
 ### Examples
 
@@ -162,11 +164,9 @@ agents guard --staged
 Two things need attention when you upgrade this tool.
 
 **Re-check the git hooks.** A package manager deletes the previous version's
-directory, so hook links pinned to it dangle — and git runs a dangling hook as
-if no hook existed, which turns the commit guard off with no error at all. In
-Operator Mode, `agents doctor`'s `git-hooks:links` check catches it and prints
-the repair, and `git-hooks:unmanaged` warns about dangling links this tool does
-not own:
+directory, so a chain entry naming it dangles — and git runs a dangling hook as
+if no hook existed, which turns the commit guard off with no error at all. The
+chain record names the binary to run, so re-run the installer after an upgrade:
 
 ```bash
 bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
@@ -178,6 +178,12 @@ problem in the first place, because Homebrew repoints its stable path — the
 `/opt/homebrew/bin/agents` symlink into the current keg — at the new version.
 Details: [`git/README.md`](../git/README.md) and
 [why a `brew upgrade` stops my commit guard](../docs/qna/why-does-a-brew-upgrade-stop-my-commit-guard.md).
+
+**Converting an install that still uses symlinks.** `--adopt-owned` replaces
+the four symlinks with four generated entries. Without it the installer refuses
+a symlink it wrote itself, which is the state a machine wired by an earlier
+version is in. Until it is converted, every hook reports on stderr that the
+personal stages are unavailable on the symlink route.
 
 **Run `agents wire` once, after upgrading past a version that installed hook
 entries.** Earlier versions wrote an `agents hook …` entry into each harness

@@ -97,6 +97,7 @@ agents help --render=markdown
 | `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
+| `agents githook` | run one Git hook for the chain entry that invoked it |
 <!-- END GENERATED -->
 
 ## Development & Contributing
