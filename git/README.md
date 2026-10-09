@@ -123,4 +123,4 @@ rule is enforced by reading it, which is why it lives in `global/AGENTS.md`.
 | `~/.config/agents/hooks.d/` | the chain `core.hooksPath` names: `chain.env`, and the four generated entries git runs. Machine-owned, so a moved or deleted checkout cannot switch the guard off |
 | `git/install-hooks.sh` | ownership-checking installer |
 | `git/hooks/` | optional executable personal hook stages |
-| `git/hooks.d/` | where stage 1 kept the chain. The installer reads it to retire what it wrote there, then removes the directory |
+| git/hooks.d/ (retired) | where stage 1 kept the chain, until the move to `~/.config/agents/hooks.d/` on 2026-10-09. The installer reads it to retire what it wrote there, then removes the directory, which is why it is no longer a tracked path and is written here without the code face the live rows carry |
