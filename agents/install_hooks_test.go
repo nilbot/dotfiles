@@ -369,6 +369,65 @@ func writeChainRecord(t *testing.T, fixture hookInstallFixture, content string) 
 	}
 }
 
+// TestInstallPreflightNeedsNoBinary is the ordering property preflight exists
+// for: it runs BEFORE a binary has been built or installed, so it must not need
+// one. The hook names it inspects and the keg guard it applies are string
+// comparisons; only install validates the binary it is handed.
+func TestInstallPreflightNeedsNoBinary(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	if err := os.Remove(fixture.binary); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runHookInstaller(t, fixture, "preflight")
+	if err != nil {
+		t.Fatalf("preflight needed a binary that does not exist yet: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "preflight passed") {
+		t.Errorf("preflight did not report success: %q", output)
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+
+	output, err = runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Fatal("install accepted a missing binary")
+	}
+	if !strings.Contains(output, "executable regular file") {
+		t.Errorf("the refusal must say what is wrong with the binary: %q", output)
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+// TestInstallLeavesNoTemporaryFileWhenAPublishFails drives the one failure a
+// read-only hooks directory can produce: the entry cannot be written to its
+// temporary name, so the installer must remove what it started and refuse
+// before the record or the global key exists.
+func TestInstallLeavesNoTemporaryFileWhenAPublishFails(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	hooksDir := filepath.Join(fixture.repoRoot, "git", "hooks.d")
+	if err := os.Chmod(hooksDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(hooksDir, 0o755) })
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Fatal("install into a read-only hooks directory succeeded")
+	}
+	if !strings.Contains(output, "refusing") || !strings.Contains(output, "pre-commit") {
+		t.Errorf("the refusal must name the entry it could not write: %q", output)
+	}
+	assertNoHookInstallTemps(t, fixture)
+	if _, err := os.Lstat(chainRecordPath(fixture)); !os.IsNotExist(err) {
+		t.Errorf("the record was written after a failed entry publish: %v", err)
+	}
+	if _, err := os.Lstat(fixture.globalConfig); !os.IsNotExist(err) {
+		t.Errorf("the global key was written after a failed entry publish: %v", err)
+	}
+}
+
 func assertNoHookInstallManagedPaths(t *testing.T, fixture hookInstallFixture) {
 	t.Helper()
 	for _, path := range hookInstallManagedPaths(fixture) {
@@ -1269,15 +1328,17 @@ func TestHookInstallerConfigWriteFailureLeavesLinksInactive(t *testing.T) {
 	}
 	for _, path := range []string{
 		filepath.Join(fixture.home, ".gitattributes"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "commit-msg"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "post-merge"),
-		filepath.Join(fixture.repoRoot, "git", "hooks.d", "post-checkout"),
+		chainRecordPath(fixture),
+		hookEntryPath(fixture, "pre-commit"),
+		hookEntryPath(fixture, "commit-msg"),
+		hookEntryPath(fixture, "post-merge"),
+		hookEntryPath(fixture, "post-checkout"),
 	} {
 		if _, statErr := os.Lstat(path); statErr != nil {
 			t.Errorf("config was not the final operation; %s is absent: %v", path, statErr)
 		}
 	}
+	assertNoHookInstallTemps(t, fixture)
 }
 
 func TestHookInstallerUsesExplicitHomeForGitWhenAmbientHomeDiffers(t *testing.T) {
