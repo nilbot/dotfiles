@@ -503,10 +503,15 @@ and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
 5. `~/.gitconfig` includes the current shared-config path.
 6. Login shell is fish; fish is present in `/etc/shells`. *(workstation only)*
 7. `agents` on `PATH`, with `agents doctor`'s result folded in. *(workstation only)*
-8. `Brewfile` packages present. *(workstation only)*
+8. `Brewfile` packages present. *(workstation only)* — **removed 2026-10-09.** The
+   check ran `brew bundle check`, and the `brew` wrapper auto-updates Homebrew before
+   it dispatches, so the query verb mutated the machine it was reporting on. With the
+   command gone it would have reported "every Brewfile entry is installed" having
+   asked nothing, so [the query design](2026-10-09-what-a-query-is.md) removes the
+   check rather than repairing it. Seven checks remain.
 
 `check` takes the same profile argument as `apply` and defaults to
-`workstation`. Checks 6–8 concern state the `dotfiles` profile deliberately does
+`workstation`. Checks 6–7 concern state the `dotfiles` profile deliberately does
 not manage, so under that profile they report **not applicable** rather than a
 finding — otherwise every container run would report three false failures.
 
@@ -826,11 +831,11 @@ convergence claim: `Verify` reports and returns nil by design, so `apply` exits
 0 while its own verify phase reports failures. On Debian it reports `5 ok, 0
 warn, 3 fail`, and those three are what remains open on Linux:
 
-- **`packages` — "Homebrew is not installed".** The same resolve-vs-PATH defect
-  a fourth time, now in `internal/check` rather than `internal/phase`: the
-  check asks PATH for `brew` while Homebrew sits at `/home/linuxbrew/.linuxbrew`.
-  Left unfixed deliberately — `check` is the verb the `linux-dotfiles` job
-  gates on, so it is not a change to make as a close-out chore.
+- **`packages` — closed 2026-10-09 by removal rather than repair.** "Homebrew is
+  not installed" was the resolve-vs-PATH defect a fourth time, this one in
+  `internal/check`: the check asked PATH for `brew` while Homebrew sat at
+  `/home/linuxbrew/.linuxbrew`. [The query design](2026-10-09-what-a-query-is.md)
+  removed the check, so the gap goes with it. Two of the three stand.
 - **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
   cannot change underneath it, so the check can only ever report the shell the
   container started with. Asserting the real effect needs a fresh login.
