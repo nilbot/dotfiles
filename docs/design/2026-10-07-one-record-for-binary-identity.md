@@ -400,6 +400,7 @@ subcommand is `githook` and the removal matcher keys on `hook`.
 | A new machine-level directory (`~/.config/agents/hooks.d`) that the installer must create | the guard survives moving or deleting the checkout | if Git ever accepts a program instead of a directory |
 | An operator can no longer point a binary at a checkout with an environment variable | no ambient modes, and a test suite that needs no fabricated environment | never, by design — this is the defect being removed |
 | `root:exists` was a **failure** when the stamped checkout was missing; `chain:checkout` is a **warning** | one honest check instead of one that compares two values that the same change can move together, and it reads the record rather than a value compiled into the binary | a genuinely independent second statement of identity, which does not exist once the chain is the only record |
+| A rule added to `git/gitleaks.toml` is not enforced by this machine's guard until a release lands: the rules are embedded at build time (`agents/internal/guard/guard.go:37-42`) and pinned to that file only in CI (`guard_test.go:462-468`) | one owner for the binary, and a ruleset the repository under test cannot edit | the guard reading `<checkout>/git/gitleaks.toml` when the record's `checkout` is not `-` — a trusted machine-level path rather than the repository under test |
 | The chain's correctness on a machine where `doctor` is never run | — | nothing: a deleted chain directory cannot announce itself, because the only thing that could announce it lives inside it |
 
 Two of these are worth saying outside the table.
@@ -556,11 +557,11 @@ Two changes close it, and both belong in stage 1:
 1. **The installer probes the binary, in `install` mode, after `validate_binary`
    and before the first write.** It runs the binary with a known argument and
    refuses if the binary cannot answer `githook`. The placement is the whole
-   mechanism: `preflight` runs *before* the build and is deliberately binary-blind
-   (`bootstrap.d/internal/phase/devtools.go:52-67` records the reason), so a probe
-   placed there would refuse on the stale `~/bin/agents` that the very next step
-   rebuilds — or on no binary at all, on the machine type most likely to be running
-   `bootstrap apply workstation` for the first time. A mismatched pair then fails at
+   mechanism: `preflight` runs before the binary is installed and is deliberately
+   blind to it (`bootstrap.d/internal/phase/devtools.go:52-67` records the reason), so a probe
+   placed there would refuse on a machine where the released binary is not installed
+   yet — `preflight` runs before `brew bundle` — or whose `agents` is an older release
+   that cannot answer `githook`. A mismatched pair then fails at
    install time, with a message that says so, instead of at the first commit.
 2. **The `argv[0]` branch stays for one release, and answers all four names with
    Git's arguments.** The old symlinks invoke the binary as `pre-commit` with no
@@ -606,12 +607,13 @@ entry may be visible in a partial or non-executable state: each is written to a
 temporary file in the same directory with its final mode and `mv`ed into place, and
 `chain.env` the same way. `ln -sfn` was atomic; its replacement has to be too.
 
-**One caution for the repair text.** On this machine "re-run the installer" is not
-one action: `bootstrap`'s devtools phase installs the chain against
-`~/bin/agents`, a checkout build (`bootstrap.d/internal/phase/devtools.go:50`), so
-following that advice also changes *which binary Git runs*. The repair line should
-name the binary it is reinstalling, or say that it will switch to the checkout
-build.
+**The repair text and the phase must name the same binary.** Before the removal they
+did not: the repair command in `git/README.md` names `$(command -v agents)` while the
+devtools phase built and installed `~/bin/agents`
+(`bootstrap.d/internal/phase/devtools.go:50`), so "re-run the installer" was two
+different actions with two different outcomes. After it there is one route, and the
+argv pins in `devtools_test.go:20,23` are what keep the two naming the same resolved
+path.
 
 ### What the change touches
 
@@ -655,7 +657,7 @@ of "which binary" and "which checkout".
 | `~/.gitconfig` → `[core] hooksPath = /Users/nilbot/dotfiles/git/hooks.d` | stage 1 leaves it; stage 2 repoints it, through the relaxed `inspect_global_hooks_path` |
 | `/opt/homebrew/bin/agents` → `../Cellar/agents/0.7.0/bin/agents` | read, never written: Homebrew owns it |
 | `~/.config/fish/config.fish:19` → `set -x AGENTS_DOTFILES_ROOT /Users/nilbot/dotfiles` | **the one item no automated path owns.** It is inside a `seed` row, so `bootstrap` never rewrites it, and the tracked template does not contain it. Deleting the variable from the code leaves this line behind, harmless but misleading; the change must say so, and the person must delete it by hand |
-| `~/bin/agents` | absent here. Where it exists, it is a second owner of the chain: the devtools phase installs against it, so re-running `bootstrap apply workstation` switches which binary Git runs |
+| `~/bin/agents` | absent here. Where it exists it is a stale second owner: nothing rebuilds it after the removal, and `bootstrap apply workstation` re-runs the installer against the released binary instead, so the chain stops naming it |
 | the Homebrew keg's `INSTALL_RECEIPT.json` | a third party's record of origin (`source.tap`, `tap_git_head`). The change coexists with it and cannot convert it |
 | `.claude`, `.codex` and `.agents` hook entries in repositories wired before 2026-09-21 | untouched: `agents wire` removes them and nothing writes them |
 | retired dispatcher shims in a repository's `.git/hooks` | untouched: recognised by size and SHA-256 (`agents/internal/githook/githook.go:151-215`) and reported by the check that is `git-hooks:legacy` today and `chain:legacy` after §3.4's rename |
@@ -721,7 +723,7 @@ machine-owned.
 | 3 | the checkout is deleted: the built-in guard still runs and the personal stages are reported missing | make the entry require the checkout; the guard disappears with it |
 | 4 | `AGENTS_DOTFILES_ROOT` set to a second checkout: nothing changes | read the variable; the check count moves between 18 and 13 |
 | 5 | the installer is handed a binary that cannot answer `githook`, in `install` mode: it refuses and writes nothing | remove the probe; the chain is installed and the next commit fails |
-| 6 | the probe is reached in `preflight` mode with no `~/bin/agents`: `bootstrap apply workstation` still builds and installs | move the probe into `preflight`; the run refuses before the build that would satisfy it |
+| 6 | the probe is reached in `preflight` mode on a machine whose released `agents` is not installed yet: `apply` installs it in the packages phase and then wires the chain | move the probe into `preflight` as a refusal; the run stops before `brew bundle` installs the binary the probe requires |
 | 7 | the installer is handed a keg path while a stable path is installed: it refuses and names the stable path. Handed a keg path with no stable path, it installs and prints a note | delete the refusal; the next upgrade dangles. Delete the note too, and the only person who has one `agents` cannot install a guard at all |
 | 8 | a record whose line is a shell command: the command does **not** run, and the entry refuses | source the record instead of parsing it; the command runs at commit time |
 | 9 | a record truncated after `binary`: every entry refuses, naming the missing key | default the absent keys; an empty `--checkout` is forwarded and the wrong directory, or none, is consulted |
@@ -752,14 +754,13 @@ names to the four new ones.
 
 ## 9. Open questions
 
-1. **The exact text `agents version` prints.** `release.yml:138` matches
-   `"agents ${VERSION} (commit: ${SHA},"*` in a shell `case`, so everything after
-   the comma is free: `built: <date>`, `built from <checkout>` and `release build`
-   all match. What breaks the release is dropping or moving the comma, reordering a
-   field before `(commit:`, or losing the `v`. A mismatch fails that job **before**
-   the release object is created, so the cost is a pushed tag with no release rather
-   than a published release with wrong bytes. Recommendation: append the checkout
-   after the existing fields, and treat the comma as the part that is pinned.
+1. **Whether `agents version` changes at all.** It does not: its three fields come
+   from the release build and this design touches none of them. What is still worth
+   knowing is the constraint `release.yml:138` imposes on that line — it matches
+   `"agents ${VERSION} (commit: ${SHA},"*` in a shell `case`, so everything after the
+   comma is free while dropping or moving the comma fails the job **before** the
+   release object is created, leaving a pushed tag with no release. That matters only
+   if a later change edits the line; nothing here does.
 2. **How long the compatibility shim lives.** It should carry a version and a
    removal date in its comment, or it becomes permanent. The removal is what makes
    the rollback paragraph's "cannot answer" true again, so the two belong in the
