@@ -12,6 +12,14 @@ import "path/filepath"
 // phase used to compile $HOME/bin/agents and hand the installer that path,
 // while the package manager installed its own -- "both are correct for their
 // owner; whichever runs second fails".
+//
+// Do not give this phase a build back. The Makefile's `agents` target built the
+// same binary into one global $HOME/bin/agents stamped with the checkout it was
+// built from, so from a linked worktree it published a binary naming a
+// temporary directory; deleting that worktree left the stamp naming nothing and
+// the failure was silent -- doctor passed, because the two paths agreed with
+// each other, while the hook chain found no extras directory and ran no
+// personal hooks, at exit 0. README.md's Makefile section keeps the account.
 func Devtools(c Context) error {
 	c.logf("== devtools")
 

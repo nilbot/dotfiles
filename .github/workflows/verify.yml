@@ -1,9 +1,9 @@
 # The verification gate. See docs/design/2026-08-11-spec-5-verification-gate.md
 #
-# There are deliberately no `paths:` filters. bootstrap.d/makefile_test.go reads
-# the Makefile and agents/internal/doctor/doctor_test.go reads
-# git/gitconfig.shared, so a filter keyed on the module directories would skip
-# verification for exactly the edits a cached `go test` already fails to notice.
+# There are deliberately no `paths:` filters. A filter keyed on the module
+# directories would skip verification for a file any test reads -- today
+# agents/internal/doctor/doctor_test.go reads git/gitconfig.shared -- which is
+# exactly the edit a cached `go test` already fails to notice.
 # A required check skipped by a path filter also reports "Expected" forever and
 # blocks the PR rather than passing it.
 #

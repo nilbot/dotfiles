@@ -22,11 +22,12 @@ brew install nilbot/tap/agents
 ```
 
 **This repository no longer builds a personal copy, and that is deliberate.**
-Decided 2026-10-09, removed with the change that consumes the tap: `make agents`,
-the devtools phase's build, and the unstamped `go build -o ~/bin/agents .` this
-section used to give each produced a second `agents` beside the released one, and
-the two owners disagreed about which binary the hook chain ran. The decision and
-its evidence are in
+Decided 2026-10-09. Provisioning stopped compiling `agents` when the devtools
+phase moved to the released binary, and the unstamped `go build -o ~/bin/agents .`
+this section used to give went with it; the `make agents` target is retired with
+the test pins that assert it. Each of the three produced a second `agents` beside
+the released one, and the owners disagreed about which binary the hook chain ran.
+The decision and its evidence are in
 [the personal build removal analysis](../docs/design/2026-10-09-the-personal-build-removal-analysis.md).
 For an inner loop, `go build -o /tmp/agents .` writes no global path and installs
 nothing.

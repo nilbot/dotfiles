@@ -737,9 +737,12 @@ and `git` are present.
 > the tap, because `agents` then arrives only from `nilbot/tap/agents` and nothing
 > in the four probes names it. **The probe list gains `command -v agents`**, which
 > is what turns "the tap formula did not install" into something the job reports
-> rather than something a reader infers from a later phase's silence. The change to
-> `.github/workflows/verify.yml` lands with the tap work; this note records why it
-> is required. See
+> rather than something a reader infers from a later phase's silence. **Landed
+> 2026-10-09**: the job's step is now "stage zero delivered its four prerequisites,
+> and the Brewfile its agents", with `PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+> command -v agents` — the prefix spelled out because a `run:` step is not a login
+> shell and Homebrew's `shellenv` has not been read, which is the same defect
+> `resolveBrew` exists for. See
 > [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §4.
 
 **Demonstrated to fail by:** the Arch job is red before the repair and green
@@ -758,10 +761,11 @@ running it from a linked worktree publishes a binary stamped to a path that will
 not survive. Delete the worktree and `githook.go:127` reads the missing extras
 directory as "no personal hooks": the chain silently runs none, at exit `0`, and
 `AGENTS_DOTFILES_ROOT` cannot rescue it because the stamp deliberately wins.~~
-**Superseded 2026-10-09:** `make agents` is retired with the personal build, the
-stamp names no variable, and `AGENTS_DOTFILES_ROOT` is deleted rather than
-defeated. The *hazard* this paragraph describes — a hook chain that stops running
-and says nothing — is what the re-aimed check below still guards.
+**Superseded 2026-10-09:** `make agents` is retiring with the personal build — the
+devtools producer is already gone — the stamp names no variable, and
+`AGENTS_DOTFILES_ROOT` is deleted rather than defeated. The *hazard* this
+paragraph describes — a hook chain that stops running and says nothing — is what
+the re-aimed check below still guards.
 PR #16 documented this in the Makefile and left the fix for review.
 
 The check **fails** rather than warns, because the consequence is a correctness

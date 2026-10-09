@@ -81,7 +81,7 @@ To eliminate false mode inferences and guarantee predictable behavior across all
 ### 2.1 Resolution Rules *(superseded 2026-10-09 — see the amendment above)*
 
 ~~An `agents` binary is bound to a dotfiles checkout if and only if:~~
-1. ~~**Link-Time Stamp (Highest Precedence)**: The binary was compiled with `-ldflags "-X main.dotfilesRoot=<path>"`. This is set by `make agents` and `./bootstrap apply workstation`.~~ **Deleted 2026-10-09: `make agents` and the devtools build are retired, and the flag names no variable.**
+1. ~~**Link-Time Stamp (Highest Precedence)**: The binary was compiled with `-ldflags "-X main.dotfilesRoot=<path>"`. This is set by `make agents` and `./bootstrap apply workstation`.~~ **Deleted 2026-10-09: the devtools producer is gone, `make agents` is retiring with the test pins that assert it, and the flag names no variable.**
 2. ~~**Explicit Environment Variable**: `AGENTS_DOTFILES_ROOT=<path>` is non-empty in the process environment.~~ **Deleted 2026-10-09.**
 3. ~~**Standalone Fallback (Default)**: In all other cases, `DotfilesRoot()` returns `""` (empty string).~~ **Deleted 2026-10-09: there are no modes.**
 

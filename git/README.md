@@ -13,7 +13,9 @@ repository — stays there, because a session does act on it.
 
 ### Option 1: Via Bootstrap
 Run `./bootstrap apply workstation` from the dotfiles checkout. Its devtools
-phase runs the installer's preflight and then the installer.
+phase resolves the released `agents`, runs the installer's preflight, then runs
+the installer — both with `--adopt-owned`, so the phase converts a chain an
+earlier binary installed instead of refusing it.
 
 ### Option 2: Pointing to an Existing Binary (e.g. Homebrew)
 If `agents` is installed via Homebrew (`brew install nilbot/tap/agents`), pass the

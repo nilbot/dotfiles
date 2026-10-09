@@ -46,18 +46,19 @@ first.
 
 ## The Makefile
 
-**Retired: decided 2026-10-09, removed with the change that consumes the tap.**
-`make agents` compiled this checkout into `~/bin/agents` — a second `agents`
-beside the released one — and `./bootstrap apply workstation` built the same
-binary in its devtools phase. Two owners wrote one machine and whichever ran
-second failed, measured here as `bootstrap apply workstation` exiting 2 in the
-devtools preflight. The decision, its evidence and the order the removal lands
-in are in
+**Retiring: decided 2026-10-09.** Provisioning has stopped building `agents` — the
+devtools phase now resolves the released binary and passes `--adopt-owned` to the
+installer. What is left of the personal build is the `make agents` target in this
+file, which goes with the test pins that assert it. It compiled this checkout into
+`~/bin/agents`, a second `agents` beside the released one, and the two owners
+disagreed about which binary the hook chain ran — measured here as
+`bootstrap apply workstation` exiting 2 in the devtools preflight. The decision,
+its evidence and the order the removal lands in are in
 [the personal build removal analysis](docs/design/2026-10-09-the-personal-build-removal-analysis.md).
 Provisioning belongs to `./bootstrap`. For an inner loop,
 `go build -o /tmp/agents .` writes no global path and installs nothing.
 
-`make release` ran `script/package-release.sh` and nothing else; the script is
+`make release` runs `script/package-release.sh` and nothing else; the script is
 the entry point.
 
 **Why the target was dangerous — kept, because the reasoning outlives it.** The
