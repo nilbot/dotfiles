@@ -273,3 +273,60 @@ reading it: `make -n agents` exits 0 without a makefile because `agents/` is a d
 checkable form is `make -n release` failing plus an empty grep; and `command -v agents` in
 `linux-stage-zero` needed its `PATH` prefix on the same line, since a `run:` step is not a login
 shell and nothing there put the brew prefix on `PATH`.
+
+---
+
+## Step 4's runbook: converting this machine
+
+Everything before this step is landed and verified. This is the sequence to run once a release carries
+the work; it is written down because the machine's exact state is not reconstructible from the design.
+
+**Preconditions, in order.** A release carrying `githook` exists and `brew upgrade agents` has
+installed it. Then, before touching the chain:
+
+```
+agents githook --probe        # must print "githook: ok" and exit 0
+```
+
+Exit 3 means the installed binary is not the release that carries this work. Stop there. The installer
+would refuse it anyway — that probe is what `git/install-hooks.sh` now runs after `validate_binary` and
+before its first write — but checking first separates "the release is not here yet" from "the installer
+refused", which are different problems.
+
+**The state being converted, measured on this machine 2026-10-09.** `core.hooksPath` is
+`/Users/nilbot/dotfiles/git/hooks.d`, set from `~/.gitconfig`; that directory holds four symlinks, all
+naming `/opt/homebrew/bin/agents`, plus the `.gitignore` that hides them from `git status`;
+`~/.config/agents` does not exist. Record it before changing it, because the reversal in §6 is manual:
+
+```
+git config --global --get core.hooksPath
+ls -l ~/dotfiles/git/hooks.d/
+```
+
+**The conversion, one command:**
+
+```
+bash ~/dotfiles/git/install-hooks.sh install --adopt-owned ~/dotfiles "$HOME" "$(command -v agents)"
+```
+
+`--adopt-owned` is required, not optional. Ownership is decided from the entry alone, and the four
+symlinks name the stable release path, which is neither keg-shaped nor absent — so without the flag the
+installer refuses each of them, which is the behaviour that keeps a chain from being re-pinned by
+accident. The binary argument is the stable path deliberately: `brew bundle` upgrades and deletes the
+old keg, so a keg path recorded today is a broken chain after the next upgrade.
+
+**Then verify, in this order, because each failure has a different cause:**
+
+```
+agents doctor                          # 19 checks; chain:entries, chain:record, chain:running all ok
+ls ~/.config/agents/hooks.d/           # chain.env and the four entries
+git -C ~/dotfiles status --porcelain   # clean: the checkout no longer carries the chain
+git commit --allow-empty -m "x"        # the guard runs; a blocking finding refuses, as it should
+```
+
+**Reversal, if the chain is wrong.** The installer cannot produce the old state any more, so this is
+manual: point `core.hooksPath` at a directory of four symlinks naming an older binary. Note what that
+costs, because one earlier draft of §6 did not: recreating `<root>/git/hooks.d/` adds an **untracked
+directory** to the checkout, since its `.gitignore` was deleted with stage 2. The clean path back is a
+release that fixes the fault, not a hand-built chain — which is why the preconditions above are worth
+running before the conversion rather than after it.
