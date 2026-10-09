@@ -188,3 +188,38 @@ is not progress, and a brief that spans a 700-line design plus an 800-line scrip
 produces reading rather than a diff. Narrow the brief until the deliverable is one
 file and one behaviour, and ask for it with tests failing if that is what it takes to
 see it.
+
+---
+
+## Status, end of 2026-10-09
+
+Landed and verified, on three branches:
+
+| step | state | commits |
+|---|---|---|
+| 1 — `check` executes nothing | complete; `Run` out of `check.Machine`, the recorder test proven falsifiable | `856cedf`, `45a956f` |
+| 2a — the installer writes a record and four entries | complete: `chain.env`, ownership from the entry alone, atomic publication, observational entries at exit 0, the conversion table, tests green | `9095ef0`, `b074cb9`, `74ac5c1`, `5a14f9d` |
+| 2b — `agents githook` | **production path in, four tests failing**: the shim answering all four hook names and reporting the missing checkout; the entry-to-`githook` path end to end; a live commit through the chain; and the markdown render including `githook` while the README block's expected content excludes it — a renderer audience defect, not a stale README | `35d9322` |
+| 3 — provisioning consumes the tap | not started | |
+| 4 — convert the chain | not started | |
+| 5 — delete the producers | not started | |
+| 6 — stage 2 | not started | |
+| 7 — the records | partly: spec 2's check 8 and its gap, spec 5's dead recipe line, the design index, the documents guard, the qna record, the false EXECUTED plan | `727d18d`, `790b348`, `eb7160a`, `dd176b8`, `a69329b`, `b301dbc` |
+
+**The `mambaforge` migration is gone**: `4c5fcff`, 1,059 lines, with its four spec 2 references
+turned into records. A hundred lines and a migration whose subject had already been removed.
+
+**Blocked on context, not on the work.** The remaining steps are specified to the line: step 3 is
+`brew "nilbot/tap/agents"` in the Brewfile, a `resolveAgents` beside `resolveBrew` probing
+`<prefix>/bin/agents` rather than `LookPath`, `--adopt-owned` from devtools, the two argv pins in
+`devtools_test.go:20,23` re-aimed, and `command -v agents` added to `linux-stage-zero`'s probes.
+
+**Two decisions still the owner's:** whether `migrate.Machine`'s now-uncalled `LookPath`, `Run` and
+`Sudo` leave that interface when a test pins it as `change.Interface` entire; and whether the
+`check.Machine` narrowing should be mirrored there.
+
+**What this work cost, recorded so it is not repeated:** a brief spanning a 700-line design and an
+800-line script produced four rounds of reading and no diff, and narrowing it to one file and one
+behaviour produced a commit. Twice a verification was claimed from a command whose pattern hid the
+result — a filtered `go test -run`, and a `grep '^--- FAIL'` against failure lines that are indented.
+The acceptance command must be the whole suite, and its output read rather than counted.
