@@ -36,6 +36,10 @@ func TestNoFishConfigReferencesRemovedTooling(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Named here because the fish config must not mention a package manager
+		// the machine no longer has. This is not a dependency on the deleted
+		// `mambaforge` migration -- the two removals are independent, and this
+		// one guards `fish/`, which the migration never touched.
 		for _, gone := range []string{"mambaforge", "MAMBA_EXE", "micromamba", "conda"} {
 			if strings.Contains(string(data), gone) {
 				t.Errorf("fish/%s still references %q", name, gone)
