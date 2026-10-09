@@ -250,9 +250,23 @@ message where a reader will meet it:
 - **`agents doctor` lost its machine-level checks for one task**, because deleting the compiled
   stamp left the call site nothing to read. The note that recorded it was written to be deleted by
   step 2c, and was.
-- **`agents/README.md` does document the `chain:*` checks**, contrary to a records-writer report
-  that grepped `internal/doctor/doctor.go` and missed `internal/doctor/chain.go`, which declares
-  them and is called at `doctor.go:125`.
+- **`agents/README.md` does document the `chain:*` checks**, contrary to a report asserted twice
+  by a records writer. The claim survived one refutation by grep -- `internal/doctor/chain.go`
+  declares the names and `doctor.go:125` calls `chainChecks` -- and was settled by running the
+  tool, which prints all eight:
+
+      ok    chain:hooks-path   global core.hooksPath is .../git/hooks.d
+      FAIL  chain:entries      pre-commit is a symlink, not a generated entry
+      FAIL  chain:record       cannot read .../git/hooks.d/chain.env
+      ok    chain:unmanaged / chain:local / chain:legacy / attributes:global
+      FAIL  chain:running      the record cannot be read
+      warn  chain:checkout     the record cannot be read
+
+  Those verdicts are correct for an unconverted machine. The episode is kept because the
+  refutation itself was wrong first: `grep -cE '^chain:'` returned 0, not because the checks are
+  absent but because every line is prefixed with its status. Running the tool and reading the
+  output settled in one step what two greps disagreed about -- the same lesson as the filtered
+  `go test` and the indented `--- FAIL`.
 
 **Two criteria of mine were unmeetable**, both caught by a writer running the thing rather than
 reading it: `make -n agents` exits 0 without a makefile because `agents/` is a directory, so the
