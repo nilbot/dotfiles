@@ -29,3 +29,7 @@ __pycache__/
 /dist/
 
 
+
+# The compiled tool, not source: `go build` inside agents/ writes it here, and a
+# binary in the repository is a thing every clone pays for.
+/agents/agents
