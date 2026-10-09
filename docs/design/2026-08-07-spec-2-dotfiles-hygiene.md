@@ -190,6 +190,16 @@ This phase has never actually run — see [Measured facts](#measured-facts-2026-
 Git-hook step **delegates to `git/install-hooks.sh`**, which already performs
 this carefully and has tests. It is not reimplemented.
 
+> **Amended 2026-10-09 — the middle item is retiring.** `devtools` stops building
+> `agents`: the personal build goes in favour of the released binary
+> (`brew install nilbot/tap/agents`), decided 2026-10-09 and landing with the
+> change that consumes the tap. The phase keeps `uv` and the Git-hook step; what
+> it loses is the second `agents` it compiled into `~/bin/agents` — the artifact
+> this document's own §9 records as the one no phase reconciled and no check
+> noticed. The Git-hook step's delegation, and the reason it is delegated rather
+> than reimplemented, are untouched. See
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+
 ## 4. The dry-run invariant
 
 `plan` and `apply` are the same code. **All machine access — reads included —
@@ -453,7 +463,7 @@ reader must re-derive which files are live.
 | bins | `bin/` (all four) and the `bins` target |
 | go hook | `git/hooks/go.pre-commit` |
 | unlinked | `gnupg/`, `macOS/iterm2/` |
-| Makefile | everything except the `agents` target |
+| Makefile | everything except the `agents` target — ~~and that survives~~ **superseded 2026-10-09: the `agents` target is retired with the personal build, so the whole file goes** |
 
 `macOS/filebrowser/` stays: a self-contained opt-in launchd setup with its own
 script, claimed by no phase.
@@ -602,7 +612,7 @@ executed in:
 4. Phase 10 and the `Brewfile` → `super-install-dep.sh` and
    `user-install-dep.sh` go.
 5. The removal commits (§9), one per group.
-6. Makefile reduced to the `agents` target.
+6. Makefile reduced to the `agents` target. ~~**Superseded 2026-10-09: the target is retired too, so the file goes entirely rather than being reduced to it.** That outcome is this list's own logic carried one step further — the target was the last thing no phase owned. See [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).~~
 7. This document's status, and the README table row, updated.
 
 ---
@@ -899,6 +909,21 @@ authority; `$SHELL` is a hint.
 awkward for structured checks, safe conflict handling and portable quoting; and
 targets conceal side effects, as the present `all` and `links` graph already
 demonstrates. It would improve on today without being the right shape.
+
+> **Amended 2026-10-09 — the rejection stands and the evidence it cited is
+> gone.** "The present `all` and `links` graph" no longer exists: the phases took
+> that work over, those targets were removed, and `Makefile` now declares only
+> `agents` and `release`. So the worked example this paragraph rested on had
+> already been deleted by this document's own §9 sequence, which left the
+> rejection reading as a live option rather than a settled one.
+>
+> The argument does not need it. Make being another prerequisite, and its recipes
+> being the wrong shape for structured checks and portable quoting, are the
+> reasons, and they are unaffected. What has changed underneath is the subject:
+> the whole file is retiring — decided 2026-10-09, with the personal build — so
+> "rebuilding the Makefile" is now moot rather than merely wrong-shaped. The
+> paragraph stays as the reason the file is not coming back. See
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
 
 **A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
 Note this is *not* the same as §2.1's build-from-checkout, which was adopted.

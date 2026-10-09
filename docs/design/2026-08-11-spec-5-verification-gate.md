@@ -412,7 +412,10 @@ H=$(mktemp -d); X=$(mktemp -d)
 HOME="$H" XDG_CACHE_HOME="$X" go test -count=1 ./...   # both modules
 test ! -e "$H/.local/state/agents"
 ( umask 077 && cd bootstrap.d && go test -count=1 ./... )
-make agents && agents index && git diff --exit-code -- .agents/
+# Deleted 2026-10-09: the last line of this recipe ran `make agents` and
+# `agents index`. The index command went on 2026-08-20 with its subject and
+# `make agents` goes with the personal build, so the check has no line left
+# to run. The recipe above is kept as the record of what it verified.
 ```
 
 **`git diff` is scoped to `.agents/` deliberately.** CI runs on a clean checkout
