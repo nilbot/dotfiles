@@ -11,10 +11,9 @@ repository — stays there, because a session does act on it.
 
 ## Installing
 
-### Option 1: Via Bootstrap (Build from Source)
+### Option 1: Via Bootstrap
 Run `./bootstrap apply workstation` from the dotfiles checkout. Its devtools
-phase runs the installer's preflight, builds `~/bin/agents`, then runs the
-installer.
+phase runs the installer's preflight and then the installer.
 
 ### Option 2: Pointing to an Existing Binary (e.g. Homebrew)
 If `agents` is installed via Homebrew (`brew install nilbot/tap/agents`), pass the
@@ -29,51 +28,65 @@ Do **not** resolve it first with `realpath`. That yields
 upgrades — which leaves the hooks dangling, which git runs as if no hook existed.
 
 The installer checks for existing Git-hook and global-attributes ownership
-before it builds or changes anything. It refuses a foreign global
-`core.hooksPath` instead of replacing it or implicitly chaining it. It accepts a
-symlinked binary when it resolves into a Homebrew keg for agents, and records the
-path it was given, so passing `$(command -v agents)` records the stable path.
+before it writes anything. It refuses a foreign global `core.hooksPath` instead
+of replacing it or implicitly chaining it. It accepts a symlinked binary when it
+resolves into a Homebrew keg for agents, and records the path it was given, so
+passing `$(command -v agents)` records the stable path.
 
-After a successful install, Git invokes the Go-backed `agents` multicall binary
-for `pre-commit`, `commit-msg`, `post-merge`, and `post-checkout` in new and
-pre-existing repositories. Existing repository hooks and the executable personal
-hooks in `git/hooks/` remain chained by the dispatcher. A repository with its
-own local `core.hooksPath` intentionally overrides the global chain.
+After a successful install, `core.hooksPath` names a chain directory holding the
+machine's record (`chain.env`) and four executable entries for `pre-commit`,
+`commit-msg`, `post-merge` and `post-checkout`. Each entry parses the record and
+runs `agents githook <name> --checkout <checkout>`, which runs the repository's
+own hook, then the executable personal hooks in `git/hooks/`, then the built-in
+stage. A repository with its own local `core.hooksPath` intentionally overrides
+the global chain.
+
+**This repository no longer produces the binary the chain names** — decided
+2026-10-09 and removed with the change that consumes the tap. The chain names the
+released `agents`, installed with `brew install nilbot/tap/agents`. See
+[the personal build removal analysis](../docs/design/2026-10-09-the-personal-build-removal-analysis.md).
 
 ## After upgrading `agents`
 
-A package upgrade deletes the previous version's directory. If the hooks name it,
-they dangle — and **git runs a dangling hook as if no hook existed**, so the
-commit guard stops running with no error. Run `agents doctor` and check
-`git-hooks:links`; when the link is one this installer wrote, it prints the exact
-command that repairs it, which is this one:
+A package upgrade deletes the previous version's directory. If the chain names
+it, it dangles — and **git runs a dangling hook as if no hook existed**, so the
+commit guard stops running with no error. Re-run the installer; when a name holds
+an entry this installer wrote, it refuses and prints the exact command that
+repairs it, which is this one:
 
 ```bash
 bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
   ~/dotfiles "$HOME" "$(command -v agents)"
 ```
 
-`--adopt-owned` repoints links this installer wrote for an earlier binary. A
-foreign file, or a link to another program, is still refused with or without the
-flag. Installing through `$(command -v agents)` in the first place means this
-step never comes up: Homebrew repoints its stable path for you.
+`--adopt-owned` replaces a hook name this installer wrote for an earlier binary —
+a symlink it installed then, or an entry naming another checkout or written by an
+older form of the script. A foreign file, or a link to another program, is still
+refused with or without the flag. Installing through `$(command -v agents)` in
+the first place means this step never comes up: Homebrew repoints its stable path
+for you.
 
 ## Checking an install
 
 ```bash
-# The global value should be this checkout's git/hooks.d directory.
+# The global value should name this checkout's chain directory.
 git config --global --show-origin --get-all core.hooksPath
 
-# Each installed hook should resolve to the freshly built ~/bin/agents.
+# The record should name the binary to run and the checkout it belongs to.
+cat "$HOME/dotfiles/git/hooks.d/chain.env"
+
+# Each entry should be an executable regular file ending in the command git
+# will run for that name.
 for hook in pre-commit commit-msg post-merge post-checkout; do
-  readlink "$HOME/dotfiles/git/hooks.d/$hook"
+  test -x "$HOME/dotfiles/git/hooks.d/$hook" && tail -n 1 "$HOME/dotfiles/git/hooks.d/$hook"
 done
 
 # The global attributes link should resolve to the tracked attributes file.
 readlink "$HOME/.gitattributes"
 ```
 
-`agents doctor`, run inside any repository, checks all of the above and more.
+`agents doctor`, run inside any repository, checks the attributes link and the
+rest of the repository-level state.
 
 ### Expected behaviour
 
@@ -93,6 +106,6 @@ rule is enforced by reading it, which is why it lives in `global/AGENTS.md`.
 |---|---|
 | `global/AGENTS.md` | the tracked global instruction file, symlinked to `~/.dsh/AGENTS.md`, `~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md` |
 | `bootstrap.d/links.manifest` | declares that symlink, and every other managed path |
-| `~/bin/agents` | Go-backed multicall hook dispatcher |
+| `~/dotfiles/git/hooks.d/` | the chain `core.hooksPath` names: `chain.env`, and the four generated entries git runs |
 | `git/install-hooks.sh` | ownership-checking installer |
 | `git/hooks/` | optional executable personal hook stages |

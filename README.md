@@ -46,20 +46,28 @@ first.
 
 ## The Makefile
 
-`make agents` builds the `agents` binary to `~/bin/agents`. It is a developer
-convenience for inner-loop work on `agents/` — `./bootstrap apply workstation`
-builds the same binary in its devtools phase. The Makefile's other target,
-`make release`, packages the cross-platform archives the release workflow
-publishes. Provisioning belongs to `./bootstrap`; `make dotfiles` is retired,
-not aliased.
+**Retired: decided 2026-10-09, removed with the change that consumes the tap.**
+`make agents` compiled this checkout into `~/bin/agents` — a second `agents`
+beside the released one — and `./bootstrap apply workstation` built the same
+binary in its devtools phase. Two owners wrote one machine and whichever ran
+second failed, measured here as `bootstrap apply workstation` exiting 2 in the
+devtools preflight. The decision, its evidence and the order the removal lands
+in are in
+[the personal build removal analysis](docs/design/2026-10-09-the-personal-build-removal-analysis.md).
+Provisioning belongs to `./bootstrap`. For an inner loop,
+`go build -o /tmp/agents .` writes no global path and installs nothing.
 
-**Run it from the main checkout, not a linked worktree.** The binary is stamped
-with the checkout it was built from, and this target writes the single global
-`~/bin/agents` — so from a worktree it publishes a binary stamped to a temporary
-path. Delete that worktree and the stamp names nothing: `doctor` still passes,
-because it compares paths that agree with each other, while the git hook chain
-finds no extras directory and silently runs none of your personal hooks, at exit
-0. Rebuild from the main checkout to repair.
+`make release` ran `script/package-release.sh` and nothing else; the script is
+the entry point.
+
+**Why the target was dangerous — kept, because the reasoning outlives it.** The
+binary was stamped with the checkout it was built from, and the target wrote the
+single global `~/bin/agents`, so from a linked worktree it published a binary
+stamped to a temporary path. Delete that worktree and the stamp named nothing:
+`doctor` still passed, because it compared paths that agreed with each other,
+while the git hook chain found no extras directory and silently ran none of the
+personal hooks, at exit 0. That silent class is what the identity work exists to
+remove.
 
 ## The `agents` tool
 

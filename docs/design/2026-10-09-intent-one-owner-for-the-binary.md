@@ -72,14 +72,14 @@ target writes `~/bin/agents` on the test machine.
 |---|---|---|
 | the devtools installer invocations | `bootstrap.d/internal/phase/devtools.go:64`, `:99` | the resolved released binary, not a build; see §3 |
 | the check's remedy sentence | `bootstrap.d/internal/check/checks.go:320-322` | it tells people to run the phase that no longer builds anything |
-| doctor's remedy | `agents/internal/doctor/doctor.go:834` | `make agents` |
-| the workspace README's whole Makefile section | `README.md:47-62` | the build, the path, and the worktree hazard |
-| the tool README's three producers | `agents/README.md:20-29`, `:111-121`, `:164-180` | `:24` is an **unstamped** build, a different binary from the others; `:27-29` claims "two builders … run the same command with the operator-mode stamp added" |
-| the installer README's two routes and its files table | `git/README.md:12-25`, `:34-35`, `:67`, `:96` | Option 1 disappears; `:34-35`'s `$(command -v agents)` advice survives only for a shell |
-| a doc comment | `agents/cmd_wire.go:13` | "the command to run after `make agents` moves the binary" |
+| doctor's remedy | `agents/internal/doctor/doctor.go:834` | `make agents` — **closed 2026-10-09:** the remedy is derived from the chain's own location instead |
+| the workspace README's whole Makefile section | `README.md:47-62` | the build, the path, and the worktree hazard — **closed 2026-10-09:** instructions gone, hazard kept as a record |
+| the tool README's three producers | `agents/README.md:20-29`, `:111-121`, `:164-180` | `:24` is an **unstamped** build, a different binary from the others; `:27-29` claims "two builders … run the same command with the operator-mode stamp added" — **closed 2026-10-09:** all three statements removed |
+| the installer README's two routes and its files table | `git/README.md:12-25`, `:34-35`, `:67`, `:96` | Option 1 disappears; `:34-35`'s `$(command -v agents)` advice survives only for a shell — **closed 2026-10-09** |
+| a doc comment | `agents/cmd_wire.go:13` | "the command to run after `make agents` moves the binary" — **closed 2026-10-09:** it now reads "after the `agents` binary moves" |
 | spec 2's description of the phase | `docs/design/2026-08-07-spec-2-dotfiles-hygiene.md:189` | and spec 2 is missing from the identity design's own five-document list |
 | a qna answer | `docs/qna/why-does-an-unstamped-or-homebrew-agents-binary-skip-dotfiles-checks.md:7` | names the build as a distribution route |
-| a stale line to delete rather than edit | `docs/design/2026-08-11-spec-5-verification-gate.md:415` | `make agents && agents index` — `agents index` no longer exists |
+| a stale line to delete rather than edit | `docs/design/2026-08-11-spec-5-verification-gate.md:415` | `make agents && agents index` — `agents index` no longer exists — **done 2026-10-09** |
 | `linux-stage-zero`'s probes | `.github/workflows/verify.yml:653-657` | checks gcc, file, curl, git — not `agents`; see §4 |
 
 **Not a dependent, and the removal must not touch it:** `agents/install_hooks_test.go:298-338`

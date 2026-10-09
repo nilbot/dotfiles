@@ -10,7 +10,7 @@ import (
 )
 
 // runWire regenerates harness configs without touching .agents/ content. It is
-// the command to run after `make agents` moves the binary, or after a harness
+// the command to run after the `agents` binary moves, or after a harness
 // changes its schema.
 func runWire(args []string, stdout io.Writer) int {
 	cwd, err := os.Getwd()

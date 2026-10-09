@@ -17,25 +17,19 @@ Scaffolds and maintains the repository context an AI coding agent needs: the two
 
 ## Installation
 
-### Build from Source (Go 1.26+)
-
-```bash
-cd agents
-go build -o ~/bin/agents .
-```
-
-The binary is self-contained. Two builders in this repository run the build for
-you: `make agents` from the repository root, and the devtools phase of
-`./bootstrap apply workstation`. Both also pass a link-time
-`-X main.dotfilesRoot=<checkout>` stamp. Nothing in this version reads it — the
-checkout a hook needs now arrives from the chain record — and the flag and its
-two producers are removed by a later change.
-
-### Released Binaries
-
 ```bash
 brew install nilbot/tap/agents
 ```
+
+**This repository no longer builds a personal copy, and that is deliberate.**
+Decided 2026-10-09, removed with the change that consumes the tap: `make agents`,
+the devtools phase's build, and the unstamped `go build -o ~/bin/agents .` this
+section used to give each produced a second `agents` beside the released one, and
+the two owners disagreed about which binary the hook chain ran. The decision and
+its evidence are in
+[the personal build removal analysis](../docs/design/2026-10-09-the-personal-build-removal-analysis.md).
+For an inner loop, `go build -o /tmp/agents .` writes no global path and installs
+nothing.
 
 This installs whichever release `nilbot/homebrew-tap` currently points at — the
 formula lives in that repository and is maintained there, not here.

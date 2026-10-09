@@ -44,11 +44,31 @@ Exactly one resource is machine-global *and* speaks `agents`: the hook chain.
 | artifact | role |
 |---|---|
 | `git/install-hooks.sh` | the installer. Shell, deliberately: it must work when no `agents` binary exists yet — a fresh machine, a failed build, or a Homebrew-only user who never runs bootstrap |
-| `bootstrap.d/internal/phase/devtools.go` | builds `~/bin/agents`, then calls the installer at **that** path |
+| `bootstrap.d/internal/phase/devtools.go` | ~~builds `~/bin/agents`, then calls the installer at **that** path~~ — **retired 2026-10-09:** resolves the released binary and calls the installer at that path, with `--adopt-owned` |
 | the deleted `agents hook` (now: the same binary invoked as a Git hook) / `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
 
 The call direction is one-way: bootstrap calls the installer, bootstrap builds
 `agents`, and `agents` never calls either. That is the property to preserve.
+
+> **Amended 2026-10-09 — the direction survives; two of the statements around it do not.**
+> The property this section names is worth keeping exactly as written: bootstrap
+> calls the installer, and `agents` never calls either. What changed is what
+> bootstrap hands it and what the chain holds.
+>
+> - **"its content is four symlinks to the `agents` binary"** is no longer true.
+>   The installer writes four generated executable `sh` entries plus a record,
+>   `chain.env`; each entry parses that record and runs `agents githook <name>
+>   --checkout <checkout>`. The binding is a line a person can read, rather than the
+>   name of the file git happened to exec. See §8.2 of
+>   [spec 1](2026-08-07-agents-repo-context-design.md).
+> - **"builds `~/bin/agents`, then calls the installer at that path"** is retired.
+>   Decided 2026-10-09: devtools resolves the released binary and passes
+>   `--adopt-owned`, so it stops writing a second `agents` and stops refusing on a
+>   machine a package manager wired. That answer is §7 item 2 below. See
+>   [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+>
+> The installer's own role text — "it must work when no `agents` binary exists
+> yet" — stays load-bearing, and is why the installer is still shell.
 
 ## 4. Three leaks, measured on this machine
 
@@ -173,9 +193,16 @@ four-argument form untouched.
    workstation` is no longer blocked by *this* path. The remaining exit-2 at
    `config` on this machine is the separate `~/.claude/CLAUDE.md` move noted in
    §4b, which has its own owner.
-2. **Settle hook ownership when bootstrap and a package manager are both
+2. ~~**Settle hook ownership when bootstrap and a package manager are both
    present** (§4a): whether `devtools` should pass `--adopt-owned`, defer to
-   links it did not write, or refuse with an explicit instruction.
+   links it did not write, or refuse with an explicit instruction.~~
+   **Closed 2026-10-09 — bootstrap becomes the owner and adopts.** `devtools`
+   passes `--adopt-owned` to the installer, and the personal build it used to
+   write is retired, so there is no longer a second target for it to disagree
+   with. The refusal §4a measured stops being the outcome. This is the
+   2026-09-21 decision finally landing, with its target corrected from
+   `~/bin/agents` to the released path; see
+   [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
 3. **Optional installer arguments** (§5) — the ergonomics fix that does not move
    the boundary.
 4. **A test tying the shell's hook names to the Go list** (§4).

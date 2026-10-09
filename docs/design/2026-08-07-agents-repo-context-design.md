@@ -514,6 +514,27 @@ problem `update-repo-hooks.sh` was written to solve stops existing, and
 names fired correctly as each, and received git's arguments
 (`commit-msg` got `.git/COMMIT_EDITMSG`).
 
+> **Amended 2026-10-09 — the shape above is replaced, and the section's two
+> properties are what survive it.** The properties were the point: the chain is
+> machine-global, so **no per-repo installation** is needed; and the dispatcher
+> receives git's arguments intact. Both still hold. What changed is how the
+> dispatcher is told what it is and which checkout it serves.
+>
+> Symlinks were an implicit binding — the name of the file git happened to exec
+> was the whole of the dispatch, and the checkout was recovered from a compile-time
+> stamp or from `AGENTS_DOTFILES_ROOT`. Both readers are deleted. The chain
+> directory now holds a record, `chain.env`, naming the `binary` and the
+> `checkout`, plus four generated executable `sh` entries. Each entry parses that
+> record and runs `agents githook <name> --checkout <checkout>` with git's
+> arguments forwarded verbatim. The binding is a line a person can read and a test
+> can assert, which is the property a symlink could not carry. The multicall is
+> kept for one release as a shim, because a machine wired the old way still has
+> four symlinks; it now says on stderr that the personal stages are unavailable on
+> that route, rather than running none of them in silence.
+>
+> See [`One record for binary identity`](2026-10-07-one-record-for-binary-identity.md),
+> and §8.5 below for the link-and-upgrade consequences this replaces.
+
 ### 8.3 The catch, and the mitigation
 
 `core.hooksPath` **shadows** `.git/hooks/`. Measured: a repo with its own
@@ -609,6 +630,33 @@ manager moves it.
 `~/bin/agents` and passes no flag, so on a machine whose links are stale its
 preflight refuses and the human runs the remedy once. Whether provisioning should
 adopt and override a hook target a human chose is a separate decision.
+
+> **Amended 2026-10-09 — this whole subsection is superseded, and the reasoning is
+> the record.** §8.5 was written about *links* and the package manager moving the
+> path they name. Three things it takes as fixed have since changed.
+>
+> - **The links are entries.** `git/install-hooks.sh` writes four generated `sh`
+>   entries, each reading `chain.env` and running `agents githook <name>
+>   --checkout <checkout>`; §8.2's amendment above is the reason. So the advice that
+>   a hook name "must still name the binary it was handed" is now about an entry's
+>   record, not a link's target. `--adopt-owned` still exists and now converts the
+>   symlinks as well — a machine wired by this section's version is exactly the one
+>   that needs it.
+> - **The multicall is replaced.** "Nothing here changes what the hooks run: the
+>   multicall dispatch on `basename(os.Args[0])`" is no longer true; the dispatch is
+>   the subcommand name in the generated entry, and `argv[0]` survives only as the
+>   one-release shim.
+> - **The known gap is decided, not open.** The owner's answer of 2026-10-09 makes
+>   bootstrap the owner: devtools resolves the released binary and passes
+>   `--adopt-owned`, so provisioning stops refusing on a machine a package manager
+>   wired, and stops writing a second `agents` at all. That closes the two-owner
+>   leak §4 of this document measured. The personal build is retired with the same
+>   change; see
+>   [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+>
+> Kept because the diagnosis is still the useful part: a hook name that points
+> somewhere the tool did not put it must be *reported*, never silently overwritten,
+> and `git-hooks:unmanaged` was added for the orphans this section describes.
 
 ## 9. Bootstrap and trust
 
