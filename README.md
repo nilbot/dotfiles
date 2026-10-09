@@ -48,8 +48,8 @@ first.
 
 **Retiring: decided 2026-10-09.** Provisioning has stopped building `agents` — the
 devtools phase now resolves the released binary and passes `--adopt-owned` to the
-installer. What is left of the personal build is the `make agents` target in this
-file, which goes with the test pins that assert it. It compiled this checkout into
+installer. Nothing is left of it: the `make agents` target and the test pins that
+asserted it were deleted on 2026-10-09. It compiled this checkout into
 `~/bin/agents`, a second `agents` beside the released one, and the two owners
 disagreed about which binary the hook chain ran — measured here as
 `bootstrap apply workstation` exiting 2 in the devtools preflight. The decision,

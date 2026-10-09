@@ -175,9 +175,8 @@ The scope note asked for filters "without allowing a docs-only change to
 masquerade as source verification." The filter is the hazard, and it is the same
 hazard as the Go build cache in different clothing. The obvious filter is
 `paths: ['agents/**', 'bootstrap.d/**']` — which skips verification for a change
-to `Makefile` or `git/gitconfig.shared`. But `bootstrap.d/makefile_test.go` reads
-the `Makefile` and `agents/internal/doctor/doctor_test.go` reads
-`git/gitconfig.shared`. Those are exactly the edits that break tests, and exactly
+to `Makefile` or `git/gitconfig.shared`. The `Makefile` half went with the file on
+2026-10-09, which took `bootstrap.d/makefile_test.go` with it; `agents/internal/doctor/doctor_test.go` still reads `git/gitconfig.shared`. Those are exactly the edits that break tests, and exactly
 the edits a cached `go test` already fails to notice.
 
 **The rule: no path filter may exclude a file that any test reads.** That set is
