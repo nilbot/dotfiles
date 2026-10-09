@@ -396,7 +396,16 @@ skip() {
 ENTRY
 	fi
 	cat <<'ENTRY'
-chain=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || fail "cannot locate the chain directory"
+# No external command decides where the chain is. With dirname missing from PATH
+# this used to become empty, and `cd -- ""` succeeds without changing directory, so
+# the entry looked for the record in the caller's working directory and reported a
+# wrong cause. Parameter expansion cannot be absent, and it removes a process from
+# every hook run.
+case "$0" in
+  */*) _chain_dir=${0%/*} ;;
+  *)   _chain_dir=. ;;
+esac
+chain=$(CDPATH= cd -- "$_chain_dir" && pwd) || fail "cannot locate the chain directory"
 [ -n "$repair_root" ] || repair_root=$chain
 format=; binary=; checkout=
 while IFS='=' read -r key value; do
