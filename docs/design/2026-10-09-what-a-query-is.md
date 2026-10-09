@@ -224,7 +224,7 @@ Paths are relative to the repository root.
 
 | check | the mutation that must break it |
 |---|---|
-| no check can execute a command | delete `Run` from `check.Machine` in `check.go` and add a call to it in a check: the package fails to compile |
+| no check can execute a command | delete `Run` from `check.Machine` in `check.go` and add a call to it in a check: the package fails to compile. **Do not** reach the same end by making `plan` hold an Applier instead of its Planner — that mutation executes every phase, and on 2026-10-09 it ran the fish phase's `sudo chsh` and changed the developer's login shell. The compile error is the safe mutation, and it is also the one the interface exists to produce |
 | no query invokes Homebrew | one stub directory holding a `brew` that appends its arguments to a file, shown to work before it is trusted: invoke that directory's `brew` once directly, assert the file grew, truncate it, then run `plan workstation` and `check workstation` with that same directory on `PATH` ahead of `stubToolDir(t)` — which must stay behind it, so `dscl`/`getent` are still stubbed — and assert the file stays empty. The directory has to be one handle used for both halves: `stubToolDir` mints a fresh temporary directory on every call, so a second call would put a different script on `PATH` from the one whose recorder was proved |
 | the packages check is gone | `check.All` returns seven results; the name-list test fails on the eighth |
 | the empty-Brewfile mutation is caught | empty `bootstrap.d/Brewfile`; the three tests C4 names fail — already true today, and now named |
