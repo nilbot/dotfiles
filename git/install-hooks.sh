@@ -421,13 +421,54 @@ validate_binary() {
 	fi
 }
 
+# probe_binary proves the binary answers `githook`, the subcommand every
+# generated entry runs, before anything is written.
+#
+# The placement is the whole mechanism, and it is why this is not in preflight:
+# preflight runs before the binary is installed (the devtools phase runs it
+# before the build, and on a fresh machine before `brew bundle`), so a probe
+# there would refuse a run that is about to install the very release the probe
+# requires. Here, after validate_binary and before the first write, a
+# mismatched pair -- a new installer with an old binary -- fails with a message
+# instead of at the first commit, and without the entries that would make every
+# commit fail, and every `git checkout` and `git switch` with it.
+#
+# --probe rather than a real hook: the installer must not stage, scan, or
+# otherwise touch a repository to learn which release it is holding. The
+# subcommand is a no-op that prints one line and exits 0, and it ships in the
+# same release as `githook`, so requiring it needs no compatibility story.
+probe_binary() {
+	if ! probe_output=$("$binary" githook --probe 2>&1); then
+		refuse "agents binary '$binary' cannot answer 'githook', so the chain it would install could not run a hook: $probe_output
+  The four generated entries run 'agents githook <hook> --checkout <checkout>'. Install agents v0.8.0 or later -- or build this checkout -- and re-run the installer."
+	fi
+	case "$probe_output" in
+		*githook:*ok*) ;;
+		*) refuse "agents binary '$binary' answered 'githook --probe' with '$probe_output', which is not this tool's answer; install agents v0.8.0 or later -- or build this checkout -- and re-run the installer." ;;
+	esac
+}
+
 # generate_entry prints the entry for one hook name. The text is the design's
-# §3.1 script with two substitutions -- the checkout in its header, and the hook
-# name on the last line -- and nothing else. The record is PARSED, never
-# sourced, which is why the allow-list and the one `fail` path have to be
-# exactly this: the entry runs at every commit, with the committing user's
-# privileges, so a record carrying `: > /tmp/pwned` must be rejected and not
-# executed, and a value the record does not define must never be guessed at.
+# §3.1 script with three substitutions: the checkout in its header, the hook
+# name on the last line, and the exit status of the single rejection path.
+#
+# That exit status is the one thing that differs between the two kinds of hook
+# name, and it differs for EVERY rejection rather than only for a missing
+# binary:
+#
+#   * pre-commit and commit-msg are guards. They fail closed, exit 1, whatever
+#     is wrong: a record that will not parse, a format that is not 1, a binary
+#     that is missing. A broken record blocks the commit.
+#   * post-merge and post-checkout report. They exit 0, so a broken record does
+#     not fail a `git checkout` or a `git switch`. Git propagates a hook's
+#     non-zero status, and measured on Git 2.54 `git checkout -b other` switches
+#     the branch and THEN reports failure, so anything chaining on git's status
+#     breaks.
+#
+# One `fail` per entry, one exit status, and the repair line in both: the
+# record is PARSED, never sourced, so a record carrying `: > /tmp/pwned` must be
+# rejected and not executed, and a value the record does not define must never
+# be guessed at.
 generate_entry() {
 	hook=$1
 	printf '%s\n' '#!/bin/sh'
@@ -437,32 +478,27 @@ generate_entry() {
 { IFS= read -r _shebang; IFS= read -r _header; } < "$0"
 repair_root=${_header#*for }
 repair_root=${repair_root%.}
+ENTRY
+	if is_observational_hook "$hook"; then
+		cat <<'ENTRY'
+# post-checkout and post-merge report; they never fail a `git checkout` or a
+# `git switch`, so this entry's one rejection path exits 0.
+ENTRY
+	fi
+	cat <<'ENTRY'
 fail() {
   printf 'agents: %s\n' "$1" >&2
   if [ -n "$repair_root" ]; then
     printf 'agents: repair with: bash %s/git/install-hooks.sh install --adopt-owned %s "$HOME" "$(command -v agents)"\n' "$repair_root" "$repair_root" >&2
   fi
-  exit 1
-}
 ENTRY
-	# The one branch on the entry's own hook name. A missing binary is a lost
-	# banner for post-merge and post-checkout, and reporting it at exit 0 is
-	# what keeps `git checkout` and `git switch` working; for the two guard
-	# names it blocks the commit, which is the whole point of a guard. Every
-	# record, format and path error still goes through fail, for all four: a
-	# broken record is a broken guard whatever the hook is.
 	if is_observational_hook "$hook"; then
-		cat <<'ENTRY'
-skip() {
-  printf 'agents: %s\n' "$1" >&2
-  if [ -n "$repair_root" ]; then
-    printf 'agents: repair with: bash %s/git/install-hooks.sh install --adopt-owned %s "$HOME" "$(command -v agents)"\n' "$repair_root" "$repair_root" >&2
-  fi
-  exit 0
-}
-ENTRY
+		printf '%s\n' '  exit 0'
+	else
+		printf '%s\n' '  exit 1'
 	fi
 	cat <<'ENTRY'
+}
 # No external command decides where the chain is. With dirname missing from PATH
 # this used to become empty, and `cd -- ""` succeeds without changing directory, so
 # the entry looked for the record in the caller's working directory and reported a
@@ -486,20 +522,14 @@ while IFS='=' read -r key value; do
 done < "$chain/chain.env" || fail "cannot read $chain/chain.env"
 [ "$format" = 1 ] || fail "$chain/chain.env is not format 1"
 case "$binary" in /*) ;; *) fail "binary in $chain/chain.env is not an absolute path" ;; esac
-ENTRY
-	if is_observational_hook "$hook"; then
-		printf '%s\n' '[ -f "$binary" ] && [ -x "$binary" ] || skip "the commit guard is not installed: $binary is missing or not executable"'
-	else
-		printf '%s\n' '[ -f "$binary" ] && [ -x "$binary" ] || fail "the commit guard is not installed: $binary is missing or not executable"'
-	fi
-	cat <<'ENTRY'
+[ -f "$binary" ] && [ -x "$binary" ] || fail "the commit guard is not installed: $binary is missing or not executable"
 case "$checkout" in -|/*) ;; *) fail "checkout in $chain/chain.env is neither - nor an absolute path" ;; esac
 ENTRY
 	printf 'exec "$binary" githook %s --checkout "$checkout" "$@"\n' "$hook"
 }
 
 # is_observational_hook is true for the two hook names that report rather than
-# guard: a missing banner there must not fail a `git checkout` or a `git switch`.
+# guard: a broken banner there must not fail a `git checkout` or a `git switch`.
 is_observational_hook() {
 	case "$1" in
 		post-merge|post-checkout) return 0 ;;
@@ -601,6 +631,10 @@ if [ "$mode" = preflight ]; then
 fi
 
 validate_binary
+# Before the first write, and after validate_binary: a binary that cannot answer
+# `githook` must fail here, where the message can say so, rather than at the
+# first commit. See probe_binary for why this is not in preflight.
+probe_binary
 
 # The one thing the installer creates rather than converges: the machine's own
 # chain directory. `-p` also makes the `agents` level, and preflight has already

@@ -241,23 +241,30 @@ case "$checkout" in -|/*) ;; *) fail "checkout in $chain/chain.env is neither - 
 exec "$binary" githook pre-commit --checkout "$checkout" "$@"
 ```
 
-**The observational entries exit 0 when the binary is missing.** §3.1's bullet 2
-and §3.6's first row say `post-merge` and `post-checkout` report and exit 0, because
-a missing banner must not fail a `git checkout` or a `git switch`. The `fail` above
-exits 1 on every rejection, so implementing it verbatim makes `post-checkout` exit
-1 — which is the failure the transition window exists to prevent, moved from the
-window into the steady state. The entry therefore branches once, on its own hook
-name: `post-merge` and `post-checkout` route the **missing binary** case through a
-`skip()` that prints the same line and exits 0, while every record, format and path
-error still goes through `fail` and exits 1 for all four names — §3.6's second row
-requires that, because a broken record is a broken guard whatever the hook is.
+**The exit status is decided by the hook name, and by nothing else.** `pre-commit`
+and `commit-msg` are guards: they fail closed on **every** rejection, exit 1, so
+a record that will not parse blocks every commit. `post-merge` and
+`post-checkout` report: they exit 0 on **every** rejection, so a broken record
+never fails a `git checkout` or a `git switch`. Git propagates a hook's non-zero
+status, and measured on Git 2.54 `git checkout -b other` switches the branch and
+*then* reports failure, so anything chaining on git's status breaks.
 
-Every rejection goes through `fail`: the chain directory cannot be resolved, the
-record cannot be read, an unknown key, a wrong `format`, a relative or missing
-`binary`, a bad `checkout`. All of them print the repair command and not just a
-diagnosis, which is what the ownership rule below depends on — the command the
-entry prints has to be able to repair the state the entry is reporting, and the
-only failure a hand-run installer can fix is one it can recognise as its own.
+An earlier version of this section split the two kinds only for the missing
+binary, leaving record and format errors at exit 1 for all four names. That is
+the conflict §3.6's second row used to state, and it was wrong: a malformed
+record is not a broken guard, it is a guard that cannot read its own wiring, and
+failing a checkout over it is the failure the transition window exists to
+prevent, moved into the steady state. The generated entry therefore carries one
+`fail`, with one exit status: 1 for the two guard names, 0 for the two
+observational ones.
+
+Every rejection goes through the entry's one rejection path, `fail`: the chain
+directory cannot be resolved, the record cannot be read, an unknown key, a wrong
+`format`, a relative or missing `binary`, a bad `checkout`. All of them print the
+repair command and not just a diagnosis, which is what the ownership rule below
+depends on — the command the entry prints has to be able to repair the state the
+entry is reporting, and the only failure a hand-run installer can fix is one it
+can recognise as its own. All of them take the exit status the hook name decides.
 
 Each entry passes its own hook name and **forwards Git's arguments unchanged**.
 That matters for `commit-msg`, which Git calls with the path of the message file:
@@ -271,9 +278,10 @@ shell code at every commit, with the committing user's privileges, so a record
 carrying `: > /tmp/pwned` would execute it — and it would let a record rewrite
 `PATH` or `IFS` inside the process that is about to decide whether the commit is
 allowed. A symbolic link cannot execute anything; this can. The allow-list above
-exists for that reason, and every rejection exits non-zero. The rule it enforces
-belongs here rather than in §2, because it is about this file and not about the
-platform: **a value the record does not define is a value the entry must not guess
+exists for that reason, and every rejection at least names itself: the guard
+names exit non-zero, and the observational names report at exit 0 rather than
+fail a checkout. The rule it enforces belongs here rather than in §2, because it
+is about this file and not about the platform: **a value the record does not define is a value the entry must not guess
 at.** A truncated record — which is what a concurrent write leaves — must refuse
 rather than forward an empty `--checkout`.
 
@@ -329,12 +337,15 @@ one remaining binding statement unchecked: `chain:record` requires only that
 go unnoticed while the personal stages silently stop running
 (`agents/main.go:46-49`, `agents/internal/githook/githook.go:122-125`).
 
-Nothing else reads the stamp. `dotfilesRoot` disappears from `agents/root.go`, from
-both build commands, and from the four files that hardcode the flag
-(`Makefile:40`, `bootstrap.d/internal/phase/devtools.go:88`,
-`bootstrap.d/makefile_test.go:110,165`,
-`bootstrap.d/internal/phase/devtools_test.go:22,153`) — which go with the builders
-themselves ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6).
+Nothing else reads the stamp. `dotfilesRoot` disappeared with `agents/root.go` and
+with the builders that stamped it — the `Makefile` and
+`bootstrap.d/makefile_test.go` are deleted, and
+`bootstrap.d/internal/phase/devtools.go` no longer builds the binary at all; it
+resolves the released one ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6).
+The citations this paragraph carried when it was written — `Makefile:40`,
+`devtools.go:88`, `makefile_test.go:110,165`, `devtools_test.go:22,153` — name
+lines in files that no longer exist, and are recorded here rather than left
+looking checkable.
 
 ### 3.4 `doctor` reports the machine; it does not hold a root
 
@@ -349,7 +360,7 @@ and the chain, instead of from a compiled-in root:
 | `chain:unmanaged` | look-alikes under other names, **and dangling links** an earlier installer left behind | `git-hooks:unmanaged` |
 | `chain:local` | a repository-local `core.hooksPath` override, which bypasses the chain by choice | `git-hooks:local` |
 | `chain:legacy` | the exact retired dispatcher, if one is still installed | `git-hooks:legacy` |
-| `chain:running` | the binary the record names beside the binary that is running; **fails when they are not the same file** | the old `binary` check's implicit "the" binary |
+| `chain:running` | the binary the record names beside the binary that is running; **fails when they are not the same file** | nothing — the `binary` check stays, and the two answer different questions: `binary` asks whether `agents` on `PATH` is the running executable, `chain:running` whether the committed hook runs it |
 | `attributes:global` | `~/.gitattributes` is a link whose target exists | `git-attributes` |
 | `chain:checkout` | the record's `checkout` is `-`, or a directory that exists and is not empty of `<anything>.<hook>` files. The two tracked files in this repository's `git/hooks/` make that true of any checkout, so the condition catches only a directory that has been emptied — which is why the check reports the count it found, since zero is the state it exists to notice. A warning, where `root:exists` was a failure | `root:exists`, and the `provenance:checkout` of the earlier draft, which read the stamp instead |
 
@@ -398,7 +409,7 @@ subcommand is `githook` and the removal matcher keys on `hook`.
 | what is wrong | what happens | who says so |
 |---|---|---|
 | the named binary is missing or not executable | guard entries name it and exit 1; observational entries name it and exit 0 | the entry |
-| `chain.env` is missing or malformed | every entry names the file and exits 1 | the entry |
+| `chain.env` is missing or malformed | every entry names the file; the guard entries exit 1, the observational entries exit 0 | the entry |
 | the checkout is gone | the guard still runs; the personal stages are reported missing | the entry, and `doctor` |
 | the chain names a binary other than the running one | **`doctor` fails and prints both paths** | `doctor` (`chain:running`) |
 | a repository sets its own `core.hooksPath` | the chain is bypassed; that is a deliberate local choice | `doctor` (`chain:local`) |
@@ -598,13 +609,20 @@ succeeds at exit 0 with no output, and the previous installer then refuses becau
 it requires the hooks directory to be an existing real directory
 (`git/install-hooks.sh:234`). The working sequence is:
 
-- **Stage 1** (chain still inside the checkout): delete the four entries and
-  `chain.env` from `git/hooks.d/`, but keep the directory and its tracked
-  `.gitignore`, then run the previous installer. Measured: with the names absent it
-  succeeds, and the guard is off for zero commits.
-- **Stage 2**: recreate the four symlinks in `<root>/git/hooks.d/` **first**, then
+- **The current shape** (chain machine-owned, at `~/.config/agents/hooks.d/`):
+  recreate the four entries or symlinks in `<root>/git/hooks.d/` **first**, then
   point `core.hooksPath` back at that directory, and only then delete the chain
-  directory. Repointing before the symlinks exist is the silent state again.
+  directory. Repointing before the names exist is the silent state again.
+  `git/hooks.d/.gitignore` retired with stage 1, so a rollback that recreates
+  names there leaves them untracked in `git status`. That is cosmetic, visible,
+  and the honest trade: the alternative is keeping the tracked ignore file whose
+  retirement is what leaves a checkout holding no chain at all.
+- **Stage 1's own state** (the chain inside the checkout, with the `.gitignore`
+  that ignored it) is no longer reachable — no landed step leaves a machine
+  there. Its rollback was "delete the four entries and `chain.env`, keep the
+  directory and its `.gitignore`, re-run the previous installer", measured while
+  that file existed. The file is gone, so that sequence is gone with it, and the
+  sequence above is the one that works.
 
 Rollback reverses both halves, not one — the chain *and* the binary. Re-running the
 previous installer while a new binary is on `PATH` records that binary into four
@@ -634,7 +652,7 @@ what the change makes of it:
 
 | surface | what the change does to it |
 |---|---|
-| **The builders** — `script/package-release.sh:7-10` (version and commit), `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the release builder keeps stamping version and commit; the `-X main.dotfilesRoot` flag and the two build commands that pass it go with the personal build ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6), and with them the exact-command pins in `devtools_test.go:22,153` and `makefile_test.go:110,165` |
+| **The builders** — `script/package-release.sh:7-10` (version and commit), and, when this was written, `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the release builder keeps stamping version and commit; the `-X main.dotfilesRoot` flag and the two build commands that passed it went with the personal build ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6), and the `Makefile`, `bootstrap.d/makefile_test.go` and the exact-command pins (`devtools_test.go:22,153`) went with them. `devtools.go` now resolves the released `agents` through Homebrew |
 | **The release path** — `release.yml:57-97` (version and SHA), `:120` (`package-release.sh` is passed the version, not the commit, which is why the script derives it a second time), `:134-138` (archive name and the version-output glob), `:190-201` (the tap) | one fact — the commit — is derived twice today. This design does not change that, and whoever sequences this work should decide whether to fix it here or separately |
 | **The installer** — `git/install-hooks.sh` in full: `:61` (the four names), `:139-168` (the symlink checks), `:191-208` (keg path shape), `:259-279` (the writes), `:281-287` (the keg note) | rewritten to write entries, with the table above as its specification |
 | **The consumers** — `agents/cmd_version.go:12`, `agents/root.go:15-30`, `agents/cmd_doctor.go:29-40` (the root read, at `:32`), `agents/internal/doctor/doctor.go:149-173` and `:621-644`, `agents/main.go:24-58` | the stamp goes and `doctor` reads the record instead; the multicall becomes `githook`; the link comparison becomes `chain:running`. `cmd_doctor.go:71-80` is unaffected: it reads the running binary's own path |
@@ -697,7 +715,7 @@ compatibility shim that stays for a release.
 | `agents/githook_main_test.go:384-436` | one case per `DotfilesRoot()` branch, asserting which checkout's personal hooks run |
 | `agents/install_hooks_test.go:1260-1420` | the keg path shape, the stable path that must be recorded, the refusal, and `--adopt-owned` on either side of the mode |
 | `agents/internal/doctor/doctor_test.go:293-353`, `:512`, `:599-715`, `:664`, `:764` | the binary comparison, the stamped-checkout check, the hooks-path checks, and the remedies that must name `install-hooks.sh` and `--adopt-owned` |
-| `bootstrap.d/internal/phase/devtools_test.go:22`, `:153`; `bootstrap.d/makefile_test.go:110,165` | the exact build command and the stamp's value, in both builders |
+| `bootstrap.d/internal/phase/devtools_test.go` | the exact installer invocation the devtools phase runs, including `--adopt-owned`. The pins on the build command and the stamp's value retired with the builders (`makefile_test.go` is deleted, and `devtools.go` no longer builds) |
 | `release.yml:138` | the prefix of `agents version`'s output, matched in a glob |
 | `agents/doctests.txt:28` | `TestTheCommandSetIsExactlyThis`: a new subcommand has to be declared there, or the `docs` job fails |
 | `agents/doctests.txt:42-50` | the document guards the `docs` job runs by name — the README command block, and the three living-document tests over `README.md`, `agents/README.md`, `CLAUDE.md`, `global/AGENTS.md` and the two skill trees |
@@ -732,9 +750,9 @@ machine-owned.
 | # | test | mutation that must make it fail |
 |---|---|---|
 | 1 | the recorded binary is deleted, then a commit is attempted: the commit is refused, the output names the missing path and the repair command, and the exit status is non-zero | make the entry exit 0; the commit then succeeds |
-| 2 | `chain.env` is emptied: every entry refuses, naming the file | default `checkout` to `.` and watch the wrong directory be consulted |
+| 2 | `chain.env` is emptied: every entry names the file, the guard entries exit non-zero and the observational entries exit 0 | default `checkout` to `.` and watch the wrong directory be consulted |
 | 3 | the checkout is deleted: the built-in guard still runs and the personal stages are reported missing | make the entry require the checkout; the guard disappears with it |
-| 4 | `AGENTS_DOTFILES_ROOT` set to a second checkout: nothing changes | read the variable; the check count moves between 18 and 13 |
+| 4 | `core.hooksPath` unset: `doctor` reports no chain installed, and its check set is the 14 checks a machine with no chain can still answer | re-add a compiled checkout root and make the chain checks require it; the count then depends on a path nothing compiles in again — measured: 19 checks with a chain installed, 14 without |
 | 5 | the installer is handed a binary that cannot answer `githook`, in `install` mode: it refuses and writes nothing | remove the probe; the chain is installed and the next commit fails |
 | 6 | the probe is reached in `preflight` mode on a machine whose released `agents` is not installed yet: `apply` installs it in the packages phase and then wires the chain | move the probe into `preflight` as a refusal; the run stops before `brew bundle` installs the binary the probe requires |
 | 7 | the installer is handed a keg path while a stable path is installed: it refuses and names the stable path. Handed a keg path with no stable path, it installs and prints a note | delete the refusal; the next upgrade dangles. Delete the note too, and the only person who has one `agents` cannot install a guard at all |

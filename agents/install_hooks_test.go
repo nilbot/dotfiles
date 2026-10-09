@@ -13,6 +13,20 @@ import (
 	"time"
 )
 
+// answeringStub is a binary that answers the installer's probe the way the real
+// one does. Every fixture whose run reaches `install` needs it: the probe runs
+// after validate_binary and before the first write, so a stub that exits 0
+// silently is refused -- which is the test for §8 row 5.
+const answeringStub = `#!/bin/sh
+if [ "$1" = githook ] && [ "$2" = --probe ]; then printf 'githook: ok\n'; exit 0; fi
+exit 0
+`
+
+// silentStub is a binary that runs, exits 0 for everything, and never answers
+// `githook`: the shape of an older release whose unknown-command path a wrapper
+// has swallowed.
+const silentStub = "#!/bin/sh\nexit 0\n"
+
 type hookInstallFixture struct {
 	repoRoot     string
 	home         string
@@ -42,7 +56,7 @@ func newHookInstallFixture(t *testing.T) hookInstallFixture {
 	if err := os.WriteFile(filepath.Join(fixture.repoRoot, "git", "gitattributes"), []byte(".agents/reports/traces/*.jsonl merge=union\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(fixture.binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(fixture.binary, []byte(answeringStub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return fixture
@@ -354,7 +368,9 @@ func shellQuote(s string) string {
 func recordingAgentsBinary(t *testing.T, fixture hookInstallFixture) string {
 	t.Helper()
 	log := filepath.Join(t.TempDir(), "agents argv")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + shellQuote(log) + "\n"
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = githook ] && [ \"$2\" = --probe ]; then printf 'githook: ok\\n'; exit 0; fi\n" +
+		"printf '%s\\n' \"$@\" >> " + shellQuote(log) + "\n"
 	if err := os.WriteFile(fixture.binary, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -1430,7 +1446,7 @@ func TestInstallLeavesTheCheckoutClean(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(binary), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(binary, []byte(answeringStub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(binary, 0o755); err != nil {
@@ -1537,7 +1553,7 @@ func fakeHomebrewKeg(t *testing.T, fixture hookInstallFixture, version string) (
 	if err := os.MkdirAll(filepath.Dir(keg), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(keg, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := os.WriteFile(keg, []byte(answeringStub), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	stable = filepath.Join(prefix, "bin", "agents")
@@ -1963,43 +1979,60 @@ func TestInstallRefusesAMalformedRecordWithoutRunningIt(t *testing.T) {
 	}
 }
 
-// A missing binary is a lost banner for post-merge and post-checkout, and
-// reporting it must not fail a `git checkout` or a `git switch`; for the two
-// guard names it must block the commit. A broken record is different: it is a
-// broken guard whatever the hook is, so every name exits non-zero.
-func TestInstallObservationalEntriesReportAMissingBinaryAtExitZero(t *testing.T) {
+// The exit status is decided by the hook name and by nothing else. The guard
+// names fail closed on EVERY error -- a broken record blocks every commit --
+// and the observational names report on every error at exit 0, so a broken
+// record never fails a `git checkout` or a `git switch`. Git propagates a
+// hook's non-zero status, and `git checkout -b` switches the branch and THEN
+// reports failure, so a record the installer wrote badly would break both.
+func TestInstallEntryExitStatusFollowsTheHookKindOnEveryError(t *testing.T) {
 	t.Parallel()
-	fixture := newHookInstallFixture(t)
-	if output, err := runHookInstaller(t, fixture, "install"); err != nil {
-		t.Fatalf("install failed: %v\n%s", err, output)
-	}
-	if err := os.Remove(fixture.binary); err != nil {
-		t.Fatal(err)
-	}
 
-	for _, hook := range hookInstallHookNames {
-		want := 1
-		if hookInstallObservational[hook] {
-			want = 0
-		}
-		output, code := runHookEntry(t, fixture, hook)
-		if code != want {
-			t.Errorf("%s exited %d with the binary missing, want %d:\n%s", hook, code, want, output)
-		}
-		if !strings.Contains(output, fixture.binary) {
-			t.Errorf("%s must name the binary that is missing: %q", hook, output)
-		}
+	// Every error an entry can meet, as bytes in chain.env.
+	brokenRecords := map[string]string{
+		"a missing binary":        "",
+		"an empty record":         "",
+		"a truncated record":      "# c\nformat=1\n",
+		"a wrong format":          "# c\nformat=2\nbinary=%s\ncheckout=%s\n",
+		"an unknown key":          "# c\nformat=1\nbinary=%s\ncheckout=%s\npwned=1\n",
+		"a relative binary":       "# c\nformat=1\nbinary=bin/agents\ncheckout=%s\n",
+		"a non-absolute checkout": "# c\nformat=1\nbinary=%s\ncheckout=somewhere\n",
 	}
+	for name, record := range brokenRecords {
+		t.Run(name, func(t *testing.T) {
+			fixture := newHookInstallFixture(t)
+			if output, err := runHookInstaller(t, fixture, "install"); err != nil {
+				t.Fatalf("install failed: %v\n%s", err, output)
+			}
+			if name == "a missing binary" {
+				if err := os.Remove(fixture.binary); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				body := record
+				if strings.Count(body, "%s") == 2 {
+					body = strings.Replace(body, "%s", fixture.binary, 1)
+					body = strings.Replace(body, "%s", fixture.repoRoot, 1)
+				} else if strings.Count(body, "%s") == 1 {
+					body = strings.Replace(body, "%s", fixture.binary, 1)
+				}
+				writeChainRecord(t, fixture, body)
+			}
 
-	writeChainRecord(t, fixture, "")
-	for _, hook := range hookInstallHookNames {
-		output, code := runHookEntry(t, fixture, hook)
-		if code == 0 {
-			t.Errorf("%s exited 0 on an unreadable record:\n%s", hook, output)
-		}
-		if !strings.Contains(output, "chain.env") {
-			t.Errorf("%s must name the record it could not read: %q", hook, output)
-		}
+			for _, hook := range hookInstallHookNames {
+				want := 1
+				if hookInstallObservational[hook] {
+					want = 0
+				}
+				output, code := runHookEntry(t, fixture, hook)
+				if code != want {
+					t.Errorf("%s exited %d on %s, want %d:\n%s", hook, code, name, want, output)
+				}
+				if output == "" {
+					t.Errorf("%s said nothing about %s; a loss with no line is the silence this design removes", hook, name)
+				}
+			}
+		})
 	}
 }
 
@@ -2162,4 +2195,64 @@ func TestInstallPreflightCreatesNothing(t *testing.T) {
 		t.Errorf("preflight created the agents directory: %v", err)
 	}
 	assertNoHookInstallManagedPaths(t, fixture)
+}
+
+// §8 row 5. The installer-first window: a chain written against a binary that
+// cannot answer `githook` succeeds here and fails at the first commit, at which
+// point every entry fails and `git checkout` and `git switch` fail with them.
+// The probe is what turns that into a refusal with nothing written.
+func TestInstallRefusesABinaryThatCannotAnswerGithook(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	// A release older than the entries: it runs, it exits 0 to a plain
+	// invocation, and `githook --probe` is not something it knows.
+	if err := os.WriteFile(fixture.binary, []byte(silentStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runHookInstaller(t, fixture, "install")
+	if err == nil {
+		t.Fatal("the installer wrote a chain for a binary that cannot run it")
+	}
+	if !strings.Contains(output, fixture.binary) {
+		t.Errorf("the refusal must name the binary it was handed: %q", output)
+	}
+	if !strings.Contains(output, "githook") || !strings.Contains(output, "v0.8.0") {
+		t.Errorf("the refusal must name what is missing and the release that has it: %q", output)
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+	if _, err := os.Lstat(chainDir(fixture)); !os.IsNotExist(err) {
+		t.Errorf("the refusal created the chain directory: %v", err)
+	}
+	if _, err := os.Lstat(fixture.globalConfig); !os.IsNotExist(err) {
+		t.Errorf("the refusal wrote the global config: %v", err)
+	}
+}
+
+// §8 row 6. The probe must not be reachable from preflight: preflight runs
+// before the binary is installed -- on a fresh machine before `brew bundle`
+// installs the release -- so a refusal there would stop a run that is about to
+// put the right binary in place. The same binary that install refuses passes
+// preflight untouched.
+func TestInstallPreflightIsBlindToABinaryThatCannotAnswerGithook(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	if err := os.WriteFile(fixture.binary, []byte(silentStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := runHookInstaller(t, fixture, "preflight")
+	if err != nil {
+		t.Fatalf("preflight refused before the binary it needs has been installed: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "preflight passed") {
+		t.Errorf("preflight did not report success: %q", output)
+	}
+	assertNoHookInstallManagedPaths(t, fixture)
+
+	// And the very next step, install, is where it stops -- which is the pair
+	// of behaviours the two rows pin.
+	if output, err := runHookInstaller(t, fixture, "install"); err == nil {
+		t.Fatalf("install accepted the same binary preflight was right to ignore:\n%s", output)
+	}
 }

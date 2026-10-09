@@ -106,6 +106,24 @@ time from a compile-time stamp or a hand-written environment line — and moving
 into the chain record is what turned a decision recorded on 2026-09-21 and never
 executed into an afternoon's work.
 
+## Correction, 2026-10-09 (same day, after the branch review)
+
+Two citations in the answer above point at a tree that has since moved, and one
+number was measured again:
+
+- **`bootstrap.d/internal/phase/devtools_test.go:23`** — the file now pins the
+  installer invocations **with** `--adopt-owned`, at `:20` and `:21`. The
+  sentence above is the record of what it pinned before the fix; the line number
+  is the one it had then.
+- **`agents/install_hooks_test.go:298-338`** — `runHookSequence` is still there
+  and still the only test of the devtools sequence; its line numbers moved with
+  the stage-2 work, and the name is the citation that survives.
+- **"worth five `doctor` checks (18 → 13)"** — re-measured on 2026-10-09 against
+  the branch: 19 checks with a chain installed, 14 with none. The difference is
+  still five, and it is now the chain record rather than the variable that
+  carries the binding, so the count moves with the chain and not with
+  `AGENTS_DOTFILES_ROOT` (which no longer has a reader).
+
 Sibling entries in this store and in `docs/design/` still cite `Makefile:` line
 numbers and `makefile_test.go`. Those are kept as records under the convention
 [where else does this command name live](where-else-does-this-command-name-live.md)

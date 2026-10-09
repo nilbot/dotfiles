@@ -185,11 +185,19 @@ func agentsCandidates() []string {
 // -- would re-pin the chain to a second owner and report success, which is the
 // leak the probe exists to close.
 //
-// ACCEPTED LIMITATION, of the shape resolveBrew documents: on a machine whose
-// Brewfile has not been installed, `plan workstation` stops here instead of
-// previewing the phases after it. The alternative -- recording the probe and
-// planning against a binary that is not there -- is the silent success this
-// phase exists to prevent. `plan dotfiles` excludes devtools and is unaffected.
+// ACCEPTED LIMITATION, of the shape resolveBrew documents: when no Homebrew
+// prefix holds `agents`, `plan workstation` stops here instead of previewing
+// the phases after it. The alternative -- recording the probe and planning
+// against a binary that is not there -- is the silent success this phase exists
+// to prevent. `plan dotfiles` excludes devtools and is unaffected.
+//
+// The condition is wider than "this machine has never run apply": it is "the
+// Brewfile that carries `brew \"nilbot/tap/agents\"` has not been installed
+// yet". A machine that ran `apply workstation` before that row landed -- this
+// one included, on 2026-10-09 -- has no `agents` at any prefix, so its next
+// `plan workstation` stops here until `apply` (or `brew bundle`) installs the
+// row. That is a real stop with a real instruction, not a bug in the walk:
+// re-running apply installs the tap and the phase proceeds.
 func resolveAgents(c Context) (string, error) {
 	candidates := agentsCandidates()
 	for _, candidate := range candidates {
@@ -209,8 +217,9 @@ func resolveAgents(c Context) (string, error) {
 	}
 	return "", fmt.Errorf("no agents binary at any Homebrew prefix: looked for %s. "+
 		"The packages phase installs it from bootstrap.d/Brewfile (nilbot/tap/agents), "+
-		"so a machine that has not run './bootstrap apply workstation' has nothing for "+
-		"the git hook chain to point at", strings.Join(candidates, ", "))
+		"so the git hook chain has nothing to point at until the Brewfile carrying that "+
+		"row has been installed: run './bootstrap apply workstation', or 'brew bundle' "+
+		"against bootstrap.d/Brewfile, and retry", strings.Join(candidates, ", "))
 }
 
 // resolveBrew finds the brew the installer just wrote, and exists because

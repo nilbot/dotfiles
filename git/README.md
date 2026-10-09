@@ -76,6 +76,38 @@ refused with or without the flag. Installing through `$(command -v agents)` in
 the first place means this step never comes up: Homebrew repoints its stable path
 for you.
 
+### If the installer refuses
+
+Every refusal names the path it looked at and what is there, and none of them
+needs a second tool. The sequence, by hand, when the flag is not enough:
+
+```bash
+# 1. Read the refusal. It names the path, what is at it, and the command it wants.
+bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles "$HOME" "$(command -v agents)"
+
+# 2. Move that one path aside -- move, never delete. A foreign file is somebody's.
+mv "$HOME/.config/agents/hooks.d/pre-commit" "$HOME/.config/agents/hooks.d/pre-commit.bak"
+
+# 3. Re-run the same install command, then read the result rather than trusting it.
+bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles "$HOME" "$(command -v agents)"
+agents doctor
+```
+
+Three refusals have their own shape and nothing to move aside:
+
+- **a symlinked or non-directory chain path** — `~/.config/agents` and
+  `~/.config/agents/hooks.d` must be real directories, because a symlink can be
+  aimed back inside a checkout. Fix the directory, not the file.
+- **`core.hooksPath` set elsewhere, or set from an include** — unset it with
+  `git config --global --unset-all core.hooksPath` and re-run.
+- **a binary that cannot answer `githook`** — install the released `agents`
+  (v0.8.0 or later) and re-run. The installer probes for this rather than writing
+  a chain that fails at the first commit.
+
+The chain the installer retires on its own needs no hand work: a stage-1 chain in
+`<checkout>/git/hooks.d/` is removed after `core.hooksPath` is repointed, and a
+file in that directory the installer did not write is left where it is.
+
 ## Checking an install
 
 ```bash

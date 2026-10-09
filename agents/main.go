@@ -132,12 +132,14 @@ func run(args []string) int {
 		// nothing ran, because the invocation named nothing runnable -- and the
 		// old code split them across two streams only because the handlers
 		// these clauses replaced happened to print to stdout. A caller piping
-		// `agents trace` somewhere got the complaint in the pipe.
+		// `agents doctor` somewhere got the complaint in the pipe.
 		//
 		// This unifies dispatch, not the binary: the handlers still print their
-		// own usage errors to stdout, so `agents trace` reports on stderr while
-		// `agents trace show` reports on stdout. Settling that means threading a
-		// second writer through every handler and is carried as its own task.
+		// own usage errors to stdout, so an unknown subcommand of a known
+		// command (say `agents help nope`) reports on stderr while the command's
+		// own handler reports a bad flag on stdout. Settling that means
+		// threading a second writer through every handler and is carried as its
+		// own task.
 		if len(rest) > 0 {
 			fmt.Fprintf(os.Stderr, "agents %s: unknown subcommand %q\n", cmd.Name, rest[0])
 		} else {
@@ -149,13 +151,14 @@ func run(args []string) int {
 }
 
 // helpFlagIndex finds --help or -h anywhere in the arguments, including in a
-// position where it is really a flag's value: `agents save -m -h` prints help
-// rather than committing with the message "-h". Every alternative rule is
-// worse. Stopping the scan at the first flag breaks `agents trace cache prune
-// --lane x --help`, and knowing that -m takes a value while -h does not means
-// teaching dispatch which flags each command declares -- a second copy of the
-// thing the tree exists to hold once. `-m -h` is a malformed invocation either
-// way, so the cheap rule loses nothing real.
+// position where it is really a flag's value: `agents githook pre-commit -h`
+// prints help rather than forwarding "-h" to the hook. Every alternative rule
+// is worse. Stopping the scan at the first flag breaks
+// `agents init --local -h`, and knowing which flags take a value while -h does
+// not means teaching dispatch which flags each command declares -- a second
+// copy of the thing the tree exists to hold once. A flag's value that happens
+// to be `-h` is a malformed invocation either way, so the cheap rule loses
+// nothing real.
 func helpFlagIndex(args []string) int {
 	for i, a := range args {
 		if a == "--help" || a == "-h" {
@@ -166,8 +169,8 @@ func helpFlagIndex(args []string) int {
 }
 
 // commandPathPrefix keeps the leading command tokens and drops the first flag
-// and everything after it, so `agents trace cache prune --lane x --help` still
-// resolves to the leaf rather than to a path with --lane in it.
+// and everything after it, so `agents help --all` still resolves to `help`
+// rather than to a path with `--all` in it.
 func commandPathPrefix(args []string) []string {
 	for i, a := range args {
 		if strings.HasPrefix(a, "-") {

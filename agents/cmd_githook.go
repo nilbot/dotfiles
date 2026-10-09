@@ -15,6 +15,18 @@ import (
 // the entry verbatim, so this is what arrives as `--checkout -`.
 const noCheckout = "-"
 
+// githookProbe is the one argument the installer runs to prove a binary answers
+// `githook` before it writes a chain.
+//
+// It is hand-parsed like the generated invocation, and deliberately absent from
+// the human listing: the caller is `git/install-hooks.sh`, not a person, and a
+// documented no-op would invite the wrong reader. It ships in the same release
+// as `githook` -- no release answers one without the other -- so the installer
+// requires it without needing a compatibility story.
+const githookProbe = "--probe"
+
+const githookProbeAnswer = "githook: ok"
+
 // runGithook runs one Git hook on behalf of the chain entry that invoked it.
 //
 // The invocation is generated, not typed: an entry ends with
@@ -33,6 +45,12 @@ const noCheckout = "-"
 // -- is the silent wrong-directory failure this design exists to remove, and
 // it is worse than refusing because it succeeds.
 func runGithook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == githookProbe {
+		// No repository, no record, no hook: the installer is asking whether
+		// this binary is a release that can run the chain at all.
+		fmt.Fprintln(stdout, githookProbeAnswer)
+		return exitcode.OK
+	}
 	name, checkout, hookArgs, ok := parseGithookArgs(args)
 	if !ok {
 		fmt.Fprintln(stderr, usageFor("githook"))
