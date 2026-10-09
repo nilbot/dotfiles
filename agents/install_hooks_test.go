@@ -197,17 +197,201 @@ func runHookInstallerWithTimeout(t *testing.T, fixture hookInstallFixture, mode 
 	}
 }
 
-func hookInstallManagedPaths(fixture hookInstallFixture) []string {
-	paths := []string{filepath.Join(fixture.home, ".gitattributes")}
-	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		paths = append(paths, filepath.Join(fixture.repoRoot, "git", "hooks.d", hook))
+// hookInstallHookNames is the four names the installer manages, in order.
+var hookInstallHookNames = []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"}
+
+// hookInstallObservational is the two names that report rather than guard: a
+// missing banner there must not fail a `git checkout` or a `git switch`.
+var hookInstallObservational = map[string]bool{"post-merge": true, "post-checkout": true}
+
+func hookEntryPath(fixture hookInstallFixture, hook string) string {
+	return filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)
+}
+
+func allHookEntryPaths(fixture hookInstallFixture) []string {
+	paths := make([]string, 0, len(hookInstallHookNames))
+	for _, hook := range hookInstallHookNames {
+		paths = append(paths, hookEntryPath(fixture, hook))
 	}
 	return paths
+}
+
+func chainRecordPath(fixture hookInstallFixture) string {
+	return filepath.Join(fixture.repoRoot, "git", "hooks.d", "chain.env")
+}
+
+func hookInstallManagedPaths(fixture hookInstallFixture) []string {
+	paths := []string{
+		filepath.Join(fixture.home, ".gitattributes"),
+		chainRecordPath(fixture),
+	}
+	for _, hook := range hookInstallHookNames {
+		paths = append(paths, hookEntryPath(fixture, hook))
+	}
+	return paths
+}
+
+// chainRecord parses chain.env the way an entry does -- the generated comment
+// line, then one key=value per line -- and fails the case on anything the
+// installer was not supposed to write.
+func chainRecord(t *testing.T, fixture hookInstallFixture) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(chainRecordPath(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const header = "# Written by git/install-hooks.sh. Re-run the installer to change it."
+	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+	if len(lines) < 4 || lines[0] != header {
+		t.Fatalf("chain.env does not open with the generated comment line:\n%s", data)
+	}
+	record := make(map[string]string)
+	for _, line := range lines[1:] {
+		key, value, found := strings.Cut(line, "=")
+		if !found {
+			t.Fatalf("chain.env line %q is not key=value", line)
+		}
+		record[key] = value
+	}
+	if len(record) != 3 {
+		t.Fatalf("chain.env carries %d keys, want exactly format, binary and checkout: %v", len(record), record)
+	}
+	return record
+}
+
+// assertEntriesInstalled is the shape a successful install leaves: four
+// executable regular files, no symlink among them, each carrying the generated
+// header for this checkout and exec'ing githook under its own name, plus a
+// record whose three keys are exactly these values.
+func assertEntriesInstalled(t *testing.T, fixture hookInstallFixture, wantBinary, wantCheckout string) {
+	t.Helper()
+	record := chainRecord(t, fixture)
+	if record["format"] != "1" {
+		t.Errorf("chain.env format = %q, want 1", record["format"])
+	}
+	if record["binary"] != wantBinary {
+		t.Errorf("chain.env binary = %q, want %q", record["binary"], wantBinary)
+	}
+	if record["checkout"] != wantCheckout {
+		t.Errorf("chain.env checkout = %q, want %q", record["checkout"], wantCheckout)
+	}
+	for _, hook := range hookInstallHookNames {
+		path := hookEntryPath(fixture, hook)
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Fatalf("%s: %v", hook, err)
+		}
+		if !info.Mode().IsRegular() {
+			t.Errorf("%s is not a regular file: mode %v", hook, info.Mode())
+		}
+		if info.Mode().Perm()&0o111 == 0 {
+			t.Errorf("%s is not executable: mode %v", hook, info.Mode())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		if lines[0] != "#!/bin/sh" {
+			t.Errorf("%s line 1 = %q, want #!/bin/sh", hook, lines[0])
+		}
+		if want := "# Written by git/install-hooks.sh for " + wantCheckout + "."; lines[1] != want {
+			t.Errorf("%s line 2 = %q, want %q", hook, lines[1], want)
+		}
+		if last := lines[len(lines)-1]; !strings.Contains(last, "exec ") ||
+			!strings.Contains(last, " githook "+hook+" ") {
+			t.Errorf("%s does not exec githook for its own name on the last line: %q", hook, last)
+		}
+	}
+	assertNoHookInstallTemps(t, fixture)
+}
+
+// assertNoHookInstallTemps fails when an install left a temporary file behind.
+// Every write goes to a temporary name in the hooks directory first, and a
+// directory git reads is the last place a half-written hook may sit.
+func assertNoHookInstallTemps(t *testing.T, fixture hookInstallFixture) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(fixture.repoRoot, "git", "hooks.d"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".install-hooks.") {
+			t.Errorf("temporary file left behind: %s", entry.Name())
+		}
+	}
+}
+
+// shellQuote wraps a path for the stub scripts below, so the fixture's
+// space-containing paths reach the shell as one word.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// recordingAgentsBinary replaces the fixture's binary with one that appends its
+// arguments to a file, and returns that file's path. Running an installed entry
+// and reading the log is how these cases see exactly what git would have run.
+func recordingAgentsBinary(t *testing.T, fixture hookInstallFixture) string {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "agents argv")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + shellQuote(log) + "\n"
+	if err := os.WriteFile(fixture.binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(fixture.binary, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return log
+}
+
+// runHookEntry executes one installed entry and returns what it printed, which
+// is what git shows, and the status git acts on.
+func runHookEntry(t *testing.T, fixture hookInstallFixture, hook string, args ...string) (string, int) {
+	t.Helper()
+	command := exec.Command(hookEntryPath(fixture, hook), args...)
+	command.Env = isolatedGitEnvironment(t, fixture.home, fixture.globalConfig)
+	output, err := command.CombinedOutput()
+	code := 0
+	if exit, ok := err.(*exec.ExitError); ok {
+		code = exit.ExitCode()
+	} else if err != nil {
+		t.Fatalf("run %s: %v\n%s", hook, err, output)
+	}
+	return string(output), code
+}
+
+// writeChainRecord replaces the record with these bytes, for the cases that
+// break it deliberately.
+func writeChainRecord(t *testing.T, fixture hookInstallFixture, content string) {
+	t.Helper()
+	if err := os.WriteFile(chainRecordPath(fixture), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func assertNoHookInstallManagedPaths(t *testing.T, fixture hookInstallFixture) {
 	t.Helper()
 	for _, path := range hookInstallManagedPaths(fixture) {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Errorf("refusal created %s: %v", path, err)
+		}
+	}
+}
+
+// assertRefusalWroteNothing is assertNoHookInstallManagedPaths for a fixture
+// that put something at a hook name itself: those paths are skipped, because a
+// refusal must leave them exactly as it found them -- the test asserted that
+// separately -- while everything else the installer owns must not appear.
+func assertRefusalWroteNothing(t *testing.T, fixture hookInstallFixture, preexisting ...string) {
+	t.Helper()
+	skip := make(map[string]bool, len(preexisting))
+	for _, path := range preexisting {
+		skip[path] = true
+	}
+	for _, path := range hookInstallManagedPaths(fixture) {
+		if skip[path] {
+			continue
+		}
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
 			t.Errorf("refusal created %s: %v", path, err)
 		}
@@ -348,16 +532,7 @@ func TestHookInstallerCleanInstallCreatesExactInactiveStateThenConfiguresGlobalP
 	}
 
 	wantBinary := fixture.binary
-	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		path := filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)
-		got, err := os.Readlink(path)
-		if err != nil {
-			t.Fatalf("read %s: %v", hook, err)
-		}
-		if got != wantBinary {
-			t.Errorf("%s target = %q, want %q", hook, got, wantBinary)
-		}
-	}
+	assertEntriesInstalled(t, fixture, wantBinary, fixture.repoRoot)
 	attrsPath := filepath.Join(fixture.home, ".gitattributes")
 	gotAttrs, err := os.Readlink(attrsPath)
 	if err != nil {
@@ -801,20 +976,17 @@ func TestGitHookSequenceBuildsAndInstallsTwiceWithSpaceContainingPaths(t *testin
 	if info, err := os.Stat(binary); err != nil || info.Mode()&0o111 == 0 {
 		t.Fatalf("built agents binary is not executable: %v", err)
 	}
-	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		got, err := os.Readlink(filepath.Join(root, "git", "hooks.d", hook))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != binary {
-			t.Errorf("%s target = %q, want %q", hook, got, binary)
-		}
-	}
-	gotAttrs, err := os.Readlink(filepath.Join(home, ".gitattributes"))
+	physicalRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	physicalRoot, err := filepath.EvalSymlinks(root)
+	// The installer writes the root it was handed, and runHookSequence hands it
+	// a physical path -- a logical one would record a checkout path that does
+	// not match the root these assertions resolve.
+	assertEntriesInstalled(t,
+		hookInstallFixture{repoRoot: root, home: home, binary: binary, globalConfig: globalConfig},
+		binary, physicalRoot)
+	gotAttrs, err := os.Readlink(filepath.Join(home, ".gitattributes"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1280,20 +1452,6 @@ func fakeHomebrewKeg(t *testing.T, fixture hookInstallFixture, version string) (
 	return keg, stable
 }
 
-func installedHookTargets(t *testing.T, fixture hookInstallFixture) map[string]string {
-	t.Helper()
-	targets := make(map[string]string)
-	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		path := filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)
-		target, err := os.Readlink(path)
-		if err != nil {
-			t.Fatalf("%s is not a symlink: %v", hook, err)
-		}
-		targets[hook] = target
-	}
-	return targets
-}
-
 // A symlink is accepted when every hop lands in a Homebrew keg for agents, and
 // the path RECORDED is the one passed in rather than the keg it resolves to.
 // Recording the keg would satisfy the same checks today and break the hooks on
@@ -1308,10 +1466,9 @@ func TestHookInstallerAcceptsASymlinkThatResolvesIntoAKeg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install with a keg-resolving symlink failed: %v\n%s", err, output)
 	}
-	for hook, target := range installedHookTargets(t, fixture) {
-		if target != stable {
-			t.Errorf("%s points at %q, want the stable path %q (the keg is %q)", hook, target, stable, keg)
-		}
+	assertEntriesInstalled(t, fixture, stable, fixture.repoRoot)
+	if info, err := os.Lstat(keg); err != nil || info.Mode()&0o111 == 0 {
+		t.Errorf("the keg the installer was handed stopped being executable: %v", err)
 	}
 	if !strings.Contains(output, "installed global Git hooks") {
 		t.Errorf("install did not report success: %q", output)
@@ -1334,6 +1491,10 @@ func TestHookInstallerRefusesAKegPathWhenTheStablePathIsInstalled(t *testing.T) 
 	if output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, stable); err != nil {
 		t.Fatalf("initial install failed: %v\n%s", err, output)
 	}
+	before, err := os.Lstat(hookEntryPath(fixture, "pre-commit"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	output, err := runHookInstallerArgs(t, fixture, "install", fixture.repoRoot, fixture.home, keg)
 	if err == nil {
@@ -1345,10 +1506,15 @@ func TestHookInstallerRefusesAKegPathWhenTheStablePathIsInstalled(t *testing.T) 
 	if strings.Contains(output, "--adopt-owned") {
 		t.Errorf("refusal offers a flag that would re-pin the hooks: %q", output)
 	}
-	for hook, target := range installedHookTargets(t, fixture) {
-		if target != stable {
-			t.Errorf("%s was repointed to %q by a refused run", hook, target)
-		}
+	if got := chainRecord(t, fixture)["binary"]; got != stable {
+		t.Errorf("chain.env binary = %q after a refused run, want %q", got, stable)
+	}
+	after, err := os.Lstat(hookEntryPath(fixture, "pre-commit"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("a refused run replaced pre-commit")
 	}
 }
 
@@ -1361,8 +1527,8 @@ func TestHookInstallerAdoptsOwnedLinksFromAnEarlierBinary(t *testing.T) {
 	fixture := newHookInstallFixture(t)
 	_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
 	stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
-	for _, hook := range []string{"pre-commit", "commit-msg", "post-merge", "post-checkout"} {
-		if err := os.Symlink(stale, filepath.Join(fixture.repoRoot, "git", "hooks.d", hook)); err != nil {
+	for _, hook := range hookInstallHookNames {
+		if err := os.Symlink(stale, hookEntryPath(fixture, hook)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1374,17 +1540,23 @@ func TestHookInstallerAdoptsOwnedLinksFromAnEarlierBinary(t *testing.T) {
 	if !strings.Contains(output, "--adopt-owned") {
 		t.Errorf("refusal does not name the flag that repairs it: %q", output)
 	}
+	assertRefusalWroteNothing(t, fixture, allHookEntryPaths(fixture)...)
 
 	output, err = runHookInstallerArgs(t, fixture, "install", "--adopt-owned", fixture.repoRoot, fixture.home, stable)
 	if err != nil {
 		t.Fatalf("--adopt-owned did not repair stale owned links: %v\n%s", err, output)
 	}
-	for hook, target := range installedHookTargets(t, fixture) {
-		if target != stable {
-			t.Errorf("%s points at %q after adoption, want %q", hook, target, stable)
+	assertEntriesInstalled(t, fixture, stable, fixture.repoRoot)
+	for _, hook := range hookInstallHookNames {
+		info, err := os.Lstat(hookEntryPath(fixture, hook))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			t.Errorf("%s is still a symlink after adoption", hook)
 		}
 	}
-	if !strings.Contains(output, "repointed pre-commit") {
+	if !strings.Contains(output, "replaced pre-commit with a generated entry") {
 		t.Errorf("adoption was not reported: %q", output)
 	}
 }
@@ -1427,7 +1599,7 @@ func TestHookInstallerAcceptsTheAdoptFlagOnEitherSideOfTheMode(t *testing.T) {
 			fixture := newHookInstallFixture(t)
 			_, stable := fakeHomebrewKeg(t, fixture, "9.9.9")
 			stale := filepath.Join(fixture.home, "homebrew", "Cellar", "agents", "0.0.1", "bin", "agents")
-			if err := os.Symlink(stale, filepath.Join(fixture.repoRoot, "git", "hooks.d", "pre-commit")); err != nil {
+			if err := os.Symlink(stale, hookEntryPath(fixture, "pre-commit")); err != nil {
 				t.Fatal(err)
 			}
 
@@ -1436,9 +1608,293 @@ func TestHookInstallerAcceptsTheAdoptFlagOnEitherSideOfTheMode(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%v failed: %v\n%s", args, err, output)
 			}
-			if target := installedHookTargets(t, fixture)["pre-commit"]; target != stable {
-				t.Errorf("pre-commit points at %q, want %q", target, stable)
-			}
+			assertEntriesInstalled(t, fixture, stable, fixture.repoRoot)
 		})
+	}
+}
+
+// TestInstallConversionTable is §6's table: what the installer does with each
+// shape it can find at a hook name, with and without --adopt-owned.
+func TestInstallConversionTable(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nothing at the hook name", func(t *testing.T) {
+		fixture := newHookInstallFixture(t)
+		if output, err := runHookInstaller(t, fixture, "install"); err != nil {
+			t.Fatalf("install failed: %v\n%s", err, output)
+		}
+		assertEntriesInstalled(t, fixture, fixture.binary, fixture.repoRoot)
+	})
+
+	// The conversion the flag exists to permit. Nothing else turns four
+	// symlinks into four entries, so an exact link must not be a success state.
+	t.Run("an exact symlink this installer wrote", func(t *testing.T) {
+		fixture := newHookInstallFixture(t)
+		for _, hook := range hookInstallHookNames {
+			if err := os.Symlink(fixture.binary, hookEntryPath(fixture, hook)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		output, err := runHookInstaller(t, fixture, "install")
+		if err == nil {
+			t.Fatal("four symlinks naming the handed binary converted without --adopt-owned")
+		}
+		if !strings.Contains(output, "pre-commit") || !strings.Contains(output, "--adopt-owned") {
+			t.Errorf("the refusal must name the file and the flag: %q", output)
+		}
+		assertRefusalWroteNothing(t, fixture, allHookEntryPaths(fixture)...)
+
+		output, err = runHookInstallerArgs(t, fixture, "install", "--adopt-owned",
+			fixture.repoRoot, fixture.home, fixture.binary)
+		if err != nil {
+			t.Fatalf("--adopt-owned did not convert the symlinks: %v\n%s", err, output)
+		}
+		assertEntriesInstalled(t, fixture, fixture.binary, fixture.repoRoot)
+		for _, hook := range hookInstallHookNames {
+			info, err := os.Lstat(hookEntryPath(fixture, hook))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				t.Errorf("%s is still a symlink after conversion", hook)
+			}
+		}
+	})
+
+	t.Run("a symlink to something else", func(t *testing.T) {
+		for _, adopt := range []bool{false, true} {
+			fixture := newHookInstallFixture(t)
+			foreign := hookEntryPath(fixture, "pre-commit")
+			if err := os.Symlink("/preserved/foreign/hook", foreign); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"install"}
+			if adopt {
+				args = append(args, "--adopt-owned")
+			}
+			output, err := runHookInstallerArgs(t, fixture, append(args, fixture.repoRoot, fixture.home, fixture.binary)...)
+			if err == nil {
+				t.Errorf("adopt=%v: a foreign symlink was accepted", adopt)
+			}
+			if !strings.Contains(output, foreign) {
+				t.Errorf("adopt=%v: the refusal must name the file: %q", adopt, output)
+			}
+			if target, err := os.Readlink(foreign); err != nil || target != "/preserved/foreign/hook" {
+				t.Errorf("adopt=%v: the foreign link changed: target=%q err=%v", adopt, target, err)
+			}
+			assertRefusalWroteNothing(t, fixture, foreign)
+		}
+	})
+
+	t.Run("a regular file this installer did not write", func(t *testing.T) {
+		for _, adopt := range []bool{false, true} {
+			fixture := newHookInstallFixture(t)
+			foreign := hookEntryPath(fixture, "pre-commit")
+			if err := os.WriteFile(foreign, []byte("foreign hook\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"install"}
+			if adopt {
+				args = append(args, "--adopt-owned")
+			}
+			output, err := runHookInstallerArgs(t, fixture, append(args, fixture.repoRoot, fixture.home, fixture.binary)...)
+			if err == nil {
+				t.Errorf("adopt=%v: a foreign regular file was accepted", adopt)
+			}
+			if !strings.Contains(output, foreign) {
+				t.Errorf("adopt=%v: the refusal must name the file: %q", adopt, output)
+			}
+			content, err := os.ReadFile(foreign)
+			if err != nil || string(content) != "foreign hook\n" {
+				t.Errorf("adopt=%v: the foreign file changed: %q %v", adopt, content, err)
+			}
+			assertRefusalWroteNothing(t, fixture, foreign)
+		}
+	})
+
+	// Row 4: an entry that is ours but not what this run would write. It is
+	// refused without the flag and replaced with it.
+	t.Run("our entry from another checkout", func(t *testing.T) {
+		fixture := newHookInstallFixture(t)
+		if output, err := runHookInstaller(t, fixture, "install"); err != nil {
+			t.Fatalf("install failed: %v\n%s", err, output)
+		}
+		other := filepath.Join(filepath.Dir(fixture.repoRoot), "another checkout")
+		rewritten := strings.Replace(
+			"# Written by git/install-hooks.sh for "+fixture.repoRoot+".",
+			fixture.repoRoot, other, 1)
+		entryPath := hookEntryPath(fixture, "pre-commit")
+		data, err := os.ReadFile(entryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		patched := strings.Replace(string(data),
+			"# Written by git/install-hooks.sh for "+fixture.repoRoot+".", rewritten, 1)
+		if patched == string(data) {
+			t.Fatal("the generated header was not found in the entry")
+		}
+		if err := os.WriteFile(entryPath, []byte(patched), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.Lstat(entryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		output, err := runHookInstaller(t, fixture, "install")
+		if err == nil {
+			t.Fatal("an entry naming another checkout was replaced without --adopt-owned")
+		}
+		if !strings.Contains(output, entryPath) || !strings.Contains(output, "--adopt-owned") {
+			t.Errorf("the refusal must name the file and the flag: %q", output)
+		}
+		after, err := os.Lstat(entryPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(before, after) {
+			t.Error("a refused run replaced the entry")
+		}
+
+		if output, err := runHookInstallerArgs(t, fixture, "install", "--adopt-owned",
+			fixture.repoRoot, fixture.home, fixture.binary); err != nil {
+			t.Fatalf("--adopt-owned did not replace the entry: %v\n%s", err, output)
+		}
+		assertEntriesInstalled(t, fixture, fixture.binary, fixture.repoRoot)
+	})
+}
+
+// An installed entry runs the binary the record names, under its own hook name,
+// with the checkout from the record and Git's arguments unchanged -- which is
+// what commit-msg depends on, since Git hands it the message file's path.
+func TestInstallEntriesExecTheRecordedBinaryWithGitArguments(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	log := recordingAgentsBinary(t, fixture)
+	if output, err := runHookInstaller(t, fixture, "install"); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, output)
+	}
+
+	for _, hook := range hookInstallHookNames {
+		if err := os.Remove(log); err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		output, code := runHookEntry(t, fixture, hook, "first arg", "COMMIT_EDITMSG")
+		if code != 0 {
+			t.Fatalf("%s exited %d:\n%s", hook, code, output)
+		}
+		data, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatalf("%s did not run the recorded binary: %v", hook, err)
+		}
+		got := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+		want := []string{"githook", hook, "--checkout", fixture.repoRoot, "first arg", "COMMIT_EDITMSG"}
+		if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+			t.Errorf("%s ran %q, want %q", hook, got, want)
+		}
+	}
+}
+
+// The record is data, not code. A record that is malformed must be refused by
+// name, and a line that happens to be a shell command must never run.
+func TestInstallRefusesAMalformedRecordWithoutRunningIt(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	log := recordingAgentsBinary(t, fixture)
+	if output, err := runHookInstaller(t, fixture, "install"); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, output)
+	}
+	valid := "# c\nformat=1\nbinary=" + fixture.binary + "\ncheckout=" + fixture.repoRoot + "\n"
+
+	t.Run("unknown key", func(t *testing.T) {
+		writeChainRecord(t, fixture, valid+"pwned=1\n")
+		output, code := runHookEntry(t, fixture, "pre-commit")
+		if code == 0 {
+			t.Errorf("a record with an unknown key was accepted:\n%s", output)
+		}
+		if !strings.Contains(output, "pwned") {
+			t.Errorf("the refusal must name the unknown key: %q", output)
+		}
+	})
+
+	t.Run("truncated after binary", func(t *testing.T) {
+		writeChainRecord(t, fixture, "# c\nformat=1\nbinary="+fixture.binary+"\n")
+		output, code := runHookEntry(t, fixture, "pre-commit")
+		if code == 0 {
+			t.Errorf("a truncated record was accepted:\n%s", output)
+		}
+		if !strings.Contains(output, "checkout") {
+			t.Errorf("the refusal must name the key it could not read: %q", output)
+		}
+	})
+
+	t.Run("a line that is a shell command", func(t *testing.T) {
+		pwned := filepath.Join(t.TempDir(), "pwned")
+		writeChainRecord(t, fixture, valid+": > "+pwned+"\n")
+		output, code := runHookEntry(t, fixture, "pre-commit")
+		if code == 0 {
+			t.Errorf("a record line that is a shell command was accepted:\n%s", output)
+		}
+		if _, err := os.Lstat(pwned); !os.IsNotExist(err) {
+			t.Errorf("the record was sourced, not parsed: %s ran", pwned)
+		}
+	})
+
+	t.Run("a value that is a shell command", func(t *testing.T) {
+		pwned := filepath.Join(t.TempDir(), "pwned-value")
+		writeChainRecord(t, fixture, "# c\nformat=1\nbinary="+fixture.binary+"; : > "+pwned+"\ncheckout="+fixture.repoRoot+"\n")
+		output, code := runHookEntry(t, fixture, "pre-commit")
+		if code == 0 {
+			t.Errorf("a record value carrying a shell command was accepted:\n%s", output)
+		}
+		if _, err := os.Lstat(pwned); !os.IsNotExist(err) {
+			t.Errorf("a value was interpreted as shell: %s ran", pwned)
+		}
+	})
+
+	// Nothing above may have reached the binary: every record was broken.
+	if _, err := os.Lstat(log); !os.IsNotExist(err) {
+		t.Errorf("an entry executed the binary with a malformed record")
+	}
+}
+
+// A missing binary is a lost banner for post-merge and post-checkout, and
+// reporting it must not fail a `git checkout` or a `git switch`; for the two
+// guard names it must block the commit. A broken record is different: it is a
+// broken guard whatever the hook is, so every name exits non-zero.
+func TestInstallObservationalEntriesReportAMissingBinaryAtExitZero(t *testing.T) {
+	t.Parallel()
+	fixture := newHookInstallFixture(t)
+	if output, err := runHookInstaller(t, fixture, "install"); err != nil {
+		t.Fatalf("install failed: %v\n%s", err, output)
+	}
+	if err := os.Remove(fixture.binary); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, hook := range hookInstallHookNames {
+		want := 1
+		if hookInstallObservational[hook] {
+			want = 0
+		}
+		output, code := runHookEntry(t, fixture, hook)
+		if code != want {
+			t.Errorf("%s exited %d with the binary missing, want %d:\n%s", hook, code, want, output)
+		}
+		if !strings.Contains(output, fixture.binary) {
+			t.Errorf("%s must name the binary that is missing: %q", hook, output)
+		}
+	}
+
+	writeChainRecord(t, fixture, "")
+	for _, hook := range hookInstallHookNames {
+		output, code := runHookEntry(t, fixture, hook)
+		if code == 0 {
+			t.Errorf("%s exited 0 on an unreadable record:\n%s", hook, output)
+		}
+		if !strings.Contains(output, "chain.env") {
+			t.Errorf("%s must name the record it could not read: %q", hook, output)
+		}
 	}
 }
