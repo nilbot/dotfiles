@@ -178,6 +178,25 @@ one formula out of the Brewfile's thirty, and neither cask.
    `brew bundle check`, and Homebrew's auto-update, inside CI on every stage-zero
    run, against the warm prefix `verify.yml:568-572` restores.
 
+### Migration: what this costs a machine that is already provisioned
+
+Nothing on the machine migrates. The change adds no file, no record and no
+configuration, and it removes none: it deletes a check from a program's behaviour
+and a method from an interface. A machine that is already provisioned sees
+`bootstrap check` stop asking Homebrew a question, and its `bootstrap` binary is
+rebuilt by whatever route built it before — `bootstrap apply`, or a developer's
+`make`-equivalent. Rollback is reverting the change and rebuilding. There is no
+state to unwind, which is why this document has no rollback section — where the
+sibling design for binary identity, in review on another branch, needs two, one for
+each of its two stages.
+
+Two things change for a person, and neither is on the machine. Anyone who ran
+`./bootstrap check workstation` to ask whether their packages are installed loses
+that answer, and has to ask `brew bundle check` instead — that is §3's first row.
+And a Brewfile that is missing or mistyped is no longer noticed by `check`; it
+surfaces when `brew bundle --file` fails at the next `apply`, which is §3's third
+row.
+
 ## 5. What enforces the old behaviour today
 
 Fifteen sites carry the behaviour being removed, or become wrong once it is gone.
