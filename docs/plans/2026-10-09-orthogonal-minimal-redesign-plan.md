@@ -223,3 +223,39 @@ turned into records. A hundred lines and a migration whose subject had already b
 behaviour produced a commit. Twice a verification was claimed from a command whose pattern hid the
 result — a filtered `go test -run`, and a `grep '^--- FAIL'` against failure lines that are indented.
 The acceptance command must be the whole suite, and its output read rather than counted.
+
+---
+
+## Status, round 50
+
+| step | state | commits |
+|---|---|---|
+| 1 — `check` executes nothing | landed and verified | `856cedf` |
+| 2a — the installer writes a record and four entries | landed and verified | `9095ef0`, `b074cb9`, `74ac5c1`, `5a14f9d` |
+| 2b — `agents githook`, the record reader, the shim | landed and verified: suite green including `-race`, documents guards passing, and a real commit whose `commit-msg` hook received `COMMIT_EDITMSG` | `35d9322`, `4934e1b` |
+| 2c — `doctor` reads the chain | landed and verified, and measured against this machine before conversion, where it correctly reports `chain:entries FAIL pre-commit is a symlink` | `94e25af` |
+| 3 — provisioning consumes the tap | landed and verified; the new test is falsifiable by adding a `LookPath` arm | `1d6e323` |
+| 4 — convert this machine's chain | **waiting on a release**: the conversion needs a binary that answers `githook`, and the installer's refusal of 0.7.0 is correct until then | |
+| 5 — delete the producers | landed: the `Makefile` and `makefile_test.go` gone, the worktree hazard kept in `devtools.go`'s doc comment | `db03eb3` |
+| 6 — stage 2, the chain becomes machine-owned | in flight | |
+| 7 — the records | substantially landed across both branches | `727d18d`, `790b348`, `eb7160a`, `dd176b8`, `a69329b`, `5ceae5b`, `5ef703e`, `a799b9f` |
+
+Three things this stage established that the plan did not anticipate, each now in a commit
+message where a reader will meet it:
+
+- **`--adopt-owned` does not convert a chain naming `~/bin/agents`.** `owned_link_target` adopts
+  only keg-shaped links, so the 2026-09-21 decision now means less than it did: the flag repairs a
+  keg-pinned chain or a stable path from another prefix, not the personal build's. A machine wired
+  that way needs the documented manual sequence.
+- **`agents doctor` lost its machine-level checks for one task**, because deleting the compiled
+  stamp left the call site nothing to read. The note that recorded it was written to be deleted by
+  step 2c, and was.
+- **`agents/README.md` does document the `chain:*` checks**, contrary to a records-writer report
+  that grepped `internal/doctor/doctor.go` and missed `internal/doctor/chain.go`, which declares
+  them and is called at `doctor.go:125`.
+
+**Two criteria of mine were unmeetable**, both caught by a writer running the thing rather than
+reading it: `make -n agents` exits 0 without a makefile because `agents/` is a directory, so the
+checkable form is `make -n release` failing plus an empty grep; and `command -v agents` in
+`linux-stage-zero` needed its `PATH` prefix on the same line, since a `run:` step is not a login
+shell and nothing there put the brew prefix on `PATH`.
