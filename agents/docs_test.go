@@ -81,11 +81,18 @@ func livingDocuments(t *testing.T, root string) []string {
 	targets := []string{
 		"README.md",
 		filepath.Join("agents", "README.md"),
+		filepath.Join("git", "README.md"),
 		"CLAUDE.md",
 		filepath.Join("global", "AGENTS.md"),
 	}
-	for _, dir := range []string{filepath.Join("claude", "skills"), filepath.Join(".agents", "skills")} {
-		_ = filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
+	// One skill tree, not two. claude/skills was deleted on 2026-09-21 and this
+	// list went on walking it for a month, discarding the error, so the guard
+	// covered one tree while claiming two. A listed root that is missing now
+	// fails rather than passing in silence, which is the same rule the comment
+	// above applies to targets -- and the reason git/README.md is listed here: it
+	// states the install and upgrade rule, and nothing was watching it.
+	for _, dir := range []string{filepath.Join(".agents", "skills")} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d fs.DirEntry, err error) error {
 			if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") {
 				rel, relErr := filepath.Rel(root, p)
 				if relErr == nil {
@@ -94,6 +101,9 @@ func livingDocuments(t *testing.T, root string) []string {
 			}
 			return nil
 		})
+		if err != nil {
+			t.Errorf("document root %s: %v; a guard that skips a listed root silently covers less than it claims", dir, err)
+		}
 	}
 	return targets
 }
