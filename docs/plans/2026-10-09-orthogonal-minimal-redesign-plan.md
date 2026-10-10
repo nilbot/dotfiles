@@ -330,3 +330,45 @@ costs, because one earlier draft of §6 did not: recreating `<root>/git/hooks.d/
 directory** to the checkout, since its `.gitignore` was deleted with stage 2. The clean path back is a
 release that fixes the fault, not a hand-built chain — which is why the preconditions above are worth
 running before the conversion rather than after it.
+
+---
+
+## Step 4 executed, 2026-10-10
+
+The plan is complete. The release landed as **v0.8.0** on `e504c56`, and the machine's chain is
+converted. The evidence, because an EXECUTED claim without it is the defect this plan was written to
+correct:
+
+```
+$ agents githook --probe
+githook: ok                                    # exit 0, the installer's precondition
+
+$ bash git/install-hooks.sh install --adopt-owned ~/dotfiles "$HOME" "$(command -v agents)"
+install-hooks: retired pre-commit from /Users/nilbot/dotfiles/git/hooks.d
+install-hooks: retired commit-msg   ... post-merge ... post-checkout
+install-hooks: installed global Git hooks       # exit 0, nothing written before the probe passed
+
+$ git config --global --get core.hooksPath
+/Users/nilbot/.config/agents/hooks.d
+
+$ cat ~/.config/agents/hooks.d/chain.env
+format=1
+binary=/opt/homebrew/bin/agents
+checkout=/Users/nilbot/dotfiles
+```
+
+`agents doctor` reports all nine chain checks ok, including the two that could only be true after
+this step: `chain:running` says the chain runs `/opt/homebrew/bin/agents`, which is the running
+binary, and `chain:checkout` says the recorded checkout supplies 2 personal stages. The dotfiles
+checkout is clean — the four symlinks were retired and `git/hooks.d/` is gone, so the untracked
+directory stage 2 created no longer exists. A real commit in a scratch repository exits 0, and a
+`git checkout -b` exits 0, which is the exit-status rule the CI fixes established.
+
+`brew upgrade agents` removed the 0.7.0 keg, which is the deletion the design accounts for by
+recording the stable prefix path rather than a keg path.
+
+**What is not done, and is not this plan's business:** nothing. Every step landed, and the two
+follow-ups the branch review could not close by itself are recorded rather than hidden — the installer
+cannot adopt a chain naming `~/bin/agents` (it is foreign, and `git/README.md` now gives the manual
+sequence), and a machine that installed the Brewfile before the trust fix needs the tap trusted,
+which the packages phase now does before `brew bundle`.
