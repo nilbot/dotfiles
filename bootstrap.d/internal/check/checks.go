@@ -323,31 +323,3 @@ func agentsOnPath(c Context) Result {
 	}
 	return Result{OK, "agents", path}
 }
-
-// packages asks Homebrew whether the Brewfile is satisfied. `brew bundle check`
-// reads and reports; it installs nothing, which is why a check may run it.
-//
-// The absent-Brewfile arm comes first and deliberately does not reach brew:
-// Task 12 creates the file, so until then it genuinely does not exist, and
-// handing a missing path to `brew bundle check` produces an error about the path
-// where the honest answer is that the phase which creates it has not run.
-func packages(c Context) Result {
-	brewfile := filepath.Join(c.Root, "bootstrap.d", "Brewfile")
-	info, err := c.Change.Lstat(brewfile)
-	if err != nil {
-		return Result{Fail, "packages", err.Error()}
-	}
-	if !info.Exists {
-		return Result{Fail, "packages",
-			"the packages phase has not run: " + brewfile + " does not exist"}
-	}
-	if _, err := c.Change.LookPath("brew"); err != nil {
-		return Result{Fail, "packages",
-			"Homebrew is not installed; run './bootstrap apply workstation'"}
-	}
-	if err := c.Change.Run("brew", "bundle", "check", "--file", brewfile); err != nil {
-		return Result{Fail, "packages",
-			"some Brewfile entries are not installed; run './bootstrap apply workstation'"}
-	}
-	return Result{OK, "packages", "every Brewfile entry is installed"}
-}

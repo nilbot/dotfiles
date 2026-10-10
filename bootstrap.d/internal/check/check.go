@@ -1,5 +1,6 @@
 // Package check reports whether this machine is in the state bootstrap would
-// put it in. It answers questions; it never converges anything.
+// put it in. It answers questions; it never converges anything, and it executes
+// nothing -- Machine, below, has no method that runs a command.
 //
 // Like internal/phase it imports NO package capable of I/O -- not os, not
 // os/exec. Every question it asks the machine goes through change.Interface,
@@ -12,18 +13,20 @@
 //
 // # Context.Change must be an Applier, never a Planner
 //
-// A Planner's Run records the command and returns nil without running it. A
-// check that asks a question by running one -- packages asks `brew bundle check`
-// -- would read that nil as success, so the answer would be "everything is
-// installed" on a machine where nothing is. That is a silent false pass in the
-// layer whose entire job is catching silent failures, and it would appear only
-// under `plan`, where nobody is looking for it.
+// A Planner answers Lstat as though every link it recorded already existed, so
+// a check handed one would report the state the plan intends rather than the
+// state the machine is in. That is a silent false pass in the layer whose
+// entire job is catching silent failures, and it would appear only under
+// `plan`, where nobody is looking for it. phase.Verify therefore builds its own
+// Applier rather than passing its Context's Change along.
 //
 // Handing a check an Applier does not weaken the dry-run invariant: every check
-// reads, and `brew bundle check` is a query. Checks never mutate, which is why
-// they do not need the Planner's protection in the first place. phase.Verify
-// therefore builds its own Applier rather than passing its Context's Change
-// along.
+// reads, and none can do anything else. The one check that asked its question by
+// executing a command -- packages, which ran `brew bundle check` -- was removed
+// rather than repaired on 2026-10-09. With the call gone it would have reported
+// "every Brewfile entry is installed" having asked nothing, and the command's
+// own `brew` wrapper auto-updates Homebrew before it dispatches, which is the
+// mutation the query promise exists to prevent.
 //
 // That is enforced by Machine, below, not by anyone remembering it.
 package check
@@ -37,18 +40,21 @@ import (
 )
 
 // Machine is the part of change.Interface a check is allowed to reach, and it
-// deliberately omits Dir, Link, Seed and Sudo.
+// deliberately omits Dir, Link, Seed, Sudo and Run.
 //
 // Ruling 1 removed the Planner from this layer, which left it holding an
-// Applier -- a type whose method set can create symlinks and elevate. The
-// architecture test constrains imports, not method calls, so nothing would have
-// caught a future check that reached for Link, and the dry-run invariant would
-// have rested on every check happening to only read. Stating the interface puts
-// it back in the type system, where the rest of this design keeps its
-// invariants: a check that tried to mutate would not compile.
+// Applier -- a type whose method set can create symlinks, elevate, and execute
+// an arbitrary command. The architecture test constrains imports, not method
+// calls, so nothing would have caught a future check that reached for Link, and
+// the dry-run invariant would have rested on every check happening to only
+// read. Stating the interface puts it back in the type system, where the rest
+// of this design keeps its invariants: a check that tried to mutate would not
+// compile.
 //
-// Run stays because `brew bundle check` is how the packages check asks its
-// question. It is a query, and there is no narrower way to ask it.
+// Run left with the packages check, its only caller. Keeping it would have left
+// the one method that runs a command reachable from a check, so "a query
+// executes nothing" would have rested on nobody reaching for it -- a promise,
+// where everything else this interface states is a compile error.
 //
 // change.Interface satisfies this implicitly, so nothing at a call site changes.
 type Machine interface {
@@ -56,7 +62,6 @@ type Machine interface {
 	Readlink(path string) (string, error)
 	ReadFile(path string) ([]byte, error)
 	LookPath(name string) (string, error)
-	Run(name string, args ...string) error
 }
 
 type Status string
@@ -96,7 +101,8 @@ type Context struct {
 	Shell string
 }
 
-// All runs spec 2 §10's eight checks, in the order they are listed there.
+// All runs the seven checks spec 2 §10 lists, in the order they are listed
+// there, less the `packages` one the query design removed on 2026-10-09.
 //
 // The error is separate from the results on purpose. Everything a check can say
 // about the machine is a Result; the error carries the one thing that is not
@@ -113,10 +119,10 @@ func All(c Context) ([]Result, error) {
 		gitconfigInclude(c),
 	}
 	for _, m := range machineChecks {
-		// Checks 6-8 cover state the dotfiles profile deliberately does not
+		// Checks 6-7 cover state the dotfiles profile deliberately does not
 		// manage -- no sudo, no network, no package manager, no login-shell
 		// change. Reporting them as failures would make every container run
-		// report three problems that are not problems, which is how a report
+		// report two problems that are not problems, which is how a report
 		// stops being read at all.
 		if !managesMachine(c.Profile) {
 			results = append(results, Result{NA, m.name,
@@ -128,7 +134,7 @@ func All(c Context) ([]Result, error) {
 	return results, rowsErr
 }
 
-// machineChecks are the three that concern machine-wide state.
+// machineChecks are the two that concern machine-wide state.
 var machineChecks = []struct {
 	name    string
 	subject string
@@ -136,7 +142,6 @@ var machineChecks = []struct {
 }{
 	{"login-shell", "the login shell", loginShell},
 	{"agents", "developer tooling", agentsOnPath},
-	{"packages", "installed packages", packages},
 }
 
 // managesMachine is the one place this package decides what a profile covers.
