@@ -8,10 +8,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 
-	"github.com/nilbot/dotfiles/agents/internal/githook"
 	"github.com/nilbot/dotfiles/agents/internal/harness"
 	"github.com/nilbot/dotfiles/agents/internal/repo"
 	"github.com/nilbot/dotfiles/agents/internal/safeio"
@@ -42,28 +40,21 @@ type Dependencies struct {
 	LegacyHooksPath       func(string) (string, error)
 	CodexConfig           string
 	AntigravityConfig     string
-	HooksDir              string
 	AttributesLink        string
-	AttributesSource      string
 	AttributesConfigValue string
 	GlobalGitConfig       string
-	SharedGitConfig       string
-	// Root is the checkout this binary was stamped to. Kept rather than only
-	// derived from, because every other path here is built by joining onto it,
-	// so nothing existing can report that the root itself is gone.
-	Root string
 }
 
-// DependenciesFor builds the diagnostic against a named dotfiles checkout.
+// DependenciesFor builds the diagnostic from the machine's own paths.
 //
-// The checkout root is a caller's answer, not doctor's guess: doctor compares
-// HooksDir and SharedGitConfig against what Git reports, so a wrong root makes
-// those checks fail on a correctly provisioned machine. The remaining paths
-// stay home-relative because Git reads them from the home directory wherever
-// the checkout lives.
-func DependenciesFor(root string) Dependencies {
+// It takes no checkout root, and that is the design rather than an omission:
+// the compiled stamp that used to name one is gone, and doctor's machine-level
+// answers now come from the chain -- the directory core.hooksPath names, the
+// record inside it, and the entries Git executes. The remaining paths are
+// home-relative because Git reads them from the home directory.
+func DependenciesFor() Dependencies {
 	home, _ := os.UserHomeDir()
-	deps := Dependencies{
+	return Dependencies{
 		LookPath:              exec.LookPath,
 		Git:                   runGit,
 		LegacyHooksPath:       repo.LegacyHooksPath,
@@ -72,14 +63,7 @@ func DependenciesFor(root string) Dependencies {
 		AttributesLink:        filepath.Join(home, ".gitattributes"),
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(home, ".gitconfig"),
-		Root:                  root,
 	}
-	if root != "" {
-		deps.HooksDir = filepath.Join(root, "git", "hooks.d")
-		deps.AttributesSource = filepath.Join(root, "git", "gitattributes")
-		deps.SharedGitConfig = filepath.Join(root, "git", "gitconfig.shared")
-	}
-	return deps
 }
 
 func runGit(dir string, args ...string) GitResult {
@@ -138,9 +122,8 @@ func RunWithDeps(repoRoot, binary string, deps Dependencies) ([]Check, error) {
 	}
 	checks = append(checks, checkAntigravityTrust(deps.AntigravityConfig, repoRoot))
 	checks = append(checks, checkGitleaks(deps.LookPath))
-	checks = append(checks, rootChecks(deps)...)
-	checks = append(checks, checkGitHooks(repoRoot, binary, deps)...)
-	checks = append(checks, checkGitAttributes(repoRoot, deps))
+	checks = append(checks, chainChecks(repoRoot, binary, deps)...)
+	checks = append(checks, checkAttributesGlobal(repoRoot, deps))
 	checks = append(checks, checkScaffold(repoRoot)...)
 	checks = append(checks, checkSkills(repoRoot)...)
 	return checks, nil
@@ -504,110 +487,6 @@ func checkAntigravityTrust(configPath, repoRoot string) Check {
 	}
 }
 
-func checkGitAttributes(repoRoot string, deps Dependencies) Check {
-	if deps.Root == "" || deps.AttributesSource == "" {
-		repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
-		if err != nil {
-			return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes is unavailable", Remedy: "run `agents init` after reviewing existing attributes"}
-		}
-		for _, line := range repoAttributeLines {
-			if !hasExactLine(repoAttrs, line) {
-				return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes lacks an exact agents rule", Remedy: "run `agents init` after reviewing existing attributes"}
-			}
-		}
-		return Check{Name: "git-attributes", Status: OK, Detail: "repository attributes are exact"}
-	}
-	if deps.Git == nil {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "Git diagnostic runner is unavailable", Remedy: "inspect global Git attributes configuration"}
-	}
-	result := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")
-	values, parseErr := configOriginValues(result.Output)
-	if result.Code != 0 || parseErr != nil || len(values) != 1 || values[0].Origin != "file:"+deps.SharedGitConfig || values[0].Value != deps.AttributesConfigValue {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global core.attributesFile is missing, unreadable, multiple, or unexpected", Remedy: "restore the reviewed global attributes configuration"}
-	}
-	linkInfo, err := os.Lstat(deps.AttributesLink)
-	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link is missing or not a symlink", Remedy: hookInstallerRemedy(deps, false)}
-	}
-	linkTarget, err := os.Stat(deps.AttributesLink)
-	if err != nil {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link is broken", Remedy: hookInstallerRemedy(deps, false)}
-	}
-	sourceInfo, err := os.Stat(deps.AttributesSource)
-	if err != nil || !sourceInfo.Mode().IsRegular() || !os.SameFile(linkTarget, sourceInfo) {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes link does not resolve to the tracked source", Remedy: hookInstallerRemedy(deps, false)}
-	}
-	// The source has to be readable and has to be the tracked file, checked
-	// above. Its contents are no longer asserted: the one rule that lived here
-	// was the trace merge=union attribute, which retired with the tracked
-	// index. Asserting a specific line again would mean this check fails the
-	// moment the file legitimately holds nothing.
-	if _, err := safeio.ReadRegular(deps.AttributesSource); err != nil {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "global attributes source is unreadable", Remedy: "restore the tracked attributes source"}
-	}
-	repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
-	if err != nil {
-		return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes is unavailable", Remedy: "run `agents init` after reviewing existing attributes"}
-	}
-	for _, line := range repoAttributeLines {
-		if !hasExactLine(repoAttrs, line) {
-			return Check{Name: "git-attributes", Status: Fail, Detail: "repository .gitattributes lacks an exact agents rule", Remedy: "run `agents init` after reviewing existing attributes"}
-		}
-	}
-	return Check{Name: "git-attributes", Status: OK, Detail: "global and repository attributes are exact"}
-}
-
-func checkGitHooks(repoRoot, binary string, deps Dependencies) []Check {
-	if deps.Git == nil {
-		name := "git-hooks:global"
-		if deps.Root == "" || deps.HooksDir == "" {
-			name = "git-hooks:local"
-		}
-		return []Check{{Name: name, Status: Fail, Detail: "Git diagnostic runner is unavailable"}}
-	}
-	if deps.Root == "" || deps.HooksDir == "" {
-		return []Check{
-			checkLocalHooks(repoRoot, deps.Git),
-			checkLegacyHooks(repoRoot, deps),
-		}
-	}
-	var checks []Check
-	global := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.hooksPath")
-	globalValues, globalParseErr := configOriginValues(global.Output)
-	switch {
-	case global.Code == 1:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath is unset", Remedy: hookInstallerRemedy(deps, false)})
-	case global.Code != 0:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath could not be read", Remedy: "inspect global Git configuration"})
-	case globalParseErr != nil || len(globalValues) != 1:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: fmt.Sprintf("global core.hooksPath has %d values", len(globalValues)), Remedy: "resolve the global values deliberately"})
-	case globalValues[0].Origin != "file:"+deps.GlobalGitConfig || globalValues[0].Value != deps.HooksDir:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: Fail, Detail: "global core.hooksPath value or origin is unexpected", Remedy: "preserve included settings and restore the reviewed primary global setting deliberately"})
-	default:
-		checks = append(checks, Check{Name: "git-hooks:global", Status: OK, Detail: "global core.hooksPath is exact"})
-	}
-
-	checks = append(checks, checkLocalHooks(repoRoot, deps.Git))
-
-	effective := deps.Git(repoRoot, "config", "--get", "core.hooksPath")
-	effectiveValues := configValues(effective.Output)
-	switch {
-	case effective.Code != 0:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: Fail, Detail: "effective core.hooksPath could not be read", Remedy: "inspect all Git configuration scopes"})
-	case len(effectiveValues) != 1:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: Fail, Detail: fmt.Sprintf("effective core.hooksPath has %d values", len(effectiveValues)), Remedy: "inspect all Git configuration scopes"})
-	case effectiveValues[0] != deps.HooksDir:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: Warn, Detail: "effective core.hooksPath shadows the agents hook directory", Remedy: "inspect local, worktree, command, and environment Git configuration"})
-	default:
-		checks = append(checks, Check{Name: "git-hooks:effective", Status: OK, Detail: "effective core.hooksPath is exact"})
-	}
-
-	checks = append(checks, checkInstalledLinks(deps, binary))
-	checks = append(checks, checkUnmanagedLinks(deps))
-	checks = append(checks, checkLegacyHooks(repoRoot, deps))
-	return checks
-}
-
 func checkGitleaks(lookPath func(string) (string, error)) Check {
 	if lookPath == nil {
 		return Check{Name: "gitleaks", Status: Warn, Detail: "gitleaks lookup is unavailable", Remedy: "brew install gitleaks"}
@@ -616,107 +495,6 @@ func checkGitleaks(lookPath func(string) (string, error)) Check {
 		return Check{Name: "gitleaks", Status: Warn, Detail: "gitleaks is not available on PATH", Remedy: "brew install gitleaks"}
 	}
 	return Check{Name: "gitleaks", Status: OK, Detail: "gitleaks is available on PATH"}
-}
-
-func checkInstalledLinks(deps Dependencies, binary string) Check {
-	binaryInfo, err := os.Stat(binary)
-	if err != nil {
-		return Check{Name: "git-hooks:links", Status: Fail, Detail: "current binary cannot be inspected", Remedy: "rebuild and reinstall agents"}
-	}
-	for _, name := range installedHookNames {
-		path := filepath.Join(deps.HooksDir, name)
-		info, err := os.Lstat(path)
-		if err != nil {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " hook link is missing or unreadable", Remedy: hookInstallerRemedy(deps, false)}
-		}
-		if info.Mode()&os.ModeSymlink == 0 {
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " is not an owned symlink", Remedy: "preserve or move the foreign hook deliberately, then " + hookInstallerRemedy(deps, false)}
-		}
-		resolved, err := os.Stat(path)
-		if err != nil || !os.SameFile(binaryInfo, resolved) {
-			// The link exists and is ours, but names an older binary -- the
-			// shape a package upgrade leaves behind. Repointing it needs the
-			// flag, because the default refuses any link it did not just write.
-			return Check{Name: "git-hooks:links", Status: Fail, Detail: name + " does not resolve to the current binary", Remedy: hookInstallerRemedy(deps, true)}
-		}
-	}
-	return Check{Name: "git-hooks:links", Status: OK, Detail: "all four installed hook links resolve to the current binary"}
-}
-
-func checkLegacyHooks(repoRoot string, deps Dependencies) Check {
-	if deps.LegacyHooksPath == nil {
-		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
-	}
-	dir, err := deps.LegacyHooksPath(repoRoot)
-	if err != nil || !filepath.IsAbs(dir) {
-		return Check{Name: "git-hooks:legacy", Status: Fail, Detail: "repository legacy hooks directory could not be resolved", Remedy: "inspect the repository Git directory"}
-	}
-	var found []string
-	for _, name := range installedHookNames {
-		if githook.IsRetiredShim(filepath.Join(dir, name)) {
-			found = append(found, name)
-		}
-	}
-	if len(found) > 0 {
-		return Check{Name: "git-hooks:legacy", Status: Warn, Detail: "exact retired legacy dispatcher remains for " + strings.Join(found, ", "), Remedy: "remove only the exact retired shim after preserving foreign hooks"}
-	}
-	return Check{Name: "git-hooks:legacy", Status: OK, Detail: "no exact retired legacy dispatcher detected"}
-}
-
-func checkLocalHooks(repoRoot string, git func(dir string, args ...string) GitResult) Check {
-	local := git(repoRoot, "config", "--local", "--get-all", "core.hooksPath")
-	localValues := configValues(local.Output)
-	switch {
-	case local.Code == 1:
-		return Check{Name: "git-hooks:local", Status: OK, Detail: "no repository-local core.hooksPath override"}
-	case local.Code != 0:
-		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath could not be read", Remedy: "inspect repository or linked-worktree Git configuration"}
-	case len(localValues) == 0:
-		return Check{Name: "git-hooks:local", Status: Fail, Detail: "repository-local core.hooksPath returned an empty value"}
-	default:
-		return Check{Name: "git-hooks:local", Status: Warn, Detail: fmt.Sprintf("repository-local core.hooksPath override is set (%d value(s))", len(localValues)), Remedy: "the global agents hooks are shadowed here; chain them from the local hook directory if desired"}
-	}
-}
-
-// checkUnmanagedLinks reports symlinks in the hooks directory that this
-// repository does not manage and that no longer resolve. Git ignores names it
-// does not know, so they are inert -- and invisible: a link left behind by an
-// older install dangles forever and no other check names it. This is the pair
-// of links that survived the 2026-09-20 upgrade of this machine while
-// git-hooks:links, which sees only the four managed names, stayed silent.
-//
-// Warn, never fail: a dangling link under a managed name is already a failure
-// above, and anything else here is the human's to keep or delete.
-func checkUnmanagedLinks(deps Dependencies) Check {
-	entries, err := os.ReadDir(deps.HooksDir)
-	if err != nil {
-		return Check{Name: "git-hooks:unmanaged", Status: Warn, Detail: "hook directory could not be read", Remedy: "inspect " + deps.HooksDir}
-	}
-	var dangling []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if isManagedHookName(name) {
-			continue
-		}
-		path := filepath.Join(deps.HooksDir, name)
-		info, err := os.Lstat(path)
-		if err != nil || info.Mode()&os.ModeSymlink == 0 {
-			continue
-		}
-		if _, err := os.Stat(path); err != nil {
-			dangling = append(dangling, name)
-		}
-	}
-	if len(dangling) == 0 {
-		return Check{Name: "git-hooks:unmanaged", Status: OK, Detail: "no unowned hook links dangle"}
-	}
-	sort.Strings(dangling)
-	return Check{
-		Name:   "git-hooks:unmanaged",
-		Status: Warn,
-		Detail: "unowned hook link(s) dangle and will never run: " + strings.Join(dangling, ", "),
-		Remedy: "delete them, or repoint them deliberately: " + hookInstallerRemedy(deps, false),
-	}
 }
 
 // configOriginValue is one git config entry with the file it came from, which
@@ -765,19 +543,81 @@ func hasExactLine(contents []byte, want string) bool {
 	return false
 }
 
-// hookInstallerRemedy renders the command that repairs what the git-hooks and
-// git-attributes checks report. The text it replaces -- "run the reviewed
-// global hook installer" -- named no path, no arguments and no way past the
-// installer's own refusal. That matters most in the one case these checks exist
-// to catch: a package upgrade deletes the versioned path a pinned hook link
-// points at, git runs a dangling hook as if no hook existed, and the installer
-// then refuses the link it wrote itself unless it is handed --adopt-owned. So
-// the remedy carries the flag and the arguments, and falls back to the old
-// sentence only when the checkout paths are unknown.
-func hookInstallerRemedy(deps Dependencies, adoptOwned bool) string {
-	root := deps.Root
-	if root == "" && deps.HooksDir != "" {
-		root = filepath.Dir(filepath.Dir(deps.HooksDir))
+var repoAttributeLines = []string{
+	".agents/** linguist-generated=true",
+}
+
+// checkAttributesGlobal is the machine's attributes link plus the repository's
+// own rule.
+//
+// The link half is the design's row: ~/.gitattributes is a link whose target
+// exists. The recorded link used to be compared against <checkout>/git/
+// gitattributes as well; with no compiled checkout root there is no independent
+// statement to compare it with, and the comparison it did make -- same file as
+// the tracked source -- was the root restated a second time.
+//
+// The repository half is kept here rather than dropped because it is the only
+// in-repo guard for the rule `agents init` writes: the `context` job that also
+// checks it lives in template/ci/verify.yml, which repositories this tool
+// initializes adopt and this one does not run.
+func checkAttributesGlobal(repoRoot string, deps Dependencies) Check {
+	const name = "attributes:global"
+	repoAttrs, err := safeio.ReadRegular(filepath.Join(repoRoot, ".gitattributes"))
+	if err != nil {
+		return Check{Name: name, Status: Fail, Detail: "repository .gitattributes is unavailable", Remedy: "run `agents init` after reviewing existing attributes"}
+	}
+	for _, line := range repoAttributeLines {
+		if !hasExactLine(repoAttrs, line) {
+			return Check{Name: name, Status: Fail, Detail: "repository .gitattributes lacks an exact agents rule", Remedy: "run `agents init` after reviewing existing attributes"}
+		}
+	}
+
+	if deps.Git == nil {
+		return Check{Name: name, Status: Fail, Detail: "Git diagnostic runner is unavailable", Remedy: "inspect global Git attributes configuration"}
+	}
+	if deps.GlobalGitConfig == "" || deps.AttributesConfigValue == "" {
+		return Check{Name: name, Status: Fail, Detail: "global attributes paths are unknown", Remedy: "inspect global Git attributes configuration"}
+	}
+	result := deps.Git(repoRoot, "config", "--global", "--includes", "--null", "--show-origin", "--get-all", "core.attributesFile")
+	values, parseErr := configOriginValues(result.Output)
+	if result.Code != 0 || parseErr != nil || len(values) != 1 || values[0].Value != deps.AttributesConfigValue {
+		return Check{Name: name, Status: Fail, Detail: "global core.attributesFile is missing, unreadable, multiple, or not " + deps.AttributesConfigValue, Remedy: "restore the reviewed global attributes configuration"}
+	}
+	if !attributesOriginIsReviewed(repoRoot, deps, values[0].Origin) {
+		return Check{Name: name, Status: Fail, Detail: "global core.attributesFile comes from " + values[0].Origin + ", which the machine's global config was not reviewed to include", Remedy: "restore the reviewed global attributes configuration"}
+	}
+	remedy := hookInstallerRemedy("", deps, false)
+	linkInfo, err := os.Lstat(deps.AttributesLink)
+	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
+		return Check{Name: name, Status: Fail, Detail: "global attributes link is missing or not a symlink", Remedy: remedy}
+	}
+	if _, err := os.Stat(deps.AttributesLink); err != nil {
+		return Check{Name: name, Status: Fail, Detail: "global attributes link is broken", Remedy: remedy}
+	}
+	return Check{Name: name, Status: OK, Detail: "global attributes link resolves, and the repository rule is exact"}
+}
+
+// hookInstallerRemedy renders the command that repairs what a chain check
+// reports.
+//
+// The checkout comes from the RECORD's `checkout` key, which is the machine's
+// own statement of where the personal stages and the installer live. Stage 1
+// read it from the chain's location instead -- <checkout>/git/hooks.d -- and
+// stage 2 moved the chain to ~/.config/agents/hooks.d, where no checkout
+// appears in any path. When the record is unreadable, or the installer is not
+// at <checkout>/git/install-hooks.sh, the remedy falls back to the sentence
+// that names no path rather than printing a command that cannot run.
+//
+// The arguments matter as much as the path: an upgrade deletes the versioned
+// path a pinned link points at, git runs a dangling hook as if no hook existed,
+// and the installer then refuses the entry it wrote itself unless it is handed
+// --adopt-owned.
+func hookInstallerRemedy(checkout string, deps Dependencies, adoptOwned bool) string {
+	root := ""
+	if checkout != "" && checkout != "-" {
+		if info, err := os.Stat(filepath.Join(checkout, "git", "install-hooks.sh")); err == nil && info.Mode().IsRegular() {
+			root = checkout
+		}
 	}
 	home := ""
 	if deps.GlobalGitConfig != "" {
@@ -795,8 +635,8 @@ func hookInstallerRemedy(deps Dependencies, adoptOwned bool) string {
 }
 
 // isManagedHookName reports whether this repository owns the hook name. The
-// installer links exactly installedHookNames; anything else in the directory
-// belongs to the human.
+// installer writes exactly installedHookNames; anything else in the chain
+// directory belongs to the human.
 func isManagedHookName(name string) bool {
 	for _, managed := range installedHookNames {
 		if name == managed {
@@ -806,46 +646,36 @@ func isManagedHookName(name string) bool {
 	return false
 }
 
-var repoAttributeLines = []string{
-	".agents/** linguist-generated=true",
-}
-
-// rootChecks reports whether the checkout this binary was stamped to still
-// exists.
+// attributesOriginIsReviewed reports whether the file that set
+// core.attributesFile is one the machine's own global config reads: the primary
+// file itself, or a file it includes.
 //
-// Nothing else did, and that was measured before this was written rather than
-// argued from the code. A binary stamped to a worktree, with core.hooksPath
-// agreeing with the stamp, produces output BYTE-IDENTICAL before and after that
-// worktree is deleted -- 2691 bytes both times, and the deleted path appears
-// nowhere in it. git-hooks:global compares core.hooksPath against HooksDir as
-// strings, so two paths that agree with each other pass whether or not either
-// exists.
-//
-// It fails rather than warns because of what the silence costs: githook treats
-// a missing extras directory as "no personal hooks" and carries on at exit 0,
-// so the whole personal hook chain stops running and every check still says the
-// machine is fine.
-func rootChecks(deps Dependencies) []Check {
-	// An unstamped binary is a different situation and not this check's to
-	// report: a test binary, or `go run`, has no root to have lost.
-	if deps.Root == "" {
-		return nil
+// The old check named the checkout's tracked gitconfig.shared directly. With no
+// compiled checkout root there is no such file to name -- and requiring the
+// primary file alone fails a correct machine, measured here, where the value
+// legitimately arrives through the include the global config carries. What the
+// guard still catches is the case it always caught: a setting arriving from a
+// file nobody reviewed.
+func attributesOriginIsReviewed(repoRoot string, deps Dependencies, origin string) bool {
+	path, ok := strings.CutPrefix(origin, "file:")
+	if !ok || path == "" {
+		return false
 	}
-	remedy := "rebuild from the main checkout: cd <checkout> && make agents"
-	info, err := os.Stat(deps.Root)
-	switch {
-	case err != nil:
-		return []Check{{
-			Name: "root:exists", Status: Fail,
-			Detail: fmt.Sprintf("the stamped checkout %s does not exist", deps.Root),
-			Remedy: remedy,
-		}}
-	case !info.IsDir():
-		return []Check{{
-			Name: "root:exists", Status: Fail,
-			Detail: fmt.Sprintf("the stamped checkout %s is not a directory", deps.Root),
-			Remedy: remedy,
-		}}
+	if path == deps.GlobalGitConfig {
+		return true
 	}
-	return []Check{{Name: "root:exists", Status: OK, Detail: "the stamped checkout exists"}}
+	includes := deps.Git(repoRoot, "config", "--global", "--includes", "--get-all", "include.path")
+	home := filepath.Dir(deps.GlobalGitConfig)
+	for _, included := range configValues(includes.Output) {
+		switch {
+		case strings.HasPrefix(included, "~/"):
+			included = filepath.Join(home, included[len("~/"):])
+		case !filepath.IsAbs(included):
+			included = filepath.Join(home, included)
+		}
+		if included == path {
+			return true
+		}
+	}
+	return false
 }

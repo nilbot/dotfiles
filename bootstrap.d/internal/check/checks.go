@@ -318,7 +318,8 @@ func agentsOnPath(c Context) Result {
 	path, err := c.Change.LookPath("agents")
 	if err != nil {
 		return Result{Fail, "agents",
-			"not on PATH; the devtools phase builds it -- run './bootstrap apply workstation'"}
+			"not on PATH; the packages phase installs it from bootstrap.d/Brewfile " +
+				"-- run './bootstrap apply workstation'"}
 	}
 	return Result{OK, "agents", path}
 }

@@ -503,9 +503,15 @@ func TestNoUsageLineNamesAFlagThatDoesNotExist(t *testing.T) {
 	// behaviourally instead, by TestHelpAllIncludesTheAutomatedCommands and
 	// TestRenderMarkdownListsEveryCommandAtEveryDepth, which invoke them.
 	//
+	// `githook` is here for the same reason and not as a second convenience:
+	// its invocation is generated, leads with the hook's name, and ends with
+	// Git's own arguments, so it has to be read positionally. What covers
+	// `--checkout` behaviourally is TestGithookRefusesAnInvocationThatIsNotTheGeneratedShape,
+	// which is where a flag the parser stopped honouring would show up.
+	//
 	// The exemption is a fixed list, not a predicate: a second hand-parser
 	// added later fails here rather than quietly inheriting the hole.
-	handParsed := map[string]bool{"help": true}
+	handParsed := map[string]bool{"help": true, "githook": true}
 
 	sets := handlerFlagSets(t)
 	checked := 0

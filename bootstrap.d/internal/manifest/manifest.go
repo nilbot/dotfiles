@@ -91,7 +91,7 @@ func For(rows []Row, platform string) []Row {
 }
 
 // DuplicateTargets reports targets claimed more than once. Two owners for one
-// path is how softlinks.sh and the Makefile drifted apart.
+// path is how the retired softlinks.sh and Makefile provisioning drifted apart.
 func DuplicateTargets(rows []Row) []string {
 	seen := map[string]int{}
 	for _, r := range rows {

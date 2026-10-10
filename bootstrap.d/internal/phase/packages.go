@@ -152,6 +152,76 @@ func homebrew(c Context) (string, error) {
 	return resolveBrew(c)
 }
 
+// agentsCandidates are the paths a Homebrew-installed agents binary occupies,
+// derived from brewLocations so the two lists cannot drift: Homebrew puts every
+// formula's executables in <prefix>/bin.
+//
+// The candidate is the STABLE <prefix>/bin/agents and never the keg it resolves
+// into. `brew bundle` upgrades, and an upgrade deletes the keg the previous
+// version lived in, so a chain pinned to Cellar/agents/<version>/bin/agents
+// dangles on the very next apply -- and git runs a dangling hook as if no hook
+// existed. git/install-hooks.sh refuses that shape from its side; nothing here
+// may hand it one.
+func agentsCandidates() []string {
+	out := make([]string, 0, len(brewLocations))
+	for _, brew := range brewLocations {
+		out = append(out, filepath.Join(filepath.Dir(brew), "agents"))
+	}
+	return out
+}
+
+// resolveAgents finds the released agents binary the git hook chain points at.
+//
+// It probes the Homebrew prefixes rather than PATH, for the reason resolveBrew
+// gives: Homebrew's installer appends a `shellenv` line to a shell PROFILE, a
+// profile is read by the next login shell, and exec.LookPath resolves against
+// exactly the PATH this process inherited. On the fresh machine this phase
+// exists for, `agents` is installed and unfindable by name in the same run.
+//
+// It does NOT retry LookPath first, which resolveBrew does, because the two are
+// not the same question. Any brew on PATH is a brew this phase may use; the
+// binary that owns the hook chain has to be the one the tap installed. A
+// LookPath answering $HOME/bin/agents -- the checkout build this change retires
+// -- would re-pin the chain to a second owner and report success, which is the
+// leak the probe exists to close.
+//
+// ACCEPTED LIMITATION, of the shape resolveBrew documents: when no Homebrew
+// prefix holds `agents`, `plan workstation` stops here instead of previewing
+// the phases after it. The alternative -- recording the probe and planning
+// against a binary that is not there -- is the silent success this phase exists
+// to prevent. `plan dotfiles` excludes devtools and is unaffected.
+//
+// The condition is wider than "this machine has never run apply": it is "the
+// Brewfile that carries `brew \"nilbot/tap/agents\"` has not been installed
+// yet". A machine that ran `apply workstation` before that row landed -- this
+// one included, on 2026-10-09 -- has no `agents` at any prefix, so its next
+// `plan workstation` stops here until `apply` (or `brew bundle`) installs the
+// row. That is a real stop with a real instruction, not a bug in the walk:
+// re-running apply installs the tap and the phase proceeds.
+func resolveAgents(c Context) (string, error) {
+	candidates := agentsCandidates()
+	for _, candidate := range candidates {
+		info, err := c.Change.Lstat(candidate)
+		// Continue rather than return, for the reason resolveBrew gives: an
+		// unreadable candidate is not an answer about the others, and an EACCES
+		// on /opt must not stop the walk before /home/linuxbrew.
+		if err != nil {
+			c.logf("   agents      %s could not be read (%v); trying the next prefix",
+				candidate, err)
+			continue
+		}
+		if info.Exists {
+			c.logf("   agents      %s", candidate)
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("no agents binary at any Homebrew prefix: looked for %s. "+
+		"The packages phase installs it from bootstrap.d/Brewfile (nilbot/tap/agents), "+
+		"so the git hook chain has nothing to point at until the Brewfile carrying that "+
+		"row has been installed: run './bootstrap apply workstation', or 'brew bundle' "+
+		"against bootstrap.d/Brewfile, and retry", strings.Join(candidates, ", "))
+}
+
 // resolveBrew finds the brew the installer just wrote, and exists because
 // LookPath cannot find it.
 //

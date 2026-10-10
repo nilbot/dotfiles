@@ -16,6 +16,20 @@ When repositories initialized with `agents init` are opened to external collabor
 1. **Instruction Inflexibility & False Alarms**: The generated root `AGENTS.md` strictly directs AI harnesses that *"an empty or stale `.agents/` means the setup is broken rather than that there is nothing to say — report it rather than working around it"* and commands *"Run `agents doctor` early"*. External contributors and their LLM harnesses (Claude Code, Codex, Antigravity, Cursor) lack the operator's dotfiles and `agents` binary on `PATH`, causing the agent to report false setup failures.
 2. **Coupled Diagnostics in `agents doctor`**: `agents doctor` assumes the host machine contains a stamped `dotfiles` checkout (`DotfilesRoot()`), checking global `core.hooksPath` pointing to `<dotfilesRoot>/git/hooks.d` and global attributes pointing to `<dotfilesRoot>/git/gitattributes`. In a standalone repository on a collaborator's machine, these checks fail even when the repository's local context and wiring are exact.
 
+> **Amended 2026-10-09 — the coupling is gone, and so is the thing it coupled to.**
+> `DotfilesRoot()` has been deleted, along with `AGENTS_DOTFILES_ROOT` and the mode
+> that decided which checks ran. `agents doctor` reads the machine's record instead
+> — `core.hooksPath`, and the `chain.env` inside the directory it names — so there
+> is no root compiled into the binary, and no mode for a standalone repository to
+> be on the wrong side of. The defect this paragraph names is closed at the source
+> rather than by the conditional this document proposed.
+>
+> The rule the rest of this document rests on is untouched, and is why the
+> paragraph is kept: **a diagnostic must not depend on the operator's machine.**
+> For the release side of the same change see
+> [spec 6](2026-08-11-spec-6-releases-and-distribution.md); for the record that
+> replaces the root, [one record for binary identity](2026-10-07-one-record-for-binary-identity.md).
+
 This specification formalizes the **Two-Tier Contributor Guardrail Architecture**:
 - **Tier 1 (Zero-Install Contributor / External AI)**: Self-contained `AGENTS.md` and in-repo `.agents/skills/` instructing agents to consult `docs/qna/` and `docs/design/`, run repo verification commands, and gracefully skip `agents doctor` if the binary is absent. Authoritative PR verification runs in CI.
 - **Tier 2 (Enhanced Local Tooling)**: Decoupled `agents` CLI functioning in standalone repository mode without requiring personal dotfiles paths, enabling collaborators to optionally install `agents` and obtain local pre-commit secret guards and transcript tracing.

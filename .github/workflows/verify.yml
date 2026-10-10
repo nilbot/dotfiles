@@ -1,9 +1,9 @@
 # The verification gate. See docs/design/2026-08-11-spec-5-verification-gate.md
 #
-# There are deliberately no `paths:` filters. bootstrap.d/makefile_test.go reads
-# the Makefile and agents/internal/doctor/doctor_test.go reads
-# git/gitconfig.shared, so a filter keyed on the module directories would skip
-# verification for exactly the edits a cached `go test` already fails to notice.
+# There are deliberately no `paths:` filters. A filter keyed on the module
+# directories would skip verification for a file any test reads -- today
+# agents/internal/doctor/doctor_test.go reads git/gitconfig.shared -- which is
+# exactly the edit a cached `go test` already fails to notice.
 # A required check skipped by a path filter also reports "Expected" forever and
 # blocks the PR rather than passing it.
 #
@@ -545,7 +545,8 @@ jobs:
           test -s "$GITHUB_WORKSPACE/.github/go-build-cache-epoch" || { echo ".github/go-build-cache-epoch is missing or empty; the Go build cache key would hash nothing" >&2; exit 1; }
       # Homebrew's prefix, cached. In run 35975118898 this was 101 of the
       # Debian leg's 161 seconds -- 17s for the installer, then 84s for `brew
-      # bundle` over the Brewfile's 30 formulae -- and it is a function of the
+      # bundle` over the Brewfile's 30 formulae (31 since nilbot/tap/agents
+      # joined the list) -- and it is a function of the
       # Brewfile and of nothing else a PR might touch. Restoring it leaves the
       # installer to re-init, fetch and check out its latest stable tag, and
       # `brew bundle` finds the formulae already poured.
@@ -648,13 +649,30 @@ jobs:
       # by this job's own prereqs and would pass whatever stage zero did --
       # unavoidably so, since preflight requires curl before stage zero runs.
       # They are asserted anyway because the four are what stage zero promises.
-      - name: stage zero delivered its four prerequisites
+      #
+      # `agents` is NOT a stage-zero prerequisite: it comes from the Brewfile,
+      # which `brew bundle` installs later in the same packages phase. It is
+      # probed here because nothing else in this job can fail when the tap
+      # formula does not install -- the apply step above REPORTS its exit code
+      # rather than asserting it, and the `stage zero` grep passes one statement
+      # before `brew bundle` runs. Without this line a release that never
+      # reached the tap leaves the job green while `devtools` refuses on a
+      # machine that has no binary for the hook chain to point at.
+      #
+      # The PATH prefix is load-bearing, and it is the same defect resolveBrew
+      # and resolveFish exist for. A `run:` step is not a login shell, so
+      # Homebrew's shellenv line -- written to a profile by its installer -- has
+      # not been read, and a bare `command -v agents` would fail on a machine
+      # that has it. Here there is no Machine to resolve through, so the prefix
+      # is spelled out.
+      - name: stage zero delivered its four prerequisites, and the Brewfile its agents
         run: |
           set -eux
           command -v gcc
           command -v file
           command -v curl
           command -v git
+          PATH="/home/linuxbrew/.linuxbrew/bin:$PATH" command -v agents
 
   # The single required check. Branch protection names this job and nothing
   # else, so adding a job later is a workflow change rather than a

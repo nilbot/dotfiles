@@ -73,3 +73,34 @@ transcript cache, a Standalone Mode binary has no machine-local state to write a
 all: it scaffolds on request, strips wiring on request, and otherwise reports.
 The mode difference is now about which machine-level checks run, not about where
 anything is stored.
+
+## Follow-up, 2026-10-09
+
+**Expired, not amended: the mechanism this entry explains has been deleted.**
+
+Identity stage 1 landed, and with it the whole subject of the question. There is
+no link-time stamp reader, no `AGENTS_DOTFILES_ROOT`, and no mode for an unstamped
+binary to be in or out of — `DotfilesRoot()` and `root.go` are gone from the tree,
+so "an unstamped or Homebrew binary" is now simply *the* binary, and there is
+nothing left for it to skip.
+
+What replaced the three-step order is the machine's record: the hook chain that
+`core.hooksPath` names, holding `chain.env` with `format`, `binary` and
+`checkout`, and four generated entries that read it. The dispatcher is told which
+checkout to use by the entry that invoked it (`agents githook <name> --checkout
+<path>`), and `agents doctor` reads the chain rather than a root compiled into
+itself. The reason this entry gave for the contract survives intact and is now
+enforced by the record instead of by a resolution order: **a binary that belongs
+to no checkout must not guess at one.**
+
+Two consequences of the deletion are worth carrying forward. A machine still wired
+the old way — four symlinks naming the binary — runs the personal stages under no
+checkout at all, and the one-release shim says so on stderr rather than running
+none of them in silence. And `apply` on such a machine must adopt the chain rather
+than refuse it: `--adopt-owned` is the conversion, decided 2026-10-09 and landing
+with the change that consumes the tap.
+
+The distribution half of the Context paragraph is also expired: this repository
+retires its personal build (`make agents` and the devtools build), leaving the
+Homebrew release as the only route; see
+[the personal build removal analysis](../design/2026-10-09-the-personal-build-removal-analysis.md).

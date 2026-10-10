@@ -175,10 +175,11 @@ The scope note asked for filters "without allowing a docs-only change to
 masquerade as source verification." The filter is the hazard, and it is the same
 hazard as the Go build cache in different clothing. The obvious filter is
 `paths: ['agents/**', 'bootstrap.d/**']` — which skips verification for a change
-to `Makefile` or `git/gitconfig.shared`. But `bootstrap.d/makefile_test.go` reads
-the `Makefile` and `agents/internal/doctor/doctor_test.go` reads
-`git/gitconfig.shared`. Those are exactly the edits that break tests, and exactly
-the edits a cached `go test` already fails to notice.
+to `Makefile` or `git/gitconfig.shared`. The `Makefile` half went with the file on
+2026-10-09, and took `bootstrap.d/makefile_test.go` with it;
+`agents/internal/doctor/doctor_test.go` still reads `git/gitconfig.shared`. Those
+are exactly the edits that break tests, and exactly the edits a cached `go test`
+already fails to notice.
 
 **The rule: no path filter may exclude a file that any test reads.** That set is
 not the set under the module directories, nothing keeps it enumerable, and
@@ -412,7 +413,10 @@ H=$(mktemp -d); X=$(mktemp -d)
 HOME="$H" XDG_CACHE_HOME="$X" go test -count=1 ./...   # both modules
 test ! -e "$H/.local/state/agents"
 ( umask 077 && cd bootstrap.d && go test -count=1 ./... )
-make agents && agents index && git diff --exit-code -- .agents/
+# Deleted 2026-10-09: the last line of this recipe ran `make agents` and
+# `agents index`. The index command went on 2026-08-20 with its subject and
+# `make agents` goes with the personal build, so the check has no line left
+# to run. The recipe above is kept as the record of what it verified.
 ```
 
 **`git diff` is scoped to `.agents/` deliberately.** CI runs on a clean checkout
@@ -724,6 +728,24 @@ asserted at exit `0` for `plan`, `apply` and `check`, and both stage-zero
 containers reaching a state where `build-essential`/`base-devel`, `curl`, `file`
 and `git` are present.
 
+> **Amended 2026-10-09 — those four probes cannot see the failure provisioning is
+> about to start having.** `linux-stage-zero` records `apply`'s exit code without
+> asserting it and gates on `grep -q "stage zero"`, and the packages phase prints
+> that line *before* `brew bundle` runs. So a `brew bundle` that installs nothing
+> leaves the job green, and the failure surfaces afterwards, in devtools, where it
+> is recorded rather than asserted too. That was survivable while devtools built
+> `agents` from the checkout. It stops being survivable when provisioning consumes
+> the tap, because `agents` then arrives only from `nilbot/tap/agents` and nothing
+> in the four probes names it. **The probe list gains `command -v agents`**, which
+> is what turns "the tap formula did not install" into something the job reports
+> rather than something a reader infers from a later phase's silence. **Landed
+> 2026-10-09**: the job's step is now "stage zero delivered its four prerequisites,
+> and the Brewfile its agents", with `PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+> command -v agents` — the prefix spelled out because a `run:` step is not a login
+> shell and Homebrew's `shellenv` has not been read, which is the same defect
+> `resolveBrew` exists for. See
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §4.
+
 **Demonstrated to fail by:** the Arch job is red before the repair and green
 after — the one phase whose failure has already been observed.
 
@@ -732,12 +754,20 @@ after — the one phase whose failure has already been observed.
 ## Phase 6 — the doctor rider
 
 **Builds:** one `agents doctor` check that the stamped checkout root exists.
+*(Superseded 2026-10-09 — the root is read from the chain record now; see the
+amendment at the end of this phase.)*
 
-`make agents` stamps `$(CURDIR)` and writes the single global `~/bin/agents`, so
+~~`make agents` stamps `$(CURDIR)` and writes the single global `~/bin/agents`, so
 running it from a linked worktree publishes a binary stamped to a path that will
 not survive. Delete the worktree and `githook.go:127` reads the missing extras
 directory as "no personal hooks": the chain silently runs none, at exit `0`, and
-`AGENTS_DOTFILES_ROOT` cannot rescue it because the stamp deliberately wins.
+`AGENTS_DOTFILES_ROOT` cannot rescue it because the stamp deliberately wins.~~
+**Superseded 2026-10-09:** `make agents` and the Makefile that carried it are
+deleted with the personal build — the devtools producer went ahead of them — the
+stamp names no variable, and
+`AGENTS_DOTFILES_ROOT` is deleted rather than defeated. The *hazard* this
+paragraph describes — a hook chain that stops running and says nothing — is what
+the re-aimed check below still guards.
 PR #16 documented this in the Makefile and left the fix for review.
 
 The check **fails** rather than warns, because the consequence is a correctness
@@ -769,6 +799,11 @@ it needs no CI, and it is here because it would otherwise wait on a release
 pipeline it has nothing to do with. Sequenced last so nothing depends on it.
 
 **Verified by:**
+*(Dead recipe, kept as the record of what it proved. Superseded 2026-10-09: the
+flag below names no variable — `go build -ldflags "-X main.dotfilesRoot=…"` exits
+0 and the linker ignores it — and `AGENTS_DOTFILES_ROOT` is deleted, so the
+command the comment calls a no-op cannot be run at all. The replacement is a
+`chain.env` whose `checkout` names a directory that does not exist.)*
 
 ```bash
 # NOT `AGENTS_DOTFILES_ROOT=... agents doctor` -- the installed binary is
@@ -782,7 +817,38 @@ agents doctor                 # the real binary stays green
 
 **Demonstrated to fail by:** the throwaway build above. Its predecessor in this
 spec — setting `AGENTS_DOTFILES_ROOT` — was a check that could not fail, in the
-phase whose entire subject is a check that could not fail.
+phase whose entire subject is a check that could not fail. *(Neither the
+throwaway build nor the variable exists any more; the property they established —
+that this check must be shown to fail before it is trusted — is what carries
+forward.)*
+
+> **Amended 2026-10-09 — the check survives; the root it read does not.**
+> The reasoning above is the part worth keeping, and it is the reason this rider is
+> not retired along with the stamp: a personal hook chain that stops running is a
+> correctness mechanism failing in silence, and something has to say so.
+>
+> What changed is where the answer comes from. `main.dotfilesRoot` and
+> `AGENTS_DOTFILES_ROOT` are both deleted, so the "Verified by" recipe no longer
+> demonstrates anything: `go build -ldflags "-X main.dotfilesRoot=/nonexistent-root"`
+> still exits 0, but the flag now names no variable and is accepted and ignored,
+> and the environment variable the comment calls defeated by the stamp is simply
+> gone. `root:exists` is therefore **re-aimed at the chain record instead of being
+> deleted**: `doctor` warns when `chain.env`'s `checkout` is neither `-` nor a
+> directory that exists. That needs no stamp, and it restores exactly the property
+> this phase was written for — the recorded checkout's absence is reported, rather
+> than read as "no personal hooks" at exit 0.
+>
+> One half of the original scenario disappears entirely. The hazard was running
+> `make agents` from a linked worktree, which published a binary stamped to a
+> temporary path; the stamp is gone and the chain names its checkout explicitly, so
+> a worktree can supply the personal stages without any binary being published at
+> all. That hazard is kept as a record in the workspace `README.md`, where the
+> reasoning outlives the target, and it is no longer a live failure mode.
+>
+> See [`One record for binary identity`](2026-10-07-one-record-for-binary-identity.md),
+> and §4 of
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md)
+> for why deleting this check would have reopened the silence it exists to close.
 
 ---
 

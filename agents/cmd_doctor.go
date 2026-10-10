@@ -29,7 +29,13 @@ type doctorCommandDependencies struct {
 func defaultDoctorCommandDependencies() doctorCommandDependencies {
 	// The scaffold checks ask whether the resolved layout admits this binary
 	// (design §5.3), so the running version -- not a literal -- reaches them.
-	doctorDeps := doctor.DependenciesFor(DotfilesRoot())
+	//
+	// No checkout root is read here, and there is none to read: the compiled
+	// stamp went with the mode matrix, and the machine-level checks now read
+	// the chain -- the directory core.hooksPath names, its record and its
+	// entries -- so that what is installed is answered from the installation
+	// rather than from what this binary was built beside.
+	doctorDeps := doctor.DependenciesFor()
 	return doctorCommandDependencies{
 		Getwd:      os.Getwd,
 		Discover:   repo.Discover,

@@ -186,9 +186,14 @@ This phase has never actually run — see [Measured facts](#measured-facts-2026-
 
 ### 3.3 Devtools
 
-`uv`, the `agents` binary built to `~/bin/agents`, and global Git hooks. The
-Git-hook step **delegates to `git/install-hooks.sh`**, which already performs
-this carefully and has tests. It is not reimplemented.
+`uv`, the released `agents`, and global Git hooks. The Git-hook step
+**delegates to `git/install-hooks.sh`**, which already performs this carefully
+and has tests. It is not reimplemented.
+
+*Corrected 2026-10-09:* this phase used to build `agents` into `~/bin/agents`.
+The personal build was removed — the `Makefile` and its builder are gone, and
+`bootstrap.d/internal/phase/devtools.go` resolves the released binary through
+Homebrew instead — so there is no `~/bin/agents` to install or to name.
 
 ## 4. The dry-run invariant
 
@@ -597,7 +602,9 @@ executed in:
 4. Phase 10 and the `Brewfile` → `super-install-dep.sh` and
    `user-install-dep.sh` go.
 5. The removal commits (§9), one per group.
-6. Makefile reduced to the `agents` target.
+6. ~~Makefile reduced to the `agents` target.~~ *Corrected 2026-10-09:* the
+   `Makefile` was removed entirely with the personal build, not reduced. The
+   release path is `script/package-release.sh` and the Homebrew tap.
 7. This document's status, and the README table row, updated.
 
 ---
