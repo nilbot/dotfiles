@@ -62,9 +62,29 @@ func Devtools(c Context) error {
 	// ARGUMENT to both steps below: a machine with no binary should be told
 	// which path is missing rather than have the installer refuse a chain it
 	// cannot compare against.
-	binary, err := resolveAgents(c)
-	if err != nil {
-		return err
+	binary := resolveAgents(c)
+	if binary == "" {
+		// Nothing has installed it yet. Under `plan` that is the ordinary state
+		// of a machine being previewed -- plan executes nothing, so the packages
+		// phase that installs it from the Brewfile has not run -- and refusing
+		// here made every preview on a bare machine fail. Under `apply` the
+		// packages phase has just run, so the path named below is the one that
+		// should exist, and the INSTALLER is what refuses it when it does not:
+		// validate_binary rejects a missing or non-executable file, and the
+		// githook probe rejects a release too old to answer the subcommand the
+		// entries run. Both are Runs, which plan does not perform.
+		//
+		// resolveBrew, not homebrew: this phase runs AFTER packages, so a
+		// missing brew here is a real answer about the machine rather than a
+		// cue to install one. homebrew would run the installer again on any
+		// machine whose brew is at a prefix but not yet on PATH -- which is
+		// every fresh Homebrew install, and every CI container.
+		brew, err := resolveBrew(c)
+		if err != nil {
+			return err
+		}
+		binary = filepath.Join(filepath.Dir(brew), "agents")
+		c.logf("   agents      not installed yet; the chain would name %s", binary)
 	}
 
 	// The hooks preflight runs BEFORE the install, and its whole value is in

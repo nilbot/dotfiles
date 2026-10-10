@@ -115,35 +115,47 @@ func TestDevtoolsDelegatesHooksRatherThanInstallingThem(t *testing.T) {
 // end for whoever has to act on it -- and must perform no operation first, so
 // the failure cannot leave a machine half-changed.
 //
-// This is also where the LookPath trap is caught, and the fixture is shaped so
-// that the trap is loud rather than lucky. The fake's LookPath answers
-// /usr/bin/<name> for any name it does not know, so a resolveAgents that tried
-// LookPath("agents") first -- the thing this phase must not do, because
-// Homebrew's shellenv is read by the next login shell and not by this process --
-// would find /usr/bin/agents and hand the installer a path that is not the
-// tap's. Measured: adding that arm makes this case fail with "no agents binary
-// at any Homebrew prefix, and the phase proceeded".
-func TestDevtoolsRefusesWhenNoAgentsIsInstalled(t *testing.T) {
-	fake, ctx, _ := devtoolsCtx(true)
+// The LookPath trap, under the contract that replaced the refusal: with no
+// agents binary anywhere, the path the phase NAMES must be the tap prefix's,
+// never whatever `agents` happens to answer on PATH.
+//
+// The fixture makes the trap loud rather than lucky. The fake's LookPath answers
+// /usr/bin/<name> for any name it does not know -- so a resolveAgents that tried
+// LookPath("agents") would find /usr/bin/agents and hand the installer a path
+// that is not the tap's. brew is taken OFF PATH here and placed at the Apple
+// Silicon prefix instead, which is the machine the phase exists for: Homebrew
+// installed and not yet on PATH, because its shellenv line is read by the next
+// login shell and not by this process.
+//
+// The installer steps are still reached, and that is deliberate. They are Runs:
+// plan performs none of them, and under apply the installer is what refuses
+// this path -- validate_binary when nothing is there, the githook probe when
+// the release it finds is too old. The phase's job is to name the path, not to
+// judge it.
+func TestDevtoolsNamesTheTapPrefixNotWhicheverAgentsIsOnPath(t *testing.T) {
+	fake, ctx, out := devtoolsCtx(true)
 	delete(fake.info, "/opt/homebrew/bin/agents")
+	fake.lookPathErr["brew"] = true
+	installedAt(fake, "/opt/homebrew/bin/brew")
 
-	err := phase.Devtools(ctx)
-	if err == nil {
-		t.Fatal("no agents binary at any Homebrew prefix, and the phase proceeded")
+	if err := phase.Devtools(ctx); err != nil {
+		t.Fatalf("a machine with no agents binary must still preview: %v", err)
 	}
-	for _, want := range []string{
-		"/opt/homebrew/bin/agents",
-		"/usr/local/bin/agents",
-		"/home/linuxbrew/.linuxbrew/bin/agents",
-	} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal does not name %s, so it does not say where it "+
-				"looked: %v", want, err)
+	if !strings.Contains(out.String(), "the chain would name /opt/homebrew/bin/agents") {
+		t.Errorf("the plan must name the tap prefix's path:\n%s", out)
+	}
+	for _, op := range fake.Ops {
+		if strings.Contains(op, "/usr/bin/agents") {
+			t.Errorf("the phase handed the installer a path from PATH, which is not "+
+				"the tap's: %q", op)
 		}
 	}
-	if len(fake.Ops) != 0 {
-		t.Errorf("the phase performed operations before refusing:\n%s",
-			strings.Join(fake.Ops, "\n"))
+	want := []string{
+		"run bash /repo/git/install-hooks.sh preflight --adopt-owned /repo /home /opt/homebrew/bin/agents",
+		"run bash /repo/git/install-hooks.sh install --adopt-owned /repo /home /opt/homebrew/bin/agents",
+	}
+	if got := strings.Join(fake.Ops, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
 }
 
@@ -276,5 +288,44 @@ func TestDevtoolsStopsAtTheFirstFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A preview runs before the binary exists. Plan executes nothing, so the
+// packages phase that installs `agents` from the Brewfile has not run either --
+// which is the state of every CI runner, and refusing there is what failed four
+// plan tests on them (run 38044462264) while passing on a machine that has
+// `agents` installed.
+//
+// The installer steps still run, and that is the half that keeps `apply`
+// honest: they are Runs, plan performs none of them, and under apply the
+// installer is what refuses the named path -- by validate_binary when it is
+// missing, and by the githook probe when the release it finds cannot answer the
+// subcommand the entries run.
+func TestDevtoolsPreviewsAMachineWithNoAgentsBinary(t *testing.T) {
+	fake := &fakeChange{
+		info:        map[string]change.FileInfo{},
+		links:       map[string]string{},
+		lookPathErr: map[string]bool{"uv": true},
+	}
+	out := &bytes.Buffer{}
+	ctx := phase.Context{
+		Change: fake, Root: "/repo", Home: "/home", Platform: "darwin",
+		Profile: "workstation", Out: out,
+	}
+
+	if err := phase.Devtools(ctx); err != nil {
+		t.Fatalf("a machine with no agents binary must still preview: %v", err)
+	}
+	if !strings.Contains(out.String(), "the chain would name /usr/bin/agents") {
+		t.Errorf("the plan must name the path it would use:\n%s", out)
+	}
+	want := []string{
+		opInstallUv,
+		"run bash /repo/git/install-hooks.sh preflight --adopt-owned /repo /home /usr/bin/agents",
+		"run bash /repo/git/install-hooks.sh install --adopt-owned /repo /home /usr/bin/agents",
+	}
+	if got := strings.Join(fake.Ops, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
 }

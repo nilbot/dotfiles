@@ -1439,6 +1439,14 @@ func TestInstallLeavesTheCheckoutClean(t *testing.T) {
 	}
 	globalConfig := filepath.Join(home, ".gitconfig")
 	runIsolatedGit(t, root, home, globalConfig, "init", "-q")
+	// The identity goes in the FIXTURE's repository, not in the ambient config.
+	// GIT_CONFIG_GLOBAL points at the fixture's own home, so the machine running
+	// this test supplies nothing -- which is the point, and which failed on CI's
+	// Ubuntu runners with `Author identity unknown` until these two lines
+	// existed. A test that measured the runner's global config would be
+	// measuring the runner.
+	runIsolatedGit(t, root, home, globalConfig, "config", "user.email", "t@example.com")
+	runIsolatedGit(t, root, home, globalConfig, "config", "user.name", "T")
 	runIsolatedGit(t, root, home, globalConfig, "add", "-A")
 	runIsolatedGit(t, root, home, globalConfig, "commit", "-qm", "init")
 
