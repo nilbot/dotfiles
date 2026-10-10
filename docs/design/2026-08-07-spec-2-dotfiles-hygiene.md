@@ -433,12 +433,24 @@ Migrations come in two kinds, and the kind determines whether a bare
 2. **gitconfig include** — repoint a `~/.gitconfig` that includes the old
    `gitconfig.symlink` path.
 
-**Reclaiming migrations** run only when named — `./bootstrap migrate mambaforge`:
+**Reclaiming migrations** run only when named — `./bootstrap migrate <name>`:
 
-3. **mambaforge** — remove `~/sdk/mambaforge` (3.5 GB). Precondition: refuse if
-   anything on `PATH` resolves inside it. Measured on this machine: nothing
-   does, and its four environments are named by Python version alone
-   (`3_9`–`3_12`), which is the job `uv` now performs.
+3. ~~**mambaforge** — remove `~/sdk/mambaforge` (3.5 GB).~~ **Deleted
+   2026-10-09. Nothing declares this kind now**, so a bare `./bootstrap migrate`
+   has no reclamation to list and `./bootstrap migrate mambaforge` answers
+   `unknown migration "mambaforge"; known migrations are fish, gitconfig,
+   gitignore` at exit 3. The reasoning is kept because it is the record of what
+   the kind was for and what deleting it costs:
+
+   > Precondition: refuse if anything on `PATH` resolves inside it. Measured on
+   > this machine: nothing does, and its four environments are named by Python
+   > version alone (`3_9`–`3_12`), which is the job `uv` now performs.
+
+   It went with the package manager it served. `~/sdk/mambaforge` was 3.5 GB of
+   untracked data surviving from May 2024; a migration whose subject has left
+   the machine is machinery, not safety, and the guard it carried — six
+   `LookPath` probes over a hand-written symlink resolver — was more code than
+   the removal it protected.
 
 A bare `./bootstrap migrate` **lists** the reclaiming migrations it is eligible
 to run, with the exact command for each, and performs none of them. So nothing
@@ -446,6 +458,16 @@ has to be remembered or rediscovered later — the tool says what is reclaimable
 and how — while a routine invocation can never destroy untracked data. This is
 the same shape as the rest of the design: declare the kind, and behaviour
 follows from the kind.
+
+**The listing and the kind are kept with no instance to exercise them.** That is
+deliberate, and the alternatives are both worse: deleting the kind takes the
+rule with it and re-deriving it later is how a safety property ships untested,
+and keeping a migration with no subject means carrying a destructive code path
+for a machine state that no longer occurs — the thing this document's §9 calls
+rot. What the deletion does change is testability: `Names(due, Reclaiming)` is
+empty on every machine, so `phase.Preflight`'s reconciling-only filter can no
+longer be exercised through the phase, and the rule is now proved only against
+migrations a test constructs.
 
 ## 9. What is removed
 
@@ -460,7 +482,7 @@ reader must re-derive which files are live.
 |---|---|
 | zsh | `zsh/` (344 tracked files), the `omz` target, zsh from `super-install-dep.sh` |
 | tools | `tools/` |
-| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it. `~/sdk/mambaforge` itself is reclaimed by §8.1's third migration |
+| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it. `~/sdk/mambaforge` itself *was* to be reclaimed by §8.1's third migration; that migration was deleted on 2026-10-09, so the installation is reclaimed by hand or not at all |
 | stale scripts | `snapshot.sh`, `recover.sh`, `mountcrypt.sh`, `mountsshfs.sh`, `post-install.sh` |
 | superseded installers | `super-install-dep.sh`, `user-install-dep.sh`, `softlinks.sh` — content carried into phases 10 and 20 |
 | editors | the `editors`, `tmux` and `extra` targets, and `spacemacs/` |
@@ -674,7 +696,12 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
   inert. `~/sdk/mambaforge` survives from May 2024 at 3.5 GB. Its four
   environments are named by Python version only (`3_9`, `3_10`, `3_11`, `3_12`),
   and none of `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip`
-  resolves inside it.
+  resolves inside it. *(This is what made it reclaimable, and §8.1's third
+  migration was written to do it. **That migration was deleted on 2026-10-09**,
+  so nothing in this repository removes the directory now: `./bootstrap migrate
+  mambaforge` answers `unknown migration` at exit 3, and the 3.5 GB is reclaimed
+  by hand or not at all. The measurement above is kept because it is the reason
+  the migration could be written, and the reason its deletion is safe.)*
 - `gnupg/`, `gemini/skills/` and `macOS/iterm2/` are tracked and referenced by
   no target. *(All three are gone now. `gnupg/` and `macOS/iterm2/` went in
   `ac5286a` on 2026-08-11; `gemini/skills/` was still linked by a manifest row

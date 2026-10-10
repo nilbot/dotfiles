@@ -42,7 +42,8 @@ const (
 	// reconstructed from the checkout, so a bare migrate runs it.
 	Reconciling Kind = "reconciling"
 	// Reclaiming destroys untracked data irreversibly. A bare migrate LISTS it
-	// and runs nothing; it happens only when named.
+	// and runs nothing; it happens only when named. Nothing declares this kind
+	// today: `mambaforge` was its only instance and it was deleted 2026-10-09.
 	Reclaiming Kind = "reclaiming"
 )
 
@@ -127,16 +128,18 @@ func (c Context) logf(format string, args ...any) {
 
 // All is the declared set, in the order a bare migrate runs them.
 //
-// The reclaiming one is last, and nothing depends on that -- a bare migrate runs
-// none of them, so its position is a matter of reading order only. What DOES
-// depend on the declaration is its Kind: that single word is what stops a
-// routine `./bootstrap migrate` from destroying 3.5 GB of untracked data.
+// Every migration declared here is Reconciling. The reclaiming one that used to
+// be last -- `mambaforge`, which removed ~/sdk/mambaforge -- was deleted on
+// 2026-10-09 along with the package manager it served, so `Names(All(),
+// Reclaiming)` is empty today. Kind and the rule that follows from it stay
+// declared: a future reclaiming migration is one word and one pair of
+// functions, and the rule that keeps a bare migrate from destroying untracked
+// data is safer kept than re-derived.
 func All() []Migration {
 	return []Migration{
 		{"fish", Reconciling, fishPending, fishRun},
 		{"gitconfig", Reconciling, gitconfigPending, gitconfigRun},
 		{"gitignore", Reconciling, gitignorePending, gitignoreRun},
-		{"mambaforge", Reclaiming, mambaforgePending, mambaforgeRun},
 	}
 }
 
@@ -181,9 +184,15 @@ func pending(q Query, all []Migration) ([]Migration, error) {
 //
 // It exists so that preflight's "refuse on reconciling migrations only" can be
 // tested here rather than only through the phase. Dropping the filter is a
-// deadlock: mambaforge is pending for as long as ~/sdk/mambaforge exists, which
-// may be forever, and preflight would refuse apply for something a bare migrate
-// deliberately never runs -- so the remedy the refusal names would not clear it.
+// deadlock for any reclaiming migration: it is pending for as long as the thing
+// it would reclaim exists, which may be forever, and preflight would refuse
+// apply for something a bare migrate deliberately never runs -- so the remedy
+// the refusal names would not clear it.
+//
+// No reclaiming migration is declared any more (the `mambaforge` one went on
+// 2026-10-09), so today this filter passes every pending migration through. Its
+// teeth are exercised over migrations a test constructs, which is the only
+// shape left that can exercise them at all.
 func Names(ms []Migration, kind Kind) []string {
 	var names []string
 	for _, m := range ms {
@@ -200,8 +209,13 @@ func Run(c Context, name string) error { return run(c, name, All()) }
 
 // run takes the migration set so a test can state the reclaiming rule over
 // migrations it constructs itself, independently of what All() happens to hold.
-// The rule is also exercised over the real mambaforge migration, through Run --
-// a mechanism proved only against a fake proves only the fake.
+//
+// That independence used to be a bonus rather than the only route: the rule was
+// also exercised over the real `mambaforge` migration, through Run. Deleting
+// that migration on 2026-10-09 removed the real instance, so a constructed one
+// is now the only shape the listing path can be proved against -- and the debt
+// is stated here rather than left for a reader to discover: the reclaiming
+// branch has no production caller until a reclaiming migration is declared.
 func run(c Context, name string, all []Migration) error {
 	c.logf("== migrate")
 	// The root, named before a migration runs, in preflight's shape and for
