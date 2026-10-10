@@ -1,5 +1,15 @@
 # Why does `./bootstrap plan workstation` stop before the tap is installed?
 
+> **Corrected 2026-10-10: it does not stop any more.** `plan` on a machine with
+> no `agents` binary is now a preview that names the path the chain would use and
+> exits 0; `apply` still refuses, one step later, at the installer. CI run
+> 38044462264 is what changed the answer: four plan tests failed on every Linux
+> runner, because a runner has no `agents` and refusing on that made a query
+> behave like a mutation. The reasoning below is kept as the record of why the
+> stop existed, and the file it names is the one to read for the current
+> behaviour (`resolveAgents` returns `""`; `devtools.go` names the path; the
+> installer's `validate_binary` and `githook --probe` are what refuse).
+
 ## Context
 
 Measured 2026-10-09 on this machine, while the personal `agents` build was being
