@@ -186,9 +186,24 @@ This phase has never actually run — see [Measured facts](#measured-facts-2026-
 
 ### 3.3 Devtools
 
-`uv`, the `agents` binary built to `~/bin/agents`, and global Git hooks. The
-Git-hook step **delegates to `git/install-hooks.sh`**, which already performs
-this carefully and has tests. It is not reimplemented.
+`uv`, the released `agents`, and global Git hooks. The Git-hook step
+**delegates to `git/install-hooks.sh`**, which already performs this carefully
+and has tests. It is not reimplemented.
+
+*Corrected 2026-10-09:* this phase used to build `agents` into `~/bin/agents`.
+The personal build was removed — the `Makefile` and its builder are gone, and
+`bootstrap.d/internal/phase/devtools.go` resolves the released binary through
+Homebrew instead — so there is no `~/bin/agents` to install or to name.
+
+> **Amended 2026-10-09 — the middle item is retiring.** `devtools` stops building
+> `agents`: the personal build goes in favour of the released binary
+> (`brew install nilbot/tap/agents`), decided 2026-10-09 and landing with the
+> change that consumes the tap. The phase keeps `uv` and the Git-hook step; what
+> it loses is the second `agents` it compiled into `~/bin/agents` — the artifact
+> this document's own §9 records as the one no phase reconciled and no check
+> noticed. The Git-hook step's delegation, and the reason it is delegated rather
+> than reimplemented, are untouched. See
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
 
 ## 4. The dry-run invariant
 
@@ -418,12 +433,24 @@ Migrations come in two kinds, and the kind determines whether a bare
 2. **gitconfig include** — repoint a `~/.gitconfig` that includes the old
    `gitconfig.symlink` path.
 
-**Reclaiming migrations** run only when named — `./bootstrap migrate mambaforge`:
+**Reclaiming migrations** run only when named — `./bootstrap migrate <name>`:
 
-3. **mambaforge** — remove `~/sdk/mambaforge` (3.5 GB). Precondition: refuse if
-   anything on `PATH` resolves inside it. Measured on this machine: nothing
-   does, and its four environments are named by Python version alone
-   (`3_9`–`3_12`), which is the job `uv` now performs.
+3. ~~**mambaforge** — remove `~/sdk/mambaforge` (3.5 GB).~~ **Deleted
+   2026-10-09. Nothing declares this kind now**, so a bare `./bootstrap migrate`
+   has no reclamation to list and `./bootstrap migrate mambaforge` answers
+   `unknown migration "mambaforge"; known migrations are fish, gitconfig,
+   gitignore` at exit 3. The reasoning is kept because it is the record of what
+   the kind was for and what deleting it costs:
+
+   > Precondition: refuse if anything on `PATH` resolves inside it. Measured on
+   > this machine: nothing does, and its four environments are named by Python
+   > version alone (`3_9`–`3_12`), which is the job `uv` now performs.
+
+   It went with the package manager it served. `~/sdk/mambaforge` was 3.5 GB of
+   untracked data surviving from May 2024; a migration whose subject has left
+   the machine is machinery, not safety, and the guard it carried — six
+   `LookPath` probes over a hand-written symlink resolver — was more code than
+   the removal it protected.
 
 A bare `./bootstrap migrate` **lists** the reclaiming migrations it is eligible
 to run, with the exact command for each, and performs none of them. So nothing
@@ -431,6 +458,16 @@ has to be remembered or rediscovered later — the tool says what is reclaimable
 and how — while a routine invocation can never destroy untracked data. This is
 the same shape as the rest of the design: declare the kind, and behaviour
 follows from the kind.
+
+**The listing and the kind are kept with no instance to exercise them.** That is
+deliberate, and the alternatives are both worse: deleting the kind takes the
+rule with it and re-deriving it later is how a safety property ships untested,
+and keeping a migration with no subject means carrying a destructive code path
+for a machine state that no longer occurs — the thing this document's §9 calls
+rot. What the deletion does change is testability: `Names(due, Reclaiming)` is
+empty on every machine, so `phase.Preflight`'s reconciling-only filter can no
+longer be exercised through the phase, and the rule is now proved only against
+migrations a test constructs.
 
 ## 9. What is removed
 
@@ -445,7 +482,7 @@ reader must re-derive which files are live.
 |---|---|
 | zsh | `zsh/` (344 tracked files), the `omz` target, zsh from `super-install-dep.sh` |
 | tools | `tools/` |
-| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it. `~/sdk/mambaforge` itself is reclaimed by §8.1's third migration |
+| conda/mamba | `miniforge/`, `micromamba` from the package list, the mamba block in `fish/mypost.fish`. The `conda`/`mamba` aliases in `alias.fish` are `type -q`-guarded and go quietly with it. `~/sdk/mambaforge` itself *was* to be reclaimed by §8.1's third migration; that migration was deleted on 2026-10-09, so the installation is reclaimed by hand or not at all |
 | stale scripts | `snapshot.sh`, `recover.sh`, `mountcrypt.sh`, `mountsshfs.sh`, `post-install.sh` |
 | superseded installers | `super-install-dep.sh`, `user-install-dep.sh`, `softlinks.sh` — content carried into phases 10 and 20 |
 | editors | the `editors`, `tmux` and `extra` targets, and `spacemacs/` |
@@ -453,7 +490,7 @@ reader must re-derive which files are live.
 | bins | `bin/` (all four) and the `bins` target |
 | go hook | `git/hooks/go.pre-commit` |
 | unlinked | `gnupg/`, `macOS/iterm2/` |
-| Makefile | everything except the `agents` target |
+| Makefile | everything except the `agents` target — ~~and that survives~~ **superseded 2026-10-09: the `agents` target is retired with the personal build, so the whole file goes** |
 
 `macOS/filebrowser/` stays: a self-contained opt-in launchd setup with its own
 script, claimed by no phase.
@@ -503,10 +540,15 @@ and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
 5. `~/.gitconfig` includes the current shared-config path.
 6. Login shell is fish; fish is present in `/etc/shells`. *(workstation only)*
 7. `agents` on `PATH`, with `agents doctor`'s result folded in. *(workstation only)*
-8. `Brewfile` packages present. *(workstation only)*
+8. `Brewfile` packages present. *(workstation only)* — **removed 2026-10-09.** The
+   check ran `brew bundle check`, and the `brew` wrapper auto-updates Homebrew before
+   it dispatches, so the query verb mutated the machine it was reporting on. With the
+   command gone it would have reported "every Brewfile entry is installed" having
+   asked nothing, so [the query design](2026-10-09-what-a-query-is.md) removes the
+   check rather than repairing it. Seven checks remain.
 
 `check` takes the same profile argument as `apply` and defaults to
-`workstation`. Checks 6–8 concern state the `dotfiles` profile deliberately does
+`workstation`. Checks 6–7 concern state the `dotfiles` profile deliberately does
 not manage, so under that profile they report **not applicable** rather than a
 finding — otherwise every container run would report three false failures.
 
@@ -597,7 +639,11 @@ executed in:
 4. Phase 10 and the `Brewfile` → `super-install-dep.sh` and
    `user-install-dep.sh` go.
 5. The removal commits (§9), one per group.
-6. Makefile reduced to the `agents` target.
+6. ~~Makefile reduced to the `agents` target.~~ *Corrected 2026-10-09:* the
+   `Makefile` was removed entirely with the personal build, not reduced. That is
+   this list's own logic carried one step further — the target was the last
+   thing no phase owned. The release path is `script/package-release.sh` and the
+   Homebrew tap. See [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
 7. This document's status, and the README table row, updated.
 
 ---
@@ -650,7 +696,12 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
   inert. `~/sdk/mambaforge` survives from May 2024 at 3.5 GB. Its four
   environments are named by Python version only (`3_9`, `3_10`, `3_11`, `3_12`),
   and none of `conda`, `mamba`, `micromamba`, `python`, `python3` or `pip`
-  resolves inside it.
+  resolves inside it. *(This is what made it reclaimable, and §8.1's third
+  migration was written to do it. **That migration was deleted on 2026-10-09**,
+  so nothing in this repository removes the directory now: `./bootstrap migrate
+  mambaforge` answers `unknown migration` at exit 3, and the 3.5 GB is reclaimed
+  by hand or not at all. The measurement above is kept because it is the reason
+  the migration could be written, and the reason its deletion is safe.)*
 - `gnupg/`, `gemini/skills/` and `macOS/iterm2/` are tracked and referenced by
   no target. *(All three are gone now. `gnupg/` and `macOS/iterm2/` went in
   `ac5286a` on 2026-08-11; `gemini/skills/` was still linked by a manifest row
@@ -826,11 +877,11 @@ convergence claim: `Verify` reports and returns nil by design, so `apply` exits
 0 while its own verify phase reports failures. On Debian it reports `5 ok, 0
 warn, 3 fail`, and those three are what remains open on Linux:
 
-- **`packages` — "Homebrew is not installed".** The same resolve-vs-PATH defect
-  a fourth time, now in `internal/check` rather than `internal/phase`: the
-  check asks PATH for `brew` while Homebrew sits at `/home/linuxbrew/.linuxbrew`.
-  Left unfixed deliberately — `check` is the verb the `linux-dotfiles` job
-  gates on, so it is not a change to make as a close-out chore.
+- **`packages` — closed 2026-10-09 by removal rather than repair.** "Homebrew is
+  not installed" was the resolve-vs-PATH defect a fourth time, this one in
+  `internal/check`: the check asked PATH for `brew` while Homebrew sat at
+  `/home/linuxbrew/.linuxbrew`. [The query design](2026-10-09-what-a-query-is.md)
+  removed the check, so the gap goes with it. Two of the three stand.
 - **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
   cannot change underneath it, so the check can only ever report the shell the
   container started with. Asserting the real effect needs a fresh login.
@@ -894,6 +945,21 @@ authority; `$SHELL` is a hint.
 awkward for structured checks, safe conflict handling and portable quoting; and
 targets conceal side effects, as the present `all` and `links` graph already
 demonstrates. It would improve on today without being the right shape.
+
+> **Amended 2026-10-09 — the rejection stands and the evidence it cited is
+> gone.** "The present `all` and `links` graph" no longer exists: the phases took
+> that work over, those targets were removed, and `Makefile` now declares only
+> `agents` and `release`. So the worked example this paragraph rested on had
+> already been deleted by this document's own §9 sequence, which left the
+> rejection reading as a live option rather than a settled one.
+>
+> The argument does not need it. Make being another prerequisite, and its recipes
+> being the wrong shape for structured checks and portable quoting, are the
+> reasons, and they are unaffected. What has changed underneath is the subject:
+> the whole file is retiring — decided 2026-10-09, with the personal build — so
+> "rebuilding the Makefile" is now moot rather than merely wrong-shaped. The
+> paragraph stays as the reason the file is not coming back. See
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
 
 **A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
 Note this is *not* the same as §2.1's build-from-checkout, which was adopted.

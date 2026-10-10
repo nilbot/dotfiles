@@ -1,6 +1,8 @@
 # Simplification Plan
 
-**Status: EXECUTED 2026-09-21, with deviations recorded below.** The work is on
+**Status: EXECUTED 2026-09-21, with deviations recorded below — except Task 1,
+neither of whose steps was carried out. Corrected 2026-10-09; the deviation note is
+under Task 1.** The work is on
 branch `simplify/agents-single-home` (PR #52). Read this section before the plan
 itself: several steps landed differently from what is written further down,
 because the writing was a plan and the doing found things a plan could not.
@@ -208,6 +210,40 @@ complete. Every later task's verification runs that command, so this goes first.
   Update the review rather than leaving the item open. This is the same
   one-owner-per-resource rule the review's §6 already states, so the finding is
   that the machine had drifted from the rule, not that the rule was wrong.
+
+**Deviation, 2026-10-09: neither step was executed.** Both boxes above were still
+unticked when the status line claimed the plan was executed, and it claimed that
+until this note. Measured on the day this note was written:
+
+- `git log --all -S'adopt-owned' -- bootstrap.d/` returns nothing on any branch.
+- `bootstrap.d/internal/phase/devtools_test.go:23` still pins the flagless
+  command, so a test enforces the state Task 1 exists to change.
+- `bash git/install-hooks.sh preflight <root> "$HOME" "$HOME/bin/agents"` refuses
+  at `git/install-hooks.sh:161`, exit 1, so `./bootstrap apply workstation` still
+  exits 2 on any machine whose chain names the Homebrew path.
+- `docs/design/2026-09-20-agents-and-bootstrap-boundary.md` §7 item 2 is still
+  open, so Step 2 did not happen either.
+
+The lesson is in the shape of the evidence: a status line is a claim, and this one
+was asserted without reading the two boxes directly beneath it. Task 1's own
+verification — `apply` reaches `verify`, the four names point at the intended
+binary — is what would have shown it, and it was never run.
+
+**Why it is not being executed as written.** Step 1's verification says the four
+names should point at `~/bin/agents`. That binary is being removed: it is the
+personal build, and a later analysis found it is a port of the retired `githooks`
+target whose justification died on 2026-09-21 when `wire` stopped rendering hook
+entries. Executing Step 1 literally would convert this machine to the personal
+build and convert it again when that build goes, leaving a window in which deleting
+the checkout silently disables the guard — the failure the boundary review's own
+alternatives table rejects.
+
+The decision stands and moves to the ordered work: **bootstrap owns the hook chain
+and the formula does not** (the formula names no hook and no installer, verified)
+— but the binary it hands the installer is the released one, resolved the way `uv`
+already is (`devtools.go:28-40`, the resolved-brew-path defect this phase fixed
+once), and `--adopt-owned` goes with it. That change lands after the record exists,
+so the checkout binding has somewhere to live that is not a build fact.
 
 ---
 

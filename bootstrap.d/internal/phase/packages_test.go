@@ -703,3 +703,56 @@ func TestArchStageZeroSynchronizesBeforeInstalling(t *testing.T) {
 		t.Errorf("--disable-sandbox belongs to the container, never to the shipped command; got %q", pacman)
 	}
 }
+
+// Homebrew refuses to load a formula from a non-official tap until that tap is
+// trusted, and the Brewfile names one. Measured in CI run 38044462264 on both
+// debian:stable-slim and archlinux:base:
+//
+//	Installing nilbot/tap/agents
+//	##[error]Refusing to load formula nilbot/tap/agents from untrusted tap nilbot/tap.
+//
+// The trust call belongs BEFORE the bundle, so this asserts the order rather
+// than the mere presence: a trust that ran after the bundle would be a step
+// that repairs a failure it just caused.
+func TestPackagesTrustsTheTapsTheBrewfileNamesBeforeBundling(t *testing.T) {
+	fake, ctx, _ := packagesCtx("darwin")
+	fake.files = map[string][]byte{
+		// Two entries from one tap, a bare formula from homebrew/core that needs
+		// no trust, and a comment that quotes a tap to prove the parser reads
+		// lines rather than searching the file for a substring.
+		"/repo/bootstrap.d/Brewfile": []byte(`# brew "someone/else/thing"
+brew "jq"
+brew "nilbot/tap/agents"
+brew "nilbot/tap/other"
+brew "nilbot/tap/agents"
+`),
+	}
+
+	if err := phase.Packages(ctx); err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+	want := []string{
+		"run " + brewOnPath + " help trust",
+		"run " + brewOnPath + " trust --tap nilbot/tap",
+		opBundleVia(brewOnPath),
+	}
+	if got := strings.Join(fake.Ops, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
+	}
+}
+
+// A Brewfile that names no third-party tap must produce no trust call at all:
+// `brew trust` on an older Homebrew is an unknown command, and probing for it
+// on every machine would be work for a gate that is not there.
+func TestPackagesTrustsNothingWhenTheBrewfileNamesNoTap(t *testing.T) {
+	fake, ctx, _ := packagesCtx("darwin")
+	fake.files = map[string][]byte{
+		"/repo/bootstrap.d/Brewfile": []byte("brew \"jq\"\nbrew \"git\"\n"),
+	}
+	if err := phase.Packages(ctx); err != nil {
+		t.Fatalf("Packages: %v", err)
+	}
+	if got := strings.Join(fake.Ops, "\n"); got != opBundleVia(brewOnPath) {
+		t.Errorf("ops:\n%s\nwant only the bundle", got)
+	}
+}

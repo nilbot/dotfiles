@@ -1,7 +1,8 @@
 # Design: Explicit Binary Identity and Standalone Resolution
 
 **Date:** 2026-08-28  
-**Status:** Under Review  
+**Status:** superseded in part, 2026-10-07; implemented and then deleted 2026-10-09.  
+**Superseded by:** [one record for binary identity](2026-10-07-one-record-for-binary-identity.md) — §2's resolution rules and its mode matrix are replaced, and `DotfilesRoot()` and `AGENTS_DOTFILES_ROOT` are deleted from the tree. The reasoning below is kept: it is the record of the heuristic this document removed, and of why removing it was not enough.  
 **Applies to:** `agents` CLI, `DotfilesRoot()`, `agents doctor`, `githook` dispatcher, Homebrew packaging (`nilbot/tap/agents`)  
 **Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (harness wiring), [Spec 5](2026-08-11-spec-5-verification-gate.md) (verification gate), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md) (releases & binary distribution), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28)  
 **Reads against:** [`docs/qna/can-this-check-actually-fail.md`](../qna/can-this-check-actually-fail.md)
@@ -53,12 +54,36 @@ This heuristic introduced a critical flaw:
 
 To eliminate false mode inferences and guarantee predictable behavior across all platforms, `DotfilesRoot()` transitions from heuristic detection to an **explicit, deterministic contract**.
 
-### 2.1 Resolution Rules
+> **Amended 2026-10-09 — everything from here to the end of §2.2 is deleted from
+> the tree.** It is kept because the move it records was the right one at the time
+> and the reason it was not enough is worth having. The heuristic it removed —
+> "if `$HOME/dotfiles` exists, infer Operator Mode" — is still the clearest example
+> of an ambient source deciding behaviour.
+>
+> What replaced it kept the same flaw in a quieter form: a *mode*, resolved at run
+> time from the link-time stamp, then `AGENTS_DOTFILES_ROOT`, then empty. That is
+> three answers to one question, and it made the same binary behave two ways on
+> one machine depending only on how the process was launched — 18 checks with the
+> variable set, 13 without — while saying nothing when the behaviour changed. The
+> variable was also unmanaged: it lived in a hand-written line in
+> `~/.config/fish/config.fish`, and no tracked file has ever written it.
+>
+> `DotfilesRoot()`, `main.dotfilesRoot` and `AGENTS_DOTFILES_ROOT` are deleted.
+> The machine's record is the hook chain — `core.hooksPath`, the `chain.env` inside
+> it, and the four entries that read it — and the dispatcher is *told* its checkout
+> by the entry that invoked it. The stamp survives as nothing at all: the two
+> producers that set it are retired, so `-X main.dotfilesRoot=…` names no variable.
+> See [one record for binary identity](2026-10-07-one-record-for-binary-identity.md),
+> and §5 of
+> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md)
+> for the rows of this document the revision changes.
 
-An `agents` binary is bound to a dotfiles checkout if and only if:
-1. **Link-Time Stamp (Highest Precedence)**: The binary was compiled with `-ldflags "-X main.dotfilesRoot=<path>"`. This is set by `make agents` and `./bootstrap apply workstation`.
-2. **Explicit Environment Variable**: `AGENTS_DOTFILES_ROOT=<path>` is non-empty in the process environment.
-3. **Standalone Fallback (Default)**: In all other cases, `DotfilesRoot()` returns `""` (empty string).
+### 2.1 Resolution Rules *(superseded 2026-10-09 — see the amendment above)*
+
+~~An `agents` binary is bound to a dotfiles checkout if and only if:~~
+1. ~~**Link-Time Stamp (Highest Precedence)**: The binary was compiled with `-ldflags "-X main.dotfilesRoot=<path>"`. This is set by `make agents` and `./bootstrap apply workstation`.~~ **Deleted 2026-10-09: both producers are gone — the devtools build with the tap change, the `make agents` target with the Makefile and its test pins — and the flag names no variable.**
+2. ~~**Explicit Environment Variable**: `AGENTS_DOTFILES_ROOT=<path>` is non-empty in the process environment.~~ **Deleted 2026-10-09.**
+3. ~~**Standalone Fallback (Default)**: In all other cases, `DotfilesRoot()` returns `""` (empty string).~~ **Deleted 2026-10-09: there are no modes.**
 
 ```go
 // DotfilesRoot answers which checkout this binary belongs to.
@@ -77,13 +102,13 @@ func DotfilesRoot() string {
 }
 ```
 
-### 2.2 Mode Matrix
+### 2.2 Mode Matrix *(superseded 2026-10-09 — every row below describes a mode that no longer exists)*
 
 | Binary Provenance | Link Stamp (`main.dotfilesRoot`) | Environment (`AGENTS_DOTFILES_ROOT`) | Resolved `DotfilesRoot()` | Resulting Mode |
 | :--- | :--- | :--- | :--- | :--- |
 | **Homebrew Release** (`/opt/homebrew/bin/agents`) | `""` | Unset | `""` | **Standalone Mode** |
 | **Homebrew Release** (Operator override) | `""` | `/Users/nilbot/dotfiles` | `/Users/nilbot/dotfiles` | **Dotfiles Operator Mode** |
-| **Locally Compiled** (`make agents` $\rightarrow$ `~/bin/agents`) | `/Users/nilbot/dotfiles` | Any (stamp wins) | `/Users/nilbot/dotfiles` | **Dotfiles Operator Mode** |
+| **Locally Compiled** (~~`make agents`~~ $\rightarrow$ `~/bin/agents`) — **retired 2026-10-09** | `/Users/nilbot/dotfiles` | Any (stamp wins) | `/Users/nilbot/dotfiles` | **Dotfiles Operator Mode** |
 | **CI / Container Test** | `""` | Unset | `""` | **Standalone Mode** |
 
 ---
@@ -145,7 +170,7 @@ When invoked as a Git hook (`pre-commit`, `commit-msg`, `post-merge`, `post-chec
 ## 5. Documentation Updates
 
 1. **`docs/design/2026-08-11-spec-6-releases-and-distribution.md`**: Update Section 2 to document explicit resolution without `$HOME/dotfiles` directory fallback.
-2. **`Makefile` & `bootstrap.d/internal/phase/devtools.go`**: Update code comments regarding unstamped binaries operating in Standalone Mode.
+2. **`Makefile` & `bootstrap.d/internal/phase/devtools.go`**: Update code comments regarding unstamped binaries operating in Standalone Mode. ~~**Done, and then both files went further than the task:** the comments were corrected, and then the `Makefile` and the devtools build were deleted with the personal build (2026-10-09), so there is no unstamped-binary comment left to update.~~
 3. **`docs/qna/why-does-an-unstamped-or-homebrew-agents-binary-skip-dotfiles-checks.md`**: New Q&A documenting Standalone Mode mechanics and `AGENTS_DOTFILES_ROOT`.
 
 ---

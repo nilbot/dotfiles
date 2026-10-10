@@ -17,15 +17,20 @@ const (
 	// is what the phase gets on a machine that has brew on PATH -- and pinning
 	// it here is what makes a regression to the bare name visible.
 	opInstallUv    = "run /usr/bin/brew install uv"
-	opCheckHooks   = "run bash /repo/git/install-hooks.sh preflight /repo /home /home/bin/agents"
-	opMakeBinDir   = "dir /home/bin"
-	opBuildAgents  = `run go build -C /repo/agents -trimpath -ldflags "-X main.dotfilesRoot=/repo" -o /home/bin/agents .`
-	opInstallHooks = "run bash /repo/git/install-hooks.sh install /repo /home /home/bin/agents"
+	opCheckHooks   = "run bash /repo/git/install-hooks.sh preflight --adopt-owned /repo /home /opt/homebrew/bin/agents"
+	opInstallHooks = "run bash /repo/git/install-hooks.sh install --adopt-owned /repo /home /opt/homebrew/bin/agents"
 )
 
 func devtoolsCtx(uvOnPath bool) (*fakeChange, phase.Context, *bytes.Buffer) {
 	fake := &fakeChange{
-		info:        map[string]change.FileInfo{},
+		info: map[string]change.FileInfo{
+			// The tap's binary at the first Homebrew prefix, which is what
+			// resolveAgents probes for. Note that it is NOT on PATH: the fake
+			// answers /usr/bin/<name> for everything, and a phase that went
+			// looking there would find nothing -- which is the defect this
+			// fixture is shaped to catch.
+			"/opt/homebrew/bin/agents": {Exists: true},
+		},
 		links:       map[string]string{},
 		lookPathErr: map[string]bool{"uv": !uvOnPath},
 	}
@@ -41,53 +46,36 @@ func TestDevtoolsRunsItsStepsInOrder(t *testing.T) {
 	if err := phase.Devtools(ctx); err != nil {
 		t.Fatalf("Devtools: %v", err)
 	}
-	want := []string{opInstallUv, opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}
+	want := []string{opInstallUv, opCheckHooks, opInstallHooks}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
 }
 
 // The ordering, asserted by position rather than by the whole list, so it keeps
-// reporting the same finding if a fourth step is ever added above or between.
+// reporting the same finding if a step is ever added above or between.
 //
-// This is not stylistic. install-hooks.sh symlinks four hook names AT the agents
-// binary and refuses unless it is an executable regular file, so a phase that
-// installed hooks first would either refuse on a machine that has never built
-// agents, or -- worse, on a machine that has -- point the chain at a stale
-// binary and report success.
-func TestDevtoolsBuildsTheBinaryBeforePointingHooksAtIt(t *testing.T) {
+// This is not stylistic. The installer is the only thing that links the four
+// hook names and the only thing that writes core.hooksPath, and it refuses
+// without touching anything -- so running its preflight first is what makes a
+// machine whose global git config is unusable, or whose chain belongs to another
+// binary, learn that before a link is written. `install` re-runs the same
+// validation internally, which is why the assertion is about the preflight's
+// POSITION and not about its presence.
+func TestDevtoolsChecksTheHooksBeforeInstallingThem(t *testing.T) {
 	fake, ctx, _ := devtoolsCtx(false)
 	if err := phase.Devtools(ctx); err != nil {
 		t.Fatalf("Devtools: %v", err)
 	}
-	build := slices.Index(fake.Ops, opBuildAgents)
-	hooks := slices.Index(fake.Ops, opInstallHooks)
-	if build < 0 || hooks < 0 {
+	check := slices.Index(fake.Ops, opCheckHooks)
+	install := slices.Index(fake.Ops, opInstallHooks)
+	if check < 0 || install < 0 {
 		t.Fatalf("both steps must happen; ops: %v", fake.Ops)
 	}
-	if build > hooks {
-		t.Errorf("hooks were installed at %d, before the build at %d; the installer "+
-			"points four hook names at a binary that does not exist yet", hooks, build)
-	}
-	if dir := slices.Index(fake.Ops, opMakeBinDir); dir < 0 || dir > build {
-		t.Errorf("%s must be created before the build writes into it; ops: %v",
-			opMakeBinDir, fake.Ops)
-	}
-
-	// The hooks preflight is a check that costs nothing and refuses without
-	// touching anything, so its whole value is in WHERE it sits. Running it
-	// after the build would still catch a bad ~/.gitconfig, a foreign
-	// core.hooksPath or a hooks link pointing somewhere else -- but only after
-	// compiling a Go module, which is the one part of this phase that takes
-	// real time. Position, not presence, is what is asserted.
-	check := slices.Index(fake.Ops, opCheckHooks)
-	if check < 0 {
-		t.Fatalf("the hooks preflight must run; ops: %v", fake.Ops)
-	}
-	if check > build {
-		t.Errorf("the hooks preflight ran at %d, after the build at %d; a machine "+
-			"whose global git config is unusable should learn that in a second, "+
-			"not after compiling the agents module", check, build)
+	if check > install {
+		t.Errorf("the hooks preflight ran at %d, after the install at %d; a machine "+
+			"whose global git config is unusable should learn that before anything "+
+			"is linked, not after", check, install)
 	}
 }
 
@@ -121,40 +109,53 @@ func TestDevtoolsDelegatesHooksRatherThanInstallingThem(t *testing.T) {
 	}
 }
 
-// The binary has to be told which checkout it belongs to, and this phase is one
-// of only two places that can tell it -- the builder is the only party that
-// knows. An unstamped binary falls back to ~/dotfiles, where doctor reports
-// three failures against a machine that is fine and the git hook chain finds no
-// personal hooks directory and silently runs none of them.
+// A machine that has run the packages phase has the tap's binary at a Homebrew
+// prefix; one that has not has nothing for the chain to point at. The refusal
+// must name every path it looked in -- "no agents binary" on its own is a dead
+// end for whoever has to act on it -- and must perform no operation first, so
+// the failure cannot leave a machine half-changed.
 //
-// Asserted on its own rather than left to the exact-argv cases above, because
-// those report "ops differ" for any drift at all. Provisioning a checkout that
-// is not ~/dotfiles is the reason the flag exists, so the value asserted is
-// c.Root and not a fixed path.
+// The LookPath trap, under the contract that replaced the refusal: with no
+// agents binary anywhere, the path the phase NAMES must be the tap prefix's,
+// never whatever `agents` happens to answer on PATH.
 //
-// The quotes are load-bearing. -ldflags takes ONE argument, and splitting the
-// value into "-X" and "main.dotfilesRoot=<root>" produces a command go rejects
-// outright with `malformed import path`. The fake quotes any element holding a
-// space, so requiring them here is how this case can tell the two apart.
-func TestDevtoolsStampsTheCheckoutIntoTheBinaryItBuilds(t *testing.T) {
-	fake, ctx, _ := devtoolsCtx(true)
+// The fixture makes the trap loud rather than lucky. The fake's LookPath answers
+// /usr/bin/<name> for any name it does not know -- so a resolveAgents that tried
+// LookPath("agents") would find /usr/bin/agents and hand the installer a path
+// that is not the tap's. brew is taken OFF PATH here and placed at the Apple
+// Silicon prefix instead, which is the machine the phase exists for: Homebrew
+// installed and not yet on PATH, because its shellenv line is read by the next
+// login shell and not by this process.
+//
+// The installer steps are still reached, and that is deliberate. They are Runs:
+// plan performs none of them, and under apply the installer is what refuses
+// this path -- validate_binary when nothing is there, the githook probe when
+// the release it finds is too old. The phase's job is to name the path, not to
+// judge it.
+func TestDevtoolsNamesTheTapPrefixNotWhicheverAgentsIsOnPath(t *testing.T) {
+	fake, ctx, out := devtoolsCtx(true)
+	delete(fake.info, "/opt/homebrew/bin/agents")
+	fake.lookPathErr["brew"] = true
+	installedAt(fake, "/opt/homebrew/bin/brew")
+
 	if err := phase.Devtools(ctx); err != nil {
-		t.Fatalf("Devtools: %v", err)
+		t.Fatalf("a machine with no agents binary must still preview: %v", err)
 	}
-	build := ""
+	if !strings.Contains(out.String(), "the chain would name /opt/homebrew/bin/agents") {
+		t.Errorf("the plan must name the tap prefix's path:\n%s", out)
+	}
 	for _, op := range fake.Ops {
-		if strings.HasPrefix(op, "run go build") {
-			build = op
+		if strings.Contains(op, "/usr/bin/agents") {
+			t.Errorf("the phase handed the installer a path from PATH, which is not "+
+				"the tap's: %q", op)
 		}
 	}
-	if build == "" {
-		t.Fatalf("the phase did not build the binary at all; ops: %v", fake.Ops)
+	want := []string{
+		"run bash /repo/git/install-hooks.sh preflight --adopt-owned /repo /home /opt/homebrew/bin/agents",
+		"run bash /repo/git/install-hooks.sh install --adopt-owned /repo /home /opt/homebrew/bin/agents",
 	}
-	if want := `-ldflags "-X main.dotfilesRoot=` + ctx.Root + `"`; !strings.Contains(build, want) {
-		t.Errorf("build command:\n%s\nis missing %q; the binary it produces would fall "+
-			"back to ~/dotfiles, so on a checkout provisioned anywhere else doctor "+
-			"fails checks that are fine and the git hook chain runs no personal hooks "+
-			"and reports nothing", build, want)
+	if got := strings.Join(fake.Ops, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
 }
 
@@ -165,7 +166,7 @@ func TestDevtoolsSkipsUvWhenItIsAlreadyOnPath(t *testing.T) {
 	if err := phase.Devtools(ctx); err != nil {
 		t.Fatalf("Devtools: %v", err)
 	}
-	want := []string{opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}
+	want := []string{opCheckHooks, opInstallHooks}
 	if strings.Join(fake.Ops, "\n") != strings.Join(want, "\n") {
 		t.Errorf("ops:\n%s\nwant:\n%s", strings.Join(fake.Ops, "\n"), strings.Join(want, "\n"))
 	}
@@ -187,7 +188,8 @@ func TestDevtoolsSkipsUvWhenItIsAlreadyOnPath(t *testing.T) {
 func TestDevtoolsFindsBrewOutsideThisProcessPATH(t *testing.T) {
 	fake := &fakeChange{
 		info: map[string]change.FileInfo{
-			"/home/linuxbrew/.linuxbrew/bin/brew": {Exists: true},
+			"/home/linuxbrew/.linuxbrew/bin/brew":   {Exists: true},
+			"/home/linuxbrew/.linuxbrew/bin/agents": {Exists: true},
 		},
 		links: map[string]string{},
 		// The WHOLE of what this machine has on PATH: nothing. uv is absent, so
@@ -241,16 +243,16 @@ func TestDevtoolsRefusesWhenNoBrewExistsAnywhere(t *testing.T) {
 }
 
 // Every step is a precondition for the ones after it, so a failure must stop the
-// phase rather than be logged and stepped over. The build is the load-bearing
-// case: continuing past it hands install-hooks.sh a binary that was never
-// written.
+// phase rather than be logged and stepped over. The preflight is the
+// load-bearing case: continuing past it hands a machine to the install that the
+// preflight had just refused.
 //
 // Which refusal comes back is asserted, not just that one did. Absence of the
-// later operations is not enough on its own: ~/bin is a PREFIX of the binary
-// path every later step names, so a swallowed Dir error would produce an
-// identical Ops list and a refusal from the next step instead. The fake names
-// the failing operation -- the path for Dir, the command for Run -- so that is
-// what tells the two apart.
+// later operations is not enough on its own: the two installer invocations share
+// a leading word, so an implementation that swallowed the preflight's error
+// would produce an Ops list ending in the install and a refusal from the wrong
+// step. The fake names the failing operation -- the command for Run -- so that
+// is what tells the two apart.
 //
 // Each failOn below names exactly one recorded operation, which is why the fake
 // matches against the operation as recorded rather than against a bare path.
@@ -261,15 +263,9 @@ func TestDevtoolsStopsAtTheFirstFailure(t *testing.T) {
 		wantPath string
 		mustNot  []string
 	}{
-		{"uv", opInstallUv, "/usr/bin/brew",
-			[]string{opCheckHooks, opMakeBinDir, opBuildAgents, opInstallHooks}},
-		// The reason the preflight moved ahead of the build: a machine that
-		// cannot take the hooks must not pay for a compile to find out.
+		{"uv", opInstallUv, "/usr/bin/brew", []string{opCheckHooks, opInstallHooks}},
 		{"hooks preflight", "install-hooks.sh preflight", "bash",
-			[]string{opMakeBinDir, opBuildAgents, opInstallHooks}},
-		{"bin directory", "dir /home/bin", "/home/bin",
-			[]string{opBuildAgents, opInstallHooks}},
-		{"build", "run go build", "go", []string{opInstallHooks}},
+			[]string{opInstallHooks}},
 		{"hooks install", "install-hooks.sh install", "bash", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -292,5 +288,44 @@ func TestDevtoolsStopsAtTheFirstFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A preview runs before the binary exists. Plan executes nothing, so the
+// packages phase that installs `agents` from the Brewfile has not run either --
+// which is the state of every CI runner, and refusing there is what failed four
+// plan tests on them (run 38044462264) while passing on a machine that has
+// `agents` installed.
+//
+// The installer steps still run, and that is the half that keeps `apply`
+// honest: they are Runs, plan performs none of them, and under apply the
+// installer is what refuses the named path -- by validate_binary when it is
+// missing, and by the githook probe when the release it finds cannot answer the
+// subcommand the entries run.
+func TestDevtoolsPreviewsAMachineWithNoAgentsBinary(t *testing.T) {
+	fake := &fakeChange{
+		info:        map[string]change.FileInfo{},
+		links:       map[string]string{},
+		lookPathErr: map[string]bool{"uv": true},
+	}
+	out := &bytes.Buffer{}
+	ctx := phase.Context{
+		Change: fake, Root: "/repo", Home: "/home", Platform: "darwin",
+		Profile: "workstation", Out: out,
+	}
+
+	if err := phase.Devtools(ctx); err != nil {
+		t.Fatalf("a machine with no agents binary must still preview: %v", err)
+	}
+	if !strings.Contains(out.String(), "the chain would name /usr/bin/agents") {
+		t.Errorf("the plan must name the path it would use:\n%s", out)
+	}
+	want := []string{
+		opInstallUv,
+		"run bash /repo/git/install-hooks.sh preflight --adopt-owned /repo /home /usr/bin/agents",
+		"run bash /repo/git/install-hooks.sh install --adopt-owned /repo /home /usr/bin/agents",
+	}
+	if got := strings.Join(fake.Ops, "\n"); got != strings.Join(want, "\n") {
+		t.Errorf("ops:\n%s\nwant:\n%s", got, strings.Join(want, "\n"))
 	}
 }

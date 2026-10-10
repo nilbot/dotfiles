@@ -6,6 +6,18 @@ brew "rustup-init"
 brew "tmux"
 brew "yarn"
 
+# The released agents binary, which the devtools phase hands to
+# git/install-hooks.sh as the path the four hook names point at. A qualified name
+# taps on demand, so this list needs no separate `tap` line -- and nothing builds
+# agents from the checkout any more.
+#
+# The packaging phase trusts this tap before `brew bundle` runs
+# (trustBrewfileTaps, internal/phase/packages.go): Homebrew refuses to LOAD a
+# formula from an untrusted third-party tap, which is what stopped the tap
+# installing on both Linux CI images. The tap is read off this file, so the
+# trusted set and the installed set cannot drift.
+brew "nilbot/tap/agents"
+
 brew "bat"
 brew "bingrep"
 brew "broot"

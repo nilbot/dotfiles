@@ -53,5 +53,16 @@ func rootCommand() *Command {
 			Audience: []Audience{Git, CI},
 			Run:      func(a []string, io IO) int { return runGuard(a, io.Out) },
 		},
+		{
+			// Not the `agents hook` entry point deleted on 2026-09-21: that one
+			// recorded harness lifecycle events. This one runs a Git hook for
+			// the chain entry that invoked it, and it is the only way in -- the
+			// argv[0] multicall it replaces survives one release as a shim.
+			Name: "githook", Summary: "run one Git hook for the chain entry that invoked it",
+			Usage:    "agents githook <name> --checkout <path>",
+			Detail:   "Runs one Git hook in three parts, in order: the repository's own hook of that name, then the executable personal stages named `<anything>.<name>` under `<path>/git/hooks/`, then the built-in stage. `<path>` is `-` when the chain record names no checkout, and then no personal stages run. Invoked only by the four generated entries in the hook chain; `--checkout` is the value the entry read from the record, Git's own arguments follow it, and they are forwarded verbatim.",
+			Audience: []Audience{Git, CI},
+			Run:      func(a []string, io IO) int { return runGithook(a, io.In, io.Out, io.Err) },
+		},
 	}}
 }

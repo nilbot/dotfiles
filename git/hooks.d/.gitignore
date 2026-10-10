@@ -1,5 +1,0 @@
-# The symlinks in this directory point at an absolute path on one machine
-# (~/bin/agents). git/install-hooks.sh creates them, and bootstrap's devtools
-# phase runs it. Only this file is tracked.
-*
-!.gitignore

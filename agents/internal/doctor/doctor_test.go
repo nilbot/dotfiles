@@ -116,7 +116,7 @@ func TestSkillsReportsMissingCustomizedAndPresent(t *testing.T) {
 // keys off both. A check with neither would render as a blank line.
 func TestRunWithDepsNamesEveryCheck(t *testing.T) {
 	root := t.TempDir()
-	checks, err := RunWithDeps(root, "/nonexistent/agents", DependenciesFor(""))
+	checks, err := RunWithDeps(root, "/nonexistent/agents", DependenciesFor())
 	if err != nil {
 		t.Fatalf("RunWithDeps: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestRunWithDepsNamesEveryCheck(t *testing.T) {
 func TestRunWithDepsIsObservationalOnly(t *testing.T) {
 	root := t.TempDir()
 	before, _ := os.ReadDir(root)
-	_, err := RunWithDeps(root, "/nonexistent/agents", DependenciesFor(""))
+	_, err := RunWithDeps(root, "/nonexistent/agents", DependenciesFor())
 	if err != nil {
 		t.Fatalf("RunWithDeps: %v", err)
 	}
@@ -230,8 +230,8 @@ func TestWiringPrefersAnOwnedEntryOverALookalike(t *testing.T) {
 const (
 	gitGlobalHooksQuestion      = "config --global --includes --null --show-origin --get-all core.hooksPath"
 	gitLocalHooksQuestion       = "config --local --get-all core.hooksPath"
-	gitEffectiveHooksQuestion   = "config --get core.hooksPath"
 	gitGlobalAttributesQuestion = "config --global --includes --null --show-origin --get-all core.attributesFile"
+	gitGlobalIncludesQuestion   = "config --global --includes --get-all include.path"
 )
 
 func writeFixture(t *testing.T, path, body string) {
@@ -504,110 +504,114 @@ func TestCheckAntigravityTrustMatchesTheRepositoryRootExactly(t *testing.T) {
 	})
 }
 
-// rootChecks exists because every other check compares one configured path with
-// another: a binary stamped to a deleted worktree produced a byte-identical
-// report before it was added, and the personal hook chain had already stopped
-// running at exit 0. So the property is not only that it fails, but that the
-// failure names the path that is gone -- no other line in the report does.
-func TestRootChecksReportsAStampedCheckoutThatIsGone(t *testing.T) {
-	t.Run("an unstamped binary has no root to report", func(t *testing.T) {
-		if got := rootChecks(Dependencies{}); len(got) != 0 {
-			t.Errorf("an empty Root = %+v, want no check at all; `go run` has no checkout to have lost", got)
-		}
-	})
+// ---------------------------------------------------------------------------
+// The chain: the directory core.hooksPath names, the record inside it, and the
+// four entries Git executes.
+//
+// The fixture is a machine the installer provisioned, and every case breaks one
+// thing about it. Nothing here reads a compiled checkout root -- there is none
+// any more -- so the chain is found the way doctor finds it: through the global
+// setting.
+// ---------------------------------------------------------------------------
 
-	t.Run("the stamped checkout is gone", func(t *testing.T) {
-		root := filepath.Join(t.TempDir(), "deleted-worktree")
-		got := rootChecks(Dependencies{Root: root})
-		if len(got) != 1 || got[0].Status != Fail {
-			t.Fatalf("a deleted stamped checkout = %+v, want one Fail", got)
-		}
-		if !strings.Contains(got[0].Detail, root) {
-			t.Errorf("the report must name the path nothing else mentions: %s", got[0].Detail)
-		}
-		if got[0].Remedy == "" {
-			t.Error("a failure with nothing to do about it is a dead end")
-		}
-	})
-
-	t.Run("the stamped checkout is a file", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "not-a-checkout")
-		writeFixture(t, path, "#!/bin/sh\n")
-		got := rootChecks(Dependencies{Root: path})
-		if len(got) != 1 || got[0].Status != Fail {
-			t.Fatalf("a stamped path that is not a directory = %+v, want one Fail", got)
-		}
-	})
-
-	t.Run("the stamped checkout exists", func(t *testing.T) {
-		got := rootChecks(Dependencies{Root: t.TempDir()})
-		if len(got) != 1 || got[0].Status != OK {
-			t.Fatalf("an intact checkout = %+v, want one OK", got)
-		}
-	})
+// chainFixture is a machine wired the way git/install-hooks.sh wires one: the
+// chain at <root>/git/hooks.d holding a record and four generated entries, the
+// binary the record names, a checkout supplying two personal stages, and the
+// global setting that points Git at it.
+type chainFixture struct {
+	root     string
+	chain    string
+	binary   string
+	checkout string
+	deps     Dependencies
 }
 
-// hooksFixture is a machine provisioned the way the installer provisions one: a
-// checkout carrying the reviewed git config paths, a hooks directory of four
-// links, and the binary those links resolve to.
-type hooksFixture struct {
-	root   string
-	binary string
-	deps   Dependencies
-}
-
-func newHooksFixture(t *testing.T) hooksFixture {
+func newChainFixture(t *testing.T) chainFixture {
 	t.Helper()
 	root := t.TempDir()
-	f := hooksFixture{
-		root:   root,
-		binary: filepath.Join(root, "bin", "agents"),
+	f := chainFixture{
+		root:     root,
+		chain:    filepath.Join(root, "git", "hooks.d"),
+		binary:   filepath.Join(root, "bin", "agents"),
+		checkout: filepath.Join(root, "personal checkout"),
 	}
 	f.deps = Dependencies{
-		Root:            root,
-		HooksDir:        filepath.Join(root, "git", "hooks.d"),
-		GlobalGitConfig: filepath.Join(root, ".gitconfig"),
-		SharedGitConfig: filepath.Join(root, "git", "gitconfig.shared"),
-		LegacyHooksPath: func(string) (string, error) { return filepath.Join(root, "git", "hooks"), nil },
+		GlobalGitConfig:       filepath.Join(root, "home", ".gitconfig"),
+		AttributesLink:        filepath.Join(root, "home", ".gitattributes"),
+		AttributesConfigValue: "~/.gitattributes",
+		LegacyHooksPath:       func(string) (string, error) { return filepath.Join(root, "git", "hooks"), nil },
 	}
 	writeFixture(t, f.binary, "#!/bin/sh\n")
-	if err := os.MkdirAll(f.deps.HooksDir, 0o755); err != nil {
+	if err := os.Chmod(f.binary, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The installer has to be at <checkout>/git/install-hooks.sh -- the record's
+	// checkout is where the remedy reads it from -- or the remedy falls back to
+	// the sentence that names no path.
+	writeFixture(t, filepath.Join(f.checkout, "git", "install-hooks.sh"), "#!/bin/sh\n")
 	for _, name := range installedHookNames {
-		if err := os.Symlink(f.binary, filepath.Join(f.deps.HooksDir, name)); err != nil {
+		path := filepath.Join(f.chain, name)
+		writeFixture(t, path, generatedEntry(f.checkout, name))
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFixture(t, filepath.Join(f.chain, chainRecordName), generatedChainRecord(f.binary, f.checkout))
+	// Two personal stages, the shape this repository's own git/hooks carries.
+	for _, name := range []string{"recent.post-merge", "recent.post-checkout"} {
+		path := filepath.Join(f.checkout, "git", "hooks", name)
+		writeFixture(t, path, "#!/bin/sh\n")
+		if err := os.Chmod(path, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return f
 }
 
-// exactGitAnswers answers the three questions checkGitHooks asks, as a correctly
-// provisioned machine answers them. The global setting is expected to come from
-// the primary global config specifically: a hooksPath set from an included or
-// shared file is a different finding even when the value is right.
-func (f hooksFixture) exactGitAnswers() map[string]GitResult {
+// generatedEntry is the entry git/install-hooks.sh writes, reduced to the three
+// things doctor recognises: line 1, the generated header, and the exec line for
+// this hook name.
+func generatedEntry(checkout, hook string) string {
+	return "#!/bin/sh\n" +
+		"# Written by git/install-hooks.sh for " + checkout + ".\n" +
+		"# The checkout is read from our own header, so a broken record is still repairable.\n" +
+		"exec \"$binary\" githook " + hook + " --checkout \"$checkout\" \"$@\"\n"
+}
+
+func generatedChainRecord(binary, checkout string) string {
+	return "# Written by git/install-hooks.sh. Re-run the installer to change it.\n" +
+		"format=1\nbinary=" + binary + "\ncheckout=" + checkout + "\n"
+}
+
+// exactGitAnswers answers the two questions the chain checks ask, as a machine
+// the installer provisioned answers them.
+func (f chainFixture) exactGitAnswers() map[string]GitResult {
 	return map[string]GitResult{
-		gitGlobalHooksQuestion:    {Output: gitConfigOriginOutput("file:"+f.deps.GlobalGitConfig, f.deps.HooksDir)},
-		gitLocalHooksQuestion:     {Code: 1},
-		gitEffectiveHooksQuestion: {Output: f.deps.HooksDir + "\n"},
+		gitGlobalHooksQuestion: {Output: gitConfigOriginOutput("file:"+f.deps.GlobalGitConfig, f.chain)},
+		gitLocalHooksQuestion:  {Code: 1},
 	}
 }
 
-// A machine provisioned exactly right must clear every one of these checks.
-// Without this, every other case here can pass while one of them is inverted.
-func TestCheckGitHooksClearsAnExactInstallation(t *testing.T) {
-	f := newHooksFixture(t)
+func (f chainFixture) checks(t *testing.T) []Check {
+	t.Helper()
 	f.deps.Git = gitAnswers(t, f.exactGitAnswers())
+	return chainChecks(f.root, f.binary, f.deps)
+}
 
-	checks := checkGitHooks(f.root, f.binary, f.deps)
+// A machine provisioned exactly right must clear every chain check. Without
+// this, every other case here can pass while one of them is inverted.
+func TestChainClearsAnExactInstallation(t *testing.T) {
+	f := newChainFixture(t)
+	checks := f.checks(t)
 	for _, name := range []string{
-		"git-hooks:global",
-		"git-hooks:local",
-		"git-hooks:effective",
-		"git-hooks:links",
-		"git-hooks:unmanaged",
-		"git-hooks:legacy",
+		"chain:hooks-path",
+		"chain:entries",
+		"chain:record",
+		"chain:unmanaged",
+		"chain:local",
+		"chain:legacy",
+		"chain:running",
+		"chain:checkout",
 	} {
 		if got := findCheck(t, checks, name); got.Status != OK {
 			t.Errorf("%s = %q, want %q: %s %s", name, got.Status, OK, got.Detail, got.Remedy)
@@ -615,81 +619,50 @@ func TestCheckGitHooksClearsAnExactInstallation(t *testing.T) {
 	}
 }
 
-// The failure the local and effective checks exist for: a repository-local (or
-// otherwise closer) core.hooksPath takes the personal hook chain out of the
-// path, and git then runs a hook directory that has none of this tool's hooks in
-// it. Nothing about the global setting looks wrong, which is why the effective
-// value is checked separately.
-func TestCheckGitHooksReportsAHooksPathThatShadowsTheHooks(t *testing.T) {
-	f := newHooksFixture(t)
-	shadow := filepath.Join(f.root, "git", "hooks")
-	answers := f.exactGitAnswers()
-	answers[gitLocalHooksQuestion] = GitResult{Output: shadow + "\n"}
-	answers[gitEffectiveHooksQuestion] = GitResult{Output: shadow + "\n"}
-	f.deps.Git = gitAnswers(t, answers)
-
-	checks := checkGitHooks(f.root, f.binary, f.deps)
-	local := findCheck(t, checks, "git-hooks:local")
-	if local.Status != Warn {
-		t.Errorf("a repository-local override = %q, want %q: %s", local.Status, Warn, local.Detail)
-	}
-	if local.Remedy == "" {
-		t.Error("an operator cannot unshadow a hook directory the report does not name")
-	}
-	effective := findCheck(t, checks, "git-hooks:effective")
-	if effective.Status != Warn {
-		t.Errorf("an effective hooksPath pointing elsewhere = %q, want %q: %s", effective.Status, Warn, effective.Detail)
-	}
-	// The links themselves are intact; the report must not blame them.
-	if got := findCheck(t, checks, "git-hooks:links"); got.Status != OK {
-		t.Errorf("the installed links are untouched by a shadowing config: %+v", got)
-	}
-}
-
-// The three ways the global setting can be wrong, told apart because they end
-// differently: unset, set in a file this review does not own, or set twice by
-// includes that disagree. All three leave the machine with hooks that do not
-// run.
-func TestCheckGitHooksReportsAGlobalHooksPathItDoesNotOwn(t *testing.T) {
-	t.Run("unset", func(t *testing.T) {
-		f := newHooksFixture(t)
-		answers := f.exactGitAnswers()
-		answers[gitGlobalHooksQuestion] = GitResult{Code: 1}
-		f.deps.Git = gitAnswers(t, answers)
-
-		got := findCheck(t, checkGitHooks(f.root, f.binary, f.deps), "git-hooks:global")
-		if got.Status != Fail {
-			t.Fatalf("an unset global hooksPath = %q, want %q: %s", got.Status, Fail, got.Detail)
+// chain:hooks-path reads the one setting that says where the chain is. The
+// value must come from the machine-local primary global config -- a path set by
+// an included file is a different finding even when it is right -- and an unset
+// setting is a report, not a fault: §8 row 15 pins that, because failing here
+// would fail doctor on every machine that never installed the hooks.
+func TestChainHooksPathClassifiesTheGlobalSetting(t *testing.T) {
+	t.Run("unset means no chain is installed", func(t *testing.T) {
+		f := newChainFixture(t)
+		f.deps.Git = gitAnswers(t, map[string]GitResult{
+			gitGlobalHooksQuestion: {Code: 1},
+			gitLocalHooksQuestion:  {Code: 1},
+		})
+		checks := chainChecks(f.root, f.binary, f.deps)
+		if got := findCheck(t, checks, "chain:hooks-path"); got.Status != OK {
+			t.Fatalf("an unset core.hooksPath = %q, want %q: %s", got.Status, OK, got.Detail)
 		}
-		if !strings.Contains(got.Remedy, "git/install-hooks.sh") {
-			t.Errorf("the remedy must be the reviewed installer, with its paths: %s", got.Remedy)
+		if len(checks) != 3 {
+			t.Fatalf("with no chain installed doctor produced %d checks, want hooks-path, local and legacy: %+v", len(checks), checks)
 		}
 	})
 
 	t.Run("set from a file this review does not own", func(t *testing.T) {
-		f := newHooksFixture(t)
+		f := newChainFixture(t)
 		answers := f.exactGitAnswers()
-		answers[gitGlobalHooksQuestion] = GitResult{
-			Output: gitConfigOriginOutput("file:"+f.deps.SharedGitConfig, f.deps.HooksDir),
-		}
+		answers[gitGlobalHooksQuestion] = GitResult{Output: gitConfigOriginOutput(
+			"file:"+filepath.Join(f.root, "elsewhere", "config"), f.chain)}
 		f.deps.Git = gitAnswers(t, answers)
 
-		got := findCheck(t, checkGitHooks(f.root, f.binary, f.deps), "git-hooks:global")
+		got := findCheck(t, chainChecks(f.root, f.binary, f.deps), "chain:hooks-path")
 		if got.Status != Fail {
 			t.Fatalf("the right value from the wrong file = %q, want %q: %s", got.Status, Fail, got.Detail)
 		}
 	})
 
 	t.Run("set twice", func(t *testing.T) {
-		f := newHooksFixture(t)
+		f := newChainFixture(t)
 		answers := f.exactGitAnswers()
 		answers[gitGlobalHooksQuestion] = GitResult{Output: gitConfigOriginOutput(
-			"file:"+f.deps.GlobalGitConfig, f.deps.HooksDir,
-			"file:"+f.deps.SharedGitConfig, filepath.Join(f.root, "git", "hooks"),
+			"file:"+f.deps.GlobalGitConfig, f.chain,
+			"file:"+filepath.Join(f.root, "elsewhere"), filepath.Join(f.root, "git", "hooks"),
 		)}
 		f.deps.Git = gitAnswers(t, answers)
 
-		got := findCheck(t, checkGitHooks(f.root, f.binary, f.deps), "git-hooks:global")
+		got := findCheck(t, chainChecks(f.root, f.binary, f.deps), "chain:hooks-path")
 		if got.Status != Fail {
 			t.Fatalf("two global hooksPath values = %q, want %q: %s", got.Status, Fail, got.Detail)
 		}
@@ -698,131 +671,282 @@ func TestCheckGitHooksReportsAGlobalHooksPathItDoesNotOwn(t *testing.T) {
 		}
 	})
 
+	t.Run("the setting cannot be read", func(t *testing.T) {
+		f := newChainFixture(t)
+		answers := f.exactGitAnswers()
+		answers[gitGlobalHooksQuestion] = GitResult{Code: 128, Output: "fatal: bad config line 1\n"}
+		f.deps.Git = gitAnswers(t, answers)
+
+		if got := findCheck(t, chainChecks(f.root, f.binary, f.deps), "chain:hooks-path"); got.Status != Fail {
+			t.Errorf("an unreadable setting = %q, want %q: %s", got.Status, Fail, got.Detail)
+		}
+	})
+
 	t.Run("no git runner at all", func(t *testing.T) {
-		f := newHooksFixture(t)
-		checks := checkGitHooks(f.root, f.binary, f.deps)
-		got := findCheck(t, checks, "git-hooks:global")
+		f := newChainFixture(t)
+		if got := findCheck(t, chainChecks(f.root, f.binary, f.deps), "chain:hooks-path"); got.Status != Fail {
+			t.Errorf("an unavailable git = %q, want %q: a report that cannot look must not pass", got.Status, Fail)
+		}
+	})
+}
+
+// chain:entries watches the four files Git will actually execute. The failure
+// §8 row 13 names is a mode bit: a non-executable entry is skipped with a hint
+// and exit 0, so the guard is off and only the hint says so.
+func TestChainEntriesReportsWhatGitWouldSkip(t *testing.T) {
+	t.Run("an entry is not executable", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.Chmod(filepath.Join(f.chain, "pre-commit"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:entries")
 		if got.Status != Fail {
-			t.Fatalf("an unavailable git = %q, want %q: a report that cannot look must not pass", got.Status, Fail)
+			t.Fatalf("a non-executable entry = %q, want %q: %s", got.Status, Fail, got.Detail)
+		}
+		if !strings.Contains(got.Detail, "not executable") {
+			t.Errorf("the report must say the mode is what stops it: %s", got.Detail)
+		}
+	})
+
+	t.Run("a managed name holds a foreign file", func(t *testing.T) {
+		f := newChainFixture(t)
+		writeFixture(t, filepath.Join(f.chain, "commit-msg"), "#!/bin/sh\nexit 0\n")
+		got := findCheck(t, f.checks(t), "chain:entries")
+		if got.Status != Fail {
+			t.Fatalf("a foreign file where our entry belongs = %q, want %q: %s", got.Status, Fail, got.Detail)
+		}
+		if !strings.Contains(got.Detail, "generated header") {
+			t.Errorf("the report must name what is missing from the file: %s", got.Detail)
+		}
+	})
+
+	t.Run("a managed name is missing", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.Remove(filepath.Join(f.chain, "post-merge")); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:entries")
+		if got.Status != Fail || !strings.Contains(got.Detail, "post-merge") {
+			t.Fatalf("a missing entry = %q (%s), want a Fail naming post-merge", got.Status, got.Detail)
+		}
+	})
+
+	t.Run("the chain directory is gone", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.RemoveAll(f.chain); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:entries")
+		if got.Status != Fail {
+			t.Fatalf("a deleted chain directory = %q, want %q: this is the one silence doctor exists to break", got.Status, Fail)
+		}
+		if !strings.Contains(got.Detail, f.chain) {
+			t.Errorf("the report must name the directory that is gone: %s", got.Detail)
+		}
+		if got.Remedy == "" {
+			t.Error("a failure with nothing to do about it is a dead end")
 		}
 	})
 }
 
-// A binary that was never stamped to a checkout -- `go run`, a test binary -- has
-// no HooksDir to compare against, and asking the global questions anyway would
-// compare a configured path with the empty string. The stub is what proves the
-// narrowing: it fails the test on any question but the repository-local one.
-func TestCheckGitHooksWithoutACheckoutAsksOnlyWhatItCan(t *testing.T) {
-	f := newHooksFixture(t)
-	f.deps.Root = ""
-	f.deps.HooksDir = ""
-	f.deps.Git = gitAnswers(t, map[string]GitResult{gitLocalHooksQuestion: {Code: 1}})
+// chain:record parses chain.env under the entry's allow-list. Every case here
+// is a record the entry would refuse too, which is the point: doctor and the
+// entry must not disagree about what is readable.
+func TestChainRecordRefusesMalformedRecords(t *testing.T) {
+	cases := []struct {
+		name   string
+		record string
+		detail string
+	}{
+		{
+			name:   "an unknown key",
+			record: "format=1\nbinary=%s\ncheckout=%s\npwned=1\n",
+			detail: "pwned",
+		},
+		{
+			name:   "a wrong format",
+			record: "format=2\nbinary=%s\ncheckout=%s\n",
+			detail: "not format 1",
+		},
+		{
+			name:   "a relative binary",
+			record: "format=1\nbinary=bin/agents\ncheckout=%s\n",
+			detail: "not an absolute path",
+		},
+		{
+			name:   "a checkout that is neither - nor absolute",
+			record: "format=1\nbinary=%s\ncheckout=somewhere\n",
+			detail: "neither - nor an absolute path",
+		},
+		{
+			name:   "a truncated record",
+			record: "format=1\nbinary=%s\n",
+			detail: "checkout",
+		},
+		{
+			name:   "a line that is a shell command",
+			record: "format=1\nbinary=%s\ncheckout=%s\n: > /tmp/pwned\n",
+			detail: "unknown key",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newChainFixture(t)
+			body := tc.record
+			if strings.Count(body, "%s") == 2 {
+				body = strings.Replace(body, "%s", f.binary, 1)
+				body = strings.Replace(body, "%s", f.checkout, 1)
+			} else if strings.Count(body, "%s") == 1 {
+				body = strings.Replace(body, "%s", f.binary, 1)
+			}
+			writeFixture(t, filepath.Join(f.chain, chainRecordName), body)
 
-	checks := checkGitHooks(f.root, f.binary, f.deps)
-	if len(checks) != 2 {
-		t.Fatalf("an unstamped binary produced %d checks, want the local and legacy pair: %+v", len(checks), checks)
+			got := findCheck(t, f.checks(t), "chain:record")
+			if got.Status != Fail {
+				t.Fatalf("%s = %q, want %q: %s", tc.name, got.Status, Fail, got.Detail)
+			}
+			if !strings.Contains(got.Detail, tc.detail) {
+				t.Errorf("detail = %q, want it to mention %q", got.Detail, tc.detail)
+			}
+			if got.Remedy == "" {
+				t.Error("a failure with nothing to do about it is a dead end")
+			}
+		})
 	}
-	if got := findCheck(t, checks, "git-hooks:local"); got.Status != OK {
-		t.Errorf("git-hooks:local = %q, want %q: %s", got.Status, OK, got.Detail)
-	}
-	if got := findCheck(t, checks, "git-hooks:legacy"); got.Status != OK {
-		t.Errorf("git-hooks:legacy = %q, want %q: %s", got.Status, OK, got.Detail)
-	}
-}
 
-// checkInstalledLinks watches the four symlinks git will actually execute. The
-// case worth a fixture is the one a package upgrade leaves behind: the link is
-// still ours and still a link, but it names the previous version's binary, and
-// the installer refuses to repoint a link it did not just write unless it is
-// handed --adopt-owned. A remedy without the flag is a command that fails.
-func TestCheckInstalledLinksReportsWhatOnlyAFlagCanRepair(t *testing.T) {
-	t.Run("all four resolve to the current binary", func(t *testing.T) {
-		f := newHooksFixture(t)
-		if got := checkInstalledLinks(f.deps, f.binary); got.Status != OK {
-			t.Errorf("an intact link set = %q, want %q: %s", got.Status, OK, got.Detail)
+	t.Run("the record is missing", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.Remove(filepath.Join(f.chain, chainRecordName)); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:record")
+		if got.Status != Fail || !strings.Contains(got.Detail, chainRecordName) {
+			t.Fatalf("a missing record = %q (%s), want a Fail naming chain.env", got.Status, got.Detail)
 		}
 	})
 
-	t.Run("a link names an older binary", func(t *testing.T) {
-		f := newHooksFixture(t)
+	t.Run("the binary it names is not executable", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.Chmod(f.binary, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:record")
+		if got.Status != Fail || !strings.Contains(got.Detail, f.binary) {
+			t.Fatalf("a record naming a non-executable binary = %q (%s), want a Fail naming it", got.Status, got.Detail)
+		}
+	})
+}
+
+// chain:running is the check that caught the upgrade incident, and it stays a
+// failure: §8 row 14's mutation is reporting both paths as facts with no
+// failure, which would print ok while the binary you run is not the binary your
+// commits run.
+func TestChainRunningFailsWhenTheRecordNamesAnotherBinary(t *testing.T) {
+	t.Run("the record names the running binary", func(t *testing.T) {
+		f := newChainFixture(t)
+		if got := findCheck(t, f.checks(t), "chain:running"); got.Status != OK {
+			t.Errorf("the record names the running binary = %q, want %q: %s", got.Status, OK, got.Detail)
+		}
+	})
+
+	t.Run("the record names an older binary", func(t *testing.T) {
+		f := newChainFixture(t)
 		older := filepath.Join(f.root, "bin", "agents-0.5.1")
 		writeFixture(t, older, "#!/bin/sh\n")
-		if err := os.Remove(filepath.Join(f.deps.HooksDir, "commit-msg")); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(older, filepath.Join(f.deps.HooksDir, "commit-msg")); err != nil {
-			t.Fatal(err)
-		}
+		writeFixture(t, filepath.Join(f.chain, chainRecordName), generatedChainRecord(older, f.checkout))
 
-		got := checkInstalledLinks(f.deps, f.binary)
+		got := findCheck(t, f.checks(t), "chain:running")
 		if got.Status != Fail {
-			t.Fatalf("a link to the previous version = %q, want %q: %s", got.Status, Fail, got.Detail)
+			t.Fatalf("a record naming another binary = %q, want %q: %s", got.Status, Fail, got.Detail)
 		}
-		if !strings.Contains(got.Detail, "commit-msg") {
-			t.Errorf("the report must name the link that needs repointing: %s", got.Detail)
-		}
-		if !strings.Contains(got.Remedy, "--adopt-owned") {
-			t.Errorf("the installer refuses an existing link without the flag, so the remedy must carry it: %s", got.Remedy)
+		for _, want := range []string{older, f.binary} {
+			if !strings.Contains(got.Detail, want) {
+				t.Errorf("the failure must print both paths; %q omits %q", got.Detail, want)
+			}
 		}
 	})
 
-	t.Run("a foreign file sits under a managed hook name", func(t *testing.T) {
-		f := newHooksFixture(t)
-		path := filepath.Join(f.deps.HooksDir, "pre-commit")
-		if err := os.Remove(path); err != nil {
+	t.Run("the record cannot be read", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.Remove(filepath.Join(f.chain, chainRecordName)); err != nil {
 			t.Fatal(err)
 		}
-		writeFixture(t, path, "#!/bin/sh\nexit 0\n")
-
-		got := checkInstalledLinks(f.deps, f.binary)
-		if got.Status != Fail {
-			t.Fatalf("a foreign hook where ours belongs = %q, want %q: %s", got.Status, Fail, got.Detail)
-		}
-		if !strings.Contains(got.Detail, "not an owned symlink") {
-			t.Errorf("the report must not describe a foreign file as a missing link: %s", got.Detail)
-		}
-	})
-
-	t.Run("a hook link is missing", func(t *testing.T) {
-		f := newHooksFixture(t)
-		if err := os.Remove(filepath.Join(f.deps.HooksDir, "post-merge")); err != nil {
-			t.Fatal(err)
-		}
-		got := checkInstalledLinks(f.deps, f.binary)
-		if got.Status != Fail {
-			t.Fatalf("a missing hook link = %q, want %q: %s", got.Status, Fail, got.Detail)
-		}
-	})
-
-	t.Run("the current binary cannot be inspected", func(t *testing.T) {
-		f := newHooksFixture(t)
-		got := checkInstalledLinks(f.deps, filepath.Join(f.root, "bin", "gone"))
-		if got.Status != Fail {
-			t.Fatalf("an unstattable binary = %q, want %q: %s", got.Status, Fail, got.Detail)
+		if got := findCheck(t, f.checks(t), "chain:running"); got.Status != Fail {
+			t.Errorf("no record to compare with = %q, want %q: %s", got.Status, Fail, got.Detail)
 		}
 	})
 }
 
-// checkUnmanagedLinks exists because git silently ignores names it does not
-// know: a dangling link left by an older install dangles forever and no other
-// check names it, since git-hooks:links looks only at the four managed names.
-// The other half of the property is what it must not claim -- a managed name is
-// already reported by that other check, and a link that resolves is the
-// human's to keep.
-func TestCheckUnmanagedLinksReportsOnlyDanglingUnownedLinks(t *testing.T) {
-	t.Run("nothing dangling", func(t *testing.T) {
-		f := newHooksFixture(t)
-		if got := checkUnmanagedLinks(f.deps); got.Status != OK {
-			t.Errorf("a clean directory = %q, want %q: %s", got.Status, OK, got.Detail)
+// chain:checkout reports the personal stages, and it reports a COUNT: this
+// repository's git/hooks carries two tracked files, so "not empty" is true of
+// any checkout and zero is the state the check exists to notice. It warns where
+// root:exists failed, because the built-in guard still runs.
+func TestChainCheckoutReportsThePersonalStageCount(t *testing.T) {
+	t.Run("two stages are found", func(t *testing.T) {
+		f := newChainFixture(t)
+		got := findCheck(t, f.checks(t), "chain:checkout")
+		if got.Status != OK {
+			t.Fatalf("two personal stages = %q, want %q: %s", got.Status, OK, got.Detail)
+		}
+		if !strings.Contains(got.Detail, "2 personal stage") {
+			t.Errorf("the report must give the count it found: %s", got.Detail)
+		}
+	})
+
+	t.Run("the record declares none", func(t *testing.T) {
+		f := newChainFixture(t)
+		writeFixture(t, filepath.Join(f.chain, chainRecordName), generatedChainRecord(f.binary, "-"))
+		if got := findCheck(t, f.checks(t), "chain:checkout"); got.Status != OK {
+			t.Errorf("checkout=- = %q, want %q: %s", got.Status, OK, got.Detail)
+		}
+	})
+
+	t.Run("the recorded checkout is gone", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.RemoveAll(f.checkout); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:checkout")
+		if got.Status != Warn {
+			t.Fatalf("a deleted checkout = %q, want %q: %s", got.Status, Warn, got.Detail)
+		}
+		if !strings.Contains(got.Detail, f.checkout) {
+			t.Errorf("the report must name the checkout that is gone: %s", got.Detail)
+		}
+	})
+
+	t.Run("the checkout has been emptied", func(t *testing.T) {
+		f := newChainFixture(t)
+		if err := os.RemoveAll(filepath.Join(f.checkout, "git", "hooks")); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:checkout")
+		if got.Status != Warn {
+			t.Fatalf("an emptied checkout = %q, want %q: %s", got.Status, Warn, got.Detail)
+		}
+		if !strings.Contains(got.Detail, "0 executable") {
+			t.Errorf("the report must give the count it found, and it is zero: %s", got.Detail)
+		}
+	})
+}
+
+// chain:unmanaged reports the complementary case to chain:entries: names Git
+// never runs. A dangling link left by an earlier installer, and a generated
+// entry under a name that is not a hook -- which looks installed and is not.
+func TestChainUnmanagedReportsDanglingLinksAndLookalikes(t *testing.T) {
+	t.Run("nothing to report", func(t *testing.T) {
+		f := newChainFixture(t)
+		if got := findCheck(t, f.checks(t), "chain:unmanaged"); got.Status != OK {
+			t.Errorf("a clean chain = %q, want %q: %s", got.Status, OK, got.Detail)
 		}
 	})
 
 	t.Run("an unowned link dangles", func(t *testing.T) {
-		f := newHooksFixture(t)
-		if err := os.Symlink(filepath.Join(f.root, "bin", "agents-0.4.0"), filepath.Join(f.deps.HooksDir, "pre-push")); err != nil {
+		f := newChainFixture(t)
+		if err := os.Symlink(filepath.Join(f.root, "bin", "agents-0.4.0"), filepath.Join(f.chain, "pre-push")); err != nil {
 			t.Fatal(err)
 		}
-		got := checkUnmanagedLinks(f.deps)
+		got := findCheck(t, f.checks(t), "chain:unmanaged")
 		if got.Status != Warn {
 			t.Fatalf("a dangling unowned link = %q, want %q: %s", got.Status, Warn, got.Detail)
 		}
@@ -832,40 +956,56 @@ func TestCheckUnmanagedLinksReportsOnlyDanglingUnownedLinks(t *testing.T) {
 	})
 
 	t.Run("an unowned link resolves", func(t *testing.T) {
-		f := newHooksFixture(t)
-		if err := os.Symlink(f.binary, filepath.Join(f.deps.HooksDir, "pre-push")); err != nil {
+		f := newChainFixture(t)
+		if err := os.Symlink(f.binary, filepath.Join(f.chain, "pre-push")); err != nil {
 			t.Fatal(err)
 		}
-		if got := checkUnmanagedLinks(f.deps); got.Status != OK {
+		if got := findCheck(t, f.checks(t), "chain:unmanaged"); got.Status != OK {
 			t.Errorf("an unowned link that works = %q, want %q: %s", got.Status, OK, got.Detail)
 		}
 	})
 
-	t.Run("a managed link dangles", func(t *testing.T) {
-		f := newHooksFixture(t)
-		path := filepath.Join(f.deps.HooksDir, "post-checkout")
+	t.Run("a generated entry sits under a name git never runs", func(t *testing.T) {
+		f := newChainFixture(t)
+		path := filepath.Join(f.chain, "pre-push")
+		writeFixture(t, path, generatedEntry(f.checkout, "pre-push"))
+		if err := os.Chmod(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got := findCheck(t, f.checks(t), "chain:unmanaged")
+		if got.Status != Warn {
+			t.Fatalf("a look-alike entry = %q, want %q: %s", got.Status, Warn, got.Detail)
+		}
+		if !strings.Contains(got.Detail, "pre-push") {
+			t.Errorf("the report must name the file that will never run: %s", got.Detail)
+		}
+	})
+
+	t.Run("a managed name dangles", func(t *testing.T) {
+		f := newChainFixture(t)
+		path := filepath.Join(f.chain, "post-checkout")
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(filepath.Join(f.root, "bin", "agents-0.4.0"), path); err != nil {
 			t.Fatal(err)
 		}
-		// Reported once, by git-hooks:links, which owns those names.
-		if got := checkUnmanagedLinks(f.deps); got.Status != OK {
-			t.Errorf("a dangling managed link = %q, want %q: it is git-hooks:links' finding, not this check's: %s",
+		// Reported once, by chain:entries, which owns those names.
+		if got := findCheck(t, f.checks(t), "chain:unmanaged"); got.Status != OK {
+			t.Errorf("a dangling managed name = %q, want %q: it is chain:entries' finding, not this check's: %s",
 				got.Status, OK, got.Detail)
 		}
-		if got := checkInstalledLinks(f.deps, f.binary); got.Status != Fail {
+		if got := findCheck(t, f.checks(t), "chain:entries"); got.Status != Fail {
 			t.Errorf("the check that owns managed names must report it: %+v", got)
 		}
 	})
 }
 
-// checkLocalHooks is the cheap half of the shadowing question: it reads the
+// chain:local is the cheap half of the shadowing question: it reads the
 // repository-local value alone. Exit 1 is git's "no such setting" and must stay
 // OK, while an unreadable answer is a failure -- reading "could not ask" as
 // "nothing set" is how a shadowed hook chain passes silently.
-func TestCheckLocalHooksClassifiesTheRepositoryOverride(t *testing.T) {
+func TestChainLocalClassifiesTheRepositoryOverride(t *testing.T) {
 	cases := []struct {
 		name   string
 		answer GitResult
@@ -881,7 +1021,7 @@ func TestCheckLocalHooksClassifiesTheRepositoryOverride(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var asked []string
-			got := checkLocalHooks("/repo", func(dir string, args ...string) GitResult {
+			got := checkChainLocal("/repo", func(dir string, args ...string) GitResult {
 				asked = append(asked, strings.Join(args, " "))
 				return tc.answer
 			})
@@ -896,13 +1036,19 @@ func TestCheckLocalHooksClassifiesTheRepositoryOverride(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("no git runner", func(t *testing.T) {
+		if got := checkChainLocal("/repo", nil); got.Status != Fail {
+			t.Errorf("no runner = %q, want %q: a report that cannot look must not pass", got.Status, Fail)
+		}
+	})
 }
 
-// checkLegacyHooks looks for the retired dispatcher shim in the repository's own
+// chain:legacy looks for the retired dispatcher shim in the repository's own
 // hooks directory -- the one a global core.hooksPath shadows. Its whole safety
 // property is that it matches exact bytes: a shim left behind still runs and
 // fails, while a hook the human wrote must never be named as removable.
-func TestCheckLegacyHooksDetectsOnlyTheExactRetiredShim(t *testing.T) {
+func TestChainLegacyDetectsOnlyTheExactRetiredShim(t *testing.T) {
 	shim := func(t *testing.T) []byte {
 		t.Helper()
 		b, err := os.ReadFile(filepath.Join("..", "githook", "testdata", "retired-run-hooks.sh"))
@@ -922,7 +1068,7 @@ func TestCheckLegacyHooksDetectsOnlyTheExactRetiredShim(t *testing.T) {
 
 	t.Run("nothing there", func(t *testing.T) {
 		_, deps := newLegacy(t)
-		if got := checkLegacyHooks("/repo", deps); got.Status != OK {
+		if got := checkChainLegacy("/repo", deps); got.Status != OK {
 			t.Errorf("an empty hooks directory = %q, want %q: %s", got.Status, OK, got.Detail)
 		}
 	})
@@ -930,7 +1076,7 @@ func TestCheckLegacyHooksDetectsOnlyTheExactRetiredShim(t *testing.T) {
 	t.Run("a foreign hook that is not the retired shim", func(t *testing.T) {
 		dir, deps := newLegacy(t)
 		writeFixture(t, filepath.Join(dir, "pre-commit"), "#!/bin/sh\nexit 0\n")
-		if got := checkLegacyHooks("/repo", deps); got.Status != OK {
+		if got := checkChainLegacy("/repo", deps); got.Status != OK {
 			t.Errorf("a hand-written hook = %q, want %q: naming it would tell the operator to delete their own hook: %s",
 				got.Status, OK, got.Detail)
 		}
@@ -938,7 +1084,7 @@ func TestCheckLegacyHooksDetectsOnlyTheExactRetiredShim(t *testing.T) {
 
 	t.Run("the retired shim is still installed", func(t *testing.T) {
 		_, deps := newLegacy(t, "pre-commit", "commit-msg")
-		got := checkLegacyHooks("/repo", deps)
+		got := checkChainLegacy("/repo", deps)
 		if got.Status != Warn {
 			t.Fatalf("two retired shims = %q, want %q: %s", got.Status, Warn, got.Detail)
 		}
@@ -950,7 +1096,7 @@ func TestCheckLegacyHooksDetectsOnlyTheExactRetiredShim(t *testing.T) {
 	})
 
 	t.Run("the hooks directory cannot be resolved", func(t *testing.T) {
-		got := checkLegacyHooks("/repo", Dependencies{})
+		got := checkChainLegacy("/repo", Dependencies{})
 		if got.Status != Fail {
 			t.Errorf("no resolver = %q, want %q: %s", got.Status, Fail, got.Detail)
 		}
@@ -958,23 +1104,68 @@ func TestCheckLegacyHooksDetectsOnlyTheExactRetiredShim(t *testing.T) {
 
 	t.Run("the resolver returns a relative path", func(t *testing.T) {
 		deps := Dependencies{LegacyHooksPath: func(string) (string, error) { return ".git/hooks", nil }}
-		if got := checkLegacyHooks("/repo", deps); got.Status != Fail {
+		if got := checkChainLegacy("/repo", deps); got.Status != Fail {
 			t.Errorf("a relative hooks directory = %q, want %q: %s", got.Status, Fail, got.Detail)
 		}
 	})
 
 	t.Run("the resolver fails", func(t *testing.T) {
 		deps := Dependencies{LegacyHooksPath: func(string) (string, error) { return "", errors.New("no git dir") }}
-		if got := checkLegacyHooks("/repo", deps); got.Status != Fail {
+		if got := checkChainLegacy("/repo", deps); got.Status != Fail {
 			t.Errorf("a failed resolution = %q, want %q: an unresolvable question must not read as clean: %s",
 				got.Status, Fail, got.Detail)
 		}
 	})
 }
 
-// attributesFixture is the global half of the attributes setup: a tracked source
-// in the checkout, the reviewed symlink at ~/.gitattributes, and a repository
-// carrying its own copy of the rule.
+// The record's three keys are the whole format, and doctor's parser must agree
+// with the entry's: the same bytes are read by both, and a disagreement would
+// mean a machine whose commits work and whose doctor fails, or the reverse.
+func TestChainRecordParserAcceptsTheEntryFormat(t *testing.T) {
+	record, err := parseChainRecord("/chain.env", []byte(
+		"# Written by git/install-hooks.sh. Re-run the installer to change it.\n"+
+			"format=1\nbinary=/opt/homebrew/bin/agents\ncheckout=/Users/nilbot/dotfiles\n"))
+	if err != nil {
+		t.Fatalf("the generated record did not parse: %v", err)
+	}
+	if record.Format != "1" || record.Binary != "/opt/homebrew/bin/agents" || record.Checkout != "/Users/nilbot/dotfiles" {
+		t.Errorf("parsed %+v, want the three generated values", record)
+	}
+
+	t.Run("comments and blank lines are skipped", func(t *testing.T) {
+		record, err := parseChainRecord("/chain.env", []byte(
+			"# comment\n\nformat=1\nbinary=/bin/agents\ncheckout=-\n"))
+		if err != nil {
+			t.Fatalf("a record with a comment and a blank line did not parse: %v", err)
+		}
+		if record.Checkout != "-" {
+			t.Errorf("checkout = %q, want -", record.Checkout)
+		}
+	})
+
+	t.Run("nothing after the first = is interpreted", func(t *testing.T) {
+		record, err := parseChainRecord("/chain.env", []byte(
+			"format=1\nbinary=/bin/agents\ncheckout=/checkout=a=b\n"))
+		if err != nil {
+			t.Fatalf("a checkout containing = did not parse: %v", err)
+		}
+		if record.Checkout != "/checkout=a=b" {
+			t.Errorf("checkout = %q, want the value taken literally", record.Checkout)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// attributes:global
+// ---------------------------------------------------------------------------
+
+// attributesFixture is the machine's attributes setup: a link at
+// ~/.gitattributes resolving to a file that exists, and a repository carrying
+// its own copy of the rule.
+//
+// The recorded link is no longer compared against <checkout>/git/gitattributes:
+// with no compiled checkout root there is no independent statement of where it
+// should point, so the fixture only has to be a real file.
 type attributesFixture struct {
 	root   string
 	repo   string
@@ -993,14 +1184,11 @@ func newAttributesFixture(t *testing.T) attributesFixture {
 		link:   filepath.Join(root, "home", ".gitattributes"),
 	}
 	f.deps = Dependencies{
-		Root:                  root,
 		AttributesLink:        f.link,
-		AttributesSource:      f.source,
 		AttributesConfigValue: "~/.gitattributes",
 		GlobalGitConfig:       filepath.Join(root, "home", ".gitconfig"),
-		SharedGitConfig:       filepath.Join(root, "dotfiles", "git", "gitconfig.shared"),
 	}
-	writeFixture(t, f.source, ".agents/** linguist-generated=true\n")
+	writeFixture(t, f.source, "")
 	writeFixture(t, filepath.Join(f.repo, ".gitattributes"), ".agents/** linguist-generated=true\n")
 	if err := os.MkdirAll(filepath.Dir(f.link), 0o755); err != nil {
 		t.Fatal(err)
@@ -1013,12 +1201,15 @@ func newAttributesFixture(t *testing.T) attributesFixture {
 
 func (f attributesFixture) exactGitAnswers() map[string]GitResult {
 	return map[string]GitResult{
+		// The setting lives in the tracked shared file, which the machine's
+		// global config includes -- the shape the real machine has.
 		gitGlobalAttributesQuestion: {Output: gitConfigOriginOutput(
-			"file:"+f.deps.SharedGitConfig, f.deps.AttributesConfigValue)},
+			"file:"+f.source, f.deps.AttributesConfigValue)},
+		gitGlobalIncludesQuestion: {Output: f.source + "\n"},
 	}
 }
 
-func TestCheckGitAttributesInGlobalMode(t *testing.T) {
+func TestCheckAttributesGlobal(t *testing.T) {
 	cases := []struct {
 		name    string
 		want    string
@@ -1045,9 +1236,19 @@ func TestCheckGitAttributesInGlobalMode(t *testing.T) {
 			prepare: func(t *testing.T, f *attributesFixture) {
 				answers := f.exactGitAnswers()
 				answers[gitGlobalAttributesQuestion] = GitResult{Output: gitConfigOriginOutput(
-					"file:"+f.deps.SharedGitConfig, f.deps.AttributesConfigValue,
-					"file:"+f.deps.GlobalGitConfig, "~/.gitattributes",
+					"file:"+f.deps.GlobalGitConfig, f.deps.AttributesConfigValue,
+					"file:"+filepath.Join(f.root, "elsewhere"), "~/.gitattributes",
 				)}
+				f.deps.Git = gitAnswers(t, answers)
+			},
+		},
+		{
+			name: "the global setting comes from a file this review does not own",
+			want: Fail,
+			prepare: func(t *testing.T, f *attributesFixture) {
+				answers := f.exactGitAnswers()
+				answers[gitGlobalAttributesQuestion] = GitResult{Output: gitConfigOriginOutput(
+					"file:"+filepath.Join(f.root, "elsewhere"), f.deps.AttributesConfigValue)}
 				f.deps.Git = gitAnswers(t, answers)
 			},
 		},
@@ -1057,26 +1258,8 @@ func TestCheckGitAttributesInGlobalMode(t *testing.T) {
 			prepare: func(t *testing.T, f *attributesFixture) {
 				answers := f.exactGitAnswers()
 				answers[gitGlobalAttributesQuestion] = GitResult{Output: gitConfigOriginOutput(
-					"file:"+f.deps.SharedGitConfig, "~/.config/git/attributes")}
+					"file:"+f.deps.GlobalGitConfig, "~/.config/git/attributes")}
 				f.deps.Git = gitAnswers(t, answers)
-			},
-		},
-		{
-			// The failure a content comparison cannot see: the bytes are
-			// identical today, but the rules in force belong to a copy, so the
-			// reviewed source stops being the thing git reads.
-			name:   "the link resolves to a copy rather than the tracked source",
-			want:   Fail,
-			detail: "tracked source",
-			prepare: func(t *testing.T, f *attributesFixture) {
-				stale := filepath.Join(f.root, "stale-gitattributes")
-				writeFixture(t, stale, ".agents/** linguist-generated=true\n")
-				if err := os.Remove(f.link); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(stale, f.link); err != nil {
-					t.Fatal(err)
-				}
 			},
 		},
 		{
@@ -1124,6 +1307,14 @@ func TestCheckGitAttributesInGlobalMode(t *testing.T) {
 			},
 		},
 		{
+			name: "the repository carries user rules beside ours",
+			want: OK,
+			prepare: func(t *testing.T, f *attributesFixture) {
+				writeFixture(t, filepath.Join(f.repo, ".gitattributes"),
+					"*.lock -diff\n.agents/** linguist-generated=true\n")
+			},
+		},
+		{
 			name:   "there is no git runner",
 			want:   Fail,
 			detail: "runner is unavailable",
@@ -1140,7 +1331,7 @@ func TestCheckGitAttributesInGlobalMode(t *testing.T) {
 			if tc.prepare != nil {
 				tc.prepare(t, &f)
 			}
-			got := checkGitAttributes(f.repo, f.deps)
+			got := checkAttributesGlobal(f.repo, f.deps)
 			if got.Status != tc.want {
 				t.Fatalf("status = %q, want %q: %s", got.Status, tc.want, got.Detail)
 			}
@@ -1154,50 +1345,85 @@ func TestCheckGitAttributesInGlobalMode(t *testing.T) {
 	}
 }
 
-// Without a global attributes file to check, the check narrows to the
-// repository's own copy -- the half that travels with the repository and is
-// therefore the half a clone can be missing.
-func TestCheckGitAttributesInRepositoryOnlyMode(t *testing.T) {
+// The repository half is checked before the machine half, because it is the one
+// that works on a machine that never installed anything: a repository whose
+// .gitattributes is missing must be told to run `agents init` whatever the
+// global link looks like.
+func TestCheckAttributesGlobalReportsTheRepositoryHalfFirst(t *testing.T) {
+	f := newAttributesFixture(t)
+	f.deps.Git = gitAnswers(t, f.exactGitAnswers())
+	if err := os.Remove(filepath.Join(f.repo, ".gitattributes")); err != nil {
+		t.Fatal(err)
+	}
+	got := checkAttributesGlobal(f.repo, f.deps)
+	if got.Status != Fail || !strings.Contains(got.Detail, "repository .gitattributes") {
+		t.Fatalf("a missing repository rule = %q (%s), want a Fail naming the repository file", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Remedy, "agents init") {
+		t.Errorf("the remedy for the repository half is `agents init`: %s", got.Remedy)
+	}
+}
+
+// The remedy is the installer command, and it names the checkout the RECORD
+// names -- the machine chain has no checkout in its path any more. When the
+// record names no checkout, or the installer is not there, the remedy falls
+// back to the sentence that names no path rather than printing a command that
+// cannot run.
+func TestHookInstallerRemedyNamesTheInstallerOnlyWhenItExists(t *testing.T) {
+	checkout := t.TempDir()
+	writeFixture(t, filepath.Join(checkout, "git", "install-hooks.sh"), "#!/bin/sh\n")
+	home := t.TempDir()
+	deps := Dependencies{GlobalGitConfig: filepath.Join(home, ".gitconfig")}
+
+	got := hookInstallerRemedy(checkout, deps, true)
+	for _, want := range []string{filepath.Join(checkout, "git", "install-hooks.sh"), "--adopt-owned", checkout, home} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the remedy must carry %q: %s", want, got)
+		}
+	}
+
+	for _, tc := range []struct {
+		name     string
+		checkout string
+	}{
+		{"the record declares no checkout", "-"},
+		{"the record names no checkout at all", ""},
+		{"the checkout is gone", filepath.Join(t.TempDir(), "gone")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hookInstallerRemedy(tc.checkout, deps, false); got != "run the reviewed global hook installer" {
+				t.Errorf("remedy = %q, want the sentence that names no path", got)
+			}
+		})
+	}
+}
+
+// The attributes origin guard survives the loss of the compiled root by asking
+// a question that needs no root: is the file that set core.attributesFile one
+// the machine's own global config reads? Both spellings git allows are covered,
+// because a guard that only recognises one of them fails a correct machine.
+func TestAttributesOriginIsReviewed(t *testing.T) {
+	home := t.TempDir()
+	deps := Dependencies{GlobalGitConfig: filepath.Join(home, ".gitconfig")}
+	deps.Git = func(string, ...string) GitResult {
+		return GitResult{Output: "~/dotfiles/git/gitconfig.shared\nrelative/shared\n"}
+	}
+
 	cases := []struct {
 		name   string
-		body   string
-		write  bool
-		deps   Dependencies
-		want   string
-		remedy bool
+		origin string
+		want   bool
 	}{
-		{name: "the exact rule", body: ".agents/** linguist-generated=true\n", write: true, want: OK},
-		{
-			name:  "user rules plus ours",
-			body:  "*.lock -diff\n.agents/** linguist-generated=true\n",
-			write: true, want: OK,
-		},
-		{name: "the file is missing", want: Fail, remedy: true},
-		{
-			name: "only a near miss", body: ".agents/** linguist-generated\n",
-			write: true, want: Fail, remedy: true,
-		},
-		{
-			// A stamped binary with no attributes source configured: the global
-			// half cannot be checked, and the repository half still must be.
-			name: "no git runner", body: ".agents/** linguist-generated=true\n", write: true,
-			deps: Dependencies{Root: "/somewhere/else", AttributesSource: "/somewhere/gitattributes"},
-			want: Fail, remedy: true,
-		},
+		{"the primary global config", "file:" + deps.GlobalGitConfig, true},
+		{"an include named with ~", "file:" + filepath.Join(home, "dotfiles/git/gitconfig.shared"), true},
+		{"an include named relatively", "file:" + filepath.Join(home, "relative/shared"), true},
+		{"a file nothing includes", "file:" + filepath.Join(home, "elsewhere/config"), false},
+		{"an origin that is not a file", "command line", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			if tc.write {
-				writeFixture(t, filepath.Join(root, ".gitattributes"), tc.body)
-			}
-			deps := tc.deps
-			got := checkGitAttributes(root, deps)
-			if got.Status != tc.want {
-				t.Fatalf("status = %q, want %q: %s", got.Status, tc.want, got.Detail)
-			}
-			if tc.remedy && got.Remedy == "" {
-				t.Error("a failure with nothing to do about it is a dead end")
+			if got := attributesOriginIsReviewed("/repo", deps, tc.origin); got != tc.want {
+				t.Errorf("attributesOriginIsReviewed(%q) = %v, want %v", tc.origin, got, tc.want)
 			}
 		})
 	}

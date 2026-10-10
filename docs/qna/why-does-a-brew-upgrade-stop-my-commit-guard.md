@@ -90,3 +90,22 @@ on either side of the mode, because doctor prints `install --adopt-owned`.
   a warning for dangling links under names this repository does not manage. Two
   such links (`pre-commit-user`, `post-checkout-user`) outlived this upgrade
   unremarked until the check existed.
+
+## Correction, 2026-10-09
+
+The mechanism above is unchanged, and three names in it have moved:
+
+- **`git-hooks:links` no longer exists.** The chain is now one record and four
+  generated entries, so the checks are `chain:entries` (each entry present,
+  executable, carrying the generated header), `chain:record` (the record parses
+  and names an executable binary) and `chain:running` (the recorded binary
+  against the one running). The `FAIL git-hooks:links` line quoted under Context
+  is what that machine printed on 2026-09-20, not what it prints now.
+- **The chain is machine-owned.** It lives at `~/.config/agents/hooks.d/`, not in
+  `~/dotfiles/git/hooks.d/`, so a moved or deleted checkout no longer takes the
+  guard with it. `core.hooksPath` is repointed by the installer, which accepts
+  the old checkout value while it does so.
+- **The command in "What to do" needs the released binary.** The installer now
+  probes the binary it is handed and refuses one that cannot answer `githook`
+  (v0.8.0 or later). A stale `~/bin/agents` from the retired personal build is
+  refused at install time instead of at the first commit.

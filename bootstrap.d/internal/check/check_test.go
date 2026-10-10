@@ -24,17 +24,16 @@ const manifestPath = "/repo/bootstrap.d/links.manifest"
 
 // healthy is a machine on which every check passes: every manifest row present
 // and of its declared kind, both silent-failure guards intact, fish the login
-// shell, agents on PATH, a Brewfile in the checkout.
+// shell, and agents on PATH.
 //
 // Cases break one thing about it and assert on that one check, which is what
 // keeps them from passing for the wrong reason.
 func healthy() *fakeChange {
 	return &fakeChange{
 		info: map[string]change.FileInfo{
-			"/home/.tmux.conf":           {Exists: true, IsLink: true},
-			"/home/.gitconfig":           {Exists: true, IsRegular: true},
-			"/home/.config/fish":         {Exists: true, IsDir: true},
-			"/repo/bootstrap.d/Brewfile": {Exists: true, IsRegular: true},
+			"/home/.tmux.conf":   {Exists: true, IsLink: true},
+			"/home/.gitconfig":   {Exists: true, IsRegular: true},
+			"/home/.config/fish": {Exists: true, IsDir: true},
 			// The two files the stubs below point at. Both guards resolve what
 			// they matched, so a healthy machine is one where those paths are
 			// actually there -- not merely named.
@@ -103,10 +102,10 @@ func assertStatus(t *testing.T, results []check.Result, name string, want check.
 	return got
 }
 
-func TestAllReportsTheEightChecks(t *testing.T) {
+func TestAllReportsTheSevenChecks(t *testing.T) {
 	got := strings.Join(names(all(t, ctx(healthy(), "workstation"))), ",")
 	want := "platform,manifest-owners,manifest-kinds,fish-source,gitconfig-include," +
-		"login-shell,agents,packages"
+		"login-shell,agents"
 	if got != want {
 		t.Errorf("checks = %s, want %s", got, want)
 	}
@@ -124,20 +123,19 @@ func TestAHealthyMachinePassesEveryCheck(t *testing.T) {
 	}
 }
 
-// Rule 1: the three machine-wide checks cover state the dotfiles profile
+// Rule 1: the two machine-wide checks cover state the dotfiles profile
 // deliberately does not manage. Reporting them as failures would make every
-// container run report three problems that are not problems.
+// container run report two problems that are not problems.
 func TestMachineChecksAreNotApplicableUnderDotfiles(t *testing.T) {
-	// A machine on which all three genuinely fail, so the n/a comes from the
+	// A machine on which both genuinely fail, so the n/a comes from the
 	// profile and not from the machine happening to be healthy.
 	fake := healthy()
-	fake.lookPathErr = map[string]bool{"agents": true, "brew": true}
-	delete(fake.info, "/repo/bootstrap.d/Brewfile")
+	fake.lookPathErr = map[string]bool{"agents": true}
 	c := ctx(fake, "dotfiles")
 	c.Shell = "/bin/zsh"
 
 	results := all(t, c)
-	for _, name := range []string{"login-shell", "agents", "packages"} {
+	for _, name := range []string{"login-shell", "agents"} {
 		assertStatus(t, results, name, check.NA)
 	}
 	if code := check.ExitCode(results); code != 0 {
@@ -146,17 +144,16 @@ func TestMachineChecksAreNotApplicableUnderDotfiles(t *testing.T) {
 }
 
 // The other half of rule 1, and the half that regresses silently: under
-// workstation the same three must produce a real verdict. Without this case a
+// workstation the same two must produce a real verdict. Without this case a
 // check that always reported n/a would pass the case above.
 func TestMachineChecksReportRealVerdictsUnderWorkstation(t *testing.T) {
 	fake := healthy()
-	fake.lookPathErr = map[string]bool{"agents": true, "brew": true}
-	delete(fake.info, "/repo/bootstrap.d/Brewfile")
+	fake.lookPathErr = map[string]bool{"agents": true}
 	c := ctx(fake, "workstation")
 	c.Shell = "/bin/zsh"
 
 	results := all(t, c)
-	for _, name := range []string{"login-shell", "agents", "packages"} {
+	for _, name := range []string{"login-shell", "agents"} {
 		assertStatus(t, results, name, check.Fail)
 	}
 	if code := check.ExitCode(results); code != 2 {
@@ -365,23 +362,24 @@ func TestGitconfigIncludeAcceptsTheFormsGitAccepts(t *testing.T) {
 // The dry-run invariant, in the type system rather than in anyone's memory.
 //
 // A check runs during `plan` and holds an Applier, whose method set can create
-// symlinks and elevate. Machine omits those, so a check that reached for one
-// would not compile. The architecture test cannot see this -- it constrains
-// imports, not method calls.
+// symlinks, elevate and run a command. Machine omits those, so a check that
+// reached for one would not compile. The architecture test cannot see this --
+// it constrains imports, not method calls.
 func TestMachineCannotMutate(t *testing.T) {
 	// change.Interface must satisfy Machine, or every call site would need a
 	// wrapper and the narrowing would not be free.
 	var _ check.Machine = change.Interface(nil)
 
 	machine := reflect.TypeOf((*check.Machine)(nil)).Elem()
-	for _, method := range []string{"Dir", "Link", "Seed", "Sudo"} {
+	for _, method := range []string{"Dir", "Link", "Seed", "Sudo", "Run"} {
 		if _, found := machine.MethodByName(method); found {
-			t.Errorf("check.Machine exposes %s; a check must not be able to mutate", method)
+			t.Errorf("check.Machine exposes %s; a check must neither mutate nor "+
+				"execute anything", method)
 		}
 	}
-	if machine.NumMethod() != 5 {
-		t.Errorf("check.Machine has %d methods, want 5 (Lstat, Readlink, ReadFile, "+
-			"LookPath, Run); widening it widens what a check can do during a plan",
+	if machine.NumMethod() != 4 {
+		t.Errorf("check.Machine has %d methods, want 4 (Lstat, Readlink, ReadFile, "+
+			"LookPath); widening it widens what a check can do during a plan",
 			machine.NumMethod())
 	}
 }
@@ -452,31 +450,6 @@ func TestGitconfigIncludeFailsWhenTheFileIsAbsent(t *testing.T) {
 
 func TestGitconfigIncludePassesOnTheSharedPath(t *testing.T) {
 	assertStatus(t, all(t, ctx(healthy(), "dotfiles")), "gitconfig-include", check.OK)
-}
-
-// Rule 2: between this task and Task 12 the Brewfile genuinely does not exist.
-// Handing a missing path to `brew bundle check` produces a confusing error where
-// the honest answer is that the phase which creates it has not run.
-func TestPackagesFailsWhenTheBrewfileIsAbsent(t *testing.T) {
-	fake := healthy()
-	delete(fake.info, "/repo/bootstrap.d/Brewfile")
-
-	got := assertStatus(t, all(t, ctx(fake, "workstation")), "packages", check.Fail)
-	if !strings.Contains(got.Detail, "the packages phase has not run") {
-		t.Errorf("the finding must say the packages phase has not run: %s", got.Detail)
-	}
-	for _, op := range fake.Ops {
-		if strings.Contains(op, "brew") {
-			t.Errorf("brew must not be invoked without a Brewfile: %s", op)
-		}
-	}
-}
-
-func TestPackagesFailsWhenBrewBundleCheckFails(t *testing.T) {
-	fake := healthy()
-	fake.runErr = map[string]bool{"brew": true}
-
-	assertStatus(t, all(t, ctx(fake, "workstation")), "packages", check.Fail)
 }
 
 func TestLoginShellFailsWhenTheShellIsNotFish(t *testing.T) {
@@ -601,7 +574,6 @@ type fakeChange struct {
 	files       map[string][]byte
 	readErr     map[string]bool // paths ReadFile reports as unreadable
 	lookPathErr map[string]bool
-	runErr      map[string]bool // commands Run reports as failing
 	Ops         []string
 }
 
@@ -635,9 +607,6 @@ func (f *fakeChange) Seed(s, t string) error {
 }
 func (f *fakeChange) Run(n string, a ...string) error {
 	f.Ops = append(f.Ops, "run "+n+" "+strings.Join(a, " "))
-	if f.runErr[n] {
-		return errNotFound
-	}
 	return nil
 }
 func (f *fakeChange) Sudo(n string, a ...string) error {

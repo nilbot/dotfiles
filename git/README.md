@@ -11,10 +11,11 @@ repository — stays there, because a session does act on it.
 
 ## Installing
 
-### Option 1: Via Bootstrap (Build from Source)
+### Option 1: Via Bootstrap
 Run `./bootstrap apply workstation` from the dotfiles checkout. Its devtools
-phase runs the installer's preflight, builds `~/bin/agents`, then runs the
-installer.
+phase resolves the released `agents`, runs the installer's preflight, then runs
+the installer — both with `--adopt-owned`, so the phase converts a chain an
+earlier binary installed instead of refusing it.
 
 ### Option 2: Pointing to an Existing Binary (e.g. Homebrew)
 If `agents` is installed via Homebrew (`brew install nilbot/tap/agents`), pass the
@@ -29,51 +30,109 @@ Do **not** resolve it first with `realpath`. That yields
 upgrades — which leaves the hooks dangling, which git runs as if no hook existed.
 
 The installer checks for existing Git-hook and global-attributes ownership
-before it builds or changes anything. It refuses a foreign global
-`core.hooksPath` instead of replacing it or implicitly chaining it. It accepts a
-symlinked binary when it resolves into a Homebrew keg for agents, and records the
-path it was given, so passing `$(command -v agents)` records the stable path.
+before it writes anything. It refuses a foreign global `core.hooksPath` instead
+of replacing it or implicitly chaining it. It accepts a symlinked binary when it
+resolves into a Homebrew keg for agents, and records the path it was given, so
+passing `$(command -v agents)` records the stable path.
 
-After a successful install, Git invokes the Go-backed `agents` multicall binary
-for `pre-commit`, `commit-msg`, `post-merge`, and `post-checkout` in new and
-pre-existing repositories. Existing repository hooks and the executable personal
-hooks in `git/hooks/` remain chained by the dispatcher. A repository with its
-own local `core.hooksPath` intentionally overrides the global chain.
+After a successful install, `core.hooksPath` names a chain directory holding the
+machine's record (`chain.env`) and four executable entries for `pre-commit`,
+`commit-msg`, `post-merge` and `post-checkout`. Each entry parses the record and
+runs `agents githook <name> --checkout <checkout>`, which runs the repository's
+own hook, then the executable personal hooks in `git/hooks/`, then the built-in
+stage. A repository with its own local `core.hooksPath` intentionally overrides
+the global chain.
+
+**The chain is machine-owned, and that is the point of where it lives.** It sits
+under the home directory rather than inside a checkout, because a checkout is a
+directory a person moves and deletes: while the chain lived at
+`<checkout>/git/hooks.d`, deleting the checkout took the commit guard with it and
+Git reported nothing. An install that finds the chain in the checkout — the shape
+stage 1 wrote — retires those entries and repoints `core.hooksPath` at the
+machine-owned directory.
+
+**This repository no longer produces the binary the chain names** — decided
+2026-10-09 and removed with the change that consumes the tap. The chain names the
+released `agents`, installed with `brew install nilbot/tap/agents`. See
+[the personal build removal analysis](../docs/design/2026-10-09-the-personal-build-removal-analysis.md).
 
 ## After upgrading `agents`
 
-A package upgrade deletes the previous version's directory. If the hooks name it,
-they dangle — and **git runs a dangling hook as if no hook existed**, so the
-commit guard stops running with no error. Run `agents doctor` and check
-`git-hooks:links`; when the link is one this installer wrote, it prints the exact
-command that repairs it, which is this one:
+A package upgrade deletes the previous version's directory. If the chain names
+it, it dangles — and **git runs a dangling hook as if no hook existed**, so the
+commit guard stops running with no error. Re-run the installer; when a name holds
+an entry this installer wrote, it refuses and prints the exact command that
+repairs it, which is this one:
 
 ```bash
 bash ~/dotfiles/git/install-hooks.sh install --adopt-owned \
   ~/dotfiles "$HOME" "$(command -v agents)"
 ```
 
-`--adopt-owned` repoints links this installer wrote for an earlier binary. A
-foreign file, or a link to another program, is still refused with or without the
-flag. Installing through `$(command -v agents)` in the first place means this
-step never comes up: Homebrew repoints its stable path for you.
+`--adopt-owned` replaces a hook name this installer wrote for an earlier binary —
+a symlink it installed then, or an entry naming another checkout or written by an
+older form of the script. A foreign file, or a link to another program, is still
+refused with or without the flag. Installing through `$(command -v agents)` in
+the first place means this step never comes up: Homebrew repoints its stable path
+for you.
+
+### If the installer refuses
+
+Every refusal names the path it looked at and what is there, and none of them
+needs a second tool. The sequence, by hand, when the flag is not enough:
+
+```bash
+# 1. Read the refusal. It names the path, what is at it, and the command it wants.
+bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles "$HOME" "$(command -v agents)"
+
+# 2. Move that one path aside -- move, never delete. A foreign file is somebody's.
+mv "$HOME/.config/agents/hooks.d/pre-commit" "$HOME/.config/agents/hooks.d/pre-commit.bak"
+
+# 3. Re-run the same install command, then read the result rather than trusting it.
+bash ~/dotfiles/git/install-hooks.sh install ~/dotfiles "$HOME" "$(command -v agents)"
+agents doctor
+```
+
+Three refusals have their own shape and nothing to move aside:
+
+- **a symlinked or non-directory chain path** — `~/.config/agents` and
+  `~/.config/agents/hooks.d` must be real directories, because a symlink can be
+  aimed back inside a checkout. Fix the directory, not the file.
+- **`core.hooksPath` set elsewhere, or set from an include** — unset it with
+  `git config --global --unset-all core.hooksPath` and re-run.
+- **a binary that cannot answer `githook`** — install the released `agents`
+  (v0.8.0 or later) and re-run. The installer probes for this rather than writing
+  a chain that fails at the first commit.
+
+The chain the installer retires on its own needs no hand work: a stage-1 chain in
+`<checkout>/git/hooks.d/` is removed after `core.hooksPath` is repointed, and a
+file in that directory the installer did not write is left where it is.
 
 ## Checking an install
 
 ```bash
-# The global value should be this checkout's git/hooks.d directory.
+# The global value should name the machine-owned chain directory.
 git config --global --show-origin --get-all core.hooksPath
 
-# Each installed hook should resolve to the freshly built ~/bin/agents.
+# The record should name the binary to run and the checkout it belongs to.
+cat "$HOME/.config/agents/hooks.d/chain.env"
+
+# Each entry should be an executable regular file ending in the command git
+# will run for that name.
 for hook in pre-commit commit-msg post-merge post-checkout; do
-  readlink "$HOME/dotfiles/git/hooks.d/$hook"
+  test -x "$HOME/.config/agents/hooks.d/$hook" && tail -n 1 "$HOME/.config/agents/hooks.d/$hook"
 done
 
 # The global attributes link should resolve to the tracked attributes file.
 readlink "$HOME/.gitattributes"
 ```
 
-`agents doctor`, run inside any repository, checks all of the above and more.
+`agents doctor`, run inside any repository, reads that chain where
+`core.hooksPath` points it and reports it by name: `chain:hooks-path`,
+`chain:entries`, `chain:record`, `chain:running` (the recorded binary against
+the one running), `chain:checkout` (the personal stages, and how many were
+found), `chain:unmanaged`, `chain:local`, `chain:legacy`, and
+`attributes:global`.
 
 ### Expected behaviour
 
@@ -93,6 +152,7 @@ rule is enforced by reading it, which is why it lives in `global/AGENTS.md`.
 |---|---|
 | `global/AGENTS.md` | the tracked global instruction file, symlinked to `~/.dsh/AGENTS.md`, `~/.claude/CLAUDE.md`, and `~/.codex/AGENTS.md` |
 | `bootstrap.d/links.manifest` | declares that symlink, and every other managed path |
-| `~/bin/agents` | Go-backed multicall hook dispatcher |
+| `~/.config/agents/hooks.d/` | the chain `core.hooksPath` names: `chain.env`, and the four generated entries git runs. Machine-owned, so a moved or deleted checkout cannot switch the guard off |
 | `git/install-hooks.sh` | ownership-checking installer |
 | `git/hooks/` | optional executable personal hook stages |
+| git/hooks.d/ (retired) | where stage 1 kept the chain, until the move to `~/.config/agents/hooks.d/` on 2026-10-09. The installer reads it to retire what it wrote there, then removes the directory, which is why it is no longer a tracked path and is written here without the code face the live rows carry |

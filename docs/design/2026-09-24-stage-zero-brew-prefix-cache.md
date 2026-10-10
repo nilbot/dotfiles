@@ -175,3 +175,48 @@ per-`run_id` archive entries write 348 MB on *every* run and can never be
 restored by a later one, which is what fills a 10 GB budget with 68 entries.
 That is a separate change to `stage-zero-<image>-<run_id>` and it is not made
 here.
+
+## 6. How a Linux machine gets `agents` (decided 2026-10-10)
+
+`bootstrap.d/Brewfile` names `brew "nilbot/tap/agents"`, and **Linux gets the
+same binary from the same row** — there is no separate Linux path and no
+checkout build, which the personal-build removal retired. The tap formula
+carries the URLs for it: `on_linux`, `on_arm` → `agents_v0.7.0_linux_arm64.tar.gz`
+and `on_intel` → `agents_v0.7.0_linux_amd64.tar.gz`, beside the two darwin ones.
+
+What blocked it was not the formula but Homebrew's tap-trust gate. Measured in
+CI run 38044462264, on `debian:stable-slim` and `archlinux:base` alike, at the
+`brew bundle` step:
+
+```text
+Installing nilbot/tap/agents
+##[error]Refusing to load formula nilbot/tap/agents from untrusted tap nilbot/tap.
+Run `brew trust --formula nilbot/tap/agents` or `brew trust nilbot/tap` to trust it.
+```
+
+The gate is not platform-specific. It is invisible on a machine whose tap was
+trusted when `brew trust` first appeared, which is why this repository's macOS
+machine never saw it and why the failure only appeared on Linux — the Linux leg
+is the only CI job that installs the Brewfile on a clean machine.
+
+**The decision, and where it lives.** The packages phase trusts the taps the
+Brewfile names, before `brew bundle`, in `trustBrewfileTaps`
+(`bootstrap.d/internal/phase/packages.go`). The taps come from the Brewfile
+itself rather than from a list beside it, so the trusted set and the installed
+set cannot drift; the step is skipped entirely on a Homebrew without
+`brew trust`, which is also a Homebrew without the gate. Both the probe and the
+trust call are `Run`s, so `plan` reports them and performs neither.
+
+**The row stays.** The stage-zero job's last step asserts
+`PATH=/home/linuxbrew/.linuxbrew/bin:$PATH command -v agents`, and it is what
+notices a tap that never installed; deleting the row to make CI green would
+leave Linux with no `agents` for the devtools phase to hand the installer.
+
+**One consequence to expect until the next release.** The formula pins v0.7.0,
+which cannot answer `githook`, so `devtools` will refuse on a Linux machine that
+has just installed it — with the installer probe's message naming the required
+release (`agents v0.8.0 or later`). That is the designed behaviour of an
+unreleased branch: the chain must not be written against a binary that cannot
+run it. The stage-zero job tolerates it deliberately, gating stage zero rather
+than the whole Linux port; when the release carrying `githook` is tagged and the
+formula bumped, the same run goes on to wire the chain.

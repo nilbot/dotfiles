@@ -48,10 +48,101 @@ func Packages(c Context) error {
 	// happened to invoke ./bootstrap from.
 	brewfile := filepath.Join(c.Root, "bootstrap.d", "Brewfile")
 	c.logf("   brewfile    %s", brewfile)
+	if err := trustBrewfileTaps(c, brew, brewfile); err != nil {
+		return err
+	}
+
 	// Through the RESOLVED path rather than the bare name. See homebrew: on the
 	// fresh machine this phase exists for, `brew` is not on this process's PATH
 	// even after a successful install.
 	return c.Change.Run(brew, "bundle", "--file", brewfile)
+}
+
+// trustBrewfileTaps trusts the non-official taps the Brewfile installs from.
+//
+// Homebrew refuses to LOAD a formula from an untrusted third-party tap:
+//
+//	##[error]Refusing to load formula nilbot/tap/agents from untrusted tap nilbot/tap.
+//	Run `brew trust --formula nilbot/tap/agents` or `brew trust nilbot/tap` to trust it.
+//
+// Measured in CI run 38044462264, on both debian:stable-slim and
+// archlinux:base, at the `brew bundle` step -- and it is not a Linux fault.
+// Nothing about the gate is platform-specific; it is invisible on a machine
+// whose tap was trusted when `brew trust` first appeared, and this repository's
+// own machine is one of those. The result was a Linux stage zero that reached
+// the Brewfile and then had no `agents` for the devtools phase to hand the
+// installer, which is the failure the job's `command -v agents` step reports.
+//
+// The gate is Homebrew's, so the fix belongs before the command it blocks
+// rather than in the workflow. Two properties keep it from being a blanket
+// grant of trust to anything:
+//
+//   - the taps come from bootstrap.d/Brewfile, which is reviewed as a file, so
+//     the list trusted is the list installed and neither can drift;
+//   - it is skipped entirely on a Homebrew without `brew trust`, which is also
+//     a Homebrew without the gate -- older releases load third-party taps
+//     without asking.
+//
+// Both the probe and the trust call are Runs, so plan reports them and
+// performs neither.
+func trustBrewfileTaps(c Context, brew, brewfile string) error {
+	contents, err := c.Change.ReadFile(brewfile)
+	if err != nil {
+		return err
+	}
+	taps := brewfileTaps(string(contents))
+	if len(taps) == 0 {
+		return nil
+	}
+	if err := c.Change.Run(brew, "help", "trust"); err != nil {
+		c.logf("   tap trust   not supported by this Homebrew; nothing to trust")
+		return nil
+	}
+	for _, tap := range taps {
+		c.logf("   tap trust   %s", tap)
+		if err := c.Change.Run(brew, "trust", "--tap", tap); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// brewfileTaps reports the non-official taps a Brewfile's `brew` lines install
+// from, each as `<owner>/<repo>`, in first-seen order.
+//
+// A `brew "nilbot/tap/agents"` line names a tap and a formula in one string,
+// which is Homebrew's own shorthand for "tap this, then install from it". The
+// tap is the first two segments. A bare `brew "jq"` names no tap -- it comes
+// from homebrew/core, which is official and needs no trust -- and is skipped,
+// as is every line that is not a `brew` entry: comments, casks, and the `tap`
+// lines this Brewfile deliberately does not carry.
+func brewfileTaps(contents string) []string {
+	var taps []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(contents, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "brew ") {
+			continue
+		}
+		quoted := strings.TrimSpace(strings.TrimPrefix(line, "brew "))
+		if len(quoted) < 2 || quoted[0] != '"' {
+			continue
+		}
+		end := strings.Index(quoted[1:], `"`)
+		if end < 0 {
+			continue
+		}
+		parts := strings.Split(quoted[1:1+end], "/")
+		if len(parts) != 3 {
+			continue
+		}
+		tap := parts[0] + "/" + parts[1]
+		if !seen[tap] {
+			seen[tap] = true
+			taps = append(taps, tap)
+		}
+	}
+	return taps
 }
 
 // stageZero installs Homebrew's own prerequisites -- a C toolchain, curl, file
@@ -150,6 +241,72 @@ func homebrew(c Context) (string, error) {
 		return "", err
 	}
 	return resolveBrew(c)
+}
+
+// agentsCandidates are the paths a Homebrew-installed agents binary occupies,
+// derived from brewLocations so the two lists cannot drift: Homebrew puts every
+// formula's executables in <prefix>/bin.
+//
+// The candidate is the STABLE <prefix>/bin/agents and never the keg it resolves
+// into. `brew bundle` upgrades, and an upgrade deletes the keg the previous
+// version lived in, so a chain pinned to Cellar/agents/<version>/bin/agents
+// dangles on the very next apply -- and git runs a dangling hook as if no hook
+// existed. git/install-hooks.sh refuses that shape from its side; nothing here
+// may hand it one.
+func agentsCandidates() []string {
+	out := make([]string, 0, len(brewLocations))
+	for _, brew := range brewLocations {
+		out = append(out, filepath.Join(filepath.Dir(brew), "agents"))
+	}
+	return out
+}
+
+// resolveAgents finds the released agents binary the git hook chain points at.
+//
+// It probes the Homebrew prefixes rather than PATH, for the reason resolveBrew
+// gives: Homebrew's installer appends a `shellenv` line to a shell PROFILE, a
+// profile is read by the next login shell, and exec.LookPath resolves against
+// exactly the PATH this process inherited. On the fresh machine this phase
+// exists for, `agents` is installed and unfindable by name in the same run.
+//
+// It does NOT retry LookPath first, which resolveBrew does, because the two are
+// not the same question. Any brew on PATH is a brew this phase may use; the
+// binary that owns the hook chain has to be the one the tap installed. A
+// LookPath answering $HOME/bin/agents -- the checkout build this change retires
+// -- would re-pin the chain to a second owner and report success, which is the
+// leak the probe exists to close.
+//
+// A MISS IS NOT AN ERROR, and that is the whole of this function's contract.
+// The empty string means "no Homebrew prefix holds it", which is the ordinary
+// state of a machine being PREVIEWED: plan executes nothing, so the packages
+// phase that installs the binary from bootstrap.d/Brewfile has not run, and a
+// probe that refused here would make every `plan workstation` fail on a machine
+// that has never applied -- measured in CI run 38044462264, four tests.
+//
+// `apply` still refuses, and the refusal moved to where it can be true: the
+// devtools phase names the path this machine's Homebrew would put the binary
+// at, and the INSTALLER is what rejects it, by validate_binary and by the
+// githook probe. That is a Run, which plan does not perform and apply does, so
+// the same phase code previews on a bare machine and stops on a real one.
+func resolveAgents(c Context) string {
+	candidates := agentsCandidates()
+	for _, candidate := range candidates {
+		info, err := c.Change.Lstat(candidate)
+		// Continue rather than return, for the reason resolveBrew gives: an
+		// unreadable candidate is not an answer about the others, and an EACCES
+		// on /opt must not stop the walk before /home/linuxbrew.
+		if err != nil {
+			c.logf("   agents      %s could not be read (%v); trying the next prefix",
+				candidate, err)
+			continue
+		}
+		if info.Exists {
+			c.logf("   agents      %s", candidate)
+			return candidate
+		}
+	}
+	c.logf("   agents      none of %s holds a binary", strings.Join(candidates, ", "))
+	return ""
 }
 
 // resolveBrew finds the brew the installer just wrote, and exists because

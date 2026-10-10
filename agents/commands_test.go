@@ -41,11 +41,13 @@ func TestEveryLeafHasARunner(t *testing.T) {
 // that a command is neither lost by accident nor kept by inertia. The list
 // shrank on purpose: the fleet registry, the layout schema and its migration,
 // the session record, and the hook entrypoint were removed -- each with the
-// package it needed, none of them left as an inert subcommand.
+// package it needed, none of them left as an inert subcommand. `githook` is
+// the one name added since, and it is not that entrypoint back again: it runs
+// a Git hook for the chain entry that invoked it.
 func TestTheCommandSetIsExactlyThis(t *testing.T) {
 	present := map[string]bool{}
 	rootCommand().Walk(func(path []string, _ *Command) { present[strings.Join(path, " ")] = true })
-	want := []string{"help", "init", "wire", "doctor", "guard", "version"}
+	want := []string{"help", "init", "wire", "doctor", "guard", "version", "githook"}
 	for _, name := range want {
 		if !present[name] {
 			t.Errorf("command %q is missing", name)

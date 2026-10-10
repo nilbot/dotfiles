@@ -44,22 +44,32 @@ nerd font — are recorded with the rest in
 which is the authority. This paragraph is a summary of it and will go stale
 first.
 
-## The Makefile
+## The personal build, and the Makefile that produced it
 
-`make agents` builds the `agents` binary to `~/bin/agents`. It is a developer
-convenience for inner-loop work on `agents/` — `./bootstrap apply workstation`
-builds the same binary in its devtools phase. The Makefile's other target,
-`make release`, packages the cross-platform archives the release workflow
-publishes. Provisioning belongs to `./bootstrap`; `make dotfiles` is retired,
-not aliased.
+**Deleted 2026-10-09.** Provisioning stopped building `agents` — the devtools
+phase resolves the released binary now and passes `--adopt-owned` to the
+installer. Nothing is left of it: the `make agents` target, the Makefile that
+carried it, and the test pins that asserted it all went the same day. That build
+compiled this checkout into
+`~/bin/agents`, a second `agents` beside the released one, and the two owners
+disagreed about which binary the hook chain ran — measured here as
+`bootstrap apply workstation` exiting 2 in the devtools preflight. The decision,
+its evidence and the order the removal lands in are in
+[the personal build removal analysis](docs/design/2026-10-09-the-personal-build-removal-analysis.md).
+Provisioning belongs to `./bootstrap`. For an inner loop,
+`go build -o /tmp/agents .` writes no global path and installs nothing.
 
-**Run it from the main checkout, not a linked worktree.** The binary is stamped
-with the checkout it was built from, and this target writes the single global
-`~/bin/agents` — so from a worktree it publishes a binary stamped to a temporary
-path. Delete that worktree and the stamp names nothing: `doctor` still passes,
-because it compares paths that agree with each other, while the git hook chain
-finds no extras directory and silently runs none of your personal hooks, at exit
-0. Rebuild from the main checkout to repair.
+`make release` ran `script/package-release.sh` and nothing else; the script is
+the entry point, and the Makefile that wrapped it is gone.
+
+**Why the target was dangerous — kept, because the reasoning outlives it.** The
+binary was stamped with the checkout it was built from, and the target wrote the
+single global `~/bin/agents`, so from a linked worktree it published a binary
+stamped to a temporary path. Delete that worktree and the stamp named nothing:
+`doctor` still passed, because it compared paths that agreed with each other,
+while the git hook chain found no extras directory and silently ran none of the
+personal hooks, at exit 0. That silent class is what the identity work exists to
+remove.
 
 ## The `agents` tool
 
@@ -97,6 +107,7 @@ agents help --render=markdown
 | `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
+| `agents githook` | run one Git hook for the chain entry that invoked it |
 <!-- END GENERATED -->
 
 ## Development & Contributing
