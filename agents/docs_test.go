@@ -172,16 +172,19 @@ func TestInstalledSkillMatchesTheBinary(t *testing.T) {
 	if err := scaffold.Create(root, false); err != nil {
 		t.Fatal(err)
 	}
-	const name = "recording-what-you-learn"
-	current, found, err := scaffold.SkillCurrent(root, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if found == "" {
-		t.Fatalf("init did not write .agents/skills/%s/", name)
-	}
-	if !current {
-		t.Errorf("the installed skill is not the text this binary carries (digest %s)", found)
+	// Every bundled skill, not one named here. A skill added to the binary is
+	// installed by init, and this is the check that it arrived as written.
+	for _, name := range scaffold.BundledSkills() {
+		current, found, err := scaffold.SkillCurrent(root, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found == "" {
+			t.Fatalf("init did not write .agents/skills/%s/", name)
+		}
+		if !current {
+			t.Errorf("the installed skill %s is not the text this binary carries (digest %s)", name, found)
+		}
 	}
 }
 
@@ -201,28 +204,79 @@ func TestInstalledSkillNamesNoDeletedCommand(t *testing.T) {
 	if err := scaffold.Create(root, false); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(root, ".agents", "skills", "recording-what-you-learn", "SKILL.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("init did not install the skill: %v", err)
-	}
-	text := string(data)
 
 	known := map[string]bool{}
 	rootCommand().Walk(func(p []string, _ *Command) { known[strings.Join(p, " ")] = true })
 
-	// Every `agents <subcommand>` span in the skill must resolve against the
-	// command tree. This is the check the deleted tests performed by hand for
-	// one text; doing it from the tree means it cannot go stale when a command
-	// is removed.
-	for _, span := range agentSpanPattern.FindAllStringSubmatch(text, -1) {
-		if !known[span[1]] {
-			t.Errorf("the installed skill names `agents %s`, which is not a command in this tree", span[1])
+	// Every bundled skill, because every one of them lands in a repository that
+	// will act on what it says.
+	for _, name := range scaffold.BundledSkills() {
+		path := filepath.Join(root, ".agents", "skills", name, "SKILL.md")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("init did not install the skill %s: %v", name, err)
+		}
+		text := string(data)
+
+		// Every `agents <subcommand>` span in the skill must resolve against
+		// the command tree. This is the check the deleted tests performed by
+		// hand for one text; doing it from the tree means it cannot go stale
+		// when a command is removed.
+		for _, span := range agentSpanPattern.FindAllStringSubmatch(text, -1) {
+			if !known[span[1]] {
+				t.Errorf("the installed skill %s names `agents %s`, which is not a command in this tree", name, span[1])
+			}
+		}
+		// And it must not name a manifest this tool no longer writes.
+		if strings.Contains(text, "layout.json") {
+			t.Errorf("the installed skill %s tells the reader to consult .agents/layout.json, which this tool no longer writes", name)
 		}
 	}
-	// And it must not name a manifest this tool no longer writes.
-	if strings.Contains(text, "layout.json") {
-		t.Error("the installed skill tells the reader to consult .agents/layout.json, which this tool no longer writes")
+}
+
+// datedDocument matches a dated document name: the shape this repository's design
+// and plan stores use, and one that exists only in the repository that wrote it.
+var datedDocument = regexp.MustCompile(`\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md`)
+
+// An asset is installed into a repository where this one's documents have never
+// existed, so an asset that cites one sends its reader to nothing.
+//
+// This is not hypothetical. recording-what-you-learn shipped pointing at
+// docs/design/2026-08-19-knowledge-is-documentation.md, and agents/README.md --
+// which travels in the release archive -- at
+// docs/design/2026-10-09-the-personal-build-removal-analysis.md. Both documents
+// were deleted on 2026-10-12; both citations were found by reading, not by a
+// check, because no check opened the assets. The remedy in each case was to state
+// the fact rather than cite it, which is what this rule asks for at the point of
+// writing.
+func TestBundledAssetsCiteNoDatedDocument(t *testing.T) {
+	root := task18RepoRoot(t)
+	dir := filepath.Join(root, "agents", "internal", "scaffold", "assets")
+
+	checked := 0
+	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		data, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return readErr
+		}
+		rel, relErr := filepath.Rel(root, p)
+		if relErr != nil {
+			rel = p
+		}
+		if m := datedDocument.FindString(string(data)); m != "" {
+			t.Errorf("%s names %s, a document of this repository. State the fact instead of citing it: the asset lands in repositories where that file has never existed.", rel, m)
+		}
+		checked++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checked < 5 {
+		t.Fatalf("walked %d asset files; this check would prove little", checked)
 	}
 }
 

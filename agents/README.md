@@ -1,12 +1,12 @@
 # agents
 
-Scaffolds and maintains the repository context an AI coding agent needs: the two-tier instruction files, the documentation stores, the bundled skill, and the harness wiring that makes them visible.
+Scaffolds and maintains the repository context an AI coding agent needs: the two-tier instruction files, the documentation stores, the bundled skills, and the harness wiring that makes them visible.
 
 ---
 
 ## Features
 
-- **Repository Scaffold**: `agents init` creates `.agents/` and the four documentation stores under `docs/{design,plans,journal,qna}`, each with a README explaining what belongs in it, the root `AGENTS.md` router and its `CLAUDE.md` symlink, `.agents/AGENTS.md` for repository-specific rules, the bundled `recording-what-you-learn` skill, and the `.agents/** linguist-generated=true` rule in the repository's `.gitattributes`.
+- **Repository Scaffold**: `agents init` creates `.agents/` and the four documentation stores under `docs/{design,plans,journal,qna}`, each with a README explaining what belongs in it, the root `AGENTS.md` router and its `CLAUDE.md` symlink, `.agents/AGENTS.md` for repository-specific rules, the three bundled skills (`recording-what-you-learn`, `writing-for-humans`, `reviewing-with-a-team`), and the `.agents/** linguist-generated=true` rule in the repository's `.gitattributes`.
 - **Harness Wiring**: Makes `.agents/skills/` visible where each harness looks for it — a relative `.claude/skills` symlink for Claude Code and a relative `.codex/skills` symlink for Codex, both pointing at `.agents/skills`. Antigravity reads `.agents/` in place and needs no symlink. The tool writes no hook entries of its own: nothing records harness lifecycle events any more.
 - **Retired-Entry Cleanup**: `agents wire` removes from `.claude/settings.json`, `.codex/hooks.json` and `.agents/hooks.json` the hook entries this tool wrote in an earlier version, and preserves every other setting in those files. A config left holding nothing is removed rather than left behind as `{}`.
 - **Repository Guardrails & Pre-Commit Secret Scanning**: `agents guard --staged` scans the staged `.agents/` blobs with `gitleaks` to catch secret leaks, blocks a staged `.agents/` path carrying a control character, and warns when one commit mixes agent context with code. Invoked automatically from the pre-commit hook.

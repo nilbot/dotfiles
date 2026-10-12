@@ -106,17 +106,6 @@ var embeddedAssets = []struct {
 	{".agents/AGENTS.md", "assets/dotagents/AGENTS.md"},
 }
 
-// bundledSkills are the skills embedded in the binary and installed by init.
-//
-// recording-what-you-learn is the only one: it is the instruction that travels
-// with every repository, and its text is canonical in this binary. The other
-// skill this tool used to ship, migrating-fleet-context, described migrating a
-// repository between layout schemas -- a facility this tool no longer has, so
-// there is nothing left for it to teach.
-var bundledSkills = []string{
-	"recording-what-you-learn",
-}
-
 // StoreRoot is the directory the four documentation stores live under. The
 // roles are fixed: this tool no longer supports a manifest that places them
 // elsewhere.
@@ -129,26 +118,49 @@ var StoreRoles = []string{"design", "plans", "journal", "qna"}
 // StorePath returns the repository-relative path of one store role.
 func StorePath(role string) string { return StoreRoot + "/" + role }
 
-// skillAssets maps a bundled skill name to its embedded asset path.
+// bundledSkill is one skill the binary carries and init installs. The name and its
+// asset sit together because they have to agree: a name with no asset fails at init
+// time, in a repository that is not this one.
+type bundledSkill struct {
+	name  string
+	asset string
+}
+
+// bundledSkills are the skills embedded in the binary and installed by init, in the
+// order init writes them.
 //
-// One skill, one text. It used to be a schema-keyed table holding two canonical
-// texts plus a frozen v1 copy, because a repository's layout decided which text
-// was current. There is one layout now, so the table is a map with one entry and
-// the text it names is the one that speaks the concrete store paths every
-// repository has -- an earlier revision of this file shipped the text that told
-// an agent to run `agents layout path`, a command that no longer exists, into
-// every freshly initialized repository.
-var skillAssets = map[string]string{
-	"recording-what-you-learn": "assets/skills/recording-what-you-learn/SKILL.md",
+// They are one list rather than a name list beside a lookup table: two lists that
+// must agree, with nothing checking that they do, is a skill that installs and
+// cannot be read. An earlier revision of this file shipped text telling every
+// freshly initialized repository to run `agents layout path`, a command that no
+// longer exists, which is why the text of these files is guarded rather than
+// trusted.
+var bundledSkills = []bundledSkill{
+	{"recording-what-you-learn", "assets/skills/recording-what-you-learn/SKILL.md"},
+	{"writing-for-humans", "assets/skills/writing-for-humans/SKILL.md"},
+	{"reviewing-with-a-team", "assets/skills/reviewing-with-a-team/SKILL.md"},
+}
+
+// BundledSkills returns the names init installs, in order.
+//
+// A guard iterates this rather than naming a skill, so a skill added to the list
+// above cannot be installed without also being checked.
+func BundledSkills() []string {
+	names := make([]string, 0, len(bundledSkills))
+	for _, s := range bundledSkills {
+		names = append(names, s.name)
+	}
+	return names
 }
 
 // SkillAssetPath resolves one embedded skill asset.
 func SkillAssetPath(skillName string) (string, error) {
-	path, ok := skillAssets[skillName]
-	if !ok {
-		return "", fmt.Errorf("no asset for skill %q", skillName)
+	for _, s := range bundledSkills {
+		if s.name == skillName {
+			return s.asset, nil
+		}
 	}
-	return path, nil
+	return "", fmt.Errorf("no asset for skill %q", skillName)
 }
 
 // Create is the v1-compatible entry point: a caller that has not resolved a
@@ -248,13 +260,9 @@ func CreateWithLayout(root string, local bool) error {
 	// Nothing classifies that copy as current or customized any more. The drift
 	// command that did was deleted with the rest of the record feature, so the
 	// equality above is the whole guarantee rather than one input to a check.
-	for _, skillName := range bundledSkills {
-		assetPath, err := SkillAssetPath(skillName)
-		if err != nil {
-			return err
-		}
-		relPath := filepath.Join(".agents", "skills", skillName, "SKILL.md")
-		if err := writeIfAbsentFromFS(filepath.Join(root, relPath), AssetsFS, assetPath); err != nil {
+	for _, skill := range bundledSkills {
+		relPath := filepath.Join(".agents", "skills", skill.name, "SKILL.md")
+		if err := writeIfAbsentFromFS(filepath.Join(root, relPath), AssetsFS, skill.asset); err != nil {
 			return err
 		}
 	}
