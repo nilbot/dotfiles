@@ -275,12 +275,11 @@ One tracked table. Three kinds, which are §1's rule made mechanical:
 | `dir` | real machine-owned directory | a program owns the whole directory |
 
 ```
+# the shape of the table; bootstrap.d/links.manifest is the list
 # kind  source                            target                            platform
 link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
 link    git/gitignore_global              .gitignore                        *
-link    claude/skills                     .claude/skills                    *   # deleted 2026-09-21
-link    gemini/skills                     .gemini/skills                    *   # row deleted 2026-09-21
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
@@ -301,12 +300,9 @@ become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
 fixed and the fish regression §7 fixes.
 
-**Harness skill directories are ordinary rows.** `claude/skills` was linked
-by a hand-written Makefile line until the Makefile went on 2026-10-09; both manifest rows were deleted on
-2026-09-21, so
-`bootstrap.d/links.manifest` declares neither — two
-harnesses already diverging, the same drift spec 1 opened with. A third harness
-becomes one row.
+**Harness skill directories are ordinary rows.** `.agents/skills/` is the single
+home for bundled skills, and a harness that needs them under its own path gets one
+row here pointing at it.
 
 This has to be the bootstrap's job rather than `agents`', for a hard reason:
 **`agents` is a Go binary built by phase 40, so it cannot be a dependency of
