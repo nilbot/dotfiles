@@ -124,7 +124,7 @@ Top-level flags `--version` and `-v` are intercepted in `agents/main.go` and inv
 
 ### 4.1 Cross-compilation targets
 
-Four cross-compilation targets covering the macOS and Linux fleets (Amendment 1):
+Four cross-compilation targets covering macOS and Linux (Amendment 1):
 1. `darwin/arm64` (Apple Silicon macOS)
 2. `darwin/amd64` (Intel macOS; the tap's `brew readall` requires it)
 3. `linux/arm64` (ARM64 Linux)
