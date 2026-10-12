@@ -27,7 +27,7 @@ is `docs/archive/experiment/capture-setup.sh`.
   deploy-before-flip gate, and a digest-based drift report. The tool no longer
   has a layout schema at all — one fixed set of stores under `docs/`, no
   manifest, no migration — so the design's whole subject was deleted by
-  [the reduction](../../plans/2026-09-21-agents-reduction-plan.md). Its reasoning
+  the reduction. Its reasoning
   about store-root freedom is the record of a decision that was made and then
   reversed; the reversal is why this document is worth keeping. The root router
   text it quoted in §4.4 is still in force and is specified in

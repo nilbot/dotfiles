@@ -38,11 +38,11 @@ because the writing was a plan and the doing found things a plan could not.
 **Verification:** `script/accept-agents-simplification.sh` -- 42 checks, 0
 failures, including a real commit through the installed hook chain. CI on PR #52
 is the final gate.
-**Supersedes:** [`2026-09-21-agents-reduction-plan.md`](2026-09-21-agents-reduction-plan.md),
-[`2026-09-21-skills-single-home-plan.md`](2026-09-21-skills-single-home-plan.md),
-[`2026-09-21-simplification-roadmap.md`](2026-09-21-simplification-roadmap.md),
+**Supersedes:** `2026-09-21-agents-reduction-plan.md`,
+`2026-09-21-skills-single-home-plan.md`,
+`2026-09-21-simplification-roadmap.md`,
 and Task 1 of
-[`2026-09-21-bootstrap-self-sufficiency-plan.md`](2026-09-21-bootstrap-self-sufficiency-plan.md).
+`2026-09-21-bootstrap-self-sufficiency-plan.md`.
 Those four were reviewed independently and returned with 8 blockers and 15
 cross-plan contradictions. This file replaces them; the superseded ones stay on
 disk as the record of what was proposed and why it did not hold.
