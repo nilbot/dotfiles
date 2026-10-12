@@ -27,11 +27,11 @@ can call for two of them.
   amendment at the point of use, keeping the reasoning it replaced. Most of this store
   uses this form, and a document short enough to hold in mind needs no other.
 - **The world moved under a correct claim** — a premise the design relied on stopped
-  holding. Add an **appendix** at the end of the document and point at it from the
-  document's head: it lists, in one screen, the parts that have moved, which a reader of
-  a long document cannot hold in mind. Whether to add one to a document that already
-  exists is a judgement rather than an obligation — this store has one appendix, and
-  other long documents without one.
+  holding. The home for these is an **appendix** at the end of the document, pointed at
+  from its head: it lists, in one screen, the parts that have moved, which a reader of a
+  long document cannot hold in mind. Whether a given document earns one is a judgement
+  rather than an obligation — this store has one appendix, and other long documents
+  without one.
 
 **Where two forms apply, the in-place text is the correction and the appendix entry is
 the index to it.** A claim that is wrong and whose premise also moved is corrected where
@@ -41,11 +41,12 @@ table that has become incomplete, not only an instruction. Each appendix row say
 whether its landing carries a marker, so the table answers that without the reader
 opening the section.
 
-An amendment goes with its subject only when the section it annotates is deleted too:
-then delete both and let git history hold them, as the two-tier document did. An
-amendment whose decision was reversed stays where it is, because the reversal is the
-record — the decoupling note in `contributor-guardrails` annotates an argument that is
-still live.
+An amendment goes with its subject when the section it annotates is deleted too: then
+delete both and let git history hold them, as the two-tier document did. An amendment
+whose decision was reversed stays where it is, because the reversal is the record — the
+decoupling note in `contributor-guardrails` annotates an argument that is still live.
+And an amendment that names no section annotates the document as a whole, so it goes only
+when the document goes.
 
 ## Specs
 
