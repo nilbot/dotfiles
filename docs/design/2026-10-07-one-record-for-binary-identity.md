@@ -298,6 +298,21 @@ An entry replaces a symbolic link, and buys three things a symlink cannot:
    runs the built-in check and reports the personal stages as missing. Today,
    deleting the checkout deletes the guard.
 
+### 3.1.1 The order the installer writes in
+
+**Entries, then the record, then the global key.** `git/install-hooks.sh:577-579`
+states the rule where it is enforced: an entry whose record is missing fails
+closed and says so, which is the state a half-finished install leaves. A global
+key written first would instead activate a chain that cannot run, and the commit
+guard would be off with nothing reporting it.
+
+Each write is atomic on its own — a temporary file in the same directory, its
+mode set before it becomes visible, then `mv` into place — because Git skips a
+hook name that exists but is not executable with a hint and **exit 0**. No entry
+may ever be seen in a partial or non-executable state. A name already holding
+exactly the bytes this run would write is left alone, so a second install
+preserves the inode it installed rather than replacing a working chain.
+
 ### 3.2 The binary is told, not asked
 
 `agents githook <name> --checkout <path>` runs one hook in three parts: the
