@@ -9,39 +9,23 @@ that is not this one.** The first of the three was that no phase of this design
 had ever run on Linux. Since 2026-08-17 the **`dotfiles` profile** does, on
 every pull request, in a Debian container — see Known gap 1 for what that
 covers and the larger part it does not.
-**Implementation language:** Go, with a shell shim for stage zero (§2.1). The
-first implementation was shell throughout and was reversed after one task; the
-evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
-and the reasoning under [Rejected alternatives](#rejected-alternatives).
+**Implementation language:** Go, with a shell shim for stage zero (§2.1).
 **Depends on:** spec 1 §8, which has landed.
 
 ---
 
-## What changed from the scope note
-
-The original scope treated this as cleanup: delete `zsh/`, consolidate two
-overlapping link mechanisms, remove dead scripts. Reviewing it surfaced a larger
-framing error, and the design follows from correcting it.
+## What this spec settles
 
 **"Bootstrap" must mean reaching a usable workstation, not creating symlinks.**
-`make dotfiles` is retired completely rather than kept as an alias — an alias
-would preserve an interface we no longer want and leave two apparent entry
-points, which is the exact overlap this spec exists to remove.
+There is one entry point. An alias for the interface this replaced would leave
+two apparent ones, and that overlap is what this spec exists to remove.
 
-Three scope items are already closed and are recorded here so they are not
-attempted twice:
-
-- The dead `claude/` scripts (`commit-msg`, `check-commits.sh`,
-  `setup-protection.sh`, `update-repo-hooks.sh`) were removed with spec 1 §8 in
-  `b87810f`. `claude/` now holds only `CLAUDE.md` and `skills/`.
-- No `.DS_Store` is tracked. `git ls-files` finds none.
-- `git/hooks/go.pre-commit`'s fate is decided below: it is removed.
-
----
+The framing came from a larger error in the scope note it replaced: the note read
+as a link-management task, and reaching a usable workstation is the task.
 
 ## 1. The rule this spec is built on
 
-Spec 1 §8.4 fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
+Spec 1 §8.4 -- a design since deleted -- fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
 are harness-owned. Those were two instances of one rule, never stated. Stating
 it is most of this design:
 
@@ -90,7 +74,7 @@ branch was removed rather than repaired, because it produced the design's worst
 measured defect: `set -e` does not apply inside `$( )`, so a failed or
 off-`PATH` install was swallowed, leaving an empty path that reached the build
 as `"" build …` — exit 127, or worse, a silent `exec` of a stale cached binary.
-See [the shim defects](#five-shim-defects-measured-2026-08-10). Deleting the
+Deleting the
 branch removes the failure mode; patching it would have left the shim carrying
 exactly the bash semantics that disqualified shell everywhere else here.
 
@@ -652,33 +636,6 @@ executed in:
 
 Observed on this machine, not read from documentation.
 
-### The Makefile's privileged steps have never run
-
-`make dep` is guarded by `sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi`.
-If `sudo -v` succeeds, `||` short-circuits and the branch is skipped. If it
-fails, `[ -z 1 ]` is false — `$?` is a non-empty string — and the branch is
-skipped too. **Neither path can ever run it.**
-
-The identical construct guards `chsh` in both the `omz` and `fishshell` targets,
-so **`make` has never set the login shell either.** Corroborated: the login
-shell is `/opt/homebrew/bin/fish`, yet `/etc/shells` contains **no fish entry**
-at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
-
-### The installers are broken independently of that
-
-- `user-install-dep.sh` reads `brew/brew-cask.list`; the file is
-  `brew/brew-casks.list`.
-- It calls `brew cask install`, which is no longer a Homebrew command.
-- It installs Homebrew via the retired ruby `master`-branch URLs, for both
-  Homebrew and Linuxbrew.
-- `post-install.sh` is **not valid bash**: `bash -n` reports
-  `syntax error near unexpected token 'elif'` at line 9 (empty `then` branches).
-  It also calls `$(name -v)` for `uname -v`.
-- `make extra` links `$HOME/crypt/extras.secret` into the repo. `~/crypt` does
-  not exist; the real location is `~/etc/extras.secret`, which is what
-  `gitconfig.symlink` includes. No `extras.secret` link exists in the repo. The
-  target produces a dangling symlink.
-
 ### Fish
 
 - `~/.config/fish` has been a symlink to `~/dotfiles/fish` since April 2021.
@@ -712,94 +669,6 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
 
 A Go module in a dot-suffixed sibling directory (`bootstrap.d/`) builds and
 tests correctly, and its module path need not match the directory name.
-
-### The six bash defects that decided §1 (2026-08-10)
-
-The first implementation was shell. One task — roughly 100 lines of `lib.sh`
-plus its tests — produced six defects, every one a property of the language
-rather than a mistake about the design. Recorded because the decision to switch
-rests on them, and because a future reader will otherwise wonder why a dotfiles
-bootstrap is a Go program.
-
-1. `do_dir` assigned `target` as a global. `do_link` calls
-   `do_dir "$(dirname "$target")"` *before* using `$target`, so every symlink
-   would have been created at its parent directory's path. Caught in review.
-2. `local current=$(readlink "$target") || refuse "…"` never fires. `local` is a
-   builtin whose own exit status is 0, so it masks the command substitution's.
-   The fix for defect 1 introduced this one.
-3. `dry_run() { [ "$BOOTSTRAP_DRY_RUN" -eq 1 ]; }` fails **open**. `-eq` is
-   numeric: `BOOTSTRAP_DRY_RUN=true` and `BOOTSTRAP_DRY_RUN=` each print
-   `integer expression expected` and then take the *mutate* branch. The one
-   variable whose purpose is preventing mutation treated anything it could not
-   parse as permission to proceed.
-4. `manifest_rows | while read …` puts the loop in a subshell, where `refuse`'s
-   `exit 2` ends only the subshell and the run continues past a refusal.
-   Required process substitution instead.
-5. Whether `[ "$X" -eq 0 ] && X=1` inside a `case` arm aborts under `set -e` had
-   to be settled by running a probe. It does not — but the reasoning is not
-   something a reader can check by inspection.
-6. The lexical scan enforcing §4 was written wrong twice. Version one flagged
-   `do_run mkdir -p "$x"`, the correct form, because the mutating word sits
-   after whitespace there exactly as in a bare call. Version two missed
-   `; do cp "$x" /tmp` because the `;` alternative consumed `do` as its captured
-   word before the `do` alternative could match. Only a
-   split-on-separators-and-take-each-first-word approach, verified against
-   sixteen allowed forms and nine violations, was correct.
-
-Defects 1 and 2 are impossible in Go. Defect 3 is a `bool`. Defect 4 is an early
-`return`. Defect 5 does not exist. Defect 6 becomes an import-set assertion.
-
-### Five shim defects, measured (2026-08-10)
-
-The shim was granted shell's only exception in this design on the grounds that
-its job — find Go, build, exec — is small enough to get right. Review measured
-five defects in that job. Recorded because the premise turned out to be wrong,
-and because anyone proposing to grow the shim should read this first.
-
-1. **`set -e` does not apply inside `$( )`.** Confirmed on bash 3.2.57 and
-   5.3.15. A `find_go` helper called as `go_bin=$(find_go)` swallowed a failed
-   `brew install go` and returned empty; the shim then ran `"" build …`
-   (exit 127) or silently `exec`ed a stale cached binary. The `exit 2` refusal
-   was only reachable when Homebrew was *absent*. **Fixed by deleting the
-   auto-install branch** (§2.1), not by patching it.
-2. **One cache for every checkout.** The cache path had no component derived
-   from the repository root, so a main clone and a git worktree shared one
-   binary. A worktree whose files predate the other's build rebuilt nothing and
-   `exec`ed the wrong binary while exporting the right root: old code, new tree,
-   silently. Fixed by keying the cache on the root. An mtime-only scan also
-   missed deletions; fixed by including directories in the scan.
-3. **Shim exit codes escaped the shared table.** A Go compile error exited `1`
-   — "advisory" — which is the most likely real failure and the one CI would
-   read as non-blocking. `mkdir` failure likewise. Every shim failure now
-   exits `2`.
-4. **`CDPATH` could point the root at the wrong tree.** Reproduced:
-   `cd "$(dirname "$0")"` searches `CDPATH` for a relative `$0` and echoes the
-   resolved path, so the root came back as a same-named decoy directory *and*
-   as two lines. This is precisely the "silently linked the wrong tree" failure
-   the [six bash defects](#the-six-bash-defects-that-decided-1-2026-08-10) say
-   this redesign exists to prevent, reproduced inside the replacement. Fixed
-   with `CDPATH= cd -- …`.
-5. **Preflight validated `PATH` tools but not its two load-bearing inputs.**
-   `HOME` unset with `XDG_CACHE_HOME` set — a normal container shape, and
-   containers are why the `dotfiles` profile exists — yielded an empty `Home`,
-   which would make the config phase resolve every managed path against `/`.
-   Fixed by refusing on an empty `Root` or `Home`.
-
-Defect 4 is the one worth carrying: a design whose stated purpose is preventing
-a class of failure reproduced that exact failure in the first shell file it
-allowed itself.
-
-**A sixth followed, of the same shape.** With `dirname` off `PATH`, the
-substitution yields an empty string, `cd -- ""` succeeds, and the root silently
-becomes the caller's working directory. That is a third independent route to
-"wrong tree, silently" in a sixty-line file. The fix validates the *outcome*
-rather than each input: the resolved root must contain `bootstrap.d/`, which
-catches every route including ones not yet found.
-
-**And a seventh, in the fix for the third.** `exec "$binary" "$@" || die …` is
-dead code: a failed `execve` terminates the shell before the `||` arm can run —
-measured as exit 1 on bash 3.2.57 and 126/127 on 5.3.15, with and without
-`execfail`. The guard has to precede the `exec`, not follow it.
 
 ### An ancestor that is a symlink is refused (2026-08-10)
 
@@ -935,78 +804,6 @@ a process started under another shell, `check` reports "the login shell is /bin/
 not fish" on a machine whose passwd entry says `/opt/homebrew/bin/fish`, and the
 phase would plan a `sudo chsh` that is not needed. The passwd database is the
 authority; `$SHELL` is a hint.
-
----
-
-## Rejected alternatives
-
-**Rebuilding the Makefile as the bootstrap interface** (`make plan`,
-`make workstation`, `make check`). Make is another prerequisite; its recipes are
-awkward for structured checks, safe conflict handling and portable quoting; and
-targets conceal side effects, as the present `all` and `links` graph already
-demonstrates. It would improve on today without being the right shape.
-
-> **Amended 2026-10-09 — the rejection stands and the evidence it cited is
-> gone.** "The present `all` and `links` graph" no longer exists: the phases took
-> that work over, those targets were removed, and `Makefile` now declares only
-> `agents` and `release`. So the worked example this paragraph rested on had
-> already been deleted by this document's own §9 sequence, which left the
-> rejection reading as a live option rather than a settled one.
->
-> The argument does not need it. Make being another prerequisite, and its recipes
-> being the wrong shape for structured checks and portable quoting, are the
-> reasons, and they are unaffected. What has changed underneath is the subject:
-> the whole file is retiring — decided 2026-10-09, with the personal build — so
-> "rebuilding the Makefile" is now moot rather than merely wrong-shaped. The
-> paragraph stays as the reason the file is not coming back. See
-> the personal build removal analysis.
-
-**A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
-Note this is *not* the same as §2.1's build-from-checkout, which was adopted.
-Distribution via Homebrew requires Homebrew *before* bootstrap can start, must
-locate or embed the dotfiles it configures, creates release-version coordination
-between binary and repository, and couples this spec to the unimplemented spec 6.
-Building from the checkout has none of those properties. Publishing a release
-binary may still be worthwhile later; it is the wrong *stage-zero* mechanism.
-
-**A separate `bootstrap` subcommand inside the `agents` binary.** Rejected for
-the reason spec 1 already names: it would turn a repo-context tool into an
-unrelated workstation manager. Two Go modules, two binaries, one repo.
-
-**Bash for the whole bootstrap.** This was the original decision and it was
-reversed after one task of implementation. Reversed on evidence, not taste — see
-[the six defects](#the-six-bash-defects-that-decided-1-2026-08-10). The
-deciding one is that the §4 invariant, in shell, could only be enforced by
-lexically scanning phase files for mutating command names, and that scan was
-written wrong twice: once flagging the *correct* `do_run mkdir` form, once
-missing a real `; do cp` violation. **A guarantee enforced by a heuristic its
-own author cannot write correctly is not a guarantee.** In Go the same property
-is an import-set assertion: exact, complete, and impossible to get subtly wrong.
-
-The advantages shell genuinely had are real and were given up knowingly:
-zero stage-zero dependencies, and a tool short enough to read before running it
-on your own machine. §2.1's shim preserves the second for the only part that
-still runs before anything is verified.
-
-**Keeping `make dotfiles` as an alias.** Preserves an interface we no longer
-want and leaves two apparent entry points — the overlap this spec exists to
-remove.
-
-**Per-file symlinks under `~/.config/fish`.** Narrows the surface without fixing
-it: the file that must be tracked is the same file installers append to. See §7.
-
-**Relocating fisher's state via fish variables** while keeping the directory
-symlink. More moving parts than either alternative, and it depends on fisher
-honouring those paths — unverified.
-
-**A separate read-only `plan` implementation.** Two implementations of one
-behaviour drift; §4.
-
-**Extracting a shared Go test-helper package**, or a tracked `go.work`. The
-former makes `agents` export a package solely for a consumer outside itself; the
-latter alters module resolution during builds, so spec 6's release path would
-have to remember `GOWORK=off` — a footgun handed to an unwritten spec in
-exchange for one convenience command.
 
 ---
 
