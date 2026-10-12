@@ -3,8 +3,8 @@
 **Date:** 2026-10-07, rewritten 2026-10-09
 **Status:** version three. Attacked by an adversarial reviewer; the migration surface
 measured on a wired machine. **Landed.** Built and released in v0.8.0 (`e504c56`); the chain on this machine is converted, so this is the design behind the code rather than a proposal. Read section 3 for what the installer writes and section 6 for the two stages.
-**Replaces:** the two-mode resolution in
-binary identity and standalone resolution.
+**Replaces:** the two-mode resolution in binary identity and standalone resolution —
+deleted 2026-10-12, superseded by this document.
 **Depends on:** the boundary between `agents` and `bootstrap`
 ([the boundary document](2026-09-20-agents-and-bootstrap-boundary.md)).
 

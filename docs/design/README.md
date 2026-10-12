@@ -73,11 +73,6 @@ catalogued here because of one ordering constraint (spec 1 §8).
 
 - [`fixtures/`](fixtures/) — real hook payloads captured from live agent runs,
   read directly by `agents/internal/harness` tests. Sanitized.
-- the capture experiment
-  — the two-arm protocol behind spec 7 §3a. Its result, that an instruction alone
-  causes drafting, is what the 2026-08-19 redesign was built on and what the
-  2026-09-21 reduction deleted the consumer of. The measurement stands; only its
-  reader is gone.
 - Implementation plans are in [`../plans/`](../plans/).
 - Pre-2026-08-20 historical plans are in `../archive/plans/`.
 - Nothing is archived: a document whose subject is gone is deleted, and git

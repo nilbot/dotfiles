@@ -91,6 +91,7 @@ Durable context for this repo lives in `docs/`. Read it before assuming;
 it is the record, and this file is only the pointer to it.
 
 - `docs/qna/` — answers indexed by the question you would ask again
+- `docs/plans/` — step-by-step implementation plans
 - `docs/journal/` — dated record of what happened
 - `docs/design/` — the design still in force
 
@@ -115,7 +116,10 @@ skill; it is not repo-specific and is not restated here.
 
 ### 4.1 Multi-Version Recognition in `doctor`
 
-`doctor.checkScaffoldInstruction(repoRoot string)` must recognize **both** `scaffold.DoctorInstruction` and `scaffold.LegacyDoctorInstruction` (or any string containing `agents doctor`), ensuring existing repositories in the fleet (like `toolshed/cowork`) continue reporting `ok` on `scaffold:doctor-instruction`.
+`scaffold:doctor-instruction` was the original version of this check. It was
+replaced by the four granular `scaffold:*` checks (`docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md`
+§4), so the two string constants it compared are no longer read and no repository
+reports on it.
 
 ### 4.2 Non-Mutation Invariant
 
