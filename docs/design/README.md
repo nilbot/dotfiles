@@ -31,6 +31,10 @@ an instruction with a warning label rather than an inert record. Specs 1 and 4
 are deleted on those grounds, and so are specs 3 and 7: this store held nothing
 whose reasoning a reader cannot recover from git history.
 
+A row whose spec name is **not a link** has no document in this store: it was
+deleted, and the row stays so that the citations to its number elsewhere in
+`docs/` resolve to something that says what happened to it.
+
 | # | Spec | Status |
 |---|---|---|
 | 2 | [dotfiles hygiene](2026-08-07-spec-2-dotfiles-hygiene.md) | implemented |
