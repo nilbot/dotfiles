@@ -38,7 +38,7 @@ every push to `master` runs two container jobs:
 Beyond stage zero, `apply workstation` has been observed running every phase to
 completion and exiting 0 on both images (2026-08-17), but that is **not gated,
 and its exit code is not a convergence claim** — the verify phase reports and
-returns nil by design, so `apply` exits 0 while verify reports failures on Debian. Those three, plus the two standing gaps — `plan` exits 2 for
+returns nil by design, so `apply` exits 0 while verify reports failures on Debian. Those failures, plus the two standing gaps — `plan` exits 2 for
 `workstation` on a machine lacking Homebrew or fish, and Linux has no managed
 nerd font — are recorded with the rest in
 [spec 2](docs/design/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11),
@@ -55,7 +55,8 @@ compiled this checkout into
 `~/bin/agents`, a second `agents` beside the released one, and the two owners
 disagreed about which binary the hook chain ran — measured here as
 `bootstrap apply workstation` exiting 2 in the devtools preflight. The decision is
-2026-10-09: the checkout build is gone, and the chain names the released binary.
+2026-10-09: the checkout build is gone, and the chain -- the directory `core.hooksPath` names and
+the entries in it -- names the released binary.
 Provisioning belongs to `./bootstrap`. For an inner loop, `cd agents && go build -o /tmp/agents .` writes no global path
 and installs nothing.
 

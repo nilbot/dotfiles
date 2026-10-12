@@ -58,7 +58,8 @@ that kind, and a regression becomes a test failure instead of a discovery.
 `softlinks.sh` uses `pwd` today and silently links the wrong tree when run from
 anywhere else.
 
-Two routes to a wrong root are silent, and the shim refuses both:
+Two routes to a wrong root are silent, and the shim closes both -- the first by
+clearing `CDPATH`, the second by refusing:
 
 - **A poisoned `CDPATH`.** `cd -- "$(dirname "$0")"` without `CDPATH=` in front of
   it searches `CDPATH` for a relative `$0` and echoes the directory it resolved
@@ -69,6 +70,7 @@ Two routes to a wrong root are silent, and the shim refuses both:
   symptom at all. Same device and inode is the only test that settles it, so the
   shim compares `$BOOTSTRAP_ROOT/bootstrap` against `$0` and refuses when they
   differ.
+
 For a new machine, `./bootstrap apply workstation` performs the complete setup.
 For an existing machine the same command converges whatever is missing.
 
@@ -277,8 +279,8 @@ One tracked table. Three kinds, which are §1's rule made mechanical:
 link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
 link    git/gitignore_global              .gitignore                        *
-link    claude/skills                     .claude/skills                    *
-link    gemini/skills                     .gemini/skills                    *
+link    claude/skills                     .claude/skills                    *   # deleted 2026-09-21
+link    gemini/skills                     .gemini/skills                    *   # deleted 2026-10-01
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
@@ -291,16 +293,17 @@ which `~/.gitconfig` reaches through an include inside the shared config. It is
 machine-local and deliberately untracked: `git/gitconfig.shared:245` says so at
 the point where the temptation to put identity there would arise. Nothing in this
 repository writes it and nothing checks it, so an edit that drops the include
-loses identity and signing with no error -- the same silent-loss shape as the
-shared include above, with credentials rather than settings.
+loses identity and signing with no error -- the same silent-loss shape as section 8's shared include, with credentials
+rather than settings.
 `check` verifies each target is the **right kind**. A `link` target that has
 become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
 fixed and the fish regression §7 fixes.
 
 **Harness skill directories are ordinary rows.** `claude/skills` was linked
-by a hand-written Makefile line until both went on 2026-10-09, and
-`bootstrap.d/links.manifest` declares neither row now — two
+by a hand-written Makefile line until the Makefile went on 2026-10-09; the row
+itself was deleted on 2026-09-21, and `gemini/skills`'s on 2026-10-01, so
+`bootstrap.d/links.manifest` declares neither — two
 harnesses already diverging, the same drift spec 1 opened with. A third harness
 becomes one row.
 
@@ -582,7 +585,7 @@ bootstrap.d/
   internal/manifest/            row parsing, the Kind type
   internal/phase/               the six phases -- imports no I/O package
   internal/check/               the seven checks
-  internal/migrate/             reconciling migrations (the reclaiming kind is deleted)
+  internal/migrate/             reconciling migrations (the reclaiming kind is kept; its one instance was deleted)
 ```
 
 The directory keeps its `.d` suffix: the module *path* is what Go cares about,
