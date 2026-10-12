@@ -42,7 +42,7 @@ They belong in the binary for the same reason.
    assets for path, command or citation validity. That is how
    `recording-what-you-learn` shipped pointing at
    `docs/design/2026-08-19-knowledge-is-documentation.md` after that design was
-   deleted, and how v0.8.1 came to carry two more of the same. Widen a walk to the
+   deleted, and how v0.8.1 was found carrying one more of the same. Widen a walk to the
    assets or pin each one, and ask of each: does every path it names resolve, does
    every command it names exist, and does every citation still point at something.
 5. `agents/README.md:9` names what `init` installs today, so it needs the three
