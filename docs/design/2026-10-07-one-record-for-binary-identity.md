@@ -804,10 +804,11 @@ names to the four new ones.
    comma is free while dropping or moving the comma fails the job **before** the
    release object is created, leaving a pushed tag with no release. That matters only
    if a later change edits the line; nothing here does.
-2. **How long the compatibility shim lives.** It should carry a version and a
-   removal date in its comment, or it becomes permanent. The removal is what makes
-   the rollback paragraph's "cannot answer" true again, so the two belong in the
-   same change.
+2. **(Answered.)** How long the compatibility shim lives. It carries a version and a
+   removal date in its comment — added in v0.8.0, remove no earlier than v0.9.0
+   (2027-04-09), `agents/main.go:92-94` — because otherwise it becomes permanent. The
+   removal is what makes the rollback paragraph's "cannot answer" true again, so the
+   two belong in the same change.
 3. **`~/.gitattributes`.** Its content is deliberately empty of rules
    (`git/gitattributes` says so), and `core.attributesFile` is unset, so it marks
    nothing. Recommendation: stop managing it — delete the link, the file, the

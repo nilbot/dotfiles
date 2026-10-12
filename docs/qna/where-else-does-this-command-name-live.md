@@ -28,8 +28,15 @@ deleted command is a runtime error in a job, not a compile error in a package.
 Nothing local fails. The full set of callers in this repository:
 
 ```bash
-git grep -n 'agents <name>' -- .github/ Makefile git/ claude/ docs/ '*.go' '*.sh'
+git grep -n 'agents <name>' -- .github/ bootstrap bootstrap.d/ git/ .agents/ global/ docs/ '*.go' '*.sh'
 ```
+
+*(Path list corrected 2026-10-12. It named `Makefile` and `claude/`, both since
+deleted — `git grep` ignores a pathspec that matches nothing, so the command still
+ran and the loss was silent. The build entry point is now `bootstrap` and
+`bootstrap.d/`, and the harness-loaded documents are under `.agents/` and `global/`,
+which the old list missed. That omission matters more than the two dead paths: those
+are the callers with the long half-life this entry is about.)*
 
 `claude/` matters as much as `.github/` — the skills there are symlinked into
 `~/.claude/` and load in every session in every repository, so a stale command
@@ -46,7 +53,7 @@ under a retirement note, and only the mechanism was cut.
 **The failure mode to watch for is a scoped grep that feels exhaustive.** Every
 hit was read and correctly judged; the hits that mattered were never returned.
 When the question is "does this name still appear anywhere", scope the grep by
-*path* (the whole tree, minus `docs/archive/`) rather than by file type.
+*path* — the whole tree — rather than by file type.
 
 Related: [how-do-i-confirm-something-is-not-wired](how-do-i-confirm-something-is-not-wired.md)
 — establishing an absence needs the one read that could disconfirm it, and here
@@ -79,7 +86,9 @@ again: the hits that mattered were prose in a store nobody would call a caller.
 
 One concrete detail above has changed. The `claude/` argument no longer has
 skills in it: `claude/skills` was emptied on 2026-09-21 and its skills moved to
-`docs/archive/skills/`, which nothing loads. The harness-loaded documents are now
+`docs/archive/skills/`, which nothing loaded. `docs/archive/` itself was deleted on
+2026-10-12, so the archive exclusions in this entry's commands are no-ops now and the
+whole tree is the scope. The harness-loaded documents are now
 the ones under `.agents/skills/` — reached through the `.claude/skills` and
 `.codex/skills` symlinks `agents init` creates — plus each harness's own
 instruction file. The lesson is unaffected: a document a harness loads in every

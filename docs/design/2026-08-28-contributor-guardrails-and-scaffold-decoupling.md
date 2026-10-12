@@ -73,7 +73,7 @@ Guardrails for collaborative repositories enforce engineering rigor across three
 The phrase:
 > *"an empty or stale `.agents/` means the setup is broken rather than that there is nothing to say — report it rather than working around it."*
 
-is removed from `DefaultAgentsMD`. In a clean clone, `.agents/` contains only `skills/` (and `.gitkeep`), which is valid and expected.
+is removed from `DefaultAgentsMD`. In a clean clone, `.agents/` holds the domain-context `AGENTS.md` this scaffold writes, plus `skills/` with the bundled skill and its `.gitkeep`. None of that means the setup is broken.
 
 ### 3.2 Conditional `DoctorInstruction`
 

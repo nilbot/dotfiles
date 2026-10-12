@@ -61,7 +61,7 @@ sidecar read stands.
 
 ## What was redacted, and why it matters
 
-`last_assistant_message` is replaced with `"<REDACTED — see spec 3.2>"`, per the
+`last_assistant_message` is replaced with `"<REDACTED — see spec 1 §3.2>"`, per the
 same rule applied to the Codex fixtures. In the 2026-08-07 capture `tool_input`
 and `tool_response` did not appear at all, because no `PreToolUse` hook was
 wired — the rule was applied to all three regardless.
@@ -80,36 +80,24 @@ retained field is pointer or label data: ids, paths, event names, effort level,
 permission mode, cwd, and two empty arrays (`background_tasks`, `session_crons`).
 Each file was read in full before being committed.
 
-## These files are test input, not documentation
+## These files are captured input, and nothing reads them
 
-`agents/internal/harness/claudecode_test.go` **reads these files directly**
-at `../../../docs/design/fixtures/2026-08-07-claude-code-hook-payloads/`.
-The decode tests name the four 2026-08-07 fixtures; `TestClaudeCodeFixturesStayRedacted`
-reads the **whole directory**, so a fixture added later is guarded on arrival
-rather than when someone remembers to extend a list.
-They are not a pasted-in copy of something asserted elsewhere: edit a value here
-and the suite fails.
+`agents/internal/harness/claudecode_test.go` read these files directly and asserted
+their decoded shape. It was deleted on 2026-09-21 (`f3b4a74`) with the trace machinery
+it tested. The harness package now holds `claudecode.go` for wiring, and two tests —
+`strip_test.go` and `wire_safety_test.go` — that do not touch this directory.
 
-That is deliberate, and it is what makes the next paragraph true. Verified by
-mutation: changing `prompt_id` and `agent_id` in `cc-subagent-stop.json` fails
-`TestClaudeCodeBuildsVerifiedSubagentTrace` and
-`TestClaudeCodeFixturesDecodeToMeasuredShape/SubagentStop`; deleting any file
-fails whichever test loads it; replacing a redaction marker with real text fails
-`TestClaudeCodeFixturesStayRedacted`.
-
-Two things the fixtures deliberately do **not** cover, because they cannot:
-
-- The redaction canary. These files are redacted, so no forbidden content is left
-  in them to leak. `TestClaudeCodeForbiddenContentCannotReachTrace` keeps a small
-  inline payload carrying `SECRET-LEAK` and a `gAAAAAB…` blob for that assertion.
-- `agent_transcript_path` in `TestClaudeCodeBuildsVerifiedSubagentTrace`. The
-  captured path names a machine-bound file that does not exist on another
-  machine, so that one field is overwritten *after* decoding, with a temp path.
-  Every other field in that test comes from the committed bytes.
+One document still uses these files as evidence:
+[Does `PreToolUse` fire inside a Claude Code subagent?](../../../qna/does-pretooluse-fire-inside-a-subagent.md)
+cites `cc-pretooluse-parent.json` and `cc-pretooluse-subagent.json` for its answer,
+and that citation is what keeps the directory.
 
 ## Reproducing
 
-Re-capture on any Claude Code minor-version bump and overwrite these files; the
-tests above are what will notice if the contract moved. If you do re-capture,
-re-apply the redaction before committing — `TestClaudeCodeFixturesStayRedacted`
-enforces it, but it is easier to redact than to rewrite history.
+Re-capture on any Claude Code minor-version bump and overwrite these files. Nothing
+will notice if the contract moved — the tests that would have are gone — so compare
+the new payloads against the adapter's expectations by hand.
+
+If you do re-capture, re-apply the redaction before committing. No check enforces it
+now. The rule is spec 1 §3.2, and these files carry the marker
+`"<REDACTED — see spec 1 §3.2>"` so a reader can tell redacted from captured.

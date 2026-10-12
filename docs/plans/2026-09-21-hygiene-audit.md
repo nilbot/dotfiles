@@ -4,6 +4,10 @@ The gate is green. That is not the same as mergeable, and this file is the list 
 why. It exists so four parallel workstreams can be assigned without overlapping,
 and so the reviewer can check the audit rather than reconstruct it.
 
+**Status:** executed 2026-10-12 — every debt below is closed, and D6 turned out not
+to be a fault. The notes under each item say what closed it; the measurements stay as
+written, because they are what the audit found.
+
 ## State at the time of writing
 
 Branch `simplify/agents-single-home`, PR #52, 12/12 checks SUCCESS. The change
@@ -30,12 +34,19 @@ advertises installation from a release pipeline. Nothing tests it.
 `2026-08-19-knowledge-is-documentation.md` 2,
 `2026-08-28-binary-identity-and-standalone-resolution.md` 1.
 
+*(Five of those nine were deleted on 2026-10-12, as records whose subject was gone:
+`layout-manifest-and-store-root-design`, `agents-repo-context-design`,
+`spec-7-capture-and-review`, `knowledge-is-documentation` and
+`binary-identity-and-standalone-resolution`. The four that remain are guarded by
+`TestLivingDocumentsNameNoDeletedCommand`: a deleted command named in `docs/design/`
+has to be marked as gone on the same line.)*
+
 Not all of these are faults, and saying which is which is the work:
 
 - A **dated record** may name anything true of its date. `docs/journal/` is a
   record, and `docs/plans/` records what was planned. Rewriting either destroys
-  evidence. The repo's own `docs/archive/README.md` says the archive is
-  immutable.
+  evidence. The repo's own `docs/archive/README.md` said the same of the archive;
+  both were deleted on 2026-10-12, and `git show` recovers the README.
 - The repository's `AGENTS.md` says `docs/design/` is *"the design still in
   force"*. A document under that heading that describes a deleted command is a
   contradiction a reader cannot resolve, and that is a fault.
@@ -67,8 +78,9 @@ removes) and `why-does-agents-init-never-update-existing-instructions.md` (names
 **D6. Not a fault, recorded so nobody "fixes" them.** Seven relative links
 resolve to nothing across all of `docs/`: three are `%s`/`...`/`target`
 placeholders inside plan bodies, two are `../plans/a-plan.md` template paths, one
-points at an experiment script removed by an earlier spec, and one is inside an
-archived analysis. Plan placeholders and immutable archives are not defects.
+points at an experiment script removed by an earlier spec, and one was inside an
+archived analysis that has since been deleted with `docs/archive/`. Plan placeholders
+are not defects, and neither were immutable archives.
 
 ## Workstreams
 
