@@ -249,6 +249,14 @@ var datedDocument = regexp.MustCompile(`\d{4}-\d{2}-\d{2}-[a-z0-9-]+\.md`)
 // check, because no check opened the assets. The remedy in each case was to state
 // the fact rather than cite it, which is what this rule asks for at the point of
 // writing.
+//
+// writing-for-humans then arrived carrying
+// docs/design/2026-10-07-one-record-for-binary-identity.md, which is how the rule
+// came to be a check rather than a habit.
+//
+// Demonstrated to fail by: appending
+// "See docs/design/2026-10-07-one-record-for-binary-identity.md" to any asset,
+// which turns this red naming that file and the match.
 func TestBundledAssetsCiteNoDatedDocument(t *testing.T) {
 	root := task18RepoRoot(t)
 	dir := filepath.Join(root, "agents", "internal", "scaffold", "assets")

@@ -382,42 +382,49 @@ func checkDomain(repoRoot string) Check {
 	return Check{Name: name, Status: OK, Detail: ".agents/AGENTS.md domain context is present"}
 }
 
-// checkSkills reports the state of the one skill this tool installs.
+// checkSkills reports the state of every skill this tool installs, one check each.
 //
-// Three answers, because they call for three different responses: missing is a
-// setup gap with a remedy, present is silent success, and customized is
-// reported as OK on purpose. The skill is written once and then belongs to the
-// repository -- a repository that has edited it is using the tool as intended,
-// and a report that called that a fault would teach people to ignore the
-// report. Customized is distinct from missing rather than folded into it for
-// exactly that reason: the two are one word apart and opposite in meaning.
+// Three answers per skill, because they call for three different responses:
+// missing is a setup gap with a remedy, present is silent success, and customized
+// is reported as OK on purpose. A skill is written once and then belongs to the
+// repository -- a repository that has edited it is using the tool as intended, and
+// a report that called that a fault would teach people to ignore the report.
+// Customized is distinct from missing rather than folded into it for exactly that
+// reason: the two are one word apart and opposite in meaning.
+//
+// The names come from scaffold.BundledSkills rather than from a constant here, so
+// a skill added to the binary is reported without a second edit -- and so no
+// installed skill is invisible to the command that reports on them.
 func checkSkills(repoRoot string) []Check {
-	const name = "recording-what-you-learn"
-	const check = "scaffold:skill-recording"
-	current, found, err := scaffold.SkillCurrent(repoRoot, name)
-	if err != nil {
-		return []Check{{Name: check, Status: Warn, Detail: err.Error()}}
+	var checks []Check
+	for _, name := range scaffold.BundledSkills() {
+		check := "scaffold:skill-" + name
+		current, found, err := scaffold.SkillCurrent(repoRoot, name)
+		switch {
+		case err != nil:
+			checks = append(checks, Check{Name: check, Status: Warn, Detail: err.Error()})
+		case found == "":
+			checks = append(checks, Check{
+				Name:   check,
+				Status: Warn,
+				Detail: ".agents/skills/" + name + "/ is missing",
+				Remedy: "run 'agents init' to populate the bundled skill",
+			})
+		case !current:
+			checks = append(checks, Check{
+				Name:   check,
+				Status: OK,
+				Detail: ".agents/skills/" + name + "/ carries repository customizations",
+			})
+		default:
+			checks = append(checks, Check{
+				Name:   check,
+				Status: OK,
+				Detail: ".agents/skills/" + name + "/ is present",
+			})
+		}
 	}
-	if found == "" {
-		return []Check{{
-			Name:   check,
-			Status: Warn,
-			Detail: ".agents/skills/" + name + "/ is missing",
-			Remedy: "run 'agents init' to populate the bundled skill",
-		}}
-	}
-	if !current {
-		return []Check{{
-			Name:   check,
-			Status: OK,
-			Detail: ".agents/skills/" + name + "/ carries repository customizations",
-		}}
-	}
-	return []Check{{
-		Name:   check,
-		Status: OK,
-		Detail: ".agents/skills/" + name + "/ is present",
-	}}
+	return checks
 }
 
 func checkAntigravityTrust(configPath, repoRoot string) Check {

@@ -249,17 +249,18 @@ func CreateWithLayout(root string, local bool) error {
 		}
 	}
 
-	// The bundled skill is installed from the one text this binary carries. There
-	// used to be a schema-keyed catalog, because the resolved layout selected
-	// which text was canonical; with one layout there is one text, and it is the
-	// one the repository records. This is what keeps a fresh repository
-	// byte-identical to the skill this checkout ships, and therefore what makes
-	// "the installed skill equals the embedded skill" a property a test can
-	// assert: see TestInstalledSkillMatchesTheBinary.
+	// The bundled skills are installed from the one text this binary carries.
+	// There used to be a schema-keyed catalog, because the resolved layout
+	// selected which text was canonical; with one layout there is one text per
+	// skill, and it is the one the repository records. This is what keeps a fresh
+	// repository byte-identical to the skills this checkout ships, and therefore
+	// what makes "the installed skill equals the embedded skill" a property a test
+	// can assert: see TestInstalledSkillMatchesTheBinary.
 	//
-	// Nothing classifies that copy as current or customized any more. The drift
-	// command that did was deleted with the rest of the record feature, so the
-	// equality above is the whole guarantee rather than one input to a check.
+	// What the drift command did -- comparing an installed copy against the text
+	// this binary carries -- is SkillCurrent, and `agents doctor` reports the
+	// three answers it has: missing is a gap, present is silent, and customized is
+	// OK on purpose, because the copy belongs to the repository once written.
 	for _, skill := range bundledSkills {
 		relPath := filepath.Join(".agents", "skills", skill.name, "SKILL.md")
 		if err := writeIfAbsentFromFS(filepath.Join(root, relPath), AssetsFS, skill.asset); err != nil {

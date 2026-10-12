@@ -100,7 +100,18 @@ document of this repository, in text installed into repositories that have never
 it. The measurement it carries is the load-bearing part, so the sentence now says
 where the example came from without naming a file that only exists here.
 
-**The pin was shown to fail before it was trusted.** Injecting a dated name into an
-asset makes `TestBundledAssetsCiteNoDatedDocument` fail with the file and the match;
-removing it passes. A guard that has not been seen red proves nothing, which is the
-lesson this whole release exists to record.
+**The pin was shown to fail before it was trusted, and the demonstration is
+recorded.** Injecting a dated name into an asset makes
+`TestBundledAssetsCiteNoDatedDocument` fail with the file and the match; removing it
+passes. That line was in the notes and here, and nowhere a reader of the code would
+find it — so it is now in the test's own comment as a *Demonstrated to fail by* line,
+where the project keeps that record.
+
+**A fourth change the plan did not have: `doctor` sees all three skills.** Its check
+was `const name = "recording-what-you-learn"` and `const check =
+"scaffold:skill-recording"`, so the two new skills would have been invisible to the
+command that reports on them — neither OK nor a fault, which is the one answer a
+diagnostic must not give. It now reports one `scaffold:skill-<name>` per entry in
+`scaffold.BundledSkills()`, which is the first thing the collapsed list paid for, and
+the design document that names those checks was corrected with it. On this repository
+the two arrive as warnings until `init` is re-run, which is what they were.

@@ -37,7 +37,7 @@ This specification establishes a robust **Two-Tier Agent Context Architecture**:
    - **Tier 2 (Domain Context)**: Dedicated repository-specific guidelines stored in `.agents/AGENTS.md` and durable knowledge in `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
 2. **Deterministic CLI Engine of Truth**:
    - `agents/internal/scaffold/`: Embeds canonical starter assets via Go `embed.FS` and scaffolds full Two-Tier + 4-store skeleton on `agents init`.
-   - `agents doctor`: Granular diagnostic checks (`scaffold:router`, `scaffold:symlink`, `scaffold:domain`, `scaffold:skill-recording`).
+   - `agents doctor`: Granular diagnostic checks (`scaffold:router`, `scaffold:symlink`, `scaffold:domain`, and one `scaffold:skill-<name>` per bundled skill).
 
 ---
 
@@ -135,14 +135,14 @@ When `agents init <path>` is executed:
 
 ## 4. Enhanced `agents doctor` Diagnostics
 
-Replaces the legacy generic `scaffold:doctor-instruction` with granular checks. Four checks, and they are what `agents doctor` reports today.
+Replaces the legacy generic `scaffold:doctor-instruction` with granular checks. Three fixed checks and one per bundled skill, and they are what `agents doctor` reports today.
 
 | Check Name | Status `ok` | Status `warn` / `fail` / `info` | Remedy Message |
 | :--- | :--- | :--- | :--- |
 | `scaffold:router` | Present | `info` / `warn` (missing) | Run `agents init` to write the router |
 | `scaffold:symlink` | `CLAUDE.md` is relative symlink to `AGENTS.md` | `warn` (missing) / `fail` (a regular file, a wrong target, or a dangling link) | Run `agents init` or recreate symlink |
 | `scaffold:domain` | `.agents/AGENTS.md` exists | `warn` (missing) | Run `agents init` or create `.agents/AGENTS.md` |
-| `scaffold:skill-recording` | `.agents/skills/recording-what-you-learn/` exists | `warn` (missing) | Run `agents init` to populate bundled skill |
+| `scaffold:skill-<name>` | `.agents/skills/<name>/` exists, for every skill `agents init` installs | `warn` (missing) | Run `agents init` to populate bundled skill |
 
 `doctor` reports whether the router is *present*, which is all it can check
 without a canonical text to compare against.

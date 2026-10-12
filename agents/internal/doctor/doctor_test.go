@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nilbot/dotfiles/agents/internal/harness"
+	"github.com/nilbot/dotfiles/agents/internal/scaffold"
 )
 
 // These tests replace the ones that exercised the trace store, the layout
@@ -88,26 +89,47 @@ func TestWiringFailsOnMalformedConfig(t *testing.T) {
 	}
 }
 
-// The skill is written once and then belongs to the repository: a local edit is
-// the tool being used as intended, so it must be reported without a warning.
-// Only a missing skill is a gap.
+// A skill is written once and then belongs to the repository: a local edit is the
+// tool being used as intended, so it must be reported without a warning. Only a
+// missing skill is a gap.
+//
+// Every bundled skill gets its own check, so this asserts the set rather than one
+// name: a skill the report cannot see is a skill nobody notices is missing.
 func TestSkillsReportsMissingCustomizedAndPresent(t *testing.T) {
+	names := scaffold.BundledSkills()
+	if len(names) < 2 {
+		t.Fatalf("only %d bundled skills; this test would prove little", len(names))
+	}
+
 	t.Run("missing", func(t *testing.T) {
 		got := checkSkills(t.TempDir())
-		if len(got) != 1 || got[0].Status != Warn {
-			t.Fatalf("missing skill = %+v, want one Warn", got)
+		if len(got) != len(names) {
+			t.Fatalf("missing skills = %d checks, want one per bundled skill (%d)", len(got), len(names))
 		}
-		if got[0].Remedy == "" {
-			t.Error("a missing skill needs a remedy")
+		for _, c := range got {
+			if c.Status != Warn {
+				t.Errorf("%s = %v, want Warn", c.Name, c.Status)
+			}
+			if c.Remedy == "" {
+				t.Errorf("%s needs a remedy", c.Name)
+			}
 		}
 	})
 
 	t.Run("customized", func(t *testing.T) {
 		root := t.TempDir()
-		writeJSON(t, filepath.Join(root, ".agents", "skills", "recording-what-you-learn", "SKILL.md"), "# my own version\n")
-		got := checkSkills(root)
-		if len(got) != 1 || got[0].Status != OK {
-			t.Fatalf("customized skill = %+v, want one OK; a repository's own edits are not a fault", got)
+		edited := names[0]
+		writeJSON(t, filepath.Join(root, ".agents", "skills", edited, "SKILL.md"), "# my own version\n")
+		for _, c := range checkSkills(root) {
+			if c.Name == "scaffold:skill-"+edited {
+				if c.Status != OK {
+					t.Errorf("%s = %v, want OK; a repository's own edits are not a fault", c.Name, c.Status)
+				}
+				continue
+			}
+			if c.Status != Warn {
+				t.Errorf("%s = %v, want Warn for a skill that was never installed", c.Name, c.Status)
+			}
 		}
 	})
 }
