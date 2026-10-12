@@ -265,7 +265,7 @@ that must pass stays visible in the tracked file.
 
 ## The hygiene job
 
-### Check 1 — the suites must not write to `$HOME`
+### Containment: the suites must not write to `$HOME`
 
 **Containment, not portability.** The distinction is the whole content of this
 check, and getting it wrong produces a check that passes while the defect it
@@ -465,7 +465,7 @@ nothing. It **excludes**
 of what was true when written, the executed bootstrap plan legitimately names
 `make githooks`, and a record silently rewritten to stay true is not a record.
 
-**Harness guidance lives in `claude/skills/`** — not in either `CLAUDE.md`, and
+**Harness guidance lived in `claude/skills/`** — not in either `CLAUDE.md`, and
 not in `.agents/skills/`. `bootstrap.d/links.manifest` used to symlink
 `claude/skills` → `~/.claude/skills` on every provisioned machine, so
 `claude/skills/` was fleet-wide while `.agents/skills/` is per-repository

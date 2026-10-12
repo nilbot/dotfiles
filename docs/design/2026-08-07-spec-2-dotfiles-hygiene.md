@@ -103,7 +103,7 @@ directory is newer than the binary (directories, so a deletion counts), then
 **Building from the checkout, not installing a release.** The binary always
 matches the tree you cloned: no release-version coordination, no drift between
 an installed tool and the configuration it applies, and no dependency on
-[spec 6](2026-08-11-spec-6-releases-and-distribution.md), which is unwritten.
+[spec 6](2026-08-11-spec-6-releases-and-distribution.md), which was still unwritten when this was designed.
 
 **The honest cost:** a machine without Go needs one manual command before
 `./bootstrap` runs. That is deliberate, and it is the same call spec 1 §9 made
@@ -180,7 +180,7 @@ Confirm fish was installed by phase 10; add its resolved path to `/etc/shells`
 if absent; change the login shell only when it is not already fish; install
 fisher plugins explicitly rather than relying on a shell-start side effect.
 
-This phase has never actually run — see [Measured facts](#measured-facts-2026-08-10).
+This phase first ran for real on 2026-08-17 — see [Measured facts](#measured-facts-2026-08-10).
 
 ### 3.3 Devtools
 
@@ -779,7 +779,8 @@ warn, 3 fail`, and those three are what remains open on Linux:
 - **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
   cannot change underneath it, so the check can only ever report the shell the
   container started with. Asserting the real effect needs a fresh login.
-- **`agents`** — built to `~/bin`, which is not on the container's PATH.
+- **`agents`** — the phase built it to `~/bin`, which is not on the container's PATH;
+the personal build was removed on 2026-10-09, so re-check this against the tap binary.
 
 `brew bundle` is now exercised in full on Debian: `complete! 30 Brewfile
 dependencies now installed`, which is every `brew` line in the file — the

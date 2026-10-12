@@ -20,7 +20,7 @@ skill -- are deleted from this document with the sections that specified them;
 Two tiers exist because one file was worse. A repository's infrastructural directives
 and its own domain rules shared a single root file, and every approach that tried to
 keep such a file current was defeated by the same problems.
-Earlier iterations of repository scaffolding treated `AGENTS.md` / `CLAUDE.md` as an immutable file (`writeIfAbsent`). As the `agents` ecosystem evolved (adding multi-harness support, contributor-friendly doctor checks, 4-store documentation layouts, and retiring outdated capture systems), updating existing repositories across the fleet encountered a fundamental limitation of deterministic programming:
+Earlier iterations of repository scaffolding treated `AGENTS.md` / `CLAUDE.md` as an immutable file (`writeIfAbsent`). As the `agents` ecosystem evolved (adding multi-harness support, contributor-friendly doctor checks, 4-store documentation layouts, and retiring outdated capture systems), updating existing repositories encountered four recurring problems:
 - **Monolithic Mixing**: Repositories mixed infrastructural harness directives with custom, human-authored domain rules, test protocols, and language conventions in a single root file.
 - **Deterministic Brittleness**: Blindly overwriting `AGENTS.md` clobbers human-authored domain rules. Conversely, refraining from touching the file freezes repositories on obsolete scaffold conventions. Regex/AST parsers cannot reliably disentangle domain rules from reworded or reordered scaffold text.
 - **Skill Drift & Obsolescence**: Bundled agent skills (`recording-what-you-learn`) also evolve over time. If skills are frozen after initial scaffold, repositories miss upstream improvements; if overwritten blindly, local customizations are destroyed.
@@ -29,7 +29,7 @@ Earlier iterations of repository scaffolding treated `AGENTS.md` / `CLAUDE.md` a
 ### 1.2 The Solution: Two-Tier Context
 This specification establishes a robust **Two-Tier Agent Context Architecture**:
 1. **Clean Separation of Concerns (Two-Tier Isolation)**:
-   - **Tier 1 (Root Router)**: Standardized, lightweight router (~24 lines) at `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) that directs agents to durable docs and domain rules, and conditionally invokes `agents doctor`.
+   - **Tier 1 (Root Router)**: a short `AGENTS.md` at the repository root, with `CLAUDE.md` as a relative symlink to it. It points at the durable docs and the domain rules, and tells the agent to run `agents doctor` when the CLI is installed.
    - **Tier 2 (Domain Context)**: Dedicated repository-specific guidelines stored in `.agents/AGENTS.md` and durable knowledge in `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
 2. **Deterministic CLI Engine of Truth**:
    - `agents/internal/scaffold/`: Embeds canonical starter assets via Go `embed.FS` and scaffolds full Two-Tier + 4-store skeleton on `agents init`.
