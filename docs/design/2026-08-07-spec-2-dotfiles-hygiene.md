@@ -646,14 +646,15 @@ filesystem, no subprocess — phases are pure functions over an interface:
 This is the §4 invariant, checked exactly.
 
 **Honest limits.** Phases 10, 30 and 40 need network, `sudo`, and a package
-manager; their logic is covered by fakes. On Linux `linux-stage-zero` executes them
-end-to-end and does not assert the result; on macOS they are not executed at all.
+manager; their logic is covered by fakes. On Linux `linux-stage-zero` executes them,
+and the job would still pass if one failed; on macOS they are not executed at all.
 **No Linux machine was available to verify against**, so
 Linux support first shipped written and unit-tested but never executed there. Since
 2026-08-17 it is: CI runs the `dotfiles` profile's `plan`, `apply` and `check` in a
 Debian container on every pull request, and `linux-stage-zero` runs
 `apply workstation` on Debian and Arch. What remains unasserted is recorded in
-[Known gaps](#known-gaps-2026-08-11) and in [Risks](#risks), not claimed as working.
+[Known gaps](#known-gaps-2026-08-11) — and, for the phases after stage zero, in
+[Risks](#risks) as well — not claimed as working.
 The shim itself is shell and has a small integration test, but its Go-absent branch
 cannot be tested on a machine that has Go.
 
@@ -743,7 +744,7 @@ Measured at the end of implementation. These are facts about what was built, not
 caveats: each is stated here so that nobody has to rediscover it on a machine
 where it matters.
 
-**1. Linux is partly tested — the `dotfiles` profile only.** Narrowed
+**1. Linux is partly tested — the `dotfiles` profile and stage zero.** Narrowed
 2026-08-17 by spec 5's `linux-dotfiles` job, which runs `plan`, `apply` and
 `check` for that profile in a `debian:stable-slim` container on every pull
 request. All three exit 0, and `check` after `apply` asserts the machine stays
@@ -770,9 +771,9 @@ to run in CI, and it is also why it cannot stand in for the `workstation` profil
 gates that the run reaches stage zero, that stage zero's four tools are present
 afterwards, and that the tap's `agents` reached the machine — the last added
 2026-10-09 with the `Brewfile` row that ships it. It deliberately does **not** gate
-the phases after stage zero, because those are not yet working on Linux and gating
-them would make
-every pull request wait on the whole Linux port. The job reports `apply`'s exit
+the phases after stage zero, because those phases are executed but not asserted — the
+bullet above records the missing assertion — and gating them would make every pull
+request wait on the whole Linux port. The job reports `apply`'s exit
 code rather than swallowing it, so a later-phase failure is visible in the log
 without blocking a merge.
 
