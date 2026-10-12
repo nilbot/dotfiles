@@ -1,6 +1,6 @@
 # Bundle the two authoring skills
 
-**Status:** active — for v0.9.0.
+**Status:** executed 2026-10-13 — released as v0.9.0.
 
 ## What this is
 
@@ -81,3 +81,37 @@ They belong in the binary for the same reason.
 `agents` 10 packages (8 with tests) and `bootstrap.d` 6, whole runs; and on a fresh
 repository, `agents init` followed by a listing of `.agents/skills/` naming all
 three.
+
+## Executed, 2026-10-13
+
+Three things differed from the plan above, and each is why the plan is a record
+rather than an instruction.
+
+**One pin, not two.** The command-span pin in step 4 would have checked nothing:
+`grep -rnoE '`agents [a-z][a-z -]*`'` over `assets/` returns no matches today, so the
+check would have passed vacuously and claimed coverage it did not have. The command
+rule stays where it already is — `TestInstalledSkillNamesNoDeletedCommand`, now
+iterating every bundled skill rather than one named in the test.
+
+**`writing-for-humans` had to lose a citation to be shippable.** It named
+`docs/design/2026-10-07-one-record-for-binary-identity.md` as the evidence for
+ordering the three parts, which is exactly what the new pin forbids: a dated
+document of this repository, in text installed into repositories that have never had
+it. The measurement it carries is the load-bearing part, so the sentence now says
+where the example came from without naming a file that only exists here.
+
+**The pin was shown to fail before it was trusted, and the demonstration is
+recorded.** Injecting a dated name into an asset makes
+`TestBundledAssetsCiteNoDatedDocument` fail with the file and the match; removing it
+passes. That line was in the notes and here, and nowhere a reader of the code would
+find it — so it is now in the test's own comment as a *Demonstrated to fail by* line,
+where the project keeps that record.
+
+**A fourth change the plan did not have: `doctor` sees all three skills.** Its check
+was `const name = "recording-what-you-learn"` and `const check =
+"scaffold:skill-recording"`, so the two new skills would have been invisible to the
+command that reports on them — neither OK nor a fault, which is the one answer a
+diagnostic must not give. It now reports one `scaffold:skill-<name>` per entry in
+`scaffold.BundledSkills()`, which is the first thing the collapsed list paid for, and
+the design document that names those checks was corrected with it. On this repository
+the two arrive as warnings until `init` is re-run, which is what they were.

@@ -103,7 +103,7 @@ agents help --render=markdown
 | Command | What |
 |---|---|
 | `agents help` | print the listing, or one command's page |
-| `agents init` | create .agents/, the doc stores, and the wiring |
+| `agents init` | create .agents/, the doc stores, the bundled skills, and the wiring |
 | `agents wire` | remove this tool's entries from harness configs |
 | `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |

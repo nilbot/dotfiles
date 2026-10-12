@@ -19,9 +19,9 @@ func rootCommand() *Command {
 			Run:      func(a []string, io IO) int { return runHelp(a, io.Out) },
 		},
 		{
-			Name: "init", Summary: "create .agents/, the doc stores, and the wiring",
+			Name: "init", Summary: "create .agents/, the doc stores, the bundled skills, and the wiring",
 			Usage:    "agents init [--local]",
-			Detail:   "Creates the .agents/ tree, the four documentation stores under docs/, the router pair, the bundled skill, and the harness wiring. Prints the remaining trust steps and exits 1 (advisory), because wiring is written but not yet live. --local keeps .agents/ out of the repository, and is refused inside a linked worktree where info/exclude is shared with the main checkout.",
+			Detail:   "Creates the .agents/ tree, the four documentation stores under docs/, the router pair, the bundled skills, and the harness wiring. Prints the remaining trust steps and exits 1 (advisory), because wiring is written but not yet live. --local keeps .agents/ out of the repository, and is refused inside a linked worktree where info/exclude is shared with the main checkout.",
 			Audience: []Audience{Human, Agent},
 			Run:      func(a []string, io IO) int { return runInit(a, io.Out) },
 		},
