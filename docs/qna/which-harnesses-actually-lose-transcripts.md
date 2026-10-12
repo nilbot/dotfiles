@@ -40,7 +40,7 @@ Claude Code remedy that was deployed fleet-wide because the model in force —
 "the tool has needs, harnesses have capabilities" — had no way to express that a
 need might not exist somewhere.
 
-[Spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) §3 makes that the second
+Spec 4 §3 makes that the second
 axis: wire where the harness *exhibits the need* **and** *provides the
 capability*. A missing capability is a gap to report; an undemonstrated need is
 not a gap at all.

@@ -303,7 +303,7 @@ becomes one row.
 
 This has to be the bootstrap's job rather than `agents`', for a hard reason:
 **`agents` is a Go binary built by phase 40, so it cannot be a dependency of
-phase 20.** The trigger for revisiting, stated the way spec 4 states its
+phase 20.** The trigger for revisiting, stated the way the deleted spec 4 states its
 triggers:
 
 > Move global harness assets into `agents` when they need **generation** rather

@@ -856,7 +856,7 @@ func Slugify(s string) string {
 	return s
 }
 
-// Resolve applies the precedence in spec 4: explicit flag, then branch, then
+// Resolve applies the precedence in the deleted spec 4: explicit flag, then branch, then
 // worktree name, then "default".
 func Resolve(explicit string, rc *repo.Context) string {
 	candidates := []string{explicit}

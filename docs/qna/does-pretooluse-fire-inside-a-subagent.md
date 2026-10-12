@@ -91,7 +91,7 @@ point a tool call is about to happen, knowing it is in a subagent and which one.
 
 **Does not decide: whether anything can be said at that moment.** The read
 trigger needs to put retrieved text in front of the model, and firing is not
-injecting. [Spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) §5.2 records
+injecting. Spec 4 §5.2 records
 `result.inject-context` for Claude Code at `session.begin` only. Whether a
 `PreToolUse` hook's output can add context is untested here and is the next
 question — a mechanised read trigger needs both halves, and this measurement

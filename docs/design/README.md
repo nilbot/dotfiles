@@ -19,18 +19,23 @@ rebuilds it.
 
 Numbers are stable catalog identifiers, not priority or order.
 
-**The tool described here was reduced on 2026-09-21.** It has six commands —
-`init`, `wire`, `doctor`, `guard`, `version`, `help` — and no layout manifest, no
-migration, no trace record, no session record and no fleet registry. Rows below
-say which spec sections that deleted and which still stand. Two documents left
-this store for `../archive/design/` because their whole subject was deleted; a
-document stays here only while it describes something in force.
+**The tool described here was reduced on 2026-09-21.** It has seven commands —
+`init`, `wire`, `doctor`, `guard`, `githook`, `version`, `help` — and no layout
+manifest, no migration, no trace record, no session record and no fleet registry.
+Rows below say which spec sections that deleted and which still stand.
+
+**A document stays here only while it describes something in force.** When its
+whole subject is gone the document is deleted and git history is its archive:
+this store is read by agents that act on what they find, and a retired design is
+an instruction with a warning label rather than an inert record. Specs 1 and 4
+are deleted on those grounds; specs 3 and 7 are in `../archive/`, which is where
+the reasoning for a reversal nobody should rebuild is still worth keeping.
 
 | # | Spec | Status |
 |---|---|---|
 | 2 | [dotfiles hygiene](2026-08-07-spec-2-dotfiles-hygiene.md) | implemented |
 | 3 | [`agents distill`](../archive/specs/2026-08-07-spec-3-agents-distill.md) | **retired** — archived, never implemented |
-| 4 | [the wiring DSL](2026-08-07-spec-4-wiring-dsl.md) | **designed 2026-08-22** — triggers fired; not implemented |
+| 4 | the wiring DSL | **deleted 2026-10-12** — designed 2026-08-22, never implemented, and its purpose went with the mechanism it configured: `agents wire` removes the hook entries an earlier version wrote and adds none, because nothing records harness lifecycle events any more |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged; **test matrix amended 2026-09-20** — `ubuntu-24.04-arm` runs `agents` (a shipped target no leg had run on), `bootstrap.d` keeps x86_64 Linux only, and a new `macos-dotfiles` job runs the real `./bootstrap plan` on macOS in 24s. **2026-09-21**: its historical baseline cites three artifacts the reduction deleted; the measurements are kept and marked at the point of use, because recomputing a baseline destroys it |
 | 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | implemented; **§5.1 amended 2026-09-20** — the release requires a green `master` run for the tagged commit instead of re-running the verification matrix, and four targets rather than three. Read Amendment 1 before touching `release.yml`: the guard is one API call and four of its details fail it silently. **§5.2 amended 2026-09-21** — this repository's copy of the Homebrew formula is deleted, and the tap is updated by editing the formula it already has rather than by pushing a rendered duplicate over it. Read §5.2 before touching the tap: `checksums.txt` lists the digests in a different order than the formula's four slots, and a paste in line order fails only in a user's `brew install`. |
 | 7 | [capture cheaply, review before tracking](../archive/design/2026-08-12-spec-7-capture-and-review.md) | **archived 2026-09-21** — the capture instruction and the review queue were retired 2026-08-20, and the 2026-09-21 reduction deleted the machine-local trace store that §1–2 kept in force. Nothing in it describes a surviving mechanism, so it is a record now, not a design in force |
@@ -46,7 +51,9 @@ document stays here only while it describes something in force.
 | — | [the personal build: what it is, and why it can go](2026-10-09-the-personal-build-removal-analysis.md) | **analysis 2026-10-09** — the lineage of the checkout build (a port of the retired `githooks` target), the four revisits that kept it, and the decision of 2026-09-21 that was marked EXECUTED and never carried out. Answers the dependency question: nothing needs the binary built from the checkout; the build supplies the *binding*, which identity stage 1 moves into the record. Names the two traps — `realpath` resolves to a keg the next `brew bundle upgrade` deletes, and `linux-stage-zero` cannot fail when the tap formula does not install. |
 
 **Spec 1 is the foundation** — terminology, the placement rule, the Go module and
-installation boundaries. What the 2026-08-19 redesign takes out of it is
+installation boundaries. **The document is deleted from the tree (2026-10-12)**;
+what follows is what it established that still stands, stated here so the
+citations to it elsewhere resolve. What the 2026-08-19 redesign takes out of it is
 `.agents/memory/` and the curated-knowledge tier; what 2026-09-21 takes out is the
 record itself, §3.3–3.4. The tiers, §5's adapters and the exit-code vocabulary
 stand.
@@ -73,4 +80,5 @@ catalogued here because of one ordering constraint (spec 1 §8).
   reader is gone.
 - Implementation plans are in [`../plans/`](../plans/).
 - Pre-2026-08-20 historical plans are in [`../archive/plans/`](../archive/plans/).
-- Designs whose subject was deleted are in [`../archive/design/`](../archive/design/).
+- Designs whose subject was deleted are deleted from this store, not archived:
+git history holds them, and `git log --diff-filter=D -- docs/design` lists them.
