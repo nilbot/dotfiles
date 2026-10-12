@@ -408,7 +408,7 @@ exits `3`.
 
 Help renders the table from the constants rather than restating it, which
 collapses two of the four descriptions in the baseline. A test pins the constants
-against spec 1 §6's table: spec 1 is design intent, the code is the
+against the table written inside `agents/exitcode_doc_test.go`: spec 1 is design intent, the code is the
 implementation, and when they disagree the test surfaces it and a human decides
 which was wrong.
 
@@ -438,7 +438,7 @@ plus the coverage check in the `docs` job: walk the tree, fail on any node with
 an empty `Summary`, `Usage`, or `Detail`.
 
 **Demonstrated to fail by:** blanking one leaf's `Detail` and observing the
-coverage check red; changing a constant's comment without changing spec 1's table
+coverage check red; changing a constant's comment without changing the test's own table
 and observing the pinning test red.
 
 ---
