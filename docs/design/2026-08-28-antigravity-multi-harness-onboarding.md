@@ -3,7 +3,7 @@
 **Date:** 2026-08-28  
 **Status:** Implemented 2026-08-28 (PR #29)  
 **Applies to:** `agents` CLI, `dotfiles` harness subsystem, `autogo-mlx`, and collaborative repositories  
-**Depends on:** Spec 1 (harness adapters, exit codes), Spec 4 (wiring DSL, `named-groups` dialect, need vs capability), Knowledge is Documentation  
+**Depends on:** Spec 1 (harness adapters, exit codes), Spec 4 (the wiring DSL, `named-groups` dialect, need vs capability) — deleted 2026-10-12, Knowledge is Documentation — deleted 2026-10-12  
 **Reads against:** [`docs/qna/why-didnt-antigravity-apply-my-rules.md`](../qna/why-didnt-antigravity-apply-my-rules.md), [`docs/qna/what-does-opening-a-repo-in-antigravity-run.md`](../qna/what-does-opening-a-repo-in-antigravity-run.md), [`docs/qna/how-does-antigravity-expose-subagents.md`](../qna/how-does-antigravity-expose-subagents.md)
 
 ---

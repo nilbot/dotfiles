@@ -29,7 +29,9 @@ every push to `master` runs two container jobs:
 - **the `dotfiles` profile, gated in full** on `debian:stable-slim` — `plan`,
   `apply` and `check` all exit 0, and `check` runs *after* `apply` so the claim
   is convergence rather than "the applier reported success".
-- **the `workstation` profile, gated as far as stage zero** on
+- **the `workstation` profile, gated as far as stage zero** — the first step of
+  the `packages` phase, which installs Homebrew's own prerequisites before
+  Homebrew exists — on
   `debian:stable-slim` and `archlinux:base`, asserting the run reaches stage
   zero and that its prerequisites exist afterwards.
 

@@ -7,7 +7,7 @@ drift classifier, the command that refreshed skills, and the fleet-migration
 skill -- are deleted from this document with the sections that specified them;
 `agents help --all` is the command surface.  
 **Applies to:** `agents` CLI (`init`, `wire`, `doctor`), `AGENTS.md` / `CLAUDE.md`, `.agents/AGENTS.md`, `.agents/skills/`  
-**Depends on:** Spec 1 (harness adapters, exit codes), Knowledge is Documentation (2026-08-19), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), Binary Identity & Standalone Resolution (2026-08-28)  
+**Depends on:** Spec 1 (harness adapters, exit codes), Knowledge is Documentation — deleted 2026-10-12 — [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), and Binary Identity & Standalone Resolution (deleted 2026-10-12; superseded by [one record for binary identity](2026-10-07-one-record-for-binary-identity.md))  
 **Reads against:** [`docs/qna/why-does-agents-init-never-update-existing-instructions.md`](../qna/why-does-agents-init-never-update-existing-instructions.md), [`docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md`](../qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md)
 
 ---

@@ -3,7 +3,7 @@
 **Date:** 2026-08-28  
 **Status:** Approved in Brainstorming  
 **Applies to:** `agents` CLI, `scaffold` package, `doctor` diagnostic subsystem, `DefaultAgentsMD`, target repositories (e.g. `toolshed/cowork`)  
-**Depends on:** Spec 1 (harness adapters, exit codes), [Spec 5](2026-08-11-spec-5-verification-gate.md) (verification gate), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md) (releases and distribution), Knowledge is Documentation (2026-08-19)  
+**Depends on:** Spec 1 (harness adapters, exit codes) — deleted 2026-10-12, [Spec 5](2026-08-11-spec-5-verification-gate.md) (verification gate), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md) (releases and distribution), Knowledge is Documentation — deleted 2026-10-12  
 **Reads against:** [`docs/qna/why-does-agents-init-never-update-existing-instructions.md`](../qna/why-does-agents-init-never-update-existing-instructions.md)
 
 ---
