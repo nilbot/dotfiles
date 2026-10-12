@@ -58,7 +58,7 @@ that kind, and a regression becomes a test failure instead of a discovery.
 `softlinks.sh` uses `pwd` today and silently links the wrong tree when run from
 anywhere else.
 
-Two routes to a wrong root are silent, and the shim closes both -- the first by
+Two routes to a wrong root are silent, and the shim closes both — the first by
 clearing `CDPATH`, the second by refusing:
 
 - **A poisoned `CDPATH`.** `cd -- "$(dirname "$0")"` without `CDPATH=` in front of
@@ -280,7 +280,7 @@ link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
 link    git/gitignore_global              .gitignore                        *
 link    claude/skills                     .claude/skills                    *   # deleted 2026-09-21
-link    gemini/skills                     .gemini/skills                    *   # deleted 2026-10-01
+link    gemini/skills                     .gemini/skills                    *   # row deleted 2026-09-21
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
@@ -293,16 +293,17 @@ which `~/.gitconfig` reaches through an include inside the shared config. It is
 machine-local and deliberately untracked: `git/gitconfig.shared:245` says so at
 the point where the temptation to put identity there would arise. Nothing in this
 repository writes it and nothing checks it, so an edit that drops the include
-loses identity and signing with no error -- the same silent-loss shape as section 8's shared include, with credentials
+loses identity and signing with no error — the same silent-loss shape as section 8's shared include, with credentials
 rather than settings.
+
 `check` verifies each target is the **right kind**. A `link` target that has
 become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
 fixed and the fish regression §7 fixes.
 
 **Harness skill directories are ordinary rows.** `claude/skills` was linked
-by a hand-written Makefile line until the Makefile went on 2026-10-09; the row
-itself was deleted on 2026-09-21, and `gemini/skills`'s on 2026-10-01, so
+by a hand-written Makefile line until the Makefile went on 2026-10-09; both manifest rows were deleted on
+2026-09-21, so
 `bootstrap.d/links.manifest` declares neither — two
 harnesses already diverging, the same drift spec 1 opened with. A third harness
 becomes one row.
