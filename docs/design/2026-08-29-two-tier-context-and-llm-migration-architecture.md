@@ -1,6 +1,7 @@
 # Design: Two-Tier Agent Context and Bundled Skills
 
-**Date:** 2026-08-29 (Updated 2026-08-31; **amended 2026-09-01**, see Amendment 1; **amended 2026-09-21**, see Amendment 3)  
+**Date:** 2026-08-29 (updated 2026-08-31; the amendments of 2026-09-01 and 2026-09-21 were deleted with the
+sections they corrected)  
 **Status:** implemented. The two-tier context, the bundled-skill embedding and the
 multi-harness protocol are in force. The subsystems retired on 2026-09-21 -- the
 drift classifier, the command that refreshed skills, and the fleet-migration
@@ -15,6 +16,10 @@ skill -- are deleted from this document with the sections that specified them;
 ## 1. Executive Summary & Problem Formulation
 
 ### 1.1 Why the root router and the domain context are separate
+
+Two tiers exist because one file was worse. A repository's infrastructural directives
+and its own domain rules shared a single root file, and every programme that tried to
+keep such a file current was defeated by the same problems.
 Earlier iterations of repository scaffolding treated `AGENTS.md` / `CLAUDE.md` as an immutable file (`writeIfAbsent`). As the `agents` ecosystem evolved (adding multi-harness support, contributor-friendly doctor checks, 4-store documentation layouts, and retiring outdated capture systems), updating existing repositories across the fleet encountered a fundamental limitation of deterministic programming:
 - **Monolithic Mixing**: Repositories mixed infrastructural harness directives with custom, human-authored domain rules, test protocols, and language conventions in a single root file.
 - **Deterministic Brittleness**: Blindly overwriting `AGENTS.md` clobbers human-authored domain rules. Conversely, refraining from touching the file freezes repositories on obsolete scaffold conventions. Regex/AST parsers cannot reliably disentangle domain rules from reworded or reordered scaffold text.
