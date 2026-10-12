@@ -3,7 +3,10 @@
 **Date:** 2026-08-28  
 **Status:** Approved in Brainstorming  
 **Applies to:** `agents` CLI, `scaffold` package, `doctor` diagnostic subsystem, `DefaultAgentsMD`, target repositories (e.g. `toolshed/cowork`)  
-**Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (harness adapters, exit codes), [Spec 5](2026-08-11-spec-5-verification-gate.md) (verification gate), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md) (releases and distribution), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md) (2026-08-19)  
+**Depends on:** [spec 5](2026-08-11-spec-5-verification-gate.md) and
+[spec 6](2026-08-11-spec-6-releases-and-distribution.md). Spec 1 (harness adapters,
+exit codes) and Knowledge is Documentation, which it also rested on, were deleted
+on 2026-10-12.  
 **Reads against:** [`docs/qna/why-does-agents-init-never-update-existing-instructions.md`](../qna/why-does-agents-init-never-update-existing-instructions.md)
 
 ---
@@ -70,7 +73,7 @@ Guardrails for collaborative repositories enforce engineering rigor across three
 The phrase:
 > *"an empty or stale `.agents/` means the setup is broken rather than that there is nothing to say — report it rather than working around it."*
 
-is removed from `DefaultAgentsMD`. In a clean clone, `.agents/` contains only `skills/` (and `.gitkeep`), which is valid and expected.
+is removed from `DefaultAgentsMD`. In a clean clone, `.agents/` holds the domain-context `AGENTS.md` this scaffold writes, plus `skills/` with the bundled skill and its `.gitkeep`. None of that means the setup is broken.
 
 ### 3.2 Conditional `DoctorInstruction`
 
@@ -91,6 +94,7 @@ Durable context for this repo lives in `docs/`. Read it before assuming;
 it is the record, and this file is only the pointer to it.
 
 - `docs/qna/` — answers indexed by the question you would ask again
+- `docs/plans/` — step-by-step implementation plans
 - `docs/journal/` — dated record of what happened
 - `docs/design/` — the design still in force
 
@@ -115,7 +119,10 @@ skill; it is not repo-specific and is not restated here.
 
 ### 4.1 Multi-Version Recognition in `doctor`
 
-`doctor.checkScaffoldInstruction(repoRoot string)` must recognize **both** `scaffold.DoctorInstruction` and `scaffold.LegacyDoctorInstruction` (or any string containing `agents doctor`), ensuring existing repositories in the fleet (like `toolshed/cowork`) continue reporting `ok` on `scaffold:doctor-instruction`.
+`scaffold:doctor-instruction` was the original version of this check. It was
+replaced by the four granular `scaffold:*` checks (`docs/design/2026-08-29-two-tier-context-and-llm-migration-architecture.md`
+§4), so the two string constants it compared are no longer read and no repository
+reports on it.
 
 ### 4.2 Non-Mutation Invariant
 

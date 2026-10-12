@@ -78,7 +78,8 @@ action committed to git:
 
 **The conclusion holds. §2's mechanism does not.** Everything §2 attributes to
 `agents update` and `agents drift` names commands that were removed on
-2026-09-21, when the tool was cut to six:
+2026-09-21, when the tool was cut to six. It has seven since `githook` landed on
+2026-10-09 (`35d9322`), which `--all` lists:
 
 ```text
 $ agents help --all
@@ -103,8 +104,9 @@ procedure above is still the only path. There is nothing to run instead of
 `update`.
 
 Two further details in §2 have moved. The `migrating-fleet-context` skill was
-archived to `docs/archive/skills/` and nothing refreshes it now — there is no
-resolved layout to refresh it for. And `.claude/skills` and `.codex/skills` are
+archived to `docs/archive/skills/` — deleted with the rest of `docs/archive/` on
+2026-10-12, so git history is where it lives now — and nothing refreshes it: there
+is no resolved layout to refresh it for. And `.claude/skills` and `.codex/skills` are
 still created by `agents init` and are still symlinks, but both point at
 `.agents/skills`, which holds only `recording-what-you-learn`.
 

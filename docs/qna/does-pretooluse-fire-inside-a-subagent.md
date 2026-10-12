@@ -46,7 +46,7 @@ and [`cc-pretooluse-subagent.json`](../design/fixtures/2026-08-07-claude-code-ho
 
 ## Context
 
-The [2026-08-19 redesign](../design/2026-08-19-knowledge-is-documentation.md)
+The 2026-08-19 redesign
 named this question and said what rides on it:
 
 > `PreToolUse` was not among them, so whether it fires inside a child is unknown
@@ -91,7 +91,7 @@ point a tool call is about to happen, knowing it is in a subagent and which one.
 
 **Does not decide: whether anything can be said at that moment.** The read
 trigger needs to put retrieved text in front of the model, and firing is not
-injecting. [Spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) §5.2 records
+injecting. Spec 4 §5.2 records
 `result.inject-context` for Claude Code at `session.begin` only. Whether a
 `PreToolUse` hook's output can add context is untested here and is the next
 question — a mechanised read trigger needs both halves, and this measurement

@@ -4,7 +4,7 @@
 **Status:** in force. Implemented in `.github/workflows/verify.yml`; §5 is the
 measurement that decided it — kept, at 2m50s → 1m41s per pull request.
 **Related:** [spec 5 — the verification gate](2026-08-11-spec-5-verification-gate.md),
-[Debian container package cache fix](2026-08-29-ci-debian-package-cache-fix.md)
+Debian container package cache fix
 
 ---
 

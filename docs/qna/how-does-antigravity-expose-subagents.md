@@ -9,7 +9,7 @@ the parent the child's transcript. That shape is what
 on both harnesses.
 
 Antigravity has subagents (`invoke_subagent`) but no event of either name, so
-spec 4 carried a hypothesis: `PostToolUse` matched on `invoke_subagent` is
+the deleted spec 4 carried a hypothesis: `PostToolUse` matched on `invoke_subagent` is
 probably `subagent.end` under a different spelling. Measured 2026-08-22 on a
 live `agy` session dispatching one subagent.
 
@@ -76,7 +76,7 @@ Two things this turned up that the payload watching could not:
 ## What follows
 
 **A third reason a capability cell can be empty.**
-[Spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) already distinguished *the
+Spec 4 already distinguished *the
 harness lacks the capability* from *the need is undemonstrated*. This adds
 *the event fires but the payload cannot disambiguate which moment it is* — and
 the three call for different responses. Only the first is a vendor gap worth
@@ -99,7 +99,7 @@ is mechanisable. Nothing is built on that yet, and it should not be built withou
 its own falsifier — but the question is now answerable rather than academic.
 
 **It does not change the transcript cache.** Antigravity
-[does not prune](which-harnesses-actually-lose-transcripts.md), so there is
+does not prune, so there is
 nothing to rescue regardless of which events exist.
 
 ## Method caveat
@@ -108,7 +108,7 @@ Measured on the **CLI** with `--dangerously-skip-permissions`, not on the app an
 not without a bypass flag. Hook *firing* semantics are unlikely to differ between
 products that share a harness, but this was not shown. The same run's claim about
 how the app grants trust is separately unsupported — see
-[spec 4 §9](../design/2026-08-07-spec-4-wiring-dsl.md), which records why.
+the deleted spec 4 §9, which records why.
 
 ## Follow-up, 2026-09-21
 

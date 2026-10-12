@@ -1,5 +1,8 @@
 # Automated Release & Homebrew Tap Synchronization Implementation Plan
 
+**Status:** not stated when it finished. The work it describes shipped on
+2026-08-28 and its design is in force; read the design for what is true now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a zero-clone, automated release and Homebrew formula synchronization pipeline that extracts cryptographic SHA-256 digests from `dist/checksums.txt`, renders `Formula/agents.rb`, and commits directly to `nilbot/homebrew-tap` via the GitHub Contents REST API on release tag pushes.
@@ -22,7 +25,7 @@ graph TD
 
 **Tech Stack:** Bash, GitHub CLI (`gh`), GitHub REST API, Homebrew Ruby DSL
 
-**Spec:** [`docs/archive/design/2026-08-28-automated-release-and-homebrew-tap-sync.md`](../archive/design/2026-08-28-automated-release-and-homebrew-tap-sync.md)
+**Spec:** `docs/archive/design/2026-08-28-automated-release-and-homebrew-tap-sync.md`
 
 ## Global Constraints
 

@@ -93,10 +93,10 @@ that name to hang it on.
 > untested candidate for the same moment under a different spelling. And the
 > prior question is whether Antigravity *needs* it: the cache is a remedy for
 > Claude Code's pruning, and
-> [Codex has never been shown to have that problem either](which-harnesses-actually-lose-transcripts.md).
+> Codex has never been shown to have that problem either.
 > Read the original claim as: no event of that *name* exists. Whether the moment
 > is reachable, and whether it is wanted, are both open —
-> [spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) §9 names them. `Stop` hooks are also
+> the deleted spec 4 §9 names them. `Stop` hooks are also
 newer than they look — before 1.1.10 they sat "unreachable behind the built-ins"
 and did not run at all.
 

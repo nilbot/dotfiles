@@ -59,7 +59,7 @@ open.** Hook commands run through `sh -c`. Cloning a repository and opening it i
 the app executes whatever it contains, with no prompt and no user action beyond
 opening the folder. That is a materially different threat model from Claude
 Code's project-trust prompt and Codex's hash-based hook review, and it is the
-reason [spec 4](../design/2026-08-07-spec-4-wiring-dsl.md) §5.4's `tracked`
+reason the deleted spec 4 §5.4's `tracked`
 question resolved the way it did.
 
 **`.agents/hooks.json` is now git-ignored here**, alongside `.claude/` and

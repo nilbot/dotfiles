@@ -1,5 +1,8 @@
 # Antigravity Multi-Harness Onboarding Implementation Plan
 
+**Status:** not stated when it finished. The work it describes shipped on
+2026-08-28 and its design is in force; read the design for what is true now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement native Antigravity (`agy` 1.1.22 / Desktop App) support in `agents`, featuring `named-groups` hook rendering, decoupled skills symlinking, dual-layer instruction scaffolding (`AGENTS.md` / `.agents/AGENTS.md`), exclusion purity, and end-to-end sandbox verification for `autogo-mlx` and fleet repositories.

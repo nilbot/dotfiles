@@ -2,11 +2,10 @@
 
 **Date:** 2026-10-09
 **Status:** active. Implements two reviewed designs and one removal analysis.
-**Designs:** [what a query is](../../../dotfiles.worktrees/what-a-query-is/docs/design/2026-10-09-what-a-query-is.md)
-(branch `design/what-a-query-is`) and
-[one record for binary identity](../../../dotfiles.worktrees/identity-design/docs/design/2026-10-07-one-record-for-binary-identity.md)
-with [the removal analysis](../../../dotfiles.worktrees/identity-design/docs/design/2026-10-09-the-personal-build-removal-analysis.md)
-(branch `design/one-record-for-identity`).
+**Designs:** [what a query is](../design/2026-10-09-what-a-query-is.md) and
+[one record for binary identity](../design/2026-10-07-one-record-for-binary-identity.md).
+Both are in `docs/design/`; earlier revisions of this plan linked sibling
+worktrees on the author's machine, which resolve for nobody else.
 
 Every step below states what changes, the check that must pass before the next step
 begins, and what a machine that is already wired experiences at that moment. A step

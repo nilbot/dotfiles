@@ -2,9 +2,9 @@
 
 **Date:** 2026-10-07, rewritten 2026-10-09
 **Status:** version three. Attacked by an adversarial reviewer; the migration surface
-measured on a wired machine. No code changed.
-**Replaces:** the two-mode resolution in
-[binary identity and standalone resolution](2026-08-28-binary-identity-and-standalone-resolution.md).
+measured on a wired machine. **Landed.** Built and released in v0.8.0 (`e504c56`); the chain on this machine is converted, so this is the design behind the code rather than a proposal. Read section 3 for what the installer writes and section 6 for the two stages.
+**Replaces:** the two-mode resolution in binary identity and standalone resolution —
+deleted 2026-10-12, superseded by this document.
 **Depends on:** the boundary between `agents` and `bootstrap`
 ([the boundary document](2026-09-20-agents-and-bootstrap-boundary.md)).
 
@@ -26,7 +26,7 @@ only "look in this directory".
 There is **one build** of `agents` on a machine like this one: the released binary,
 installed by Homebrew. The checkout build that also existed — `make agents`, and
 `bootstrap`'s devtools phase — **was deleted on 2026-10-09**
-([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md)). A
+(the removal analysis). A
 developer may still build one to try a change; it installs nothing and wires
 nothing.
 
@@ -116,7 +116,7 @@ those four files contain, not through any setting.
 stages.** Its path says nothing, and there is no build step to stamp one in: the
 release is compiled by CI from a tag, and `bootstrap`'s devtools phase stops
 compiling anything
-([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6). So
+(the removal analysis §6). So
 the fact is a property of the machine, and the machine's wiring has to state it.
 
 **F3. An upgrade deletes the binary the hooks point at, and Git reports nothing.**
@@ -298,6 +298,21 @@ An entry replaces a symbolic link, and buys three things a symlink cannot:
    runs the built-in check and reports the personal stages as missing. Today,
    deleting the checkout deletes the guard.
 
+### 3.1.1 The order the installer writes in
+
+**Entries, then the record, then the global key.** `git/install-hooks.sh:577-579`
+states the rule where it is enforced: an entry whose record is missing fails
+closed and says so, which is the state a half-finished install leaves. A global
+key written first would instead activate a chain that cannot run, and the commit
+guard would be off with nothing reporting it.
+
+Each write is atomic on its own — a temporary file in the same directory, its
+mode set before it becomes visible, then `mv` into place — because Git skips a
+hook name that exists but is not executable with a hint and **exit 0**. No entry
+may ever be seen in a partial or non-executable state. A name already holding
+exactly the bytes this run would write is left alone, so a second install
+preserves the inode it installed rather than replacing a working chain.
+
 ### 3.2 The binary is told, not asked
 
 `agents githook <name> --checkout <path>` runs one hook in three parts: the
@@ -341,7 +356,7 @@ Nothing else reads the stamp. `dotfilesRoot` disappeared with `agents/root.go` a
 with the builders that stamped it — the `Makefile` and
 `bootstrap.d/makefile_test.go` are deleted, and
 `bootstrap.d/internal/phase/devtools.go` no longer builds the binary at all; it
-resolves the released one ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6).
+resolves the released one (the removal analysis §6).
 The citations this paragraph carried when it was written — `Makefile:40`,
 `devtools.go:88`, `makefile_test.go:110,165`, `devtools_test.go:22,153` — name
 lines in files that no longer exist, and are recorded here rather than left
@@ -652,12 +667,10 @@ what the change makes of it:
 
 | surface | what the change does to it |
 |---|---|
-| **The builders** — `script/package-release.sh:7-10` (version and commit), and, when this was written, `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the release builder keeps stamping version and commit; the `-X main.dotfilesRoot` flag and the two build commands that passed it went with the personal build ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6), and the `Makefile`, `bootstrap.d/makefile_test.go` and the exact-command pins (`devtools_test.go:22,153`) went with them. `devtools.go` now resolves the released `agents` through Homebrew |
 | **The release path** — `release.yml:57-97` (version and SHA), `:120` (`package-release.sh` is passed the version, not the commit, which is why the script derives it a second time), `:134-138` (archive name and the version-output glob), `:190-201` (the tap) | one fact — the commit — is derived twice today. This design does not change that, and whoever sequences this work should decide whether to fix it here or separately |
 | **The installer** — `git/install-hooks.sh` in full: `:61` (the four names), `:139-168` (the symlink checks), `:191-208` (keg path shape), `:259-279` (the writes), `:281-287` (the keg note) | rewritten to write entries, with the table above as its specification |
 | **The consumers** — `agents/cmd_version.go:12`, `agents/root.go:15-30`, `agents/cmd_doctor.go:29-40` (the root read, at `:32`), `agents/internal/doctor/doctor.go:149-173` and `:621-644`, `agents/main.go:24-58` | the stamp goes and `doctor` reads the record instead; the multicall becomes `githook`; the link comparison becomes `chain:running`. `cmd_doctor.go:71-80` is unaffected: it reads the running binary's own path |
 | **`bootstrap`** — `bootstrap.d/internal/check/checks.go:317-324` (`agentsOnPath` is `LookPath("agents")`) | unchanged, and worth knowing: the provisioner's whole opinion of the binary stays "a name resolves somewhere" |
-| **The documentation still in force** — `2026-08-11-spec-6-releases-and-distribution.md:90-97`, `2026-08-11-spec-5-verification-gate.md:734-790`, `2026-08-07-agents-repo-context-design.md` §8, `2026-09-20-agents-and-bootstrap-boundary.md` §3, `2026-08-28-contributor-guardrails-and-scaffold-decoupling.md:17` | each restates the deleted contract and must be amended in the same change |
 | **`git/README.md`** | states the install and upgrade rule, and is **not** in `livingDocuments` (`agents/docs_test.go:80-84`), unlike `agents/README.md`, which is checked three ways. The file most likely to be left stating the old rule is the one with nothing watching it |
 
 Three facts about the repository's own guards belong here, because they shape how
@@ -719,7 +732,6 @@ compatibility shim that stays for a release.
 | `release.yml:138` | the prefix of `agents version`'s output, matched in a glob |
 | `agents/doctests.txt:28` | `TestTheCommandSetIsExactlyThis`: a new subcommand has to be declared there, or the `docs` job fails |
 | `agents/doctests.txt:42-50` | the document guards the `docs` job runs by name — the README command block, and the three living-document tests over `README.md`, `agents/README.md`, `CLAUDE.md`, `global/AGENTS.md` and the two skill trees |
-| `agents/README.md:88-121`, `:164-180`; `README.md:49-62`; `git/README.md:19-96`; the five `docs/qna/` answers that state the old rule — `why-does-an-unstamped-or-homebrew-agents-binary-skip-dotfiles-checks.md`, `why-is-agents-still-in-dotfiles-and-when-should-it-split.md`, `can-this-check-actually-fail.md`, `why-does-a-brew-upgrade-stop-my-commit-guard.md`, `why-does-install-hooks-refuse-symlinks-like-opt-homebrew-bin-agents.md`; and the five design documents listed under "What the change touches" | the prose that states the old rule, each guarded by a different mechanism or by none |
 
 **Three of these rows change from edits to deletions**, because the thing they pin
 goes: `agents/root_test.go:22-63` (the three `DotfilesRoot()` branches),
@@ -792,10 +804,11 @@ names to the four new ones.
    comma is free while dropping or moving the comma fails the job **before** the
    release object is created, leaving a pushed tag with no release. That matters only
    if a later change edits the line; nothing here does.
-2. **How long the compatibility shim lives.** It should carry a version and a
-   removal date in its comment, or it becomes permanent. The removal is what makes
-   the rollback paragraph's "cannot answer" true again, so the two belong in the
-   same change.
+2. **(Answered.)** How long the compatibility shim lives. It carries a version and a
+   removal date in its comment — added in v0.8.0, remove no earlier than v0.9.0
+   (2027-04-09), `agents/main.go:92-94` — because otherwise it becomes permanent. The
+   removal is what makes the rollback paragraph's "cannot answer" true again, so the
+   two belong in the same change.
 3. **`~/.gitattributes`.** Its content is deliberately empty of rules
    (`git/gitattributes` says so), and `core.attributesFile` is unset, so it marks
    nothing. Recommendation: stop managing it — delete the link, the file, the

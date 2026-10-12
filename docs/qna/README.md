@@ -18,5 +18,4 @@ index: `ls` is the index and `grep` is the query. Length is set by the finding,
 never by a rule.
 
 Written when a human says "save that", or when the work hits something worth
-knowing again. See
-[knowledge is documentation](../design/2026-08-19-knowledge-is-documentation.md).
+knowing again.

@@ -1,5 +1,8 @@
 # Standalone Binary Release Pipeline Implementation Plan (Phase 3)
 
+**Status:** not stated when it finished. The work it describes shipped on
+2026-08-28 and its design is in force; read the design for what is true now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement the complete standalone release and packaging pipeline for `agents` (Spec 6), including `agents version`, cross-platform release packaging for macOS and Linux, GitHub Actions release automation, and Homebrew formula.

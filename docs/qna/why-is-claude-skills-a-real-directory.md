@@ -21,8 +21,9 @@ bootstrap: config: refusing: /Users/nilbot/.claude/skills
 
 The symlink was **removed deliberately on 2026-09-19**, after a harness wrote its
 own skill content through it and into the tracked checkout — 200+ foreign pending
-changes, by the operator's account. See
-[journal: when the harness wrote into the dotfiles checkout](../journal/2026-09-19-harness-skills-wrote-into-the-checkout.md).
+changes, by the operator's account. The write-up was
+`docs/journal/2026-09-19-harness-skills-wrote-into-the-checkout.md`, deleted with the
+journal's other entries on 2026-10-12; `git show` recovers it.
 
 This is the **third instance of one defect class**, and spec 1 §8.4 records the
 first two from 2026-08-07: `~/.gitconfig` was a symlink to

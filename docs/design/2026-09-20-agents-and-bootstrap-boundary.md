@@ -4,7 +4,7 @@
 **Status:** Review recorded, no code changed. §7 lists the follow-ups and none of
 them is implemented here — this document exists so the decisions are made in the
 open rather than accumulated by adding another entry point.
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) (repository
+**Depends on:** spec 1 (repository
 context), [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md) (machine hygiene and
 bootstrap), [spec 5](2026-08-11-spec-5-verification-gate.md) (the gate).
 
@@ -45,7 +45,7 @@ Exactly one resource is machine-global *and* speaks `agents`: the hook chain.
 |---|---|
 | `git/install-hooks.sh` | the installer. Shell, deliberately: it must work when no `agents` binary exists yet — a fresh machine, a failed build, or a Homebrew-only user who never runs bootstrap |
 | `bootstrap.d/internal/phase/devtools.go` | ~~builds `~/bin/agents`, then calls the installer at **that** path~~ — **retired 2026-10-09:** resolves the released binary and calls the installer at that path, with `--adopt-owned` |
-| the deleted `agents hook` (now: the same binary invoked as a Git hook) / `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
+| `agents githook` -- one hook, run by the name the chain entry passed -- and `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
 
 The call direction is one-way: bootstrap calls the installer, bootstrap builds
 `agents`, and `agents` never calls either. That is the property to preserve.
@@ -60,12 +60,12 @@ The call direction is one-way: bootstrap calls the installer, bootstrap builds
 >   `chain.env`; each entry parses that record and runs `agents githook <name>
 >   --checkout <checkout>`. The binding is a line a person can read, rather than the
 >   name of the file git happened to exec. See §8.2 of
->   [spec 1](2026-08-07-agents-repo-context-design.md).
+>   spec 1.
 > - **"builds `~/bin/agents`, then calls the installer at that path"** is retired.
 >   Decided 2026-10-09: devtools resolves the released binary and passes
 >   `--adopt-owned`, so it stops writing a second `agents` and stops refusing on a
 >   machine a package manager wired. That answer is §7 item 2 below. See
->   [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+>   the 2026-10-09 decision that nothing builds `agents` from a checkout.
 >
 > The installer's own role text — "it must work when no `agents` binary exists
 > yet" — stays load-bearing, and is why the installer is still shell.
@@ -202,7 +202,7 @@ four-argument form untouched.
    with. The refusal §4a measured stops being the outcome. This is the
    2026-09-21 decision finally landing, with its target corrected from
    `~/bin/agents` to the released path; see
-   [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+   the 2026-10-09 decision that nothing builds `agents` from a checkout.
 3. **Optional installer arguments** (§5) — the ergonomics fix that does not move
    the boundary.
 4. **A test tying the shell's hook names to the Go list** (§4).

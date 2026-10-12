@@ -47,7 +47,7 @@ unknown, and it is the gate, so it decides whether any of this fires.
 *"logs and artifacts are preserved"* when a subagent tree is killed — while a
 `Failed to prune trajectory` path also exists. Whether it destroys trajectories
 mid-session, the way Claude Code does, is
-[the measurement that decides how much of our machinery applies](which-harnesses-actually-lose-transcripts.md).
+the measurement that decides how much of our machinery applies.
 
 Method note, since the linked entry is largely about bad probes: this one is
 string extraction from a binary. It proves the code is *present and documented*,

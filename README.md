@@ -29,22 +29,23 @@ every push to `master` runs two container jobs:
 - **the `dotfiles` profile, gated in full** on `debian:stable-slim` — `plan`,
   `apply` and `check` all exit 0, and `check` runs *after* `apply` so the claim
   is convergence rather than "the applier reported success".
-- **the `workstation` profile, gated as far as stage zero** on
+- **the `workstation` profile, gated as far as stage zero** — the first step of
+  the `packages` phase, which installs Homebrew's own prerequisites before
+  Homebrew exists — on
   `debian:stable-slim` and `archlinux:base`, asserting the run reaches stage
   zero and that its prerequisites exist afterwards.
 
 Beyond stage zero, `apply workstation` has been observed running every phase to
 completion and exiting 0 on both images (2026-08-17), but that is **not gated,
 and its exit code is not a convergence claim** — the verify phase reports and
-returns nil by design, so `apply` exits 0 while verify reports 3 failures on
-Debian. Those three, plus the two standing gaps — `plan` exits 2 for
+returns nil by design, so `apply` exits 0 while verify reports failures on Debian. Those failures, plus the two standing gaps — `plan` exits 2 for
 `workstation` on a machine lacking Homebrew or fish, and Linux has no managed
 nerd font — are recorded with the rest in
 [spec 2](docs/design/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11),
 which is the authority. This paragraph is a summary of it and will go stale
 first.
 
-## The personal build, and the Makefile that produced it
+## The personal build and the Makefile that produced it (deleted 2026-10-09)
 
 **Deleted 2026-10-09.** Provisioning stopped building `agents` — the devtools
 phase resolves the released binary now and passes `--adopt-owned` to the
@@ -53,11 +54,11 @@ carried it, and the test pins that asserted it all went the same day. That build
 compiled this checkout into
 `~/bin/agents`, a second `agents` beside the released one, and the two owners
 disagreed about which binary the hook chain ran — measured here as
-`bootstrap apply workstation` exiting 2 in the devtools preflight. The decision,
-its evidence and the order the removal lands in are in
-[the personal build removal analysis](docs/design/2026-10-09-the-personal-build-removal-analysis.md).
-Provisioning belongs to `./bootstrap`. For an inner loop,
-`go build -o /tmp/agents .` writes no global path and installs nothing.
+`bootstrap apply workstation` exiting 2 in the devtools preflight. The decision is
+2026-10-09: the checkout build is gone, and the chain — the directory `core.hooksPath` names and
+the entries in it — points at the released binary.
+Provisioning belongs to `./bootstrap`. For an inner loop, `cd agents && go build -o /tmp/agents .` writes no global path
+and installs nothing.
 
 `make release` ran `script/package-release.sh` and nothing else; the script is
 the entry point, and the Makefile that wrapped it is gone.
@@ -74,19 +75,19 @@ remove.
 ## The `agents` tool
 
 `agents` scaffolds a repository's agent context and maintains the machine
-around it: `init` writes the tree, `wire` installs the harness wiring, `doctor`
+around it: `init` writes the tree, `wire` removes the entries an earlier version
+installed, `doctor`
 reports state, and the binary doubles as the git hook dispatcher and the
 pre-commit guard. It does **not** manage knowledge — that half was retired on
 2026-08-20, and what a repository knows now lives in its own `docs/`, written
-by instruction rather than by a command. See
-[knowledge is documentation](docs/design/2026-08-19-knowledge-is-documentation.md).
+by instruction rather than by a command.
+The design that established this was deleted 2026-10-12.
 
 Repositories follow a **Two-Tier Agent Context** structure:
 - **Tier 1 (Root Router)**: Standardized, lightweight `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) serving as the entrypoint bootstrap router pointing to durable docs and domain rules.
 - **Tier 2 (Domain Context & Durable Knowledge)**: Repository-specific domain guidelines in `.agents/AGENTS.md`, executable skills in `.agents/skills/`, and durable project knowledge organized in a **4-store layout** under `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
 
-`agents help <command>` explains any command in full, and `agents help --all`
-adds `guard`, the one command only the hook invokes. When to write something
+`agents help <command>` explains any command in full, and `agents help` omits `githook`, which only a chain entry invokes. When to write something
 down is in `.agents/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is
@@ -110,6 +111,10 @@ agents help --render=markdown
 | `agents githook` | run one Git hook for the chain entry that invoked it |
 <!-- END GENERATED -->
 
+A **harness** is an AI coding tool whose config file this repository edits —
+Claude Code, Codex, Antigravity. `wire` is the command that reconciles those
+files.
+
 ## Development & Contributing
 
 - **Branch Protection & Pull Requests**: Direct pushes to `master` are prohibited by GitHub Rulesets. All contributions, features, and documentation fixes must be developed on dedicated branches and merged via Pull Requests.
@@ -126,6 +131,6 @@ agents help --render=markdown
 | `.agents/` | Tier 2 repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and Antigravity's wiring config (`.agents/hooks.json`) |
 | `fish/`, `tmux/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
-| `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question, `archive/` immutable pre-2026-08-20 history |
+| `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question |
 
 Start with [the spec index](docs/design/README.md).

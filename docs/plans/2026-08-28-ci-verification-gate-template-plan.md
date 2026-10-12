@@ -1,5 +1,8 @@
 # Authoritative CI Verification Gate Template Implementation Plan (Phase 4)
 
+**Status:** not stated when it finished. The work it describes shipped on
+2026-08-28 and its design is in force; read the design for what is true now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Create a hardened, reusable GitHub Actions verification workflow template (`template/ci/verify.yml`) for collaborator repositories, providing unbypassable CI enforcement (Gitleaks secret scanning, linter/test gate, context integrity, and aggregate `gate` check), and demonstrate adoption in `toolshed/cowork`.

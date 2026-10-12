@@ -2,12 +2,20 @@
 
 **Date:** 2026-08-10 (scope, as "CI, releases, and binary distribution") /
 2026-08-11 (design, narrowed to verification) / 2026-08-13 (measured against
-master) / 2026-08-14 (restructured phase-first; every verification command
-executed, which changed phase 2)
-**Status:** implemented and merged 2026-08-19. Check 2 was deleted 2026-08-20
-with the command it measured; see the note on it below.
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the Go
-module, the exit-code table, and the security boundaries CI must not cross.
+master) / 2026-08-14 (every verification command executed)
+**Status:** in force. The gate is `.github/workflows/verify.yml`, which cites
+this document; what follows is what the gate is and the decisions that bind it,
+not the order it was built in. The construction phases, the pre-gate baseline,
+the deleted check and the rejected alternatives are gone — the first three are
+in that file's history, and the rejections are not needed to use the gate.
+**Depends on:** the two-module layout and the exit-code table as built, and the
+security boundaries CI must not cross.
+
+**Spec 1**, cited below for the placement rule, the exit-code table and the
+fail-open boundary, is the repo-tracked context design: deleted 2026-10-12 with
+the system it described. Where this document cites it, the citation is to a
+design no longer in the tree; its content is in git history and its plan is in
+the archive.
 **Carries obligations from:** [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md),
 implemented. Its largest known gap — no phase of it has ever run on Linux — is
 closed here or nowhere.
@@ -25,7 +33,7 @@ binary stamps, which live in
 > This is recorded because the false conclusion is easy to re-derive:
 > `githook.builtin` (`githook.go:354`) returns `0` for `pre-commit`, which reads
 > like an absent guard. It returns `0` because the wiring is in `main.go`,
-> exactly as [spec 1's plan](../archive/plans/2026-08-07-agents-repo-context.md)
+> exactly as spec 1's plan
 > Task 17 said it would be. **Anyone auditing this must read `runGitHook` to its
 > end; `internal/githook` alone shows the opposite.**
 
@@ -104,52 +112,6 @@ So this is the first build, test, `gofmt` and `vet` gate this repository has eve
 actually run. Six phases, each landing a check together with whatever fix makes
 it green, so the branch is mergeable at every boundary.
 
-## Current baseline
-
-Measured on this machine, 2026-08-13 and re-verified 2026-08-14, after spec 7's
-phases A and B′ landed.
-
-> **What the 2026-09-21 reduction removed from this baseline.** It is a dated
-> measurement and is left as one, but three of the artifacts it names are
-> deleted: `agents/internal/machine/machine.go` (below), the deleted `agents ls`
-> fleet registry (two measurements below), and the deleted `agents trace` /
-> deleted `agents save` commands (phases 3 and 4). The measurements that cite
-> them were true when taken; they are marked at the point of use rather than
-> recomputed, because recomputing a historical baseline would destroy it.
-
-- No `.github/` directory. No workflows, no PR checks, no releases.
-- Two Go modules — `agents/` and `bootstrap.d/` — and deliberately **no
-  `go.work`** (spec 2 §11). Two independent build graphs.
-- 107 Go files, 54 containing tests. The suites are fast.
-- Go `1.26.6` `darwin/arm64`; `go.mod` says `go 1.26`, which floats. **The first
-  baseline for this spec measured `1.26.5`; re-verifying it a day later measured
-  `1.26.6`.** The toolchain moved underfoot mid-design and nothing recorded that
-  it had — the argument for pinning, arriving unprompted.
-- gitleaks 8.30.1 on `PATH`, run by hand.
-- `agents/main.go:61` dispatches through a `switch`; `:98` is a hand-maintained
-  `usage()` literal. Nothing connects them. No `help` command, no `--help` at any
-  depth; `agents --help` reports `unknown command` and exits `3`.
-- Four files read the real `$HOME`: `agents/root.go`,
-  `agents/internal/doctor/doctor.go`, `agents/internal/machine/machine.go`,
-  `bootstrap.d/main.go`.
-- **The exit-code table is described in four places and three of them disagree.**
-
-  | Source | code 4 | code 5 |
-  |---|---|---|
-  | Spec 1 §6 (design intent) | not applicable / skip | could not record |
-  | `exitcode.go` constant comments | not applicable here | could not complete the requested operation |
-  | `agents` help text | skip | could not complete the operation |
-  | `bootstrap` help text | not applicable | *absent* |
-
-- `bootstrap.d/main.go:29` declares `exitAdvisory`. **No path in the module
-  returns it** — verified as the only occurrence, with no bare `return 1` in the
-  file.
-- The since-deleted `agents ls` reported **56 registered repositories, 40 of them missing.** Two are
-  real; the rest are Go test temp directories and capture-experiment repos that
-  the test suite registered into the real machine-local registry. See phase 2.
-- `agents doctor` exits advisory on this healthy machine, over `recording:codex`
-  and `pointers:unverified`. Both machine-local, both meaningless on a runner.
-
 ## The organizing claim
 
 **One artifact per fact; everything else computed from it.**
@@ -162,7 +124,7 @@ because nothing is there, and nothing discoverable either.
 
 ---
 
-## Decisions that bind every phase
+## Decisions that bind the gate
 
 Recorded once here rather than repeated per phase.
 
@@ -228,8 +190,7 @@ Git's contract is binary — `pre-commit` and `commit-msg` abort on any non-zero
 `post-merge` and `post-checkout` ignore the code entirely. CI has no reader at
 the moment of the call, so it is in the same class. A human or agent reads the
 text, and non-zero is what makes them read it: `agents init` exits `1` "so the
-state is visible rather than assumed" (spec 1 §9), and `agents review --stats`
-returns `1` for readings that are successful but not a clean pass.
+state is visible rather than assumed" (spec 1 §9), and a reading that is successful but not a clean pass still returns `1`.
 
 **`agents/main.go:51-58` is where the two vocabularies meet, and it already
 translates correctly** — `Advisory` becomes `OK`, only `Block` stops the commit.
@@ -239,10 +200,9 @@ per spec 1 §6's fail-open rule.
 
 So **CI's default "non-zero fails the step" is the correct disposition reading**,
 and needs no wrapping. Verified on this provisioned machine, 2026-08-14:
-`agents index`, `./bootstrap plan dotfiles` and `./bootstrap check dotfiles` all
-exit `0`. Whether `plan dotfiles` still does inside a bare container is phase 5's
-open question, and the answer does not change this reading — it changes what
-phase 5 must fix.
+`./bootstrap plan dotfiles` and `./bootstrap check dotfiles` both exit `0`. Whether `plan dotfiles` still exits `0` inside a bare container is unverified,
+and the answer does not change this reading — it changes what the container
+jobs must cover.
 
 Explicit assertion is reserved for **negative paths** — `expect 2` proves a
 refusal still refuses, which "non-zero fails" cannot express and which is the
@@ -303,37 +263,9 @@ that must pass stays visible in the tracked file.
 
 ---
 
-## Phase 1 — the workflow skeleton
+## The hygiene job
 
-**Builds:** `.github/workflows/verify.yml` with the `test` matrix, `secrets`, and
-`gate`. No repository source changes.
-
-Each `test` job runs `go build ./...`, `go test -count=1 ./...`,
-`go test -count=1 -race ./...`, `go vet ./...`, and asserts `gofmt -l` is empty.
-`secrets` runs gitleaks 8.30.1 against the embedded configuration.
-
-**Expected green on arrival.** This is the only phase that is.
-
-**Verified by:**
-
-```bash
-# locally, per module — must already pass before the workflow is written
-go build ./... && go test -count=1 ./... && go test -count=1 -race ./... \
-  && go vet ./... && test -z "$(gofmt -l .)"
-```
-
-and on CI: `gate` reports success, and all four `test` jobs appear beneath it.
-
-**Demonstrated to fail by:** introducing a `gofmt` violation on a scratch branch
-and observing `gate` red, then reverting.
-
----
-
-## Phase 2 — the hygiene job
-
-**Builds:** the `hygiene` job, plus the test isolation its first check demands.
-
-### Check 1 — the suites must not write to `$HOME`
+### Containment: the suites must not write to `$HOME`
 
 **Containment, not portability.** The distinction is the whole content of this
 check, and getting it wrong produces a check that passes while the defect it
@@ -389,52 +321,7 @@ a tracked fixture must do the same.
 `bootstrap.d` additionally runs under `umask 077`, the condition PR #16 verified
 by hand and which nothing currently keeps verified.
 
-### Check 2 — `agents index` is a pure function of tracked content
-
-> **Retired 2026-08-20, with its subject.** `agents index` and both `INDEX.md`
-> generators were deleted by
-> `docs/design/2026-08-19-knowledge-is-documentation.md`, so this check had
-> nothing left to hold pure. It is kept here rather than cut because the
-> reasoning below — CI must not depend on the reviewer's machine being
-> provisioned — outlives the command it was written about. Everything after
-> this note describes a check that no longer runs.
-
-Build `agents`, run `agents index`, require `git diff --exit-code` clean. The
-`generated-file` guard rule already blocks a stale index at commit time via
-`main.go:54` — but it is reached through `core.hooksPath`, global machine
-configuration installed by `git/install-hooks.sh`. A contributor whose machine
-has not run that has no guard, and nothing tells them. CI does not depend on the
-reviewer's machine being provisioned.
-
-**Verified by:**
-
-```bash
-H=$(mktemp -d); X=$(mktemp -d)
-HOME="$H" XDG_CACHE_HOME="$X" go test -count=1 ./...   # both modules
-test ! -e "$H/.local/state/agents"
-( umask 077 && cd bootstrap.d && go test -count=1 ./... )
-# Deleted 2026-10-09: the last line of this recipe ran `make agents` and
-# `agents index`. The index command went on 2026-08-20 with its subject and
-# `make agents` goes with the personal build, so the check has no line left
-# to run. The recipe above is kept as the record of what it verified.
-```
-
-**`git diff` is scoped to `.agents/` deliberately.** CI runs on a clean checkout
-where a bare `git diff --exit-code` is equivalent, but locally it reports every
-unrelated edit in the working tree and reads as a failure of this check. Scoping
-it makes the command mean the same thing in both places.
-
-**Demonstrated to fail by:** check 1 is already red — reverting the
-`XDG_STATE_HOME` isolation on either `cmd_init_test.go` test restores it. For
-check 2, hand-edit `.agents/memory/INDEX.md`.
-
----
-
-## Phase 3 — the command registry
-
-**Builds:** a declared command tree replacing the `switch` at `main.go:61` and
-the `usage()` literal at `:98`; `agents help`; the `docs` job carrying the
-coverage check; and the exit-code table rendered from the constants.
+## The command registry
 
 This is the largest phase and it is what the `cli-help-unification` lane is
 waiting for. Spec 7 demonstrated the cost while this spec sat unimplemented: four
@@ -520,47 +407,55 @@ exits `3`.
 ### The exit-code table, and `bootstrap`
 
 Help renders the table from the constants rather than restating it, which
-collapses two of the four descriptions in the baseline. A test pins the constants
-against spec 1 §6's table: spec 1 is design intent, the code is the
-implementation, and when they disagree the test surfaces it and a human decides
-which was wrong.
+collapses descriptions the baseline carried separately. A test pins the constants
+against the table written inside `agents/exitcode_doc_test.go`
+(`TestExitCodeTableMatchesSpecOne`): spec 1 §6 defines the vocabulary, the code is
+the implementation, and when they disagree the test surfaces it while a human
+decides which was wrong.
 
-`bootstrap` then needs `exitAdvisory` resolved — a path that means it, or the
-constant deleted. Whether it also wants `5` is decided by whether it has a path
-meaning *I tried and could not*, distinct from *this machine is in a state I will
-not write over*. That is an audit of existing `exitBlock` returns, not an
-argument from spec 1's authority or from matching `agents`.
+**`bootstrap` and the exit-code vocabulary it shares with `agents`.** `exitAdvisory`
+needed a producer rather than the removal of its name: `bootstrap check` returns `1`
+when checks warn and none fails, but the `1` was produced inside
+`bootstrap.d/internal/check` as a bare literal while the name stayed in
+`bootstrap.d/main.go`, so a grep of `bootstrap.d/main.go` reported the behaviour as
+absent when it had always been there. `runCheck` (`bootstrap.d/main.go:300`) now maps
+each number to its name in one place, with a default that fails closed to
+`exitBlock`.
+
+`TestEveryDeclaredExitCodeHasAProducer` (`bootstrap.d/main_internal_test.go`) fails
+if any declared code is returned by no path, and that is the whole of it: it counts
+identifier uses, so it does not pin the mapping itself, and swapping the
+`exitAdvisory` case in `runCheck` for another return value leaves every package
+green. `bootstrap` declares five codes and stops at `4` — `exitOK` 0, `exitAdvisory`
+1, `exitBlock` 2, `exitMalformed` 3, `exitNotApplicable` 4 — and takes no `5`.
 
 **Verified by:**
 
 ```bash
 agents help                    # exit 0, on stdout, rendered from the tree
-agents help trace cache prune  # exit 0; non-empty usage and detail for a leaf
+agents help githook  # exit 0; non-empty usage and detail for a leaf
 agents --help                  # same text as `agents help`, exit 0 (today: exit 3)
 agents                         # same text, on stderr, still exit 3
 agents nosuchcommand           # exit 3
 cd agents && go test -count=1 ./...
 ```
 
+and by the coverage check in the `docs` job: walk the tree, fail on any node
+with an empty `Summary`, `Usage`, or `Detail`.
+
 **`agents` with no arguments keeps exiting `3` on stderr** while `agents help`
 exits `0` on stdout. Same rendered text, different disposition: a bare
 invocation is a usage error and an explicit `help` request is not. Only the text
 is shared, and only the text is what derivation is for.
 
-plus the coverage check in the `docs` job: walk the tree, fail on any node with
-an empty `Summary`, `Usage`, or `Detail`.
 
 **Demonstrated to fail by:** blanking one leaf's `Detail` and observing the
-coverage check red; changing a constant's comment without changing spec 1's table
+coverage check red; changing a constant's comment without changing the test's own table
 and observing the pinning test red.
 
 ---
 
-## Phase 4 — documentation derived from the registry
-
-**Builds:** a generated command block in `README.md`, a backward name check, the
-harness guidance under `claude/skills/`, and the extensions to the `docs` job
-that enforce all three.
+## Documentation derived from the registry
 
 **Forward** — the full command surface renders as markdown into a marked block in
 `README.md`; CI regenerates and diffs it. The prose around the block stays
@@ -573,16 +468,29 @@ does not define. The check scans inline code spans and fenced blocks for
 the direction that hurts: a document confidently naming a command that no longer
 exists.
 
-**Scope of the backward check:** `README.md`, `agents/README.md`, the project
-`CLAUDE.md` and the tracked global `global/AGENTS.md`, and every `.md` under
-`.agents/skills/` — the walk also covers `claude/skills/`, which no longer
-exists, and a walk over a directory that is not there finds nothing and reports
-nothing. It **excludes**
-`docs/archive/plans/` and `docs/design/`: those are dated records
-of what was true when written, the executed bootstrap plan legitimately names
-`make githooks`, and a record silently rewritten to stay true is not a record.
+**The backward check is two tests in `agents/docs_test.go`, over overlapping
+document lists.** `TestLivingDocumentsNameOnlyRealCommands` fails when an
+`agents` subcommand named in a living document is not in the registry, which is how
+a rename or a typo in a skill, a README or an instruction file gets caught. It reads
+`README.md`, `agents/README.md`, `git/README.md`, the project `CLAUDE.md`, the
+tracked global `global/AGENTS.md`, and every `.md` under `.agents/skills/`.
 
-**Harness guidance lives in `claude/skills/`** — not in either `CLAUDE.md`, and
+`TestLivingDocumentsNameNoDeletedCommand` covers a wider list — those roots **plus**
+`docs/qna/` and `docs/design/`, the two stores the root `AGENTS.md` names as the
+record to read before assuming — and fails when a document names one of the verbs
+the tool has deleted, unless the same line says the command is gone. Plans and
+specifications are outside the first test because they are dated records: an executed
+plan legitimately names a target that no longer exists, and a record silently
+rewritten to stay true is not a record. `agents/docs_test.go` states that rule in the
+same words, and names the `make githooks` it protects.
+
+Where the guard walks a directory, a missing root is an error: a `claude/skills/`
+deleted on 2026-09-21 went on being walked, and reporting nothing, until the walk
+started failing on 2026-10-09. The listed files are not held to that — a missing one
+is skipped, so deleting `git/README.md` or `CLAUDE.md` would narrow the guard in
+silence.
+
+**Harness guidance lived in `claude/skills/`** — not in either `CLAUDE.md`, and
 not in `.agents/skills/`. `bootstrap.d/links.manifest` used to symlink
 `claude/skills` → `~/.claude/skills` on every provisioned machine, so
 `claude/skills/` was fleet-wide while `.agents/skills/` is per-repository
@@ -597,14 +505,11 @@ global rows are `:22-24` today.)*
 
 The two artifacts answer different questions and only one can be generated. The
 rendered block answers *what is this command*; the skill answers *which command
-is this situation* — when a finding was worth the deleted `agents handoff draft`
-rather than a
-comment, why the deleted `agents review` stood between a draft and the tracked record, when
-the deleted `agents trace show` answered what grep could not. The `Agent`-audience coverage check
-is what keeps the second honest as the first grows: without it a new command
-lands, gets a generated reference entry, and no agent ever reaches for it — the
-shape spec 7 measured when `CLAUDE.md` said *how* to write a handoff and never
-*that* one should, and twenty sessions produced none.
+is this situation* — judgment, which is why it cannot be generated. The
+`Agent`-audience coverage check is what keeps the second honest as the first
+grows: without it a new command lands, gets a generated reference entry, and no
+agent ever reaches for it — the shape spec 7 measured when `CLAUDE.md` said *how*
+to write a handoff and never *that* one should, and twenty sessions produced none.
 
 Neither `CLAUDE.md` becomes a manual. The project one declares itself "only the
 pointer" to `.agents/`; the global one is kept to rules a session acts on.
@@ -629,10 +534,7 @@ regenerating the README block; and naming `agents nosuchverb` in a code span in
 
 ---
 
-## Phase 5 — Linux
-
-**Builds:** `linux-dotfiles` and the `linux-stage-zero` matrix, plus the Arch
-repair.
+## Linux
 
 Spec 2's [Known gaps](2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11)
 states the problem without hedging:
@@ -744,111 +646,10 @@ and `git` are present.
 > command -v agents` — the prefix spelled out because a `run:` step is not a login
 > shell and Homebrew's `shellenv` has not been read, which is the same defect
 > `resolveBrew` exists for. See
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §4.
+> the 2026-10-09 decision that nothing builds `agents` from a checkout.
 
 **Demonstrated to fail by:** the Arch job is red before the repair and green
 after — the one phase whose failure has already been observed.
-
----
-
-## Phase 6 — the doctor rider
-
-**Builds:** one `agents doctor` check that the stamped checkout root exists.
-*(Superseded 2026-10-09 — the root is read from the chain record now; see the
-amendment at the end of this phase.)*
-
-~~`make agents` stamps `$(CURDIR)` and writes the single global `~/bin/agents`, so
-running it from a linked worktree publishes a binary stamped to a path that will
-not survive. Delete the worktree and `githook.go:127` reads the missing extras
-directory as "no personal hooks": the chain silently runs none, at exit `0`, and
-`AGENTS_DOTFILES_ROOT` cannot rescue it because the stamp deliberately wins.~~
-**Superseded 2026-10-09:** `make agents` and the Makefile that carried it are
-deleted with the personal build — the devtools producer went ahead of them — the
-stamp names no variable, and
-`AGENTS_DOTFILES_ROOT` is deleted rather than defeated. The *hazard* this
-paragraph describes — a hook chain that stops running and says nothing — is what
-the re-aimed check below still guards.
-PR #16 documented this in the Makefile and left the fix for review.
-
-The check **fails** rather than warns, because the consequence is a correctness
-mechanism silently not running.
-
-**What is verified, and what this phase must establish first.** Two things were
-measured on 2026-08-14 and one deliberately was not.
-
-`doctor.go:436` compares `globalValues[0].Value != deps.HooksDir` — **a string
-comparison with no `os.Stat`.** Two paths that agree with each other and both
-point at a deleted directory therefore pass, which is the mechanism PR #16
-described, now confirmed in the code rather than taken on trust.
-
-But a binary stamped to a nonexistent root fails **three** checks today —
-`git-hooks:global`, `git-hooks:links` and `git-attributes` — because that stamp
-*disagrees* with the real `core.hooksPath`. The worktree scenario is the agreeing
-case, and `git-hooks:links` looks for the four links under the stamped root, so
-**it may already catch the silent case.** Whether it does was not established.
-
-**So the phase begins by reproducing the worktree scenario end to end** — build
-from a worktree, point `core.hooksPath` at that worktree, delete it, run doctor
-— and only adds `root:exists` if nothing already reports it. If something does,
-the finding is that PR #16's note is stale and the phase is a documentation fix.
-Adding a check that duplicates an existing one is the same defect as adding a
-constant nobody returns.
-
-**This is a rider, not verification.** It is a spec-1 defect belonging to doctor,
-it needs no CI, and it is here because it would otherwise wait on a release
-pipeline it has nothing to do with. Sequenced last so nothing depends on it.
-
-**Verified by:**
-*(Dead recipe, kept as the record of what it proved. Superseded 2026-10-09: the
-flag below names no variable — `go build -ldflags "-X main.dotfilesRoot=…"` exits
-0 and the linker ignores it — and `AGENTS_DOTFILES_ROOT` is deleted, so the
-command the comment calls a no-op cannot be run at all. The replacement is a
-`chain.env` whose `checkout` names a directory that does not exist.)*
-
-```bash
-# NOT `AGENTS_DOTFILES_ROOT=... agents doctor` -- the installed binary is
-# stamped, the stamp deliberately beats the environment, and that command is
-# therefore a no-op that reports success. Measured: identical output with and
-# without it. Stamp a throwaway build instead.
-cd agents && go build -ldflags "-X main.dotfilesRoot=/nonexistent-root" -o /tmp/agents-badroot .
-/tmp/agents-badroot doctor    # must report the bad root, not merely disagree about hooks
-agents doctor                 # the real binary stays green
-```
-
-**Demonstrated to fail by:** the throwaway build above. Its predecessor in this
-spec — setting `AGENTS_DOTFILES_ROOT` — was a check that could not fail, in the
-phase whose entire subject is a check that could not fail. *(Neither the
-throwaway build nor the variable exists any more; the property they established —
-that this check must be shown to fail before it is trusted — is what carries
-forward.)*
-
-> **Amended 2026-10-09 — the check survives; the root it read does not.**
-> The reasoning above is the part worth keeping, and it is the reason this rider is
-> not retired along with the stamp: a personal hook chain that stops running is a
-> correctness mechanism failing in silence, and something has to say so.
->
-> What changed is where the answer comes from. `main.dotfilesRoot` and
-> `AGENTS_DOTFILES_ROOT` are both deleted, so the "Verified by" recipe no longer
-> demonstrates anything: `go build -ldflags "-X main.dotfilesRoot=/nonexistent-root"`
-> still exits 0, but the flag now names no variable and is accepted and ignored,
-> and the environment variable the comment calls defeated by the stamp is simply
-> gone. `root:exists` is therefore **re-aimed at the chain record instead of being
-> deleted**: `doctor` warns when `chain.env`'s `checkout` is neither `-` nor a
-> directory that exists. That needs no stamp, and it restores exactly the property
-> this phase was written for — the recorded checkout's absence is reported, rather
-> than read as "no personal hooks" at exit 0.
->
-> One half of the original scenario disappears entirely. The hazard was running
-> `make agents` from a linked worktree, which published a binary stamped to a
-> temporary path; the stamp is gone and the chain names its checkout explicitly, so
-> a worktree can supply the personal stages without any binary being published at
-> all. That hazard is kept as a record in the workspace `README.md`, where the
-> reasoning outlives the target, and it is no longer a live failure mode.
->
-> See [`One record for binary identity`](2026-10-07-one-record-for-binary-identity.md),
-> and §4 of
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md)
-> for why deleting this check would have reopened the silence it exists to close.
 
 ---
 
@@ -862,85 +663,3 @@ migrating spec 7's machine-local store schema across binary versions.
 
 Not in either spec: Windows; self-hosted runners; a scheduled job against the
 latest Go toolchain; changing what `agents doctor` checks beyond phase 6.
-
-## Open questions
-
-Three, all narrow, all resolved by running the thing rather than by discussion:
-
-- ~~Does `./bootstrap plan dotfiles` exit `0` in an unprivileged container?~~
-  **Answered 2026-08-17: yes.** `plan`, `apply` and `check` all exit 0 in
-  `debian:stable-slim`. Spec 2's Known gap 2 does not reach this profile —
-  `plan` reports the missing links as the state it intends to change. That gap
-  is now scoped to `workstation` in spec 2.
-- ~~Does plain `-Syu` suffice on a native x86_64 runner, without the
-  `--disable-sandbox` the emulated verification needed?~~ **The question was
-  built on a wrong diagnosis** (see the correction above): the sandbox failure
-  is Landlock under Docker, not seccomp under emulation, and it reproduces on
-  native arm64. The answerable form is *does the runner's container permit
-  Landlock*, and the job does not depend on the answer, because it configures
-  `DisableSandbox` in the container either way.
-- Which `bootstrap` paths return `2` where they mean `5`, and does `exitAdvisory`
-  have a path that should return it, or should it be deleted?
-
-## Rejected alternatives
-
-**Path filters with an enumerated exception list** — enumerate the non-module
-files the suites read and filter on the union. Rejected: the list is
-hand-maintained and its staleness is invisible, which is the defect this spec
-exists to gate. A filter that is wrong fails exactly where the build cache also
-fails.
-
-**Gate first, fixes after** — land the whole workflow with known-red jobs on
-`continue-on-error`, removing the flag as each fix arrives. Rejected: a gate
-permitted to be red teaches everyone that red is normal, which is the condition
-the deleted `go.pre-commit` died in. Faster signal is not worth establishing that
-precedent as this repository's first experience of CI.
-
-**Fixes first, gate last** — reconcile everything locally, then add one workflow
-that arrives green. Rejected: it leaves the repository unguarded for the whole
-duration.
-
-> **Corrected 2026-08-17.** This rejection originally carried a second reason —
-> that local Docker could not stand in for the runner, since `archlinux` has no
-> arm64 manifest and pacman needed an emulation-only flag. Both halves were
-> wrong (see the correction in the Arch section), and the leg has been removed
-> rather than quietly left standing. The rejection holds on the first reason
-> alone, which is the one that decided it.
->
-> The execution bore this out in the opposite direction to the deleted claim:
-> local Docker caught the Arch defects, and CI caught a defect local Docker
-> could not — a linked worktree's `.git` is a pointer file, so a `git config
-> --global` in the container silently did nothing and the `dotfiles` profile
-> appeared to converge when part of the setup had not run. Neither substitutes
-> for the other; the argument for the gate is that they fail differently.
-
-**Extending `agents index` to write the README block** — tempting, because
-`index` already owns generated content and the `generated-file` guard rule would
-cover the README for free. Rejected: the since-deleted `agents save` committed
-`.agents/` paths and
-nothing else, and the `mixed-commit` guard exists to keep repository content and
-agent context in separate commits. Teaching `index` to write a tracked file
-outside `.agents/` puts those two mechanisms in tension for a convenience. The
-renderer emits markdown on stdout; CI is the enforcement point.
-
-*(Deleted along the way: `agents index` and its `generated-file` guard rule in
-2026-08-20, and the deleted `agents save` in 2026-09-21. The rejection still
-stands on the `mixed-commit` rule, which survives.)*
-
-**Adding `NoRecord = 5` to `bootstrap` to match `agents`** — rejected. Neither
-binary nor spec 1 is the authority on whether a code is needed; a path that means
-it is. Adding one without such a path produces exactly what
-`bootstrap.d/main.go:29` already is: a constant nobody returns, describing a
-behaviour the binary does not have, with no way for a reader to tell it from one
-that works.
-
-**A CI reachability check** — assert that a command's declared invoker really
-invokes it. Rejected: the instance that motivated it was `guard`, and `guard` is
-wired (see the note at the top). What remains is one historical hook and one dead
-constant, which does not justify a job.
-
-**Suites only, no container jobs** — run `go test` on `ubuntu-latest` and call
-Linux covered. Rejected: it proves the Go code is portable and touches none of
-the stage-zero package selection, the linuxbrew prefix, or `chsh`. Spec 2's Known
-gap would stay open while appearing closed, which is worse than leaving it
-visibly open.

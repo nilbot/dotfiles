@@ -28,8 +28,7 @@ section used to give went with it; the `make agents` target, the Makefile that
 carried it, and the test pins that asserted it were deleted the same day. Each of
 the three produced a second `agents` beside
 the released one, and the owners disagreed about which binary the hook chain ran.
-The decision and its evidence are in
-[the personal build removal analysis](../docs/design/2026-10-09-the-personal-build-removal-analysis.md).
+The decision is 2026-10-09: the checkout build is gone.
 For an inner loop, `go build -o /tmp/agents .` writes no global path and installs
 nothing.
 

@@ -1,47 +1,37 @@
 # Spec 2 — dotfiles hygiene: a phased, cross-platform bootstrap
 
-**Date:** 2026-08-07 (scope) / 2026-08-10 (design; language reversed same day)
-**Status:** implemented — plan
-[2026-08-10-dotfiles-bootstrap](../archive/plans/2026-08-10-dotfiles-bootstrap.md),
-executed on branch `claude/spec-2-dotfiles-hygiene-5f92d4`.
+**Date:** 2026-08-07 (scope) / 2026-08-10 (design; implementation language changed from shell to Go the same day)
+**Status:** implemented. The plan it was executed under,
+`2026-08-10-dotfiles-bootstrap`, is **not in this store**: pre-2026-08-20 plans
+lived in `docs/archive/plans/`, deleted on 2026-10-12, and the branch it names
+(`claude/spec-2-dotfiles-hygiene-5f92d4`) is in git history rather than here.
+**Read [the appendix](#appendix-what-has-changed-since-this-was-written) before acting
+on any section.** It is the index of what has moved under this document since
+2026-08-07, and where a section and the appendix disagree, the appendix is the state of
+the world.
+
 **Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
 that is not this one.** The first of the three was that no phase of this design
 had ever run on Linux. Since 2026-08-17 the **`dotfiles` profile** does, on
 every pull request, in a Debian container — see Known gap 1 for what that
 covers and the larger part it does not.
-**Implementation language:** Go, with a shell shim for stage zero (§2.1). The
-first implementation was shell throughout and was reversed after one task; the
-evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
-and the reasoning under [Rejected alternatives](#rejected-alternatives).
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §8, which has landed.
+**Implementation language:** Go, with a shell shim for stage zero (§2.1).
+**Depends on:** spec 1 §8, which has landed.
 
 ---
 
-## What changed from the scope note
-
-The original scope treated this as cleanup: delete `zsh/`, consolidate two
-overlapping link mechanisms, remove dead scripts. Reviewing it surfaced a larger
-framing error, and the design follows from correcting it.
+## What this spec settles
 
 **"Bootstrap" must mean reaching a usable workstation, not creating symlinks.**
-`make dotfiles` is retired completely rather than kept as an alias — an alias
-would preserve an interface we no longer want and leave two apparent entry
-points, which is the exact overlap this spec exists to remove.
+There is one entry point. An alias for the interface this replaced would leave
+two apparent ones, and that overlap is what this spec exists to remove.
 
-Three scope items are already closed and are recorded here so they are not
-attempted twice:
-
-- The dead `claude/` scripts (`commit-msg`, `check-commits.sh`,
-  `setup-protection.sh`, `update-repo-hooks.sh`) were removed with spec 1 §8 in
-  `b87810f`. `claude/` now holds only `CLAUDE.md` and `skills/`.
-- No `.DS_Store` is tracked. `git ls-files` finds none.
-- `git/hooks/go.pre-commit`'s fate is decided below: it is removed.
-
----
+The framing came from a larger error in the scope note it replaced: the note read
+as a link-management task, and reaching a usable workstation is the task.
 
 ## 1. The rule this spec is built on
 
-Spec 1 §8.4 fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
+Spec 1 §8.4 — a design since deleted — fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
 are harness-owned. Those were two instances of one rule, never stated. Stating
 it is most of this design:
 
@@ -71,15 +61,28 @@ that kind, and a regression becomes a test failure instead of a discovery.
 ```
 
 `./bootstrap` resolves the repository root from `$0`, not from `pwd`.
-`softlinks.sh` uses `pwd` today and silently links the wrong tree when run from
+`softlinks.sh` used `pwd` and silently linked the wrong tree when run from
 anywhere else.
+
+Two routes to a wrong root are silent, and the shim closes both — the first by
+clearing `CDPATH`, the second by refusing:
+
+- **A poisoned `CDPATH`.** `cd -- "$(dirname "$0")"` without `CDPATH=` in front of
+  it searches `CDPATH` for a relative `$0` and echoes the directory it resolved
+  to, so the root is somewhere else and every path derived from it is wrong with
+  no error. `TestShimIgnoresAPoisonedCDPATH` reproduces it.
+- **Another tree's `bootstrap`.** Reached through a symlink or a copy on `PATH`,
+  the shim resolves *that* tree's root, builds it and runs it, and exits 0 with no
+  symptom at all. Same device and inode is the only test that settles it, so the
+  shim compares `$BOOTSTRAP_ROOT/bootstrap` against `$0` and refuses when they
+  differ.
 
 For a new machine, `./bootstrap apply workstation` performs the complete setup.
 For an existing machine the same command converges whatever is missing.
 
 ### 2.1 The shim, and the one manual step
 
-`./bootstrap` is a ~55-line shell shim. It is the only shell in the design, and
+`./bootstrap` is a short shell shim. It is the only shell in the design, and
 it has exactly one job: get to Go, then hand over.
 
 1. `go` on `PATH` → use it.
@@ -90,7 +93,7 @@ branch was removed rather than repaired, because it produced the design's worst
 measured defect: `set -e` does not apply inside `$( )`, so a failed or
 off-`PATH` install was swallowed, leaving an empty path that reached the build
 as `"" build …` — exit 127, or worse, a silent `exec` of a stale cached binary.
-See [the shim defects](#five-shim-defects-measured-2026-08-10). Deleting the
+Deleting the
 branch removes the failure mode; patching it would have left the shim carrying
 exactly the bash semantics that disqualified shell everywhere else here.
 
@@ -100,19 +103,21 @@ derived from the repository root** — without that, a main checkout and a git
 worktree share one binary and whichever built first wins, running old code
 against a new tree. It rebuilds when any `.go` file, `go.mod`, or a source
 directory is newer than the binary (directories, so a deletion counts), then
-`exec`s it with the original arguments. Every shim failure exits `2`.
+`exec`s it with the original arguments. Every failure the shim can *report* exits
+`2`; a failed `exec` is the one it cannot intercept, and the shell's own code
+reaches the caller — measured as 1 on bash 3.2.57 and 126/127 on 5.3.15.
 
 **Building from the checkout, not installing a release.** The binary always
 matches the tree you cloned: no release-version coordination, no drift between
 an installed tool and the configuration it applies, and no dependency on
-[spec 6](2026-08-11-spec-6-releases-and-distribution.md), which is unwritten.
+[spec 6](2026-08-11-spec-6-releases-and-distribution.md), which was still unwritten when this was designed.
 
 **The honest cost:** a machine without Go needs one manual command before
 `./bootstrap` runs. That is deliberate, and it is the same call spec 1 §9 made
 about Codex hook trust: the design's job is to make a required manual step *one
 obvious step* rather than a silent failure.
 
-### 2.2 The seam where spec 6 removes Go as a dependency
+### 2.2 The seam that would remove Go as a dependency
 
 Recorded now because it is the actual answer to §2.1's manual step, and because
 a future reader will otherwise re-litigate the auto-install branch.
@@ -121,7 +126,10 @@ a future reader will otherwise re-litigate the auto-install branch.
 to the verification gate and distribution became spec 6.)*
 
 **If [spec 6](2026-08-11-spec-6-releases-and-distribution.md) publishes verified
-release binaries, the shim stops needing Go at all.** Its structure becomes:
+release binaries, the shim stops needing Go at all.** That is not true of spec 6 as
+written: its pipeline builds and publishes `agents`, and this shim runs a
+`bootstrap` binary, so the seam waits on a `bootstrap` release that nothing builds
+today. Its structure becomes:
 
 1. A released binary matching this checkout is cached and verified → `exec` it.
 2. Otherwise, if a release exists for this platform → download, verify checksum,
@@ -147,7 +155,7 @@ Ordered, independently repeatable.
 | 10 | packages | native stage-zero → Homebrew → `Brewfile` | ✓ | — |
 | 20 | config | reconcile every row of `links.manifest` | ✓ | ✓ |
 | 30 | fish | `/etc/shells`, login shell, fisher plugins | ✓ | — |
-| 40 | devtools | `uv`, build `agents`, global Git hooks | ✓ | — |
+| 40 | devtools | `uv`, the released `agents` from the tap, global Git hooks | ✓ | — |
 | 50 | verify | the same checks `check` runs | ✓ | ✓ |
 
 **The `dotfiles` profile is preflight + config + verify: no sudo, no network, no
@@ -164,17 +172,19 @@ what Homebrew itself requires, and nothing else:
 - Arch/Manjaro — `base-devel curl file git`
 
 Everything above stage zero comes from the `Brewfile`, on both platforms. The
-alternative — per-distro native package lists, which `super-install-dep.sh` does
-today — needs two or three manifests kept in sync across distros whose package
+alternative — per-distro native package lists, which `super-install-dep.sh` did —
+needs two or three manifests kept in sync across distros whose package
 names disagree (`fd` vs `fd-find`, `bat` vs `batcat`), and several tools in use
 here are not consistently packaged natively at all.
 
 The PATH assumption already exists: `fish/mypre.fish` adds
 `/home/linuxbrew/.linuxbrew/bin` on Linux and `/opt/homebrew/bin` on macOS.
 
-The `Brewfile` carries platform sections, because casks are macOS-only. The
-current `brew/*.list` files are **audited, not mechanically translated** — see
-§9 for what does not survive the audit.
+The `Brewfile` carries platform sections, because casks are macOS-only. It
+replaced the three `brew/*.list` files — deleted 2026-08-11 when both platforms
+were unified on Homebrew (`30369c3`) — and those lists were **audited, not
+mechanically translated**: of their thirty entries, `micromamba` was dropped and
+`youtube-dl` replaced by `yt-dlp`, so the `Brewfile` is not their concatenation.
 
 ### 3.2 Fish
 
@@ -182,7 +192,7 @@ Confirm fish was installed by phase 10; add its resolved path to `/etc/shells`
 if absent; change the login shell only when it is not already fish; install
 fisher plugins explicitly rather than relying on a shell-start side effect.
 
-This phase has never actually run — see [Measured facts](#measured-facts-2026-08-10).
+This phase first ran for real on 2026-08-17 — see [Measured facts](#measured-facts-2026-08-10).
 
 ### 3.3 Devtools
 
@@ -203,7 +213,7 @@ Homebrew instead — so there is no `~/bin/agents` to install or to name.
 > this document's own §9 records as the one no phase reconciled and no check
 > noticed. The Git-hook step's delegation, and the reason it is delegated rather
 > than reimplemented, are untouched. See
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+> the 2026-10-09 decision: nothing builds `agents` from a checkout.
 
 ## 4. The dry-run invariant
 
@@ -226,6 +236,14 @@ type Interface interface {
 	Seed(source, target string) error
 	Run(name string, args ...string) error
 	Sudo(name string, args ...string) error
+
+	// mutations the migrations need (§8.1). They are in the interface the
+	// phases use, and the phase package still cannot reach the machine any
+	// other way.
+	Copy(source, target string) error
+	Rename(source, target string) error
+	RemoveAll(path string) error
+	WriteFile(path string, data []byte) error
 }
 ```
 
@@ -236,10 +254,9 @@ graph** — exact, complete, and machine-checked by one test that asserts the
 package's import set.
 
 This is the same move spec 1 §3.2 makes for redaction, and the reason it had to
-be this rather than a lexical scan is recorded in
-[Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10): the shell
-version's grep-based equivalent was written wrong twice — once flagging the
-*correct* form, once missing a real violation.
+be this rather than a lexical scan is that the shell version's grep-based
+equivalent was written wrong twice — once flagging the *correct* form, once
+missing a real violation.
 
 **Queries go through the interface too, which is what makes `Planner` honest.**
 It overlays planned changes on what it reads, so a `Link` into a directory the
@@ -260,7 +277,7 @@ A target that exists and is not the exact intended thing produces a **refusal
 naming the remediation**, never a deletion. Idempotence comes from "already
 correct → no-op", not from "delete and redo".
 
-This is a change in kind. The current Makefile does `rm -rf $HOME/.vim`,
+This is a change in kind. The Makefile, deleted 2026-10-09, did `rm -rf $HOME/.vim`,
 `rm -rf $HOME/.emacs.d`, `rm -rf $HOME/.config/fish`, and
 `rm -f $HOME/.config/starship.toml` — and its `editors` and `tmux` targets fail
 outright on a second run, because `git clone` into an existing directory is an
@@ -278,12 +295,11 @@ One tracked table. Three kinds, which are §1's rule made mechanical:
 | `dir` | real machine-owned directory | a program owns the whole directory |
 
 ```
+# the shape of the table; bootstrap.d/links.manifest is the list
 # kind  source                            target                            platform
 link    starship.toml                     .config/starship.toml             *
 link    tmux/tmux.conf                    .tmux.conf                        *
 link    git/gitignore_global              .gitignore                        *
-link    claude/skills                     .claude/skills                    *
-link    gemini/skills                     .gemini/skills                    *
 link    macOS/ghostty                     .config/ghostty                   darwin
 link    macOS/alacritty/alacritty.toml    .config/alacritty/alacritty.toml  darwin
 dir     -                                 .config/fish                      *
@@ -291,20 +307,30 @@ seed    fish/config.fish.template         .config/fish/config.fish          *
 seed    git/gitconfig.local.template      .gitconfig                        *
 ```
 
+The machine's Git identity and signing live in `~/etc/extras.secret/gitconfig`,
+which `~/.gitconfig` reaches through an include inside the shared config. It is
+machine-local and deliberately untracked: `git/gitconfig.shared:245` says so at
+the point where the temptation to put identity there would arise. Nothing in this
+repository writes it and nothing checks it, so an edit that drops the include
+loses identity and signing with no error — the same silent-loss shape as section 8's shared include, with credentials
+rather than settings.
+
 `check` verifies each target is the **right kind**. A `link` target that has
 become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
 fixed and the fish regression §7 fixes.
 
-**Harness skill directories are ordinary rows.** Today `claude/skills` is linked
-by a hand-written Makefile line and `gemini/skills` by nothing at all — two
-harnesses already diverging, the same drift spec 1 opened with. A third harness
-becomes one row.
+**Harness instruction files are ordinary rows.** `links.manifest` points three
+harness paths at one tracked file. Skill directories are `agents wire`'s job, not
+this table's: a harness writes into its own skills path, and §1's rule says a path
+another program writes must never be a link into this repository.
 
-This has to be the bootstrap's job rather than `agents`', for a hard reason:
-**`agents` is a Go binary built by phase 40, so it cannot be a dependency of
-phase 20.** The trigger for revisiting, stated the way spec 4 states its
-triggers:
+This is the bootstrap's job rather than `agents`'. The reason once given was
+ordering: **`agents` was a Go binary built by phase 40, so it could not be a
+dependency of phase 20.** That reason is gone — it arrives with the packages phase's
+`Brewfile` row, well before phase 20 — and what remains is the division of labour:
+this table links, and generation is `agents`'. The trigger for revisiting, stated the
+way the deleted spec 4 states its triggers:
 
 > Move global harness assets into `agents` when they need **generation** rather
 > than **linking** — when a global config must be merged into a file the harness
@@ -321,7 +347,7 @@ it is crossed.
 `git/install-hooks.sh`. The manifest therefore does **not** list them.
 
 One split is deliberate: `~/.gitconfig` is *seeded* by phase 20 (the dying
-Makefile target does this today; `install-hooks.sh` validates the file but never
+Makefile target did this until it was deleted; `install-hooks.sh` validates the file but never
 creates it), then *validated* by `install-hooks.sh` in phase 40.
 
 `check` asserts no path is claimed twice. Two owners is how `softlinks.sh` and
@@ -329,15 +355,17 @@ the Makefile drifted apart in the first place.
 
 ## 7. Fish: zero symlinks under `~/.config/fish`
 
-`~/.config/fish` is a symlink to `dotfiles/fish/`, so fisher writes `functions/`,
+`~/.config/fish` was a symlink to `dotfiles/fish/`, so fisher wrote `functions/`,
 `completions/`, `conf.d/`, `fish_plugins` and `fish_variables` into the tracked
-repo, held back only by `.gitignore`.
+repo, held back only by `.gitignore`. It is a real directory today:
+`bootstrap.d/links.manifest:28` declares it `dir`, and rows `:29` and `:34` seed
+the two files fisher writes, `config.fish` and `fish_plugins`.
 
 Per-file symlinking does **not** fix this, and that is the important part.
 Third-party installers write to `config.fish` by appending managed blocks, so
 the one file that must be tracked is also the one file that gets written to. The
-evidence is in the repo: tracked `fish/config.fish` carries a
-`# >>> grok installer >>>` block, and tracked `fish/mypost.fish` carries a block
+evidence is in git history: tracked `fish/config.fish` carried a
+`# >>> grok installer >>>` block, and tracked `fish/mypost.fish` carried a block
 marked *"managed by 'mamba init'"*. Both arrived because the well-known path was
 a link into the repo.
 
@@ -539,7 +567,8 @@ and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
 4. `~/.config/fish/config.fish` still contains its `source` line.
 5. `~/.gitconfig` includes the current shared-config path.
 6. Login shell is fish; fish is present in `/etc/shells`. *(workstation only)*
-7. `agents` on `PATH`, with `agents doctor`'s result folded in. *(workstation only)*
+7. `agents` on `PATH`. *(workstation only)* — a `LookPath` and nothing more;
+   `agents doctor`'s result was never folded in.
 8. `Brewfile` packages present. *(workstation only)* — **removed 2026-10-09.** The
    check ran `brew bundle check`, and the `brew` wrapper auto-updates Homebrew before
    it dispatches, so the query verb mutated the machine it was reporting on. With the
@@ -550,12 +579,12 @@ and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
 `check` takes the same profile argument as `apply` and defaults to
 `workstation`. Checks 6–7 concern state the `dotfiles` profile deliberately does
 not manage, so under that profile they report **not applicable** rather than a
-finding — otherwise every container run would report three false failures.
+finding — otherwise every container run would report two false failures.
 
 Output is a concise healthy / advisory / failure summary.
 
-**Exit codes come from [spec 1 §6](2026-08-07-agents-repo-context-design.md#6-binary-surface)'s
-table**, with the same meanings: `0` ok, `1` advisory, `2` block, `3` malformed
+Exit codes are the shared vocabulary a design since deleted fixed, with the same meanings
+(`agents/internal/exitcode` and its test pin the values now): `0` ok, `1` advisory, `2` block, `3` malformed
 input, `4` not applicable. (`5`, "could not record", has no analogue here.) One
 vocabulary across both tools in this repo.
 
@@ -578,8 +607,8 @@ bootstrap.d/
   internal/change/              Interface, Applier, Planner -- owns ALL I/O
   internal/manifest/            row parsing, the Kind type
   internal/phase/               the six phases -- imports no I/O package
-  internal/check/               the eight checks
-  internal/migrate/             reconciling and reclaiming migrations
+  internal/check/               the seven checks
+  internal/migrate/             reconciling migrations (the reclaiming kind is kept; its one instance was deleted)
 ```
 
 The directory keeps its `.d` suffix: the module *path* is what Go cares about,
@@ -611,20 +640,28 @@ filesystem, no subprocess — phases are pure functions over an interface:
 
 - `plan` changes nothing — a tree snapshot before and after is identical,
   compared by content and link target, not merely by name and kind.
-- `apply dotfiles` twice: the second run is entirely no-ops. Idempotence is the
-  property the Makefile never had.
+- `apply dotfiles`, then `check dotfiles` (`TestCheckIsHealthyAfterApply`): the
+  machine stays converged once the applier has exited. Deliberately not a second
+  `apply`, which would hide the defect by fixing what it measured. Per-operation
+  idempotence is pinned at the unit level, and it is the property the Makefile
+  never had.
 - Phase 40 invokes `install-hooks.sh` with the correct arguments.
 
 **Architecture test:** `internal/phase`'s import set contains no I/O package.
 This is the §4 invariant, checked exactly.
 
 **Honest limits.** Phases 10, 30 and 40 need network, `sudo`, and a package
-manager; their logic is covered by fakes and their real execution is not
-exercised end-to-end. **No Linux machine was available to verify against**, so
-Linux support shipped written and unit-tested but never executed on Linux. That
-is recorded in [Known gaps](#known-gaps-2026-08-11) and in [Risks](#risks), not
-claimed as working. The shim itself is shell and has a small integration test,
-but its Go-absent branch cannot be tested on a machine that has Go.
+manager; their logic is covered by fakes. On Linux `linux-stage-zero` executes them,
+and the job would still pass if one failed; on macOS they are not executed at all.
+**No Linux machine was available to verify against**, so
+Linux support first shipped written and unit-tested but never executed there. Since
+2026-08-17 it is: CI runs the `dotfiles` profile's `plan`, `apply` and `check` in a
+Debian container on every pull request, and `linux-stage-zero` runs
+`apply workstation` on Debian and Arch. What remains unasserted is recorded in
+[Known gaps](#known-gaps-2026-08-11) — and, for the phases after stage zero, in
+[Risks](#risks) as well — not claimed as working.
+The shim itself is shell and has a small integration test, but its Go-absent branch
+cannot be tested on a machine that has Go.
 
 ## 12. Commit order
 
@@ -643,7 +680,7 @@ executed in:
    `Makefile` was removed entirely with the personal build, not reduced. That is
    this list's own logic carried one step further — the target was the last
    thing no phase owned. The release path is `script/package-release.sh` and the
-   Homebrew tap. See [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+   Homebrew tap. Nothing is built from a checkout; the tap's binary is installed.
 7. This document's status, and the README table row, updated.
 
 ---
@@ -651,33 +688,6 @@ executed in:
 ## Measured facts (2026-08-10)
 
 Observed on this machine, not read from documentation.
-
-### The Makefile's privileged steps have never run
-
-`make dep` is guarded by `sudo -v || if [ -z $$? ]; then sudo ./super-install-dep.sh; fi`.
-If `sudo -v` succeeds, `||` short-circuits and the branch is skipped. If it
-fails, `[ -z 1 ]` is false — `$?` is a non-empty string — and the branch is
-skipped too. **Neither path can ever run it.**
-
-The identical construct guards `chsh` in both the `omz` and `fishshell` targets,
-so **`make` has never set the login shell either.** Corroborated: the login
-shell is `/opt/homebrew/bin/fish`, yet `/etc/shells` contains **no fish entry**
-at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
-
-### The installers are broken independently of that
-
-- `user-install-dep.sh` reads `brew/brew-cask.list`; the file is
-  `brew/brew-casks.list`.
-- It calls `brew cask install`, which is no longer a Homebrew command.
-- It installs Homebrew via the retired ruby `master`-branch URLs, for both
-  Homebrew and Linuxbrew.
-- `post-install.sh` is **not valid bash**: `bash -n` reports
-  `syntax error near unexpected token 'elif'` at line 9 (empty `then` branches).
-  It also calls `$(name -v)` for `uname -v`.
-- `make extra` links `$HOME/crypt/extras.secret` into the repo. `~/crypt` does
-  not exist; the real location is `~/etc/extras.secret`, which is what
-  `gitconfig.symlink` includes. No `extras.secret` link exists in the repo. The
-  target produces a dangling symlink.
 
 ### Fish
 
@@ -713,94 +723,6 @@ at all. It was set by hand with `sudo`, which bypasses the `/etc/shells` check.
 A Go module in a dot-suffixed sibling directory (`bootstrap.d/`) builds and
 tests correctly, and its module path need not match the directory name.
 
-### The six bash defects that decided §1 (2026-08-10)
-
-The first implementation was shell. One task — roughly 100 lines of `lib.sh`
-plus its tests — produced six defects, every one a property of the language
-rather than a mistake about the design. Recorded because the decision to switch
-rests on them, and because a future reader will otherwise wonder why a dotfiles
-bootstrap is a Go program.
-
-1. `do_dir` assigned `target` as a global. `do_link` calls
-   `do_dir "$(dirname "$target")"` *before* using `$target`, so every symlink
-   would have been created at its parent directory's path. Caught in review.
-2. `local current=$(readlink "$target") || refuse "…"` never fires. `local` is a
-   builtin whose own exit status is 0, so it masks the command substitution's.
-   The fix for defect 1 introduced this one.
-3. `dry_run() { [ "$BOOTSTRAP_DRY_RUN" -eq 1 ]; }` fails **open**. `-eq` is
-   numeric: `BOOTSTRAP_DRY_RUN=true` and `BOOTSTRAP_DRY_RUN=` each print
-   `integer expression expected` and then take the *mutate* branch. The one
-   variable whose purpose is preventing mutation treated anything it could not
-   parse as permission to proceed.
-4. `manifest_rows | while read …` puts the loop in a subshell, where `refuse`'s
-   `exit 2` ends only the subshell and the run continues past a refusal.
-   Required process substitution instead.
-5. Whether `[ "$X" -eq 0 ] && X=1` inside a `case` arm aborts under `set -e` had
-   to be settled by running a probe. It does not — but the reasoning is not
-   something a reader can check by inspection.
-6. The lexical scan enforcing §4 was written wrong twice. Version one flagged
-   `do_run mkdir -p "$x"`, the correct form, because the mutating word sits
-   after whitespace there exactly as in a bare call. Version two missed
-   `; do cp "$x" /tmp` because the `;` alternative consumed `do` as its captured
-   word before the `do` alternative could match. Only a
-   split-on-separators-and-take-each-first-word approach, verified against
-   sixteen allowed forms and nine violations, was correct.
-
-Defects 1 and 2 are impossible in Go. Defect 3 is a `bool`. Defect 4 is an early
-`return`. Defect 5 does not exist. Defect 6 becomes an import-set assertion.
-
-### Five shim defects, measured (2026-08-10)
-
-The shim was granted shell's only exception in this design on the grounds that
-its job — find Go, build, exec — is small enough to get right. Review measured
-five defects in that job. Recorded because the premise turned out to be wrong,
-and because anyone proposing to grow the shim should read this first.
-
-1. **`set -e` does not apply inside `$( )`.** Confirmed on bash 3.2.57 and
-   5.3.15. A `find_go` helper called as `go_bin=$(find_go)` swallowed a failed
-   `brew install go` and returned empty; the shim then ran `"" build …`
-   (exit 127) or silently `exec`ed a stale cached binary. The `exit 2` refusal
-   was only reachable when Homebrew was *absent*. **Fixed by deleting the
-   auto-install branch** (§2.1), not by patching it.
-2. **One cache for every checkout.** The cache path had no component derived
-   from the repository root, so a main clone and a git worktree shared one
-   binary. A worktree whose files predate the other's build rebuilt nothing and
-   `exec`ed the wrong binary while exporting the right root: old code, new tree,
-   silently. Fixed by keying the cache on the root. An mtime-only scan also
-   missed deletions; fixed by including directories in the scan.
-3. **Shim exit codes escaped the shared table.** A Go compile error exited `1`
-   — "advisory" — which is the most likely real failure and the one CI would
-   read as non-blocking. `mkdir` failure likewise. Every shim failure now
-   exits `2`.
-4. **`CDPATH` could point the root at the wrong tree.** Reproduced:
-   `cd "$(dirname "$0")"` searches `CDPATH` for a relative `$0` and echoes the
-   resolved path, so the root came back as a same-named decoy directory *and*
-   as two lines. This is precisely the "silently linked the wrong tree" failure
-   the [six bash defects](#the-six-bash-defects-that-decided-1-2026-08-10) say
-   this redesign exists to prevent, reproduced inside the replacement. Fixed
-   with `CDPATH= cd -- …`.
-5. **Preflight validated `PATH` tools but not its two load-bearing inputs.**
-   `HOME` unset with `XDG_CACHE_HOME` set — a normal container shape, and
-   containers are why the `dotfiles` profile exists — yielded an empty `Home`,
-   which would make the config phase resolve every managed path against `/`.
-   Fixed by refusing on an empty `Root` or `Home`.
-
-Defect 4 is the one worth carrying: a design whose stated purpose is preventing
-a class of failure reproduced that exact failure in the first shell file it
-allowed itself.
-
-**A sixth followed, of the same shape.** With `dirname` off `PATH`, the
-substitution yields an empty string, `cd -- ""` succeeds, and the root silently
-becomes the caller's working directory. That is a third independent route to
-"wrong tree, silently" in a sixty-line file. The fix validates the *outcome*
-rather than each input: the resolved root must contain `bootstrap.d/`, which
-catches every route including ones not yet found.
-
-**And a seventh, in the fix for the third.** `exec "$binary" "$@" || die …` is
-dead code: a failed `execve` terminates the shell before the `||` arm can run —
-measured as exit 1 on bash 3.2.57 and 126/127 on 5.3.15, with and without
-`execfail`. The guard has to precede the `exec`, not follow it.
-
 ### An ancestor that is a symlink is refused (2026-08-10)
 
 Recorded because it is a deliberate behaviour choice, not a consequence.
@@ -810,7 +732,8 @@ one pointing at a perfectly good directory that `MkdirAll` would have followed.
 A machine with `~/.config` symlinked elsewhere is therefore refused rather than
 silently provisioned through the link.
 
-This is consistent with the placement rule: `dirVerdict` already refuses a
+This follows this document's own §1 rule — a well-known path's kind is declared and
+checked, never discovered — and `dirVerdict` already refuses a
 symlink at a `dir` target, and this design's whole premise is that a path's
 *kind* is declared and checked rather than discovered. Distinguishing a
 symlink-to-directory from a dangling one needs a following `Stat` on
@@ -826,34 +749,36 @@ Measured at the end of implementation. These are facts about what was built, not
 caveats: each is stated here so that nobody has to rediscover it on a machine
 where it matters.
 
-**1. Linux is partly tested — the `dotfiles` profile only.** Narrowed
+**1. Linux is partly tested — the `dotfiles` profile and stage zero.** Narrowed
 2026-08-17 by spec 5's `linux-dotfiles` job, which runs `plan`, `apply` and
 `check` for that profile in a `debian:stable-slim` container on every pull
 request. All three exit 0, and `check` after `apply` asserts the machine stays
 converged rather than merely that the applier reported success.
 
 What that covers: preflight, the config phase's ten manifest rows on Linux
-paths, and the verify phase. What it does not, which is the larger part:
+paths, and the verify phase. What is still not covered:
 
-- the stage-zero package selection, and any distribution other than Debian
-- the Homebrew prefix at `/home/linuxbrew/.linuxbrew`
-- `chsh` under a different `/etc/shells` convention
-- `Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need
-  cached sudo credentials or they fail with "no tty present" — untested,
-  because the `dotfiles` profile takes no sudo at all
+- any distribution other than Debian and Arch, the two the stage-zero job runs
+- the no-tty `sudo` failure: `Applier.run` leaves `cmd.Stdin` nil, so stage
+  zero's `Sudo` calls need cached credentials, and the job's passwordless
+  `sudo` hides that
+- an assertion on the phases after stage zero, which the job executes on both
+  images and reports `apply`'s exit code for rather than gating on
 
-The profile that is now exercised on Linux is precisely the one designed to
-need none of the above. That is what makes it safe to run in CI, and it is
-also why it cannot stand in for the `workstation` profile.
+The `dotfiles` profile is precisely the one designed to need none of the
+machine-specific paths the `workstation` profile touches. That is what makes it safe
+to run in CI, and it is also why it cannot stand in for the `workstation` profile.
 
 **Stage zero itself is now covered too, and no further.** Spec 5's
 `linux-stage-zero` job runs `apply workstation` on `debian:stable-slim` and
 `archlinux:base` — the only route to `stageZero`, since `phase.For` excludes
 `packages` from the `dotfiles` profile and there is no per-phase flag. It
-gates two things: that the run reaches stage zero, and that `gcc` and `file`
-exist afterwards. It deliberately does **not** gate the phases after stage
-zero, because those are not yet working on Linux and gating them would make
-every pull request wait on the whole Linux port. The job reports `apply`'s exit
+gates that the run reaches stage zero, that stage zero's four tools are present
+afterwards, and that the tap's `agents` reached the machine — the last added
+2026-10-09 with the `Brewfile` row that ships it. It deliberately does **not** gate
+the phases after stage zero, because those phases are executed but not asserted — the
+bullet above records the missing assertion — and gating them would make every pull
+request wait on the whole Linux port. The job reports `apply`'s exit
 code rather than swallowing it, so a later-phase failure is visible in the log
 without blocking a merge.
 
@@ -875,7 +800,7 @@ Three defects this found, all fixed, none reproducible on macOS:
 every phase to completion on both images and exits 0. That exit code is not a
 convergence claim: `Verify` reports and returns nil by design, so `apply` exits
 0 while its own verify phase reports failures. On Debian it reports `5 ok, 0
-warn, 3 fail`, and those three are what remains open on Linux:
+warn, 3 fail`, and those three were what remained open on Linux:
 
 - **`packages` — closed 2026-10-09 by removal rather than repair.** "Homebrew is
   not installed" was the resolve-vs-PATH defect a fourth time, this one in
@@ -885,13 +810,17 @@ warn, 3 fail`, and those three are what remains open on Linux:
 - **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
   cannot change underneath it, so the check can only ever report the shell the
   container started with. Asserting the real effect needs a fresh login.
-- **`agents`** — built to `~/bin`, which is not on the container's PATH.
+- **`agents`** — the `devtools` phase built it to `~/bin`, which is not on the
+  container's PATH. The personal build was removed on 2026-10-09, and
+  `.github/workflows/verify.yml` now probes for the tap's binary with the Homebrew
+  prefix on `PATH` — the re-check the removal called for.
 
-`brew bundle` is now exercised in full on Debian: `complete! 30 Brewfile
-dependencies now installed`, which is every `brew` line in the file — the
-remaining two entries are casks, and casks are macOS-only. (This sentence
-previously said 36 formulae. The Brewfile holds 30 `brew` and 2 `cask` lines;
-36 was never a count of anything in it.) On Arch it has failed once inside
+`brew bundle` is exercised in full on Debian: `complete! 30 Brewfile dependencies
+now installed` was the whole file when that was measured — 30 `brew` and 2 `cask`
+lines, and casks are macOS-only. It holds 31 `brew` lines today, the tap's `agents`
+row having arrived on 2026-10-09, so the quoted output is a dated measurement rather
+than the current count. (This sentence previously said 36 formulae; 36 was never a
+count of anything in it.) On Arch it has failed once inside
 `brew bundle` on a corrupted partial download in Homebrew's own cache — not
 this repository's code, and absorbed by the narrowing rather than fixed.
 
@@ -916,97 +845,26 @@ Both were hit on the repository owner's machine immediately after merge. Neither
 was visible to the test suite, because every test drives the fake `Machine` and
 `install_fisher` is never really executed.
 
-**4. The fish phase is not idempotent, and its failure destroys the record that
-would fix it.** `install_fisher` runs `fisher install` unconditionally on every
-apply. Where fisher's own record — `$__fish_config_dir/fish_plugins` — does not
-list plugins whose files are already on disk, fisher refuses each with "please
-remove or move conflicting files first" and the phase exits 1, taking devtools and
-verify with it. It then makes the next run fail identically: with nothing
-successfully installed, `fisher.fish` reaches `command rm -f $fish_plugins` and
-**deletes the record**, so the machine cannot recover by retrying. Recovery is to
-write `fish_plugins` listing the plugins whose files are present, after which
-fisher treats them as updates. The phase should establish that state itself rather
-than requiring an operator to know this.
+**4. (closed 2026-08-11 by `92fd687`.)** The fish phase was not idempotent, and its
+failure destroyed the record that would fix it. `install_fisher` ran `fisher install`
+unconditionally on every apply. Where fisher's own record —
+`$__fish_config_dir/fish_plugins` — did not list plugins whose files were already on
+disk, fisher refused each with "please remove or move conflicting files first" and
+the phase exited 1, taking devtools and verify with it. It then made the next run
+fail identically: with nothing successfully installed, `fisher.fish` reached
+`command rm -f $fish_plugins` and **deleted the record**, so the machine could not
+recover by retrying. The phase now installs only onto a machine with no plugin files
+and otherwise reports "leaving them alone", and `links.manifest:34` seeds the record
+from `fish/fishfile`.
 
-**5. The login-shell check trusts `$SHELL`.** `check`'s `login-shell` and the fish
-phase's `chsh` decision both read `Context.Shell`, which `main.go` takes from
-`os.Getenv("SHELL")`. That is inherited and need not describe the account: run from
-a process started under another shell, `check` reports "the login shell is /bin/zsh,
+**5. (closed 2026-08-11 by `c9a9921`.)** The login-shell check trusted `$SHELL`.
+`check`'s `login-shell` and the fish phase's `chsh` decision both read
+`Context.Shell`. That is inherited and need not describe the account: run from a
+process started under another shell, `check` reported "the login shell is /bin/zsh,
 not fish" on a machine whose passwd entry says `/opt/homebrew/bin/fish`, and the
-phase would plan a `sudo chsh` that is not needed. The passwd database is the
-authority; `$SHELL` is a hint.
-
----
-
-## Rejected alternatives
-
-**Rebuilding the Makefile as the bootstrap interface** (`make plan`,
-`make workstation`, `make check`). Make is another prerequisite; its recipes are
-awkward for structured checks, safe conflict handling and portable quoting; and
-targets conceal side effects, as the present `all` and `links` graph already
-demonstrates. It would improve on today without being the right shape.
-
-> **Amended 2026-10-09 — the rejection stands and the evidence it cited is
-> gone.** "The present `all` and `links` graph" no longer exists: the phases took
-> that work over, those targets were removed, and `Makefile` now declares only
-> `agents` and `release`. So the worked example this paragraph rested on had
-> already been deleted by this document's own §9 sequence, which left the
-> rejection reading as a live option rather than a settled one.
->
-> The argument does not need it. Make being another prerequisite, and its recipes
-> being the wrong shape for structured checks and portable quoting, are the
-> reasons, and they are unaffected. What has changed underneath is the subject:
-> the whole file is retiring — decided 2026-10-09, with the personal build — so
-> "rebuilding the Makefile" is now moot rather than merely wrong-shaped. The
-> paragraph stays as the reason the file is not coming back. See
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
-
-**A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
-Note this is *not* the same as §2.1's build-from-checkout, which was adopted.
-Distribution via Homebrew requires Homebrew *before* bootstrap can start, must
-locate or embed the dotfiles it configures, creates release-version coordination
-between binary and repository, and couples this spec to the unimplemented spec 6.
-Building from the checkout has none of those properties. Publishing a release
-binary may still be worthwhile later; it is the wrong *stage-zero* mechanism.
-
-**A separate `bootstrap` subcommand inside the `agents` binary.** Rejected for
-the reason spec 1 already names: it would turn a repo-context tool into an
-unrelated workstation manager. Two Go modules, two binaries, one repo.
-
-**Bash for the whole bootstrap.** This was the original decision and it was
-reversed after one task of implementation. Reversed on evidence, not taste — see
-[the six defects](#the-six-bash-defects-that-decided-1-2026-08-10). The
-deciding one is that the §4 invariant, in shell, could only be enforced by
-lexically scanning phase files for mutating command names, and that scan was
-written wrong twice: once flagging the *correct* `do_run mkdir` form, once
-missing a real `; do cp` violation. **A guarantee enforced by a heuristic its
-own author cannot write correctly is not a guarantee.** In Go the same property
-is an import-set assertion: exact, complete, and impossible to get subtly wrong.
-
-The advantages shell genuinely had are real and were given up knowingly:
-zero stage-zero dependencies, and a tool short enough to read before running it
-on your own machine. §2.1's shim preserves the second for the only part that
-still runs before anything is verified.
-
-**Keeping `make dotfiles` as an alias.** Preserves an interface we no longer
-want and leaves two apparent entry points — the overlap this spec exists to
-remove.
-
-**Per-file symlinks under `~/.config/fish`.** Narrows the surface without fixing
-it: the file that must be tracked is the same file installers append to. See §7.
-
-**Relocating fisher's state via fish variables** while keeping the directory
-symlink. More moving parts than either alternative, and it depends on fisher
-honouring those paths — unverified.
-
-**A separate read-only `plan` implementation.** Two implementations of one
-behaviour drift; §4.
-
-**Extracting a shared Go test-helper package**, or a tracked `go.work`. The
-former makes `agents` export a package solely for a consumer outside itself; the
-latter alters module resolution during builds, so spec 6's release path would
-have to remember `GOWORK=off` — a footgun handed to an unwritten spec in
-exchange for one convenience command.
+phase planned a `sudo chsh` that was not needed. `main.go` now asks the passwd
+database first — `dscl` on macOS, `getent` elsewhere — and falls back to `$SHELL`
+only when neither answers.
 
 ---
 
@@ -1014,7 +872,7 @@ exchange for one convenience command.
 
 | Risk | Mitigation |
 |---|---|
-| Linux support is written but never executed on Linux — no phase of this design has run there | Partly mitigated 2026-08-17. Spec 5's `linux-dotfiles` job runs the `dotfiles` profile's `plan`, `apply` and `check` in a Debian container on every pull request. The `workstation` profile, every non-Debian distribution, and all of stage zero remain unexecuted on Linux: see [Known gaps](#known-gaps-2026-08-11) 1. |
+| Linux support was written before any Linux machine was available to execute it | Retired for the `dotfiles` profile and for stage zero on 2026-08-17: `linux-dotfiles` runs that profile's `plan`, `apply` and `check` in a Debian container on every pull request, and `linux-stage-zero` runs `apply workstation` on Debian and Arch. The `workstation` profile's phases after stage zero remain unasserted — the job executes them and reports `apply`'s exit code — and no distribution other than Debian and Arch is exercised: see [Known gaps](#known-gaps-2026-08-11) 1. |
 | `plan` exits 2 on a machine that lacks Homebrew or fish, instead of previewing | Accepted deliberately, not mitigated. [Known gaps](#known-gaps-2026-08-11) 2 records why, and what closing it would cost. |
 | Linux has no managed nerd font | Not mitigated. The cask is macOS-only and the vendored Linux installer was removed. [Known gaps](#known-gaps-2026-08-11) 3. |
 | The `gitconfig.shared` rename silently empties shared git config on existing machines | `migrate` repoints the include; `check` #5 detects a stale one. |
@@ -1023,16 +881,48 @@ exchange for one convenience command.
 | `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
 | A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
 | Bootstrap grows into an unmaintainable program | One package per concern; all machine access through `change.Interface`; an architecture test on the phase package's import set. |
-| Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go; spec 5's published artifact is what removes it. §2.1, §2.2. |
-| The shim is shell, so it inherits the defects that motivated the switch | It is ~40 lines, does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
+| Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go. §2.2's seam would remove it and is unrealised: spec 6 publishes `agents`, while the shim runs a `bootstrap` binary, which has no release path. §2.1, §2.2. |
+| The shim is shell, so it inherits the defects that motivated the switch | It does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 
 ## Open questions
 
-- **`snapshot.sh`'s replacement, if any.** The scope note asked whether it still
-  does something wanted; the answer is that it does not work (BSD-only `date -j`,
-  a 2021 `rclone` remote) and it is removed. Whether machine backup should exist
-  at all is a separate question this spec does not answer.
-- **The Linux distributions actually targeted.** Stage-zero commands are written
-  for Debian/Ubuntu and Arch/Manjaro, matching what `super-install-dep.sh`
-  covered. Neither is verified.
+- **Whether machine backup should exist at all.** `snapshot.sh` did not work and
+  is removed; nothing replaced it, and no decision has been taken about whether
+  it should be.
+
+## Appendix: what has changed since this was written
+
+This document is dated 2026-08-07. Its sections describe the design as it was made,
+and they are the authority on the design; this appendix is the authority on what has
+moved under it. Each row names what moved, what carries it, where it lands, and whether
+that landing carries a dated marker of its own — so a reader can see, without opening
+the section, whether the text there has been corrected.
+
+The table lists the changes that landed on a section of *this* document. Sections also
+carry dated markers it does not index: §2.2's re-scoping away from spec 5, §3.2's first
+real run on 2026-08-17, §5's note on what the deleted Makefile did, and the block of
+Measured facts — and so does the head, which records that the `dotfiles` profile has run
+on Linux since 2026-08-17. A reader who needs certainty about one section should read it.
+
+| when | what moved | carried by | lands on |
+|---|---|---|---|
+| 2026-08-11 | the three `brew/*.list` files were deleted; `bootstrap.d/Brewfile` replaced them, audited rather than translated | `30369c3` | §3.1 — marked |
+| 2026-08-11 | the fish phase stopped running `fisher install` unconditionally, and the manifest began seeding fisher's record | `92fd687` | Known gap 4 — marked closed |
+| 2026-08-11 | the login shell is read from the passwd database, with `$SHELL` only as a fallback | `c9a9921` | Known gap 5 — marked closed |
+| 2026-08-17 | `linux-dotfiles` and `linux-stage-zero` landed. Linux executes now; the phases after stage zero are still unasserted, and what the jobs do not gate is the coverage that remains | `d64c9bb`, `4415212` | the honest limits in §11, Known gap 1, and Risks — all three marked |
+| 2026-08-28 | spec 6's release pipeline was built and publishes `agents`. It builds no `bootstrap` binary, and the shim runs one, so §2.2's seam for removing the Go dependency has no release to wait on | `ddeebe4`, which builds it in `script/package-release.sh:34-42`; [spec 6](2026-08-11-spec-6-releases-and-distribution.md) | §2.2 and Risks — both corrected in place, no dated marker |
+| 2026-09-21 | the tool was cut to six commands, and `~/.claude/skills` stopped being a manifest row. Harness skill symlinking is `agents wire`'s job | `f3b4a74` | §6 — corrected in place, no dated marker; the command cut lands on no section here |
+| 2026-10-09 | `agents` is installed from the Homebrew tap as a `Brewfile` row instead of being built from a checkout | `1d6e323` | §3.3 and §12 — marked; §6 — corrected in place, no dated marker |
+| 2026-10-09 | the `Makefile`, and with it the last way to build `agents` from a checkout, was deleted | `db03eb3` | §9, §12 — marked |
+| 2026-10-09 | the `packages` check was removed rather than repaired | `856cedf` | §10, which keeps seven checks, and Known gap 1 — both marked |
+| 2026-10-09 | the reclaiming migration was deleted, so the kind is kept with no instance and `~/sdk/mambaforge` is reclaimed by hand or not at all | `4c5fcff` | §8.1, §9, Measured facts — all marked |
+| 2026-10-09 | `agents githook` replaced the `argv[0]` multicall, and the tool has seven commands | `35d9322` | no section of this document; the count is in `docs/design/README.md` and the qna store |
+| 2026-10-12 | `docs/archive/` was deleted, taking the plan this spec was executed under | `f083dac` | the status note at the top — marked |
+
+One consequence is worth stating outright, because it is the change most likely to be
+missed: **`agents` is no longer built from this checkout.** It arrives as a package, in
+the phase that installs packages, so the ordering argument in §6 — that `agents` was
+built by phase 40 and therefore could not be a dependency of phase 20 — no longer holds.
+What keeps the harness rows in `links.manifest` is the division of labour: that table
+links, and `agents` generates.

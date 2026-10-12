@@ -53,8 +53,7 @@ machine-owned directory.
 
 **This repository no longer produces the binary the chain names** — decided
 2026-10-09 and removed with the change that consumes the tap. The chain names the
-released `agents`, installed with `brew install nilbot/tap/agents`. See
-[the personal build removal analysis](../docs/design/2026-10-09-the-personal-build-removal-analysis.md).
+released `agents`, installed with `brew install nilbot/tap/agents`.
 
 ## After upgrading `agents`
 

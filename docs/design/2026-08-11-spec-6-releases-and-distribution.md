@@ -2,7 +2,10 @@
 
 **Date:** 2026-08-10 (as part of spec 5's scope note) / 2026-08-11 (split out) / 2026-08-28 (designed & implemented)  
 **Status:** Designed & Implemented (2026-08-28)  
-**Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (Go module, security boundaries, harness wiring), [Spec 5](2026-08-11-spec-5-verification-gate.md) (automated verification gate), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md) (2026-08-19)  
+**Depends on:** [spec 5](2026-08-11-spec-5-verification-gate.md), for the verification gate.
+Two things it also rested on — spec 1 (the module and security boundaries) and
+Knowledge is Documentation — were deleted on 2026-10-12; the code is what they
+described.  
 **Carries obligations from:** [Spec 2](2026-08-07-spec-2-dotfiles-hygiene.md)  
 
 ---
@@ -36,7 +39,7 @@ the binary is stamped. The build is also the small term (0.8 of 14.0
 job-minutes), so the release builds and then asserts what it built, rather than
 transporting bytes between runs.
 
-### Implementation constraints, each of which silently breaks the guard
+### Implementation constraints, four of which silently break the guard
 
 - `head_sha` must be the **full 40-character** commit SHA. An abbreviated SHA
   returns HTTP 200 with `total_count: 0`, which reads as "not verified" for a
@@ -82,61 +85,22 @@ This specification defines the build, packaging, release, and distribution pipel
 
 ---
 
-## 2. The Hardest Open Problem — Resolved
+## 2. The released binary and the checkout
 
-**Historical Question (2026-08-11):** *"A binary built by CI belongs to no checkout, so it has no root to stamp."*
+**The constraint, and it outlives the compile-time stamp that first met it:** a
+released binary must work on a machine that has no checkout, and must not guess
+at one. A binary built by CI belongs to no checkout, so nothing inside it can
+name one.
 
-**Resolution (2026-08-28):** ~~*superseded 2026-10-09 — see the amendment below.*~~
-Released binaries are built without a stamped checkout root (`main.dotfilesRoot == ""`).
+The release consequences are unchanged: a release is built with no checkout
+stamped into it, and `nilbot/tap/agents` is the distribution route.
 
-~~`DotfilesRoot()` in `agents/root.go` resolves via an explicit 2-tier contract without `$HOME/dotfiles` existence heuristics:~~
-1. ~~**Link-Time Stamp (`main.dotfilesRoot`)**: Set by `make agents` and `./bootstrap apply workstation` to bind the binary to a specific dotfiles checkout root (activating Dotfiles Operator Mode).~~ **Deleted 2026-10-09: both producers are gone — the devtools build with the tap change, the `make agents` target with the Makefile and its test pins — and in neither case does the flag name a variable any more.**
-2. ~~**Environment Variable (`AGENTS_DOTFILES_ROOT`)**: Explicit runtime override for operators running unstamped or Homebrew-installed binaries who wish to bind them to their personal dotfiles.~~ **Deleted 2026-10-09.**
-3. ~~**Standalone Fallback (`""`)**: An unstamped binary with no environment variable returns `""` and operates in **Standalone Mode** regardless of what exists in the user's home directory.~~ **Deleted 2026-10-09: there are no modes.**
-
-When `DotfilesRoot() == ""` (`deps.Root == ""`):
-- `agents doctor` operates in **Standalone Repository Mode**:
-  - Skips dotfiles-specific checks (`root:exists`, `git-hooks:global`, `git-hooks:links`).
-  - Validates repository-level `.gitattributes` directly for `.agents/** linguist-generated=true`.
-  - Validates repository-local git hooks (`git-hooks:local`).
-  - Runs full harness wiring, trust, gitleaks, instruction, and documentation checks.
-- Git hook multi-call dispatcher executes repository hooks and built-in stages, cleanly skipping personal hook chains (`<root>/git/hooks/*`).
-
-> **Amended 2026-10-09 — the resolution above is deleted; its constraint is kept.**
-> The problem this section resolved was real: a binary built by CI belongs to no
-> checkout, so nothing inside it can name one. The 2026-08-28 answer turned that
-> fact into a *mode*, resolved at run time from a link-time stamp, then
-> `AGENTS_DOTFILES_ROOT`, then empty — and the mode decided which checks ran and
-> whether the personal hook stages did. Three things went wrong with it, each
-> measured rather than argued:
->
-> - the same binary behaved two ways on one machine depending only on how the
->   process was launched, and said nothing when the behaviour changed — 18 checks
->   with the variable set, 13 without, and the five that vanish are exactly the
->   machine-level ones;
-> - the binding lived in a hand-written line in `~/.config/fish/config.fish`, which
->   `bootstrap.d/links.manifest` declares as `seed`; no tracked file has ever
->   written that variable;
-> - it made behaviour a property of the process environment rather than of the
->   installation, so a machine's own record could not be read to find out what was
->   installed.
->
-> [`One record for binary identity`](2026-10-07-one-record-for-binary-identity.md)
-> replaces it. `DotfilesRoot()`, `main.dotfilesRoot` and `AGENTS_DOTFILES_ROOT` are
-> deleted; the dispatcher is told which checkout to use by the chain entry that
-> invoked it (`agents githook <name> --checkout <path>`, landed with identity stage
-> 1); and `agents doctor` reads the machine's record — `core.hooksPath` and the
-> `chain.env` inside it — instead of a root compiled into itself. What survives
-> from this section is the constraint and not the mechanism: **a released binary
-> must work on a machine that has no checkout, and must not guess at one.**
->
-> The release consequences here are otherwise unchanged: a release is still built
-> with no checkout stamped into it, and `nilbot/tap/agents` remains the
-> distribution route. The personal build is gone as of 2026-10-09 — the devtools
-> producer with the tap change, the `make agents` target with the Makefile and its
-> test pins — so no builder is left that could stamp a checkout even if something
-> still read it. See
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+How the binary learns which checkout supplies the personal hook stages is the
+chain record, specified in
+[`one record for binary identity`](2026-10-07-one-record-for-binary-identity.md):
+`core.hooksPath` names the chain directory, the `chain.env` inside it names the
+binary and the checkout, and the entry that invoked the binary passes the
+checkout it was generated for.
 
 ---
 
@@ -163,7 +127,7 @@ Top-level flags `--version` and `-v` are intercepted in `agents/main.go` and inv
 
 ### 4.1 Cross-compilation targets
 
-Four cross-compilation targets covering the macOS and Linux fleets (Amendment 1):
+Four cross-compilation targets covering macOS and Linux (Amendment 1):
 1. `darwin/arm64` (Apple Silicon macOS)
 2. `darwin/amd64` (Intel macOS; the tap's `brew readall` requires it)
 3. `linux/arm64` (ARM64 Linux)

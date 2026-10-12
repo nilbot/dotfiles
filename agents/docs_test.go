@@ -254,6 +254,13 @@ func TestLivingDocumentsNameNoDeletedCommand(t *testing.T) {
 	deleted := []string{
 		"agents drift", "agents layout", "agents trace", "agents save",
 		"agents ls", "agents update", "agents hook",
+		// Added 2026-10-12. The list above was written from memory and missed
+		// six verbs the tool no longer has, so seven documents in the two
+		// stores this check exists to protect named a command that cannot be
+		// run and passed. A list of deleted names is a list of everything a
+		// reader might type, which means it must be derived, not recalled.
+		"agents handoff", "agents review", "agents distill", "agents index",
+		"agents fleet", "agents migrate",
 	}
 	// A line carrying one of these says the command is gone, which is the one
 	// thing a living document may say about it.

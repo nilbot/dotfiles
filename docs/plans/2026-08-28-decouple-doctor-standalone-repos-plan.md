@@ -1,5 +1,8 @@
 # Decouple `agents doctor` for Standalone Repositories Implementation Plan (Phase 2)
 
+**Status:** not stated when it finished. The work it describes shipped on
+2026-08-28 and its design is in force; read the design for what is true now.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Decouple `agents doctor` so it operates cleanly in standalone repositories on contributor machines without requiring personal `dotfiles` checkouts, while preserving full dotfiles diagnostics when managing dotfiles checkouts.
