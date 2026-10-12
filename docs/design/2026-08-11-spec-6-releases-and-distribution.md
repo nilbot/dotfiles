@@ -36,7 +36,7 @@ the binary is stamped. The build is also the small term (0.8 of 14.0
 job-minutes), so the release builds and then asserts what it built, rather than
 transporting bytes between runs.
 
-### Implementation constraints, each of which silently breaks the guard
+### Implementation constraints, four of which silently break the guard
 
 - `head_sha` must be the **full 40-character** commit SHA. An abbreviated SHA
   returns HTTP 200 with `total_count: 0`, which reads as "not verified" for a
@@ -84,7 +84,7 @@ This specification defines the build, packaging, release, and distribution pipel
 
 ## 2. The released binary and the checkout
 
-**The constraint, and it outlives the mechanism that first satisfied it:** a
+**The constraint, and it outlives the compile-time stamp that first met it:** a
 released binary must work on a machine that has no checkout, and must not guess
 at one. A binary built by CI belongs to no checkout, so nothing inside it can
 name one.

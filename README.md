@@ -45,7 +45,7 @@ nerd font — are recorded with the rest in
 which is the authority. This paragraph is a summary of it and will go stale
 first.
 
-## The personal build, and the Makefile that produced it
+## The personal build and the Makefile that produced it (deleted 2026-10-09)
 
 **Deleted 2026-10-09.** Provisioning stopped building `agents` — the devtools
 phase resolves the released binary now and passes `--adopt-owned` to the
@@ -55,8 +55,8 @@ compiled this checkout into
 `~/bin/agents`, a second `agents` beside the released one, and the two owners
 disagreed about which binary the hook chain ran — measured here as
 `bootstrap apply workstation` exiting 2 in the devtools preflight. The decision is
-2026-10-09: the checkout build is gone, and the chain -- the directory `core.hooksPath` names and
-the entries in it -- names the released binary.
+2026-10-09: the checkout build is gone, and the chain — the directory `core.hooksPath` names and
+the entries in it — points at the released binary.
 Provisioning belongs to `./bootstrap`. For an inner loop, `cd agents && go build -o /tmp/agents .` writes no global path
 and installs nothing.
 
@@ -80,14 +80,14 @@ installed, `doctor`
 reports state, and the binary doubles as the git hook dispatcher and the
 pre-commit guard. It does **not** manage knowledge — that half was retired on
 2026-08-20, and what a repository knows now lives in its own `docs/`, written
-by instruction rather than by a command. See
-knowledge is documentation.
+by instruction rather than by a command.
+The design that established this was deleted 2026-10-12.
 
 Repositories follow a **Two-Tier Agent Context** structure:
 - **Tier 1 (Root Router)**: Standardized, lightweight `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) serving as the entrypoint bootstrap router pointing to durable docs and domain rules.
 - **Tier 2 (Domain Context & Durable Knowledge)**: Repository-specific domain guidelines in `.agents/AGENTS.md`, executable skills in `.agents/skills/`, and durable project knowledge organized in a **4-store layout** under `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
 
-`agents help <command>` explains any command in full, and `agents help` leaves out `githook`, the one command only a chain entry invokes. When to write something
+`agents help <command>` explains any command in full, and `agents help` omits `githook`, which only a chain entry invokes. When to write something
 down is in `.agents/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is

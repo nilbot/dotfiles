@@ -1,6 +1,6 @@
 # Spec 2 — dotfiles hygiene: a phased, cross-platform bootstrap
 
-**Date:** 2026-08-07 (scope) / 2026-08-10 (design; language reversed same day)
+**Date:** 2026-08-07 (scope) / 2026-08-10 (design; implementation language changed from shell to Go the same day)
 **Status:** implemented. The plan it was executed under,
 `2026-08-10-dotfiles-bootstrap`, is **not in this store**: pre-2026-08-20 plans
 lived in `docs/archive/plans/`, deleted on 2026-10-12, and the branch it names
@@ -26,7 +26,7 @@ as a link-management task, and reaching a usable workstation is the task.
 
 ## 1. The rule this spec is built on
 
-Spec 1 §8.4 -- a design since deleted -- fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
+Spec 1 §8.4 — a design since deleted — fixed `~/.gitconfig` and cautioned that `~/.claude` and `~/.codex`
 are harness-owned. Those were two instances of one rule, never stated. Stating
 it is most of this design:
 
@@ -77,7 +77,7 @@ For an existing machine the same command converges whatever is missing.
 
 ### 2.1 The shim, and the one manual step
 
-`./bootstrap` is a ~55-line shell shim. It is the only shell in the design, and
+`./bootstrap` is a short shell shim. It is the only shell in the design, and
 it has exactly one job: get to Go, then hand over.
 
 1. `go` on `PATH` → use it.
@@ -703,8 +703,8 @@ one pointing at a perfectly good directory that `MkdirAll` would have followed.
 A machine with `~/.config` symlinked elsewhere is therefore refused rather than
 silently provisioned through the link.
 
-This is consistent with the placement rule stated in `global/AGENTS.md`: `dirVerdict`
-already refuses a
+This follows this document's own §1 rule — a well-known path's kind is declared and
+checked, never discovered — and `dirVerdict` already refuses a
 symlink at a `dir` target, and this design's whole premise is that a path's
 *kind* is declared and checked rather than discovered. Distinguishing a
 symlink-to-directory from a dangling one needs a following `Stat` on
@@ -846,7 +846,7 @@ authority; `$SHELL` is a hint.
 | A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
 | Bootstrap grows into an unmaintainable program | One package per concern; all machine access through `change.Interface`; an architecture test on the phase package's import set. |
 | Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go; spec 5's published artifact is what removes it. §2.1, §2.2. |
-| The shim is shell, so it inherits the defects that motivated the switch | It is ~40 lines, does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
+| The shim is shell, so it inherits the defects that motivated the switch | It does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 
 ## Open questions

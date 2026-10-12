@@ -18,7 +18,7 @@ skill -- are deleted from this document with the sections that specified them;
 ### 1.1 Why the root router and the domain context are separate
 
 Two tiers exist because one file was worse. A repository's infrastructural directives
-and its own domain rules shared a single root file, and every programme that tried to
+and its own domain rules shared a single root file, and every approach that tried to
 keep such a file current was defeated by the same problems.
 Earlier iterations of repository scaffolding treated `AGENTS.md` / `CLAUDE.md` as an immutable file (`writeIfAbsent`). As the `agents` ecosystem evolved (adding multi-harness support, contributor-friendly doctor checks, 4-store documentation layouts, and retiring outdated capture systems), updating existing repositories across the fleet encountered a fundamental limitation of deterministic programming:
 - **Monolithic Mixing**: Repositories mixed infrastructural harness directives with custom, human-authored domain rules, test protocols, and language conventions in a single root file.
@@ -60,7 +60,8 @@ Repository Root
 ```
 
 ### 2.1 Tier 1: Canonical Root Router (`AGENTS.md`)
-The root `AGENTS.md` is strictly identical across repositories in the fleet. It solves the **indirection hop** by presenting an un-ignorable **Bootstrap Protocol** in its preamble:
+The root `AGENTS.md` is written from one template, so every repository
+`agents init` scaffolds gets the same file. It solves the **indirection hop** by presenting an un-ignorable **Bootstrap Protocol** in its preamble:
 
 ```markdown
 # Agent context

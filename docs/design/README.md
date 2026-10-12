@@ -19,10 +19,10 @@ instruction with a warning label; git history holds every one of them, and
 
 Numbers are stable catalog identifiers, not priority or order.
 
-**The tool described here was reduced on 2026-09-21.** It has seven commands —
+**The `agents` tool was reduced on 2026-09-21.** It has seven commands —
 `init`, `wire`, `doctor`, `guard`, `githook`, `version`, `help` — and no layout
 manifest, no migration, no trace record, no session record and no fleet registry.
-Rows below say which spec sections that deleted and which still stand.
+Rows below say which sections that reduction deleted and which still stand.
 
 **A document stays here only while it describes something in force.** When its
 whole subject is gone the document is deleted and git history is its archive:
