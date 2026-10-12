@@ -73,7 +73,8 @@ remove.
 ## The `agents` tool
 
 `agents` scaffolds a repository's agent context and maintains the machine
-around it: `init` writes the tree, `wire` installs the harness wiring, `doctor`
+around it: `init` writes the tree, `wire` removes the entries an earlier version
+installed, `doctor`
 reports state, and the binary doubles as the git hook dispatcher and the
 pre-commit guard. It does **not** manage knowledge — that half was retired on
 2026-08-20, and what a repository knows now lives in its own `docs/`, written
@@ -103,6 +104,9 @@ agents help --render=markdown
 | `agents help` | print the listing, or one command's page |
 | `agents init` | create .agents/, the doc stores, and the wiring |
 | `agents wire` | remove this tool's entries from harness configs |
+
+A **harness** is an AI coding tool whose config file this repository edits — Claude
+Code, Codex, Antigravity. `wire` is the command that reconciles those files.
 | `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
