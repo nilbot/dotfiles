@@ -4,7 +4,7 @@
 
 Durable knowledge lives in `docs/` using the 4-store layout:
 - `docs/design/` — Living architectural specifications. Read these to understand the active design and reasoning.
-- `docs/plans/` — Step-by-step implementation plans. Authored during the `writing-plans` workflow before code changes.
+- `docs/plans/` — Step-by-step implementation plans, authored before code changes.
 - `docs/journal/` — Dated records of what happened: run collapses, decisions made, retrospectives.
 - `docs/qna/` — Topic-indexed findings answering "what question would you ask again". Written and committed directly.
 - **Retired designs and executed plans are deleted, not archived.** A document whose
@@ -24,7 +24,7 @@ Durable knowledge lives in `docs/` using the 4-store layout:
 ## 3. Agent Harness & Workflow Guidelines
 
 - **Branch Protection & Pull Request Policy**: Direct pushes to `master` are strictly prohibited by GitHub branch protection rulesets. All changes, features, bug fixes, and documentation updates MUST be authored on dedicated feature branches (e.g. `feat/`, `fix/`, `docs/`) and integrated via Pull Requests after passing CI gate verification (`gate`).
-- **Planning Workflows**: Do NOT invoke Antigravity's native `<planning_mode>` or create brain artifacts with `RequestFeedback: true`. Follow `/brainstorming` and `writing-plans` skill workflows, writing specs to `docs/design/` and plans to `docs/plans/`.
+- **Planning Workflows**: Do NOT invoke Antigravity's native `<planning_mode>` or create brain artifacts with `RequestFeedback: true`. Write specs to `docs/design/` and plans to `docs/plans/` directly. A harness that provides `/brainstorming` and `writing-plans` may be used for them; those skills belong to the harness, and nothing in this repository defines them.
 - **Evidence Before Assertions**: Always run test suites and verification commands (`agents doctor`, `go test ./...`) before claiming work is complete.
 - **Recording Findings**: Follow `.agents/skills/recording-what-you-learn/`. Main agents record findings from subagent reports.
 
