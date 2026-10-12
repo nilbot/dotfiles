@@ -41,14 +41,15 @@ table that has become incomplete, not only an instruction. Each appendix row say
 whether its landing carries a marker, so the table answers that without the reader
 opening the section.
 
-An amendment goes with what it annotates: when the annotated text is gone — deleted, or
-rewritten away — the amendment goes too, and git history holds both, as the two-tier
-document did. The exception is a reversal: an amendment recording a decision that was
-reversed survives while the document stands, because the reversal is the record, and is
-edited only to drop a reference to text that has gone. The decoupling note in
-`contributor-guardrails` is that case — it annotates an argument still live. An amendment
-sitting outside any section annotates the document as a whole, so it goes only when the
-document does.
+An amendment goes with the passage it annotates: when that passage is deleted, or
+rewritten away, the amendment goes too, and git history holds both, as the two-tier
+document did. An amendment that stays while part of what it annotates has gone is edited
+to drop the dead reference. The exception is a reversal: an amendment recording a decision
+that was reversed survives while the document stands, because the reversal is the record —
+the decoupling note in `contributor-guardrails` is that case, and it annotates an argument
+still live. An amendment that sits outside every section and names none annotates the
+document as a whole, and goes only when the document goes; a document rewritten but still
+itself is still standing.
 
 ## Specs
 
