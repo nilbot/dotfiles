@@ -5,6 +5,11 @@
 `2026-08-10-dotfiles-bootstrap`, is **not in this store**: pre-2026-08-20 plans
 lived in `docs/archive/plans/`, deleted on 2026-10-12, and the branch it names
 (`claude/spec-2-dotfiles-hygiene-5f92d4`) is in git history rather than here.
+**Read [the appendix](#appendix-what-has-changed-since-this-was-written) before acting
+on any section.** It is the index of what has moved under this document since
+2026-08-07, and where a section and the appendix disagree, the appendix is the state of
+the world.
+
 **Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
 that is not this one.** The first of the three was that no phase of this design
 had ever run on Linux. Since 2026-08-17 the **`dotfiles` profile** does, on
@@ -885,3 +890,30 @@ only when neither answers.
 - **Whether machine backup should exist at all.** `snapshot.sh` did not work and
   is removed; nothing replaced it, and no decision has been taken about whether
   it should be.
+
+## Appendix: what has changed since this was written
+
+This document is dated 2026-08-07. Its sections describe the design as it was made,
+and they are the authority on the design; this appendix is the authority on what has
+moved under it. Each row names what moved, what carries it, and the section it lands
+on. Sections that would mislead a reader acting on them carry a dated marker of their
+own, and this table is the index to all of them.
+
+| when | what moved | lands on |
+|---|---|---|
+| 2026-08-11 | the three `brew/*.list` files were deleted; `bootstrap.d/Brewfile` replaced them, audited rather than translated (`30369c3`) | §3.1 |
+| 2026-08-11 | the fish phase stopped running `fisher install` unconditionally, and the manifest began seeding fisher's record (`92fd687`) | Known gap 4 — closed |
+| 2026-08-11 | the login shell is read from the passwd database, with `$SHELL` only as a fallback (`c9a9921`) | Known gap 5 — closed |
+| 2026-08-17 | `linux-dotfiles` and `linux-stage-zero` landed. Linux executes now; the phases after stage zero are still unasserted, and what the jobs do not gate is the coverage that remains | §11's honest limits, Known gap 1, Risks |
+| 2026-09-21 | the tool was cut to six commands, and `~/.claude/skills` stopped being a manifest row (`f3b4a74`). Harness skill symlinking is `agents wire`'s job | §6, §10 |
+| 2026-10-09 | `agents` is installed from the Homebrew tap as a `Brewfile` row instead of being built from a checkout, and the `Makefile` with its `agents` target is gone (`1d6e323`) | §3.3, §6, §9, §11, §12 |
+| 2026-10-09 | the `packages` check was removed rather than repaired | §10 — seven checks remain |
+| 2026-10-09 | `agents githook` replaced the `argv[0]` multicall (`35d9322`); the tool has seven commands, and `--all` lists `githook` | §10, and any count of commands |
+| 2026-10-12 | `docs/archive/` was deleted, taking the plan this spec was executed under | the status note at the top |
+
+One consequence is worth stating outright, because it is the change most likely to be
+missed: **`agents` is no longer built from this checkout.** It arrives as a package, in
+the phase that installs packages, so the ordering argument in §6 — that `agents` was
+built by phase 40 and therefore could not be a dependency of phase 20 — no longer holds.
+What keeps the harness rows in `links.manifest` is the division of labour: that table
+links, and `agents` generates.

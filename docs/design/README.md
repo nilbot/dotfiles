@@ -15,12 +15,23 @@ store is read by agents that act on what they find, so a retired design is an
 instruction with a warning label; git history holds every one of them, and
 `git log --diff-filter=D -- docs/` lists what went.
 
-A document that is still in force is kept true to the implementation, in place.
-Where the document and the code disagree, the code governs and the document is
-corrected where it stands: a live spec does not get a mending document of its own,
-because that doubles the store and leaves the wrong sentence in front of the
-reader. A **dated amendment** records a change of meaning; a claim that has simply
-drifted with the code is corrected outright.
+A document that is still in force is kept true to the implementation. A live spec does
+not get a mending document of its own: that doubles the store and leaves the wrong
+sentence in front of the reader. Which of three forms the correction takes depends on
+what went wrong.
+
+- **The document was wrong** — a count, a path that never existed, a rule attributed to
+  the wrong spec. Correct it where it stands. An index entry does not stop a reader
+  acting on a wrong instruction.
+- **The document's meaning changed** — a decision was revisited. Record it as a dated
+  amendment at the point of use, keeping the reasoning it replaced.
+- **The world moved under a correct claim** — a premise the design relied on stopped
+  holding. Record it in an **appendix** at the end of the document, indexed by what
+  moved, what carries it, and the section it lands on, and point at the appendix from
+  the document's head. The section itself carries a dated marker only when leaving it
+  as written would mislead a reader acting on it: the original sentence is the record of
+  what was designed against, and rewriting it destroys the reasoning and puts a fresh
+  claim in its place.
 
 ## Specs
 
