@@ -98,7 +98,9 @@ derived from the repository root** — without that, a main checkout and a git
 worktree share one binary and whichever built first wins, running old code
 against a new tree. It rebuilds when any `.go` file, `go.mod`, or a source
 directory is newer than the binary (directories, so a deletion counts), then
-`exec`s it with the original arguments. Every shim failure exits `2`.
+`exec`s it with the original arguments. Every failure the shim can *report* exits
+`2`; a failed `exec` is the one it cannot intercept, and the shell's own code
+reaches the caller — measured as 1 on bash 3.2.57 and 126/127 on 5.3.15.
 
 **Building from the checkout, not installing a release.** The binary always
 matches the tree you cloned: no release-version coordination, no drift between
@@ -229,6 +231,14 @@ type Interface interface {
 	Seed(source, target string) error
 	Run(name string, args ...string) error
 	Sudo(name string, args ...string) error
+
+	// mutations the migrations need (§8.1). They are in the interface the
+	// phases use, and the phase package still cannot reach the machine any
+	// other way.
+	Copy(source, target string) error
+	Rename(source, target string) error
+	RemoveAll(path string) error
+	WriteFile(path string, data []byte) error
 }
 ```
 
@@ -305,14 +315,17 @@ become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
 fixed and the fish regression §7 fixes.
 
-**Harness skill directories are ordinary rows.** `.agents/skills/` is the single
-home for bundled skills, and a harness that needs them under its own path gets one
-row here pointing at it.
+**Harness instruction files are ordinary rows.** `links.manifest` points three
+harness paths at one tracked file. Skill directories are `agents wire`'s job, not
+this table's: a harness writes into its own skills path, and §1's rule says a path
+another program writes must never be a link into this repository.
 
-This has to be the bootstrap's job rather than `agents`', for a hard reason:
-**`agents` is a Go binary built by phase 40, so it cannot be a dependency of
-phase 20.** The trigger for revisiting, stated the way the deleted spec 4 states its
-triggers:
+This is the bootstrap's job rather than `agents`'. The reason once given was
+ordering: **`agents` was a Go binary built by phase 40, so it could not be a
+dependency of phase 20.** That reason is gone — it arrives with the packages phase's
+`Brewfile` row, well before phase 20 — and what remains is the division of labour:
+this table links, and generation is `agents`'. The trigger for revisiting, stated the
+way the deleted spec 4 states its triggers:
 
 > Move global harness assets into `agents` when they need **generation** rather
 > than **linking** — when a global config must be merged into a file the harness
@@ -346,8 +359,8 @@ the two files fisher writes, `config.fish` and `fish_plugins`.
 Per-file symlinking does **not** fix this, and that is the important part.
 Third-party installers write to `config.fish` by appending managed blocks, so
 the one file that must be tracked is also the one file that gets written to. The
-evidence is in the repo: tracked `fish/config.fish` carries a
-`# >>> grok installer >>>` block, and tracked `fish/mypost.fish` carries a block
+evidence is in git history: tracked `fish/config.fish` carried a
+`# >>> grok installer >>>` block, and tracked `fish/mypost.fish` carried a block
 marked *"managed by 'mamba init'"*. Both arrived because the well-known path was
 a link into the repo.
 
@@ -549,7 +562,8 @@ and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
 4. `~/.config/fish/config.fish` still contains its `source` line.
 5. `~/.gitconfig` includes the current shared-config path.
 6. Login shell is fish; fish is present in `/etc/shells`. *(workstation only)*
-7. `agents` on `PATH`, with `agents doctor`'s result folded in. *(workstation only)*
+7. `agents` on `PATH`. *(workstation only)* — a `LookPath` and nothing more;
+   `agents doctor`'s result was never folded in.
 8. `Brewfile` packages present. *(workstation only)* — **removed 2026-10-09.** The
    check ran `brew bundle check`, and the `brew` wrapper auto-updates Homebrew before
    it dispatches, so the query verb mutated the machine it was reporting on. With the
@@ -621,20 +635,27 @@ filesystem, no subprocess — phases are pure functions over an interface:
 
 - `plan` changes nothing — a tree snapshot before and after is identical,
   compared by content and link target, not merely by name and kind.
-- `apply dotfiles` twice: the second run is entirely no-ops. Idempotence is the
-  property the Makefile never had.
+- `apply dotfiles`, then `check dotfiles` (`TestCheckIsHealthyAfterApply`): the
+  machine stays converged once the applier has exited. Deliberately not a second
+  `apply`, which would hide the defect by fixing what it measured. Per-operation
+  idempotence is pinned at the unit level, and it is the property the Makefile
+  never had.
 - Phase 40 invokes `install-hooks.sh` with the correct arguments.
 
 **Architecture test:** `internal/phase`'s import set contains no I/O package.
 This is the §4 invariant, checked exactly.
 
 **Honest limits.** Phases 10, 30 and 40 need network, `sudo`, and a package
-manager; their logic is covered by fakes and their real execution is not
-exercised end-to-end. **No Linux machine was available to verify against**, so
-Linux support shipped written and unit-tested but never executed on Linux. That
-is recorded in [Known gaps](#known-gaps-2026-08-11) and in [Risks](#risks), not
-claimed as working. The shim itself is shell and has a small integration test,
-but its Go-absent branch cannot be tested on a machine that has Go.
+manager; their logic is covered by fakes. On Linux `linux-stage-zero` executes them
+end-to-end and does not assert the result; on macOS they are not executed at all.
+**No Linux machine was available to verify against**, so
+Linux support first shipped written and unit-tested but never executed there. Since
+2026-08-17 it is: CI runs the `dotfiles` profile's `plan`, `apply` and `check` in a
+Debian container on every pull request, and `linux-stage-zero` runs
+`apply workstation` on Debian and Arch. What remains unasserted is recorded in
+[Known gaps](#known-gaps-2026-08-11) and in [Risks](#risks), not claimed as working.
+The shim itself is shell and has a small integration test, but its Go-absent branch
+cannot be tested on a machine that has Go.
 
 ## 12. Commit order
 
@@ -729,26 +750,28 @@ request. All three exit 0, and `check` after `apply` asserts the machine stays
 converged rather than merely that the applier reported success.
 
 What that covers: preflight, the config phase's ten manifest rows on Linux
-paths, and the verify phase. What it does not, which is the larger part:
+paths, and the verify phase. What is still not covered:
 
-- the stage-zero package selection, and any distribution other than Debian
-- the Homebrew prefix at `/home/linuxbrew/.linuxbrew`
-- `chsh` under a different `/etc/shells` convention
-- `Applier.run` leaves `cmd.Stdin` nil, so stage zero's `Sudo` calls need
-  cached sudo credentials or they fail with "no tty present" — untested,
-  because the `dotfiles` profile takes no sudo at all
+- any distribution other than Debian and Arch, the two the stage-zero job runs
+- the no-tty `sudo` failure: `Applier.run` leaves `cmd.Stdin` nil, so stage
+  zero's `Sudo` calls need cached credentials, and the job's passwordless
+  `sudo` hides that
+- an assertion on the phases after stage zero, which the job executes on both
+  images and reports `apply`'s exit code for rather than gating on
 
-The profile that is now exercised on Linux is precisely the one designed to
-need none of the above. That is what makes it safe to run in CI, and it is
-also why it cannot stand in for the `workstation` profile.
+The `dotfiles` profile is precisely the one designed to need none of the
+machine-specific paths the `workstation` profile touches. That is what makes it safe
+to run in CI, and it is also why it cannot stand in for the `workstation` profile.
 
 **Stage zero itself is now covered too, and no further.** Spec 5's
 `linux-stage-zero` job runs `apply workstation` on `debian:stable-slim` and
 `archlinux:base` — the only route to `stageZero`, since `phase.For` excludes
 `packages` from the `dotfiles` profile and there is no per-phase flag. It
-gates two things: that the run reaches stage zero, and that `gcc` and `file`
-exist afterwards. It deliberately does **not** gate the phases after stage
-zero, because those are not yet working on Linux and gating them would make
+gates that the run reaches stage zero, that stage zero's four tools are present
+afterwards, and that the tap's `agents` reached the machine — the last added
+2026-10-09 with the `Brewfile` row that ships it. It deliberately does **not** gate
+the phases after stage zero, because those are not yet working on Linux and gating
+them would make
 every pull request wait on the whole Linux port. The job reports `apply`'s exit
 code rather than swallowing it, so a later-phase failure is visible in the log
 without blocking a merge.
@@ -786,11 +809,12 @@ warn, 3 fail`, and those three were what remained open on Linux:
   `.github/workflows/verify.yml` now probes for the tap's binary with the Homebrew
   prefix on `PATH` — the re-check the removal called for.
 
-`brew bundle` is now exercised in full on Debian: `complete! 30 Brewfile
-dependencies now installed`, which is every `brew` line in the file — the
-remaining two entries are casks, and casks are macOS-only. (This sentence
-previously said 36 formulae. The Brewfile holds 30 `brew` and 2 `cask` lines;
-36 was never a count of anything in it.) On Arch it has failed once inside
+`brew bundle` is exercised in full on Debian: `complete! 30 Brewfile dependencies
+now installed` was the whole file when that was measured — 30 `brew` and 2 `cask`
+lines, and casks are macOS-only. It holds 31 `brew` lines today, the tap's `agents`
+row having arrived on 2026-10-09, so the quoted output is a dated measurement rather
+than the current count. (This sentence previously said 36 formulae; 36 was never a
+count of anything in it.) On Arch it has failed once inside
 `brew bundle` on a corrupted partial download in Homebrew's own cache — not
 this repository's code, and absorbed by the narrowing rather than fixed.
 
@@ -815,25 +839,26 @@ Both were hit on the repository owner's machine immediately after merge. Neither
 was visible to the test suite, because every test drives the fake `Machine` and
 `install_fisher` is never really executed.
 
-**4. The fish phase is not idempotent, and its failure destroys the record that
-would fix it.** `install_fisher` runs `fisher install` unconditionally on every
-apply. Where fisher's own record — `$__fish_config_dir/fish_plugins` — does not
-list plugins whose files are already on disk, fisher refuses each with "please
-remove or move conflicting files first" and the phase exits 1, taking devtools and
-verify with it. It then makes the next run fail identically: with nothing
-successfully installed, `fisher.fish` reaches `command rm -f $fish_plugins` and
-**deletes the record**, so the machine cannot recover by retrying. Recovery is to
-write `fish_plugins` listing the plugins whose files are present, after which
-fisher treats them as updates. The phase should establish that state itself rather
-than requiring an operator to know this.
+**4. (closed 2026-08-11 by `92fd687`.)** The fish phase was not idempotent, and its
+failure destroyed the record that would fix it. `install_fisher` ran `fisher install`
+unconditionally on every apply. Where fisher's own record —
+`$__fish_config_dir/fish_plugins` — did not list plugins whose files were already on
+disk, fisher refused each with "please remove or move conflicting files first" and
+the phase exited 1, taking devtools and verify with it. It then made the next run
+fail identically: with nothing successfully installed, `fisher.fish` reached
+`command rm -f $fish_plugins` and **deleted the record**, so the machine could not
+recover by retrying. The phase now installs only onto a machine with no plugin files
+and otherwise reports "leaving them alone", and `links.manifest:34` seeds the record
+from `fish/fishfile`.
 
-**5. The login-shell check trusts `$SHELL`.** `check`'s `login-shell` and the fish
-phase's `chsh` decision both read `Context.Shell`, which `main.go` takes from
-`os.Getenv("SHELL")`. That is inherited and need not describe the account: run from
-a process started under another shell, `check` reports "the login shell is /bin/zsh,
+**5. (closed 2026-08-11 by `c9a9921`.)** The login-shell check trusted `$SHELL`.
+`check`'s `login-shell` and the fish phase's `chsh` decision both read
+`Context.Shell`. That is inherited and need not describe the account: run from a
+process started under another shell, `check` reported "the login shell is /bin/zsh,
 not fish" on a machine whose passwd entry says `/opt/homebrew/bin/fish`, and the
-phase would plan a `sudo chsh` that is not needed. The passwd database is the
-authority; `$SHELL` is a hint.
+phase planned a `sudo chsh` that was not needed. `main.go` now asks the passwd
+database first — `dscl` on macOS, `getent` elsewhere — and falls back to `$SHELL`
+only when neither answers.
 
 ---
 
@@ -841,7 +866,7 @@ authority; `$SHELL` is a hint.
 
 | Risk | Mitigation |
 |---|---|
-| Linux support is written but never executed on Linux — no phase of this design has run there | Partly mitigated 2026-08-17. Spec 5's `linux-dotfiles` job runs the `dotfiles` profile's `plan`, `apply` and `check` in a Debian container on every pull request. The `workstation` profile, every non-Debian distribution, and all of stage zero remain unexecuted on Linux: see [Known gaps](#known-gaps-2026-08-11) 1. |
+| Linux support was written before any Linux machine was available to execute it | Retired for the `dotfiles` profile and for stage zero on 2026-08-17: `linux-dotfiles` runs that profile's `plan`, `apply` and `check` in a Debian container on every pull request, and `linux-stage-zero` runs `apply workstation` on Debian and Arch. The `workstation` profile's phases after stage zero remain unasserted — the job executes them and reports `apply`'s exit code — and no distribution other than Debian and Arch is exercised: see [Known gaps](#known-gaps-2026-08-11) 1. |
 | `plan` exits 2 on a machine that lacks Homebrew or fish, instead of previewing | Accepted deliberately, not mitigated. [Known gaps](#known-gaps-2026-08-11) 2 records why, and what closing it would cost. |
 | Linux has no managed nerd font | Not mitigated. The cask is macOS-only and the vendored Linux installer was removed. [Known gaps](#known-gaps-2026-08-11) 3. |
 | The `gitconfig.shared` rename silently empties shared git config on existing machines | `migrate` repoints the include; `check` #5 detects a stale one. |

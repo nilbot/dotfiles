@@ -15,6 +15,13 @@ store is read by agents that act on what they find, so a retired design is an
 instruction with a warning label; git history holds every one of them, and
 `git log --diff-filter=D -- docs/` lists what went.
 
+A document that is still in force is kept true to the implementation, in place.
+Where the document and the code disagree, the code governs and the document is
+corrected where it stands: a live spec does not get a mending document of its own,
+because that doubles the store and leaves the wrong sentence in front of the
+reader. A **dated amendment** records a change of meaning; a claim that has simply
+drifted with the code is corrected outright.
+
 ## Specs
 
 Numbers are stable catalog identifiers, not priority or order.
