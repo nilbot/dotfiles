@@ -53,9 +53,8 @@ carried it, and the test pins that asserted it all went the same day. That build
 compiled this checkout into
 `~/bin/agents`, a second `agents` beside the released one, and the two owners
 disagreed about which binary the hook chain ran — measured here as
-`bootstrap apply workstation` exiting 2 in the devtools preflight. The decision,
-its evidence and the order the removal lands in are in
-[the personal build removal analysis](docs/design/2026-10-09-the-personal-build-removal-analysis.md).
+`bootstrap apply workstation` exiting 2 in the devtools preflight. The decision is
+2026-10-09: the checkout build is gone, and the chain names the released binary.
 Provisioning belongs to `./bootstrap`. For an inner loop,
 `go build -o /tmp/agents .` writes no global path and installs nothing.
 

@@ -4,7 +4,7 @@
 **Status:** version three. Attacked by an adversarial reviewer; the migration surface
 measured on a wired machine. No code changed.
 **Replaces:** the two-mode resolution in
-[binary identity and standalone resolution](2026-08-28-binary-identity-and-standalone-resolution.md).
+binary identity and standalone resolution.
 **Depends on:** the boundary between `agents` and `bootstrap`
 ([the boundary document](2026-09-20-agents-and-bootstrap-boundary.md)).
 
@@ -26,7 +26,7 @@ only "look in this directory".
 There is **one build** of `agents` on a machine like this one: the released binary,
 installed by Homebrew. The checkout build that also existed — `make agents`, and
 `bootstrap`'s devtools phase — **was deleted on 2026-10-09**
-([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md)). A
+(the removal analysis). A
 developer may still build one to try a change; it installs nothing and wires
 nothing.
 
@@ -116,7 +116,7 @@ those four files contain, not through any setting.
 stages.** Its path says nothing, and there is no build step to stamp one in: the
 release is compiled by CI from a tag, and `bootstrap`'s devtools phase stops
 compiling anything
-([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6). So
+(the removal analysis §6). So
 the fact is a property of the machine, and the machine's wiring has to state it.
 
 **F3. An upgrade deletes the binary the hooks point at, and Git reports nothing.**
@@ -341,7 +341,7 @@ Nothing else reads the stamp. `dotfilesRoot` disappeared with `agents/root.go` a
 with the builders that stamped it — the `Makefile` and
 `bootstrap.d/makefile_test.go` are deleted, and
 `bootstrap.d/internal/phase/devtools.go` no longer builds the binary at all; it
-resolves the released one ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6).
+resolves the released one (the removal analysis §6).
 The citations this paragraph carried when it was written — `Makefile:40`,
 `devtools.go:88`, `makefile_test.go:110,165`, `devtools_test.go:22,153` — name
 lines in files that no longer exist, and are recorded here rather than left
@@ -652,7 +652,6 @@ what the change makes of it:
 
 | surface | what the change does to it |
 |---|---|
-| **The builders** — `script/package-release.sh:7-10` (version and commit), and, when this was written, `Makefile:40` and `bootstrap.d/internal/phase/devtools.go:86-89` (the stamp) | the release builder keeps stamping version and commit; the `-X main.dotfilesRoot` flag and the two build commands that passed it went with the personal build ([the removal analysis](2026-10-09-the-personal-build-removal-analysis.md) §6), and the `Makefile`, `bootstrap.d/makefile_test.go` and the exact-command pins (`devtools_test.go:22,153`) went with them. `devtools.go` now resolves the released `agents` through Homebrew |
 | **The release path** — `release.yml:57-97` (version and SHA), `:120` (`package-release.sh` is passed the version, not the commit, which is why the script derives it a second time), `:134-138` (archive name and the version-output glob), `:190-201` (the tap) | one fact — the commit — is derived twice today. This design does not change that, and whoever sequences this work should decide whether to fix it here or separately |
 | **The installer** — `git/install-hooks.sh` in full: `:61` (the four names), `:139-168` (the symlink checks), `:191-208` (keg path shape), `:259-279` (the writes), `:281-287` (the keg note) | rewritten to write entries, with the table above as its specification |
 | **The consumers** — `agents/cmd_version.go:12`, `agents/root.go:15-30`, `agents/cmd_doctor.go:29-40` (the root read, at `:32`), `agents/internal/doctor/doctor.go:149-173` and `:621-644`, `agents/main.go:24-58` | the stamp goes and `doctor` reads the record instead; the multicall becomes `githook`; the link comparison becomes `chain:running`. `cmd_doctor.go:71-80` is unaffected: it reads the running binary's own path |

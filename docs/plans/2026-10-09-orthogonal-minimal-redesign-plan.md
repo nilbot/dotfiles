@@ -5,7 +5,7 @@
 **Designs:** [what a query is](../../../dotfiles.worktrees/what-a-query-is/docs/design/2026-10-09-what-a-query-is.md)
 (branch `design/what-a-query-is`) and
 [one record for binary identity](../../../dotfiles.worktrees/identity-design/docs/design/2026-10-07-one-record-for-binary-identity.md)
-with [the removal analysis](../../../dotfiles.worktrees/identity-design/docs/design/2026-10-09-the-personal-build-removal-analysis.md)
+with the removal analysis
 (branch `design/one-record-for-identity`).
 
 Every step below states what changes, the check that must pass before the next step

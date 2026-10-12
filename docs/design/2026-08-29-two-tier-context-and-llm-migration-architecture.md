@@ -3,7 +3,7 @@
 **Date:** 2026-08-29 (Updated 2026-08-31; **amended 2026-09-01**, see Amendment 1; **amended 2026-09-21**, see Amendment 3)  
 **Status:** Implemented 2026-08-31; §7 amended 2026-09-01 after the skill it specifies shipped contradicting it; **§4, §5 and §7 retired 2026-09-21**  
 **Applies to:** `agents` CLI (`init`, `wire`, `doctor`), `AGENTS.md` / `CLAUDE.md`, `.agents/AGENTS.md`, `.agents/skills/`  
-**Depends on:** Spec 1 (harness adapters, exit codes), Knowledge is Documentation (2026-08-19), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), [Binary Identity & Standalone Resolution](2026-08-28-binary-identity-and-standalone-resolution.md) (2026-08-28)  
+**Depends on:** Spec 1 (harness adapters, exit codes), Knowledge is Documentation (2026-08-19), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), Binary Identity & Standalone Resolution (2026-08-28)  
 **Reads against:** [`docs/qna/why-does-agents-init-never-update-existing-instructions.md`](../qna/why-does-agents-init-never-update-existing-instructions.md), [`docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md`](../qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md)
 
 ---
@@ -12,7 +12,7 @@
 
 The `migrating-fleet-context` skill authored against §7 of this document shipped
 contradicting the tooling it drives. The review is in
-[`docs/journal/2026-09-01-why-the-migration-skill-shipped-hollow.md`](../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md);
+`docs/journal/2026-09-01-why-the-migration-skill-shipped-hollow.md`;
 four of the defects traced to this spec rather than to the plan or the skill.
 The corrections are applied in the body below. This section is the record of
 what they replaced, because the spec is the design still in force and the

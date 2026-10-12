@@ -203,7 +203,7 @@ Homebrew instead — so there is no `~/bin/agents` to install or to name.
 > this document's own §9 records as the one no phase reconciled and no check
 > noticed. The Git-hook step's delegation, and the reason it is delegated rather
 > than reimplemented, are untouched. See
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+> the personal build removal analysis.
 
 ## 4. The dry-run invariant
 
@@ -643,7 +643,7 @@ executed in:
    `Makefile` was removed entirely with the personal build, not reduced. That is
    this list's own logic carried one step further — the target was the last
    thing no phase owned. The release path is `script/package-release.sh` and the
-   Homebrew tap. See [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+   Homebrew tap. See the personal build removal analysis.
 7. This document's status, and the README table row, updated.
 
 ---
@@ -959,7 +959,7 @@ demonstrates. It would improve on today without being the right shape.
 > the whole file is retiring — decided 2026-10-09, with the personal build — so
 > "rebuilding the Makefile" is now moot rather than merely wrong-shaped. The
 > paragraph stays as the reason the file is not coming back. See
-> [the personal build removal analysis](2026-10-09-the-personal-build-removal-analysis.md).
+> the personal build removal analysis.
 
 **A Homebrew-distributed bootstrap binary** (`brew install nilbot/tap/dotfiles`).
 Note this is *not* the same as §2.1's build-from-checkout, which was adopted.
