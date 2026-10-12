@@ -895,21 +895,23 @@ only when neither answers.
 
 This document is dated 2026-08-07. Its sections describe the design as it was made,
 and they are the authority on the design; this appendix is the authority on what has
-moved under it. Each row names what moved, what carries it, and the section it lands
-on. Sections that would mislead a reader acting on them carry a dated marker of their
-own, and this table is the index to all of them.
+moved under it. Each row names what moved, what carries it, and where it lands, saying
+whether that place carries its own marker — so a reader can tell from this table alone
+which sections have moved and which are as designed.
 
-| when | what moved | lands on |
-|---|---|---|
-| 2026-08-11 | the three `brew/*.list` files were deleted; `bootstrap.d/Brewfile` replaced them, audited rather than translated (`30369c3`) | §3.1 |
-| 2026-08-11 | the fish phase stopped running `fisher install` unconditionally, and the manifest began seeding fisher's record (`92fd687`) | Known gap 4 — closed |
-| 2026-08-11 | the login shell is read from the passwd database, with `$SHELL` only as a fallback (`c9a9921`) | Known gap 5 — closed |
-| 2026-08-17 | `linux-dotfiles` and `linux-stage-zero` landed. Linux executes now; the phases after stage zero are still unasserted, and what the jobs do not gate is the coverage that remains | §11's honest limits, Known gap 1, Risks |
-| 2026-09-21 | the tool was cut to six commands, and `~/.claude/skills` stopped being a manifest row (`f3b4a74`). Harness skill symlinking is `agents wire`'s job | §6, §10 |
-| 2026-10-09 | `agents` is installed from the Homebrew tap as a `Brewfile` row instead of being built from a checkout, and the `Makefile` with its `agents` target is gone (`1d6e323`) | §3.3, §6, §9, §11, §12 |
-| 2026-10-09 | the `packages` check was removed rather than repaired | §10 — seven checks remain |
-| 2026-10-09 | `agents githook` replaced the `argv[0]` multicall (`35d9322`); the tool has seven commands, and `--all` lists `githook` | §10, and any count of commands |
-| 2026-10-12 | `docs/archive/` was deleted, taking the plan this spec was executed under | the status note at the top |
+| when | what moved | carried by | lands on |
+|---|---|---|---|
+| 2026-08-11 | the three `brew/*.list` files were deleted; `bootstrap.d/Brewfile` replaced them, audited rather than translated | `30369c3` | §3.1 — marked |
+| 2026-08-11 | the fish phase stopped running `fisher install` unconditionally, and the manifest began seeding fisher's record | `92fd687` | Known gap 4 — marked closed |
+| 2026-08-11 | the login shell is read from the passwd database, with `$SHELL` only as a fallback | `c9a9921` | Known gap 5 — marked closed |
+| 2026-08-17 | `linux-dotfiles` and `linux-stage-zero` landed. Linux executes now; the phases after stage zero are still unasserted, and what the jobs do not gate is the coverage that remains | `d64c9bb`, `4415212` | the honest limits in §11, Known gap 1, and Risks — all three marked |
+| 2026-09-21 | the tool was cut to six commands, and `~/.claude/skills` stopped being a manifest row. Harness skill symlinking is `agents wire`'s job | `f3b4a74` | §6 — corrected in place |
+| 2026-10-09 | `agents` is installed from the Homebrew tap as a `Brewfile` row instead of being built from a checkout | `1d6e323` | §3.3, §6, §9, §12 — marked |
+| 2026-10-09 | the `Makefile`, and with it the last way to build `agents` from a checkout, was deleted | `db03eb3` | §9, §12 — marked |
+| 2026-10-09 | the `packages` check was removed rather than repaired | `856cedf` | §10, which keeps seven checks, and Known gap 1 — both marked |
+| 2026-10-09 | the reclaiming migration was deleted, so the kind is kept with no instance and `~/sdk/mambaforge` is reclaimed by hand or not at all | `4c5fcff` | §8.1, §9, Measured facts — all marked |
+| 2026-10-09 | `agents githook` replaced the `argv[0]` multicall, and the tool has seven commands | `35d9322` | no section of this document; the count is in `docs/design/README.md` and the qna store |
+| 2026-10-12 | `docs/archive/` was deleted, taking the plan this spec was executed under | `f083dac` | the status note at the top — marked |
 
 One consequence is worth stating outright, because it is the change most likely to be
 missed: **`agents` is no longer built from this checkout.** It arrives as a package, in

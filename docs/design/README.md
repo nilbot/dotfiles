@@ -17,21 +17,30 @@ instruction with a warning label; git history holds every one of them, and
 
 A document that is still in force is kept true to the implementation. A live spec does
 not get a mending document of its own: that doubles the store and leaves the wrong
-sentence in front of the reader. Which of three forms the correction takes depends on
-what went wrong.
+sentence in front of the reader. The correction takes one of three forms, and one change
+can call for two of them.
 
 - **The document was wrong** — a count, a path that never existed, a rule attributed to
   the wrong spec. Correct it where it stands. An index entry does not stop a reader
   acting on a wrong instruction.
 - **The document's meaning changed** — a decision was revisited. Record it as a dated
-  amendment at the point of use, keeping the reasoning it replaced.
+  amendment at the point of use, keeping the reasoning it replaced. Most of this store
+  uses this form, and a document short enough to hold in mind needs no other.
 - **The world moved under a correct claim** — a premise the design relied on stopped
-  holding. Record it in an **appendix** at the end of the document, indexed by what
-  moved, what carries it, and the section it lands on, and point at the appendix from
-  the document's head. The section itself carries a dated marker only when leaving it
-  as written would mislead a reader acting on it: the original sentence is the record of
-  what was designed against, and rewriting it destroys the reasoning and puts a fresh
-  claim in its place.
+  holding. Add an **appendix** at the end of the document and point at it from the
+  document's head. A long document needs one, because a reader cannot hold its moved
+  parts in mind; the appendix is where they are listed in one screen.
+
+**Where two forms apply, the in-place text is the correction and the appendix entry is
+the index to it.** A claim that is wrong and whose premise also moved is corrected where
+it stands and listed in the appendix. Mark a section in place whenever leaving it
+unmarked would mislead a reader acting on what it says — and that includes a list or a
+table that has become incomplete, not only an instruction. Each appendix row says
+whether its landing carries a marker, so the table answers that without the reader
+opening the section.
+
+An amendment whose subject is deleted goes with it: delete the amendment and the section
+together, and let git history hold both.
 
 ## Specs
 
