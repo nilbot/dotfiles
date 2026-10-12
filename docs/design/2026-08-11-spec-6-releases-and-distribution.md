@@ -2,7 +2,10 @@
 
 **Date:** 2026-08-10 (as part of spec 5's scope note) / 2026-08-11 (split out) / 2026-08-28 (designed & implemented)  
 **Status:** Designed & Implemented (2026-08-28)  
-**Depends on:** Spec 1 (Go module, security boundaries, harness wiring) — deleted 2026-10-12; git history holds it, and the code is what it described, [Spec 5](2026-08-11-spec-5-verification-gate.md) (automated verification gate), Knowledge is Documentation — deleted 2026-10-12  
+**Depends on:** [spec 5](2026-08-11-spec-5-verification-gate.md), for the verification gate.
+Two things it also rested on — spec 1 (the module and security boundaries) and
+Knowledge is Documentation — were deleted on 2026-10-12; the code is what they
+described.  
 **Carries obligations from:** [Spec 2](2026-08-07-spec-2-dotfiles-hygiene.md)  
 
 ---
