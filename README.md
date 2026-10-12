@@ -104,14 +104,15 @@ agents help --render=markdown
 | `agents help` | print the listing, or one command's page |
 | `agents init` | create .agents/, the doc stores, and the wiring |
 | `agents wire` | remove this tool's entries from harness configs |
-
-A **harness** is an AI coding tool whose config file this repository edits — Claude
-Code, Codex, Antigravity. `wire` is the command that reconciles those files.
 | `agents doctor` | report wiring, trust, and scaffold state |
 | `agents version` | print binary version and build provenance |
 | `agents guard` | pre-commit checks (the only command that blocks) |
 | `agents githook` | run one Git hook for the chain entry that invoked it |
 <!-- END GENERATED -->
+
+A **harness** is an AI coding tool whose config file this repository edits —
+Claude Code, Codex, Antigravity. `wire` is the command that reconciles those
+files.
 
 ## Development & Contributing
 
