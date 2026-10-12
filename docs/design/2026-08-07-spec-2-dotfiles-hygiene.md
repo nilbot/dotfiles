@@ -895,9 +895,14 @@ only when neither answers.
 
 This document is dated 2026-08-07. Its sections describe the design as it was made,
 and they are the authority on the design; this appendix is the authority on what has
-moved under it. Each row names what moved, what carries it, and where it lands, saying
-whether that place carries its own marker — so a reader can tell from this table alone
-which sections have moved and which are as designed.
+moved under it. Each row names what moved, what carries it, where it lands, and whether
+that landing carries a dated marker of its own — so a reader can see, without opening
+the section, whether the text there has been corrected.
+
+The table lists the changes that landed on a section of *this* document. Sections also
+carry dated markers it does not index: §2.2's re-scoping away from spec 5, §3.2's first
+real run on 2026-08-17, §5's note on what the deleted Makefile did, and the block of
+Measured facts. A reader who needs certainty about one section should read it.
 
 | when | what moved | carried by | lands on |
 |---|---|---|---|
@@ -905,8 +910,8 @@ which sections have moved and which are as designed.
 | 2026-08-11 | the fish phase stopped running `fisher install` unconditionally, and the manifest began seeding fisher's record | `92fd687` | Known gap 4 — marked closed |
 | 2026-08-11 | the login shell is read from the passwd database, with `$SHELL` only as a fallback | `c9a9921` | Known gap 5 — marked closed |
 | 2026-08-17 | `linux-dotfiles` and `linux-stage-zero` landed. Linux executes now; the phases after stage zero are still unasserted, and what the jobs do not gate is the coverage that remains | `d64c9bb`, `4415212` | the honest limits in §11, Known gap 1, and Risks — all three marked |
-| 2026-09-21 | the tool was cut to six commands, and `~/.claude/skills` stopped being a manifest row. Harness skill symlinking is `agents wire`'s job | `f3b4a74` | §6 — corrected in place |
-| 2026-10-09 | `agents` is installed from the Homebrew tap as a `Brewfile` row instead of being built from a checkout | `1d6e323` | §3.3, §6, §9, §12 — marked |
+| 2026-09-21 | the tool was cut to six commands, and `~/.claude/skills` stopped being a manifest row. Harness skill symlinking is `agents wire`'s job | `f3b4a74` | §6 — corrected in place, no dated marker; the command cut lands on no section here |
+| 2026-10-09 | `agents` is installed from the Homebrew tap as a `Brewfile` row instead of being built from a checkout | `1d6e323` | §3.3 and §12 — marked; §6 — corrected in place, no dated marker |
 | 2026-10-09 | the `Makefile`, and with it the last way to build `agents` from a checkout, was deleted | `db03eb3` | §9, §12 — marked |
 | 2026-10-09 | the `packages` check was removed rather than repaired | `856cedf` | §10, which keeps seven checks, and Known gap 1 — both marked |
 | 2026-10-09 | the reclaiming migration was deleted, so the kind is kept with no instance and `~/sdk/mambaforge` is reclaimed by hand or not at all | `4c5fcff` | §8.1, §9, Measured facts — all marked |
