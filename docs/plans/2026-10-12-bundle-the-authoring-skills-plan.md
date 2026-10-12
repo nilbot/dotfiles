@@ -22,47 +22,62 @@ They belong in the binary for the same reason.
 1. Copy each skill to `agents/internal/scaffold/assets/skills/<name>/SKILL.md`.
    They are already in the shape the embed expects; `recording-what-you-learn` is
    the model.
-2. Register both in the two places that hold the current one: `bundledSkills`
-   (`agents/internal/scaffold/scaffold.go:116`), which `init` iterates, and
-   `skillAssets` (`:141`), which resolves a name to an asset. The comment above
-   `bundledSkills` says "recording-what-you-learn is the only one" and has to go
-   with the change.
+2. **Collapse the two registries before adding to them.** `bundledSkills`
+   (`agents/internal/scaffold/scaffold.go:116`) is the ordered name list `init`
+   iterates; `skillAssets` (`:141`) maps a name to its asset path. The two must
+   agree and nothing checks that they do, so three skills would be six places to
+   keep in step. Make one ordered list of name-with-path, derive the lookup from
+   it, and export it, so the installer, the lookup and the guards all read one
+   list. The comment above `bundledSkills` says "recording-what-you-learn is the
+   only one" and goes with the change.
 3. Widen the two guards that name one skill by hand.
    `TestInstalledSkillMatchesTheBinary` (`agents/docs_test.go:175`) and
    `TestInstalledSkillNamesNoDeletedCommand` (`:204`) each carry
-   `"recording-what-you-learn"` as a constant, and both should iterate the bundled
-   set. That needs an exported way to enumerate it first: `bundledSkills` is
-   unexported in `internal/scaffold` and `docs_test.go` is package `main`, and
-   `SkillAssetPath` resolves a name without listing any.
-4. **Ask the assets the three questions no guard asks.** `SkillCurrent`
-   (`agents/internal/scaffold/scaffold.go:356`) reads an embedded skill, but only
-   to compare its digest with the installed copy. Nothing opens `assets/**` to
-   check what the text *says*: the backwards checks in `agents/docs_test.go` walk
-   `.agents/skills/**` and the two stores, and no test, walk or CI step reaches the
-   assets for path, command or citation validity. That is how
-   `recording-what-you-learn` shipped pointing at
-   `docs/design/2026-08-19-knowledge-is-documentation.md` after that design was
-   deleted, and how v0.8.1 was found carrying one more of the same. Widen a walk to the
-   assets or pin each one, and ask of each: does every path it names resolve, does
-   every command it names exist, and does every citation still point at something.
+   `"recording-what-you-learn"` as a constant, and neither can iterate the bundled
+   set today: `bundledSkills` is unexported in `internal/scaffold`, `docs_test.go`
+   is package `main`, and `SkillAssetPath` resolves a name without listing any.
+   Both iterate the list exported in step 2 — that is what makes the collapse pay.
+4. **Pin the assets with the two questions they actually raise**, not with the
+   store walk. `assets/docs/plans/README.md:7` links `../design/`, relative to a
+   repository being initialized, so a resolvable-path rule has the wrong referent
+   for a template. Two pins instead:
+   - **a bundled asset may not name a dated document.** The two dangling citations
+     v0.8.1 removes were `docs/design/2026-08-19-knowledge-is-documentation.md` and
+     `docs/design/2026-10-09-the-personal-build-removal-analysis.md`, and both
+     existed only in this repository: the reader of an initialized repository has
+     never had either. A `\d{4}-\d{2}-\d{2}-<slug>.md` match anywhere under
+     `assets/` fails, and the remedy is to state the fact rather than cite it. No
+     asset names one today, so the pin starts green and cannot be worked around in
+     silence.
+   - **every `agents` command an asset names must exist.** The command-span check
+     already runs over the living documents and the two stores; point it at
+     `assets/skills/**` as well.
 5. `agents/README.md:9` names what `init` installs today, so it needs the three
    names. The root README's generated block (`README.md:102-112`) is a command
    table rendered from each command's `Summary`, so it will not carry them on its
    own — `init`'s Summary is `agents/commands.go:22`.
 
-## Two things to settle first
+## Decisions this plan carries
 
-- **Nothing reaches an existing repository.** `init` writes a skill only when the
-  path is absent, so these arrive on a fresh repository and on no existing one.
-  That is today's behaviour for the one skill; the release notes should say so
-  rather than a migration being written.
-- **`init` or `wire`.** `wire` links `.claude/skills` and `.codex/skills` at
-  `.agents/skills`, so bundling through `init` is what makes the text reachable by
-  a harness in a repository that has been initialized. Confirm that is the intent
-  before the assets move.
+- **One registry, exported** (step 2), rather than a second reader over the
+  existing two. Two lists that must agree, with no check between them, is the same
+  defect as two tests each hardcoding one skill's name.
+- **Narrow pins, not a widened walk** (step 4). The dated-document rule is the one
+  that would have prevented v0.8.1 in both of its cases.
+- **`init`, not `wire`.** `init` writes content that belongs to the repository
+  afterwards: it writes a skill only where the path is absent
+  (`writeIfAbsentFromFS`, `scaffold.go:272`), and `doctor` reports a divergence
+  from the binary as OK rather than as a fault — coherent only if the text is the
+  repository's after install. `wire`'s subject is machine wiring, and its direction
+  is now removal. Bundling through `init` also leaves the text under version
+  control, where a `wire`-only install would put it in a harness directory outside
+  git.
+- **Nothing reaches an existing repository.** `init` writes only where the path is
+  absent, so the two skills arrive on a fresh repository and on no existing one.
+  The 0.9.0 notes say that; no migration is written for it.
 
 ## Verified by
 
-`agents` 8 packages and `bootstrap.d` 6 packages, whole runs; and on a fresh
+`agents` 10 packages (8 with tests) and `bootstrap.d` 6, whole runs; and on a fresh
 repository, `agents init` followed by a listing of `.agents/skills/` naming all
 three.
