@@ -6,7 +6,7 @@ master) / 2026-08-14 (restructured phase-first; every verification command
 executed, which changed phase 2)
 **Status:** implemented and merged 2026-08-19. Check 2 was deleted 2026-08-20
 with the command it measured; see the note on it below.
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) for the Go
+**Depends on:** spec 1 for the Go
 module, the exit-code table, and the security boundaries CI must not cross.
 **Carries obligations from:** [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md),
 implemented. Its largest known gap — no phase of it has ever run on Linux — is

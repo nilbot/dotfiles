@@ -25,7 +25,7 @@ repair. What it exposes is that the *declaration* is wrong, not the filesystem.
 
 ## Why it went that way
 
-The rule already existed. [Spec 1 §8.4](../design/2026-08-07-agents-repo-context-design.md)
+The rule already existed. Spec 1 §8.4
 records the same defect twice, from 2026-08-07:
 
 - `~/.gitconfig` was a symlink to `git/gitconfig.symlink`, so every

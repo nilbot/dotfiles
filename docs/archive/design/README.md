@@ -36,7 +36,7 @@ is `docs/archive/experiment/capture-setup.sh`.
   capture triggers, an untracked draft queue, `agents review`, and one
   machine-local store under the git common directory for the trace index and
   cache. The 2026-08-20 redesign
-  ([knowledge is documentation](../../design/2026-08-19-knowledge-is-documentation.md))
+  (knowledge is documentation)
   had already retired §3 and §4; the 2026-09-21 reduction deleted the store,
   the index and the cache too, so the two sections the document still claimed
   were in force are gone as well, and nothing in it describes a surviving

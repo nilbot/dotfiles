@@ -12,7 +12,7 @@ a directory that was deleted, or a workflow that was retired. `agents handoff`,
 `agents review`, `agents index`, `.agents/memory/` and `.agents/reports/handoff/`
 all appear in these pages and none of them exist — they were retired on
 2026-08-20 by
-[knowledge is documentation](../design/2026-08-19-knowledge-is-documentation.md).
+knowledge is documentation.
 If an archived document tells you to run one, the document predates the change.
 
 | directory | holds |

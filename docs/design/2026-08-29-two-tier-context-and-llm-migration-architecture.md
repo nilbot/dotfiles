@@ -3,7 +3,7 @@
 **Date:** 2026-08-29 (Updated 2026-08-31; **amended 2026-09-01**, see Amendment 1; **amended 2026-09-21**, see Amendment 3)  
 **Status:** Implemented 2026-08-31; §7 amended 2026-09-01 after the skill it specifies shipped contradicting it; **§4, §5 and §7 retired 2026-09-21**  
 **Applies to:** `agents` CLI (`init`, `wire`, `doctor`), `AGENTS.md` / `CLAUDE.md`, `.agents/AGENTS.md`, `.agents/skills/`  
-**Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (harness adapters, exit codes), [Knowledge is Documentation](2026-08-19-knowledge-is-documentation.md) (2026-08-19), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), [Binary Identity & Standalone Resolution](2026-08-28-binary-identity-and-standalone-resolution.md) (2026-08-28)  
+**Depends on:** Spec 1 (harness adapters, exit codes), Knowledge is Documentation (2026-08-19), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), [Binary Identity & Standalone Resolution](2026-08-28-binary-identity-and-standalone-resolution.md) (2026-08-28)  
 **Reads against:** [`docs/qna/why-does-agents-init-never-update-existing-instructions.md`](../qna/why-does-agents-init-never-update-existing-instructions.md), [`docs/qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md`](../qna/how-does-two-tier-agent-context-prevent-scaffold-drift.md)
 
 ---

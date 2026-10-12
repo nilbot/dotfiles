@@ -4,7 +4,7 @@
 **Status:** superseded in part, 2026-10-07; implemented and then deleted 2026-10-09.  
 **Superseded by:** [one record for binary identity](2026-10-07-one-record-for-binary-identity.md) — §2's resolution rules and its mode matrix are replaced, and `DotfilesRoot()` and `AGENTS_DOTFILES_ROOT` are deleted from the tree. The reasoning below is kept: it is the record of the heuristic this document removed, and of why removing it was not enough.  
 **Applies to:** `agents` CLI, `DotfilesRoot()`, `agents doctor`, `githook` dispatcher, Homebrew packaging (`nilbot/tap/agents`)  
-**Depends on:** [Spec 1](2026-08-07-agents-repo-context-design.md) (harness wiring), [Spec 5](2026-08-11-spec-5-verification-gate.md) (verification gate), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md) (releases & binary distribution), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28)  
+**Depends on:** Spec 1 (harness wiring), [Spec 5](2026-08-11-spec-5-verification-gate.md) (verification gate), [Spec 6](2026-08-11-spec-6-releases-and-distribution.md) (releases & binary distribution), [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28)  
 **Reads against:** [`docs/qna/can-this-check-actually-fail.md`](../qna/can-this-check-actually-fail.md)
 
 ---

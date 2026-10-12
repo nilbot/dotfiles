@@ -11,7 +11,7 @@ paperbubble stays frozen and no fleet repository is migrated.
 `update`), the root router (`AGENTS.md` / `CLAUDE.md`), `.agents/AGENTS.md`,
 `.agents/skills/`, and the physical location of the four documentation stores.
 **Depends on:** [Two-Tier Agent Context](../../design/2026-08-29-two-tier-context-and-llm-migration-architecture.md)
-(including its 2026-09-01 Amendment 1), [Knowledge is Documentation](../../design/2026-08-19-knowledge-is-documentation.md),
+(including its 2026-09-01 Amendment 1), Knowledge is Documentation,
 [why the migration skill shipped hollow](../../journal/2026-09-01-why-the-migration-skill-shipped-hollow.md),
 [why `agents init` never updates existing instructions](../../qna/why-does-agents-init-never-update-existing-instructions.md).
 **Amends:** the assumption in the Two-Tier design §2, §3, §4, §5, §6, and §7

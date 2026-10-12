@@ -13,7 +13,7 @@ covers and the larger part it does not.
 first implementation was shell throughout and was reversed after one task; the
 evidence is in [Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10)
 and the reasoning under [Rejected alternatives](#rejected-alternatives).
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §8, which has landed.
+**Depends on:** spec 1 §8, which has landed.
 
 ---
 

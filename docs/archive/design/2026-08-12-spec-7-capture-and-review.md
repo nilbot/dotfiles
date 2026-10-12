@@ -3,7 +3,7 @@
 **Date:** 2026-08-12
 **Status:** phases A and B′ implemented. §3a measured 2026-08-13 and it works
 (71% draft rate against a 0% control); §3c not built, now on evidence.
-**Depends on:** [spec 1](../../design/2026-08-07-agents-repo-context-design.md) for the tiers,
+**Depends on:** spec 1 for the tiers,
 the record schema, the hook adapters, and the exit-code contract.
 **Amends:** spec 1 §1, §2, §3.6, §3.7, §4. See
 [Cross-spec impact](#cross-spec-impact). §6's exit-code rule is amended only if
@@ -16,7 +16,7 @@ is scope-only and must not be designed against its current primary path.
 > **PARTIALLY RETIRED 2026-08-20.** §1 and §2 are in force — untracking the
 > trace index, one machine-local store under the git common directory, retention
 > caps. §3 (capture triggers) and §4 (the review queue) are retired by
-> [knowledge is documentation](../../design/2026-08-19-knowledge-is-documentation.md), which
+> knowledge is documentation, which
 > found the apparatus was solving a problem the evidence does not support. §3a's
 > measurement stands and is cited there; it is the conclusion drawn around it
 > that changed.

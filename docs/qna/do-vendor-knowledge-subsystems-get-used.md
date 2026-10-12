@@ -2,7 +2,7 @@
 
 ## Context
 
-The [2026-08-19 redesign](../design/2026-08-19-knowledge-is-documentation.md)
+The 2026-08-19 redesign
 retired `.agents/memory/` after it produced two entries in a week while the same
 operator's other repository, with no tooling at all, produced nine Q&As, six
 session logs and a lessons index. Its finding was that capture was never the

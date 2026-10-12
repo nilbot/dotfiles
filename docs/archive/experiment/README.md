@@ -8,7 +8,7 @@ promoted; control drafted 0 of 3.
 **These scripts no longer run.** They invoke `agents handoff draft` and
 `agents review`, removed on 2026-08-20 with the apparatus they measured. They
 are kept, unmodified, because the result is load-bearing for
-[knowledge is documentation](../../design/2026-08-19-knowledge-is-documentation.md)
+knowledge is documentation
 — it is the evidence that an instruction alone causes drafting — and a result
 whose method cannot be inspected is worth less.
 

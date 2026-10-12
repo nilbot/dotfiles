@@ -94,6 +94,6 @@ Whether **Claude Code** or **Codex** read `.agents/AGENTS.md` is unmeasured.
 Claude Code reads `CLAUDE.md`; `CLAUDE.md` appears nowhere in the `agy` 1.1.22
 binary. If the other two do not read it, rules placed there reach one harness of
 three — a parity gap pointing the opposite way from the Claude-first assumption
-[the scaffold still carries](../design/2026-08-07-agents-repo-context-design.md):
+the scaffold still carries:
 `CLAUDE.md` is the real file and `AGENTS.md` the symlink to it. The same fixture
 answers it — run it under each harness.

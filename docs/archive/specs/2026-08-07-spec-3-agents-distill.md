@@ -1,7 +1,7 @@
 # Spec 3 — `agents distill`
 
 **Status:** scope only — not designed, not implemented
-**Depends on:** [spec 1](../../design/2026-08-07-agents-repo-context-design.md) for the pointer
+**Depends on:** spec 1 for the pointer
 format (§3.1) and the memory `sources:` schema (§3.4). Both were specified in spec 1
 *specifically* so this could be built later without unrepairable data loss.
 
@@ -25,7 +25,7 @@ format (§3.1) and the memory `sources:` schema (§3.4). Both were specified in 
 > primary path.
 
 > **RETIRED 2026-08-20, never implemented.** The premise does not survive
-> [knowledge is documentation](../../design/2026-08-19-knowledge-is-documentation.md):
+> knowledge is documentation:
 > distillation was the fallback path *into* a curated `.agents/memory/` tier, and
 > that tier is retired. Kept because the reasoning is why nobody should rebuild
 > it, and because its "never dedupe by first match" hazard is still true of any

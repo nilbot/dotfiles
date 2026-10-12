@@ -79,7 +79,7 @@ reports state, and the binary doubles as the git hook dispatcher and the
 pre-commit guard. It does **not** manage knowledge — that half was retired on
 2026-08-20, and what a repository knows now lives in its own `docs/`, written
 by instruction rather than by a command. See
-[knowledge is documentation](docs/design/2026-08-19-knowledge-is-documentation.md).
+knowledge is documentation.
 
 Repositories follow a **Two-Tier Agent Context** structure:
 - **Tier 1 (Root Router)**: Standardized, lightweight `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) serving as the entrypoint bootstrap router pointing to durable docs and domain rules.

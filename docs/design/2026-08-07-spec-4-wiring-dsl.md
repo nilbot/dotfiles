@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-07 (deferred) / **2026-08-22 (designed — triggers fired)**
 **Status:** designed, not implemented.
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) §5 (harness
+**Depends on:** spec 1 §5 (harness
 adapters), §6 (exit codes), §3.2 (the redaction guarantee).
-**Reads against:** [knowledge is documentation](2026-08-19-knowledge-is-documentation.md)
+**Reads against:** knowledge is documentation
 — which decides that most of what we deliver is not wiring at all.
 
 > **History.** This document was "deferred, not rejected" from 2026-08-07 to

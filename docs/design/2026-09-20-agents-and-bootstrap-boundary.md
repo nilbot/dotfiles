@@ -4,7 +4,7 @@
 **Status:** Review recorded, no code changed. §7 lists the follow-ups and none of
 them is implemented here — this document exists so the decisions are made in the
 open rather than accumulated by adding another entry point.
-**Depends on:** [spec 1](2026-08-07-agents-repo-context-design.md) (repository
+**Depends on:** spec 1 (repository
 context), [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md) (machine hygiene and
 bootstrap), [spec 5](2026-08-11-spec-5-verification-gate.md) (the gate).
 
@@ -60,7 +60,7 @@ The call direction is one-way: bootstrap calls the installer, bootstrap builds
 >   `chain.env`; each entry parses that record and runs `agents githook <name>
 >   --checkout <checkout>`. The binding is a line a person can read, rather than the
 >   name of the file git happened to exec. See §8.2 of
->   [spec 1](2026-08-07-agents-repo-context-design.md).
+>   spec 1.
 > - **"builds `~/bin/agents`, then calls the installer at that path"** is retired.
 >   Decided 2026-10-09: devtools resolves the released binary and passes
 >   `--adopt-owned`, so it stops writing a second `agents` and stops refusing on a

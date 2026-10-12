@@ -46,7 +46,7 @@ and [`cc-pretooluse-subagent.json`](../design/fixtures/2026-08-07-claude-code-ho
 
 ## Context
 
-The [2026-08-19 redesign](../design/2026-08-19-knowledge-is-documentation.md)
+The 2026-08-19 redesign
 named this question and said what rides on it:
 
 > `PreToolUse` was not among them, so whether it fires inside a child is unknown
