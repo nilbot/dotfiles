@@ -1,9 +1,10 @@
 # Spec 2 — dotfiles hygiene: a phased, cross-platform bootstrap
 
 **Date:** 2026-08-07 (scope) / 2026-08-10 (design; language reversed same day)
-**Status:** implemented — plan
-2026-08-10-dotfiles-bootstrap,
-executed on branch `claude/spec-2-dotfiles-hygiene-5f92d4`.
+**Status:** implemented. The plan it was executed under,
+`2026-08-10-dotfiles-bootstrap`, is **not in this store**: pre-2026-08-20 plans
+lived in `docs/archive/plans/`, deleted on 2026-10-12, and the branch it names
+(`claude/spec-2-dotfiles-hygiene-5f92d4`) is in git history rather than here.
 **Read [Known gaps](#known-gaps-2026-08-11) before running this on a machine
 that is not this one.** The first of the three was that no phase of this design
 had ever run on Linux. Since 2026-08-17 the **`dotfiles` profile** does, on
