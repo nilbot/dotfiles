@@ -81,8 +81,9 @@ func TestInitLocalKeepsAgentsDirOutOfTheRepo(t *testing.T) {
 	}
 	var found bool
 	for _, l := range strings.Split(string(exclude), "\n") {
-		// A whole-line match: /.agents/.trace-cache/ is written unconditionally
-		// and contains "/.agents/" as a substring.
+		// A whole-line match: "/.agents/.agents-wire.lock" is written
+		// unconditionally and contains "/.agents/" as a substring, so a
+		// substring test would find the exclude rule already present.
 		if strings.TrimSpace(l) == "/.agents/" {
 			found = true
 		}
