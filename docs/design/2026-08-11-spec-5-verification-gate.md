@@ -641,23 +641,3 @@ migrating spec 7's machine-local store schema across binary versions.
 
 Not in either spec: Windows; self-hosted runners; a scheduled job against the
 latest Go toolchain; changing what `agents doctor` checks beyond phase 6.
-
-## Open questions
-
-Three, all narrow, all resolved by running the thing rather than by discussion:
-
-- ~~Does `./bootstrap plan dotfiles` exit `0` in an unprivileged container?~~
-  **Answered 2026-08-17: yes.** `plan`, `apply` and `check` all exit 0 in
-  `debian:stable-slim`. Spec 2's Known gap 2 does not reach this profile —
-  `plan` reports the missing links as the state it intends to change. That gap
-  is now scoped to `workstation` in spec 2.
-- ~~Does plain `-Syu` suffice on a native x86_64 runner, without the
-  `--disable-sandbox` the emulated verification needed?~~ **The question was
-  built on a wrong diagnosis** (see the correction above): the sandbox failure
-  is Landlock under Docker, not seccomp under emulation, and it reproduces on
-  native arm64. The answerable form is *does the runner's container permit
-  Landlock*, and the job does not depend on the answer, because it configures
-  `DisableSandbox` in the container either way.
-- Which `bootstrap` paths return `2` where they mean `5`, and does `exitAdvisory`
-  have a path that should return it, or should it be deleted?
-

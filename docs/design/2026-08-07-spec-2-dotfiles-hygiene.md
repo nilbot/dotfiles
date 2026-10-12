@@ -826,10 +826,6 @@ authority; `$SHELL` is a hint.
 
 ## Open questions
 
-- **`snapshot.sh`'s replacement, if any.** The scope note asked whether it still
-  does something wanted; the answer is that it does not work (BSD-only `date -j`,
-  a 2021 `rclone` remote) and it is removed. Whether machine backup should exist
-  at all is a separate question this spec does not answer.
-- **The Linux distributions actually targeted.** Stage-zero commands are written
-  for Debian/Ubuntu and Arch/Manjaro, matching what `super-install-dep.sh`
-  covered. Neither is verified.
+- **Whether machine backup should exist at all.** `snapshot.sh` did not work and
+  is removed; nothing replaced it, and no decision has been taken about whether
+  it should be.
