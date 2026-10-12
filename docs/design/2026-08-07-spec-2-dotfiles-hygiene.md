@@ -58,6 +58,17 @@ that kind, and a regression becomes a test failure instead of a discovery.
 `softlinks.sh` uses `pwd` today and silently links the wrong tree when run from
 anywhere else.
 
+Two routes to a wrong root are silent, and the shim refuses both:
+
+- **A poisoned `CDPATH`.** `cd -- "$(dirname "$0")"` without `CDPATH=` in front of
+  it searches `CDPATH` for a relative `$0` and echoes the directory it resolved
+  to, so the root is somewhere else and every path derived from it is wrong with
+  no error. `TestShimIgnoresAPoisonedCDPATH` reproduces it.
+- **Another tree's `bootstrap`.** Reached through a symlink or a copy on `PATH`,
+  the shim resolves *that* tree's root, builds it and runs it, and exits 0 with no
+  symptom at all. Same device and inode is the only test that settles it, so the
+  shim compares `$BOOTSTRAP_ROOT/bootstrap` against `$0` and refuses when they
+  differ.
 For a new machine, `./bootstrap apply workstation` performs the complete setup.
 For an existing machine the same command converges whatever is missing.
 
@@ -275,6 +286,13 @@ seed    fish/config.fish.template         .config/fish/config.fish          *
 seed    git/gitconfig.local.template      .gitconfig                        *
 ```
 
+The machine's Git identity and signing live in `~/etc/extras.secret/gitconfig`,
+which `~/.gitconfig` reaches through an include inside the shared config. It is
+machine-local and deliberately untracked: `git/gitconfig.shared:245` says so at
+the point where the temptation to put identity there would arise. Nothing in this
+repository writes it and nothing checks it, so an edit that drops the include
+loses identity and signing with no error -- the same silent-loss shape as the
+shared include above, with credentials rather than settings.
 `check` verifies each target is the **right kind**. A `link` target that has
 become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
