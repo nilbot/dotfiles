@@ -110,7 +110,7 @@ an installed tool and the configuration it applies, and no dependency on
 about Codex hook trust: the design's job is to make a required manual step *one
 obvious step* rather than a silent failure.
 
-### 2.2 The seam where spec 6 removes Go as a dependency
+### 2.2 The seam that would remove Go as a dependency
 
 Recorded now because it is the actual answer to §2.1's manual step, and because
 a future reader will otherwise re-litigate the auto-install branch.
@@ -339,9 +339,9 @@ the Makefile drifted apart in the first place.
 
 `~/.config/fish` was a symlink to `dotfiles/fish/`, so fisher wrote `functions/`,
 `completions/`, `conf.d/`, `fish_plugins` and `fish_variables` into the tracked
-repo, held back only by `.gitignore`. The design replaces it with a real directory:
-`bootstrap.d/links.manifest:28` declares it `dir`, and seeds the two files fisher
-writes from templates, `config.fish` and `fish_plugins`.
+repo, held back only by `.gitignore`. It is a real directory today:
+`bootstrap.d/links.manifest:28` declares it `dir`, and rows `:29` and `:34` seed
+the two files fisher writes, `config.fish` and `fish_plugins`.
 
 Per-file symlinking does **not** fix this, and that is the important part.
 Third-party installers write to `config.fish` by appending managed blocks, so

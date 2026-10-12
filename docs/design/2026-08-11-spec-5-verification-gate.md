@@ -414,19 +414,20 @@ the implementation, and when they disagree the test surfaces it while a human
 decides which was wrong.
 
 **`bootstrap` and the exit-code vocabulary it shares with `agents`.** `exitAdvisory`
-needed a producer, not a deletion: `bootstrap check` returns `1` when checks warn
-and none fails, but the `1` was produced inside `bootstrap.d/internal/check` as a
-bare literal while the name stayed in `bootstrap.d/main.go`, so a grep of
-`bootstrap.d/main.go` reported the behaviour as absent when it had always been
-there. `runCheck` (`bootstrap.d/main.go:300`) now maps each number to its name in
-one place, with a default that fails closed to `exitBlock`.
+needed a producer rather than the removal of its name: `bootstrap check` returns `1`
+when checks warn and none fails, but the `1` was produced inside
+`bootstrap.d/internal/check` as a bare literal while the name stayed in
+`bootstrap.d/main.go`, so a grep of `bootstrap.d/main.go` reported the behaviour as
+absent when it had always been there. `runCheck` (`bootstrap.d/main.go:300`) now maps
+each number to its name in one place, with a default that fails closed to
+`exitBlock`.
 
 `TestEveryDeclaredExitCodeHasAProducer` (`bootstrap.d/main_internal_test.go`) fails
 if any declared code is returned by no path, and that is the whole of it: it counts
-identifier uses, so it does not pin the mapping itself, and swapping the advisory
-arm's return value leaves every package green. `bootstrap` declares five codes and
-stops at `4` — `exitOK` 0, `exitAdvisory` 1, `exitBlock` 2, `exitMalformed` 3,
-`exitNotApplicable` 4 — and takes no `5`.
+identifier uses, so it does not pin the mapping itself, and swapping the
+`exitAdvisory` case in `runCheck` for another return value leaves every package
+green. `bootstrap` declares five codes and stops at `4` — `exitOK` 0, `exitAdvisory`
+1, `exitBlock` 2, `exitMalformed` 3, `exitNotApplicable` 4 — and takes no `5`.
 
 **Verified by:**
 
@@ -467,26 +468,27 @@ does not define. The check scans inline code spans and fenced blocks for
 the direction that hurts: a document confidently naming a command that no longer
 exists.
 
-**The backward check is two tests in `agents/docs_test.go` over the same documents,
-with different scopes.** `TestLivingDocumentsNameOnlyRealCommands` fails when an
+**The backward check is two tests in `agents/docs_test.go`, over overlapping
+document lists.** `TestLivingDocumentsNameOnlyRealCommands` fails when an
 `agents` subcommand named in a living document is not in the registry, which is how
 a rename or a typo in a skill, a README or an instruction file gets caught. It reads
 `README.md`, `agents/README.md`, `git/README.md`, the project `CLAUDE.md`, the
 tracked global `global/AGENTS.md`, and every `.md` under `.agents/skills/`.
 
 `TestLivingDocumentsNameNoDeletedCommand` covers a wider list — those roots **plus**
-`docs/qna/` and `docs/design/`, the two stores the root `AGENTS.md` sends an agent to
-before it asserts — and fails when a document names one of the verbs the tool has
-deleted, unless the same line says the command is gone. Plans and specifications are
-outside the first test because they are dated records: an executed plan legitimately
-names a target that no longer exists, and a record silently rewritten to stay true is
-not a record. `agents/docs_test.go` states that rule in the same words, and names the
-`make githooks` it protects.
+`docs/qna/` and `docs/design/`, the two stores the root `AGENTS.md` names as the
+record to read before assuming — and fails when a document names one of the verbs
+the tool has deleted, unless the same line says the command is gone. Plans and
+specifications are outside the first test because they are dated records: an executed
+plan legitimately names a target that no longer exists, and a record silently
+rewritten to stay true is not a record. `agents/docs_test.go` states that rule in the
+same words, and names the `make githooks` it protects.
 
 Where the guard walks a directory, a missing root is an error: a `claude/skills/`
-that had been deleted went on being walked, and reporting nothing, for eighteen
-days. The listed files are not held to that — a missing one is skipped, so deleting
-`git/README.md` or `CLAUDE.md` would narrow the guard in silence.
+deleted on 2026-09-21 went on being walked, and reporting nothing, until the walk
+started failing on 2026-10-09. The listed files are not held to that — a missing one
+is skipped, so deleting `git/README.md` or `CLAUDE.md` would narrow the guard in
+silence.
 
 **Harness guidance lived in `claude/skills/`** — not in either `CLAUDE.md`, and
 not in `.agents/skills/`. `bootstrap.d/links.manifest` used to symlink

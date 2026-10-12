@@ -74,7 +74,7 @@ catalogued here because of one ordering constraint (spec 1 §8).
   on 2026-09-21 (`f3b4a74`), and
   [Does `PreToolUse` fire inside a Claude Code subagent?](../qna/does-pretooluse-fire-inside-a-subagent.md)
   still cites two of the payloads as the evidence for its answer. The other sixteen
-  files under `fixtures/` have no reader today.
+  payload files under `fixtures/` have no reader today.
 - Implementation plans are in [`../plans/`](../plans/).
 - Nothing is archived: a document whose subject is gone is deleted, and git
 history holds it. `git log --diff-filter=D -- docs/` lists everything that went.
