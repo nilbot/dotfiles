@@ -41,12 +41,13 @@ table that has become incomplete, not only an instruction. Each appendix row say
 whether its landing carries a marker, so the table answers that without the reader
 opening the section.
 
-An amendment goes with its subject when the section it annotates is deleted too: then
-delete both and let git history hold them, as the two-tier document did. An amendment
-whose decision was reversed stays where it is, because the reversal is the record — the
-decoupling note in `contributor-guardrails` annotates an argument that is still live.
-And an amendment that names no section annotates the document as a whole, so it goes only
-when the document goes.
+An amendment goes with its subject when the section it annotates is deleted too — or
+rewritten until the text it annotated is gone: then delete both and let git history hold
+them, as the two-tier document did. An amendment whose decision was reversed stays where
+it is, because the reversal is the record — the decoupling note in
+`contributor-guardrails` annotates an argument that is still live. An amendment naming no
+section annotates the document as a whole, so it goes only when the document goes; one
+naming several annotates all of them, and goes when every one has gone.
 
 ## Specs
 
