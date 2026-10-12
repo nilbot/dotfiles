@@ -45,7 +45,7 @@ Exactly one resource is machine-global *and* speaks `agents`: the hook chain.
 |---|---|
 | `git/install-hooks.sh` | the installer. Shell, deliberately: it must work when no `agents` binary exists yet — a fresh machine, a failed build, or a Homebrew-only user who never runs bootstrap |
 | `bootstrap.d/internal/phase/devtools.go` | ~~builds `~/bin/agents`, then calls the installer at **that** path~~ — **retired 2026-10-09:** resolves the released binary and calls the installer at that path, with `--adopt-owned` |
-| the deleted `agents hook` (now: the same binary invoked as a Git hook) / `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
+| `agents githook` -- one hook, run by the name the chain entry passed -- and `agents doctor` | the runtime, and read-only verification. The only `agents`→installer link in the codebase is `doctor` *printing* the repair command |
 
 The call direction is one-way: bootstrap calls the installer, bootstrap builds
 `agents`, and `agents` never calls either. That is the property to preserve.
