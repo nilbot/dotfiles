@@ -5,7 +5,7 @@ dump script to `<repo>/.codex/hooks.json` in a throwaway git repo and running on
 `codex exec` session that delegated to two subagents.
 
 These are the test fixtures referenced by
-[spec 1 §11](../../2026-08-07-agents-repo-context-design.md#11-testing). They exist
+spec 1 §11, in a design since deleted. They exist
 so adapter tests assert against what Codex actually sends, not against a
 hand-written guess at the schema.
 
@@ -36,6 +36,6 @@ permission mode, cwd.
 ## Reproducing
 
 The capture procedure is described in
-[spec 1 § Measured facts](../../2026-08-07-agents-repo-context-design.md#measured-facts-2026-08-07).
+spec 1's measured facts, in a design since deleted.
 Re-capture on any Codex minor-version bump; the adapter's golden tests are the
 thing that will notice if the contract moved.

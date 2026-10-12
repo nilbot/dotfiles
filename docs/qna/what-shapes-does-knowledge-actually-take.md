@@ -41,5 +41,5 @@ repository's own `CLAUDE.md` names, deliberately. `autogo-mlx` keeps `sessions/`
 rather than being renamed to `journal/`; churning a working system for
 cross-repository consistency would be spending its practice to buy our tidiness.
 
-Related: `docs/design/2026-08-19-knowledge-is-documentation.md`, which specifies
+Related: a design since deleted, which specified
 the two stores and does not claim they are exhaustive.

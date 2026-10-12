@@ -91,6 +91,7 @@ work most likely to produce findings and least likely to record them.
 
 ## Where this comes from
 
-`docs/design/2026-08-19-knowledge-is-documentation.md` in the dotfiles
-repository, with the evidence for each rule above. Read it before changing any
-of this — several of these choices look arbitrary and are not.
+The evidence for each rule above was in a design in the dotfiles repository,
+deleted on 2026-10-12 when the system it described was retired; its last
+revision is in that repository's git history. Read it before changing any of
+this — several of these choices look arbitrary and are not.

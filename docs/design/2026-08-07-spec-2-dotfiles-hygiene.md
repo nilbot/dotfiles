@@ -554,7 +554,7 @@ finding — otherwise every container run would report three false failures.
 
 Output is a concise healthy / advisory / failure summary.
 
-**Exit codes come from [spec 1 §6](2026-08-07-agents-repo-context-design.md#6-binary-surface)'s
+**Exit codes come from spec 1 §6, in a design since deleted's
 table**, with the same meanings: `0` ok, `1` advisory, `2` block, `3` malformed
 input, `4` not applicable. (`5`, "could not record", has no analogue here.) One
 vocabulary across both tools in this repo.

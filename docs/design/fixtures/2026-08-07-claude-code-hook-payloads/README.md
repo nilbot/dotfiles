@@ -13,7 +13,7 @@ report how many lines are in README.md in this directory. Then tell me the numbe
 No permission-bypass or trust-bypass flag was used. Hooks fired on the first run.
 
 These are the test fixtures referenced by
-[spec 1 §11](../../2026-08-07-agents-repo-context-design.md#11-testing). They exist
+spec 1 §11, in a design since deleted. They exist
 so adapter tests assert against what Claude Code actually sends, not against a
 hand-written guess at the schema. Until this capture, the Claude Code payload
 shape in `claudecode_test.go` was reconstructed from the spec's record of prior

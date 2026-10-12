@@ -393,7 +393,7 @@ by hand and which nothing currently keeps verified.
 
 > **Retired 2026-08-20, with its subject.** `agents index` and both `INDEX.md`
 > generators were deleted by
-> `docs/design/2026-08-19-knowledge-is-documentation.md`, so this check had
+> a design since deleted, so this check had
 > nothing left to hold pure. It is kept here rather than cut because the
 > reasoning below — CI must not depend on the reviewer's machine being
 > provisioned — outlives the command it was written about. Everything after
