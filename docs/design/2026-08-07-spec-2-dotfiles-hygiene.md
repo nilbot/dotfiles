@@ -234,10 +234,9 @@ graph** — exact, complete, and machine-checked by one test that asserts the
 package's import set.
 
 This is the same move spec 1 §3.2 makes for redaction, and the reason it had to
-be this rather than a lexical scan is recorded in
-[Measured facts](#the-six-bash-defects-that-decided-1-2026-08-10): the shell
-version's grep-based equivalent was written wrong twice — once flagging the
-*correct* form, once missing a real violation.
+be this rather than a lexical scan is that the shell version's grep-based
+equivalent was written wrong twice — once flagging the *correct* form, once
+missing a real violation.
 
 **Queries go through the interface too, which is what makes `Planner` honest.**
 It overlays planned changes on what it reads, so a `Link` into a directory the

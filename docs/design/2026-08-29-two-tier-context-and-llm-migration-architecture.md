@@ -3,9 +3,9 @@
 **Date:** 2026-08-29 (updated 2026-08-31; the amendments of 2026-09-01 and 2026-09-21 were deleted with the
 sections they corrected)  
 **Status:** implemented. The two-tier context, the bundled-skill embedding and the
-multi-harness protocol are in force. The subsystems retired on 2026-09-21 -- the
+multi-harness protocol are in force. The subsystems retired on 2026-09-21 — the
 drift classifier, the command that refreshed skills, and the fleet-migration
-skill -- are deleted from this document with the sections that specified them;
+skill — are deleted from this document with the sections that specified them;
 `agents help --all` is the command surface.  
 **Applies to:** `agents` CLI (`init`, `wire`, `doctor`), `AGENTS.md` / `CLAUDE.md`, `.agents/AGENTS.md`, `.agents/skills/`  
 **Depends on:** Spec 1 (harness adapters, exit codes), Knowledge is Documentation — deleted 2026-10-12 — [Contributor Guardrails](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) (2026-08-28), and Binary Identity & Standalone Resolution (deleted 2026-10-12; superseded by [one record for binary identity](2026-10-07-one-record-for-binary-identity.md))  
@@ -170,6 +170,9 @@ To prevent AI harnesses (such as Antigravity) from intercepting workflows with m
 > 2. Root `README.md`
 > 3. CLI built-in help text (`agents help`)
 > 4. Applicable design docs and Q&A entries in `docs/`
+>
+> The operative statement of this rule for contributors is in `README.md`; this
+> is the design that introduced it, and where the two differ the README governs.
 
 ---
 
