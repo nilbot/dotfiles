@@ -6,7 +6,11 @@
 #   seed    copy source -> target ONCE, never again    another program writes here
 #   dir     a real machine-owned directory             a program owns the whole directory
 #
-# Targets are relative to $HOME. Sources are relative to the repository root.
+# Targets are relative to $HOME. Sources are relative to the repository root, and
+# a source is a visible top-level entry: the tests build a checkout from the
+# non-hidden entries, so a row naming a path under .agents/ -- which is agents
+# init's output, not something this repository carries for the machine -- refuses
+# in every one of them. Measured 2026-10-13.
 # ~/.gitattributes and core.hooksPath are deliberately absent: git/install-hooks.sh
 # owns them. One owner per path.
 #
