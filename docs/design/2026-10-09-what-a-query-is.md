@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-09
 **Status:** version six, read by an adversarial reviewer and by a cold reader, and
-confirmed clean. No code changed.
+confirmed clean. **Landed.** `Run` left `check.Machine` and the `packages` check was deleted rather than repaired; spec 2 records the seven checks that remain.
 **Scope:** the compiled verbs of `bootstrap.d`. The other tool in this repository,
 the `agents` command-line program, appears only where its `doctor` command holds the
 one runtime check that a package is installed. The bootstrap check whose name is

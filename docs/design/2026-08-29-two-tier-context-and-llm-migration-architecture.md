@@ -149,7 +149,7 @@ without a canonical text to compare against.
 
 ### 5.2 Shadowing Native Platform Planning Workflows
 To prevent AI harnesses (such as Antigravity) from intercepting workflows with modal platform prompts or transient brain artifacts:
-- All architectural specs are written directly to `docs/design/YYYY-MM-DD-<topic>-design.md`.
+- All architectural specs are written directly to `docs/design/YYYY-MM-DD-<topic>.md`.
 - All implementation plans are written directly to `docs/plans/YYYY-MM-DD-<topic>-plan.md`.
 - Transient brain artifacts are avoided or authored without `RequestFeedback: true`, maintaining conversational flow and human approval in chat via `/brainstorming` and `writing-plans`.
 

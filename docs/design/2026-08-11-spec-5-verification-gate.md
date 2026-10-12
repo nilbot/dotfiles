@@ -422,7 +422,7 @@ argument from spec 1's authority or from matching `agents`.
 
 ```bash
 agents help                    # exit 0, on stdout, rendered from the tree
-agents help trace cache prune  # exit 0; non-empty usage and detail for a leaf
+agents help githook  # exit 0; non-empty usage and detail for a leaf
 agents --help                  # same text as `agents help`, exit 0 (today: exit 3)
 agents                         # same text, on stderr, still exit 3
 agents nosuchcommand           # exit 3

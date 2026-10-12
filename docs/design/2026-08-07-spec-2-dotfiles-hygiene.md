@@ -534,12 +534,12 @@ and `git-stats.bin` — the latter defeating the `git-` prefix's whole purpose.
 `check` takes the same profile argument as `apply` and defaults to
 `workstation`. Checks 6–7 concern state the `dotfiles` profile deliberately does
 not manage, so under that profile they report **not applicable** rather than a
-finding — otherwise every container run would report three false failures.
+finding — otherwise every container run would report two false failures.
 
 Output is a concise healthy / advisory / failure summary.
 
-**Exit codes come from spec 1 §6, in a design since deleted's
-table**, with the same meanings: `0` ok, `1` advisory, `2` block, `3` malformed
+Exit codes are the shared vocabulary a design since deleted fixed, with the same meanings
+(`agents/internal/exitcode` and its test pin the values now): `0` ok, `1` advisory, `2` block, `3` malformed
 input, `4` not applicable. (`5`, "could not record", has no analogue here.) One
 vocabulary across both tools in this repo.
 
@@ -679,7 +679,8 @@ one pointing at a perfectly good directory that `MkdirAll` would have followed.
 A machine with `~/.config` symlinked elsewhere is therefore refused rather than
 silently provisioned through the link.
 
-This is consistent with the placement rule: `dirVerdict` already refuses a
+This is consistent with the placement rule stated in `global/AGENTS.md`: `dirVerdict`
+already refuses a
 symlink at a `dir` target, and this design's whole premise is that a path's
 *kind* is declared and checked rather than discovered. Distinguishing a
 symlink-to-directory from a dangling one needs a following `Stat` on
