@@ -718,7 +718,6 @@ compatibility shim that stays for a release.
 | `release.yml:138` | the prefix of `agents version`'s output, matched in a glob |
 | `agents/doctests.txt:28` | `TestTheCommandSetIsExactlyThis`: a new subcommand has to be declared there, or the `docs` job fails |
 | `agents/doctests.txt:42-50` | the document guards the `docs` job runs by name — the README command block, and the three living-document tests over `README.md`, `agents/README.md`, `CLAUDE.md`, `global/AGENTS.md` and the two skill trees |
-| `agents/README.md:88-121`, `:164-180`; `README.md:49-62`; `git/README.md:19-96`; the five `docs/qna/` answers that state the old rule — `why-does-an-unstamped-or-homebrew-agents-binary-skip-dotfiles-checks.md`, `why-is-agents-still-in-dotfiles-and-when-should-it-split.md`, `can-this-check-actually-fail.md`, `why-does-a-brew-upgrade-stop-my-commit-guard.md`, `why-does-install-hooks-refuse-symlinks-like-opt-homebrew-bin-agents.md`; and the five design documents listed under "What the change touches" | the prose that states the old rule, each guarded by a different mechanism or by none |
 
 **Three of these rows change from edits to deletions**, because the thing they pin
 goes: `agents/root_test.go:22-63` (the three `DotfilesRoot()` branches),

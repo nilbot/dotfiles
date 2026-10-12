@@ -99,7 +99,7 @@ is mechanisable. Nothing is built on that yet, and it should not be built withou
 its own falsifier — but the question is now answerable rather than academic.
 
 **It does not change the transcript cache.** Antigravity
-[does not prune](which-harnesses-actually-lose-transcripts.md), so there is
+does not prune, so there is
 nothing to rescue regardless of which events exist.
 
 ## Method caveat
