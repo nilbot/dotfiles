@@ -187,7 +187,7 @@ Homebrew instead — so there is no `~/bin/agents` to install or to name.
 > this document's own §9 records as the one no phase reconciled and no check
 > noticed. The Git-hook step's delegation, and the reason it is delegated rather
 > than reimplemented, are untouched. See
-> the personal build removal analysis.
+> the 2026-10-09 decision: nothing builds `agents` from a checkout.
 
 ## 4. The dry-run invariant
 
@@ -244,7 +244,7 @@ A target that exists and is not the exact intended thing produces a **refusal
 naming the remediation**, never a deletion. Idempotence comes from "already
 correct → no-op", not from "delete and redo".
 
-This is a change in kind. The current Makefile does `rm -rf $HOME/.vim`,
+This is a change in kind. The Makefile, deleted 2026-10-09, did `rm -rf $HOME/.vim`,
 `rm -rf $HOME/.emacs.d`, `rm -rf $HOME/.config/fish`, and
 `rm -f $HOME/.config/starship.toml` — and its `editors` and `tmux` targets fail
 outright on a second run, because `git clone` into an existing directory is an
@@ -305,7 +305,7 @@ it is crossed.
 `git/install-hooks.sh`. The manifest therefore does **not** list them.
 
 One split is deliberate: `~/.gitconfig` is *seeded* by phase 20 (the dying
-Makefile target does this today; `install-hooks.sh` validates the file but never
+Makefile target did this until it was deleted; `install-hooks.sh` validates the file but never
 creates it), then *validated* by `install-hooks.sh` in phase 40.
 
 `check` asserts no path is claimed twice. Two owners is how `softlinks.sh` and
@@ -627,7 +627,7 @@ executed in:
    `Makefile` was removed entirely with the personal build, not reduced. That is
    this list's own logic carried one step further — the target was the last
    thing no phase owned. The release path is `script/package-release.sh` and the
-   Homebrew tap. See the personal build removal analysis.
+   Homebrew tap. Nothing is built from a checkout; the tap's binary is installed.
 7. This document's status, and the README table row, updated.
 
 ---

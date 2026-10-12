@@ -624,7 +624,7 @@ and `git` are present.
 > command -v agents` — the prefix spelled out because a `run:` step is not a login
 > shell and Homebrew's `shellenv` has not been read, which is the same defect
 > `resolveBrew` exists for. See
-> the personal build removal analysis (a document since deleted) §4.
+> the 2026-10-09 decision that nothing builds `agents` from a checkout.
 
 **Demonstrated to fail by:** the Arch job is red before the repair and green
 after — the one phase whose failure has already been observed.

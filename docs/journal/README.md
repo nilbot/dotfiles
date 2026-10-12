@@ -8,5 +8,4 @@ Not named `trace/`: `agents trace` was the machine-bound transcript cache, delet
 
 Implementation plans live in [`../plans/`](../plans/). Where plans describe what we
 intend to build and Q&A answers specific technical questions, this answers
-"what was I doing, and why did it go that way". See
-knowledge is documentation.
+"what was I doing, and why did it go that way".

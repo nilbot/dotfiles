@@ -65,7 +65,7 @@ The call direction is one-way: bootstrap calls the installer, bootstrap builds
 >   Decided 2026-10-09: devtools resolves the released binary and passes
 >   `--adopt-owned`, so it stops writing a second `agents` and stops refusing on a
 >   machine a package manager wired. That answer is §7 item 2 below. See
->   the personal build removal analysis.
+>   the 2026-10-09 decision that nothing builds `agents` from a checkout.
 >
 > The installer's own role text — "it must work when no `agents` binary exists
 > yet" — stays load-bearing, and is why the installer is still shell.
@@ -202,7 +202,7 @@ four-argument form untouched.
    with. The refusal §4a measured stops being the outcome. This is the
    2026-09-21 decision finally landing, with its target corrected from
    `~/bin/agents` to the released path; see
-   the personal build removal analysis.
+   the 2026-10-09 decision that nothing builds `agents` from a checkout.
 3. **Optional installer arguments** (§5) — the ergonomics fix that does not move
    the boundary.
 4. **A test tying the shell's hook names to the Go list** (§4).
