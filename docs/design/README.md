@@ -24,12 +24,10 @@ Numbers are stable catalog identifiers, not priority or order.
 manifest, no migration, no trace record, no session record and no fleet registry.
 Rows below say which sections that reduction deleted and which still stand.
 
-**A document stays here only while it describes something in force.** When its
-whole subject is gone the document is deleted and git history is its archive:
-this store is read by agents that act on what they find, and a retired design is
-an instruction with a warning label rather than an inert record. Specs 1 and 4
-are deleted on those grounds, and so are specs 3 and 7: this store held nothing
-whose reasoning a reader cannot recover from git history.
+**Where the specs stand.** 2, 5 and 6 are implemented and in force. 1, 3, 4 and 7
+are deleted: none described something a reader cannot recover from git history,
+and the rule above applies to a whole document the same way it applies to a
+section.
 
 A row whose spec name is **not a link** has no document in this store: it was
 deleted, and the row stays so that the citations to its number elsewhere in
@@ -45,7 +43,7 @@ deleted, and the row stays so that the citations to its number elsewhere in
 | 7 | capture cheaply, review before tracking | **retired 2026-09-21, deleted 2026-10-12** — the capture instruction and the review queue were retired 2026-08-20, and the 2026-09-21 reduction deleted the machine-local trace store that §1–2 kept in force. Nothing in it describes a surviving mechanism, so it is a record now, not a design in force |
 | — | [antigravity multi-harness onboarding](2026-08-28-antigravity-multi-harness-onboarding.md) | **implemented 2026-08-28** — adapter, dialect, dual-layer instruction topology. §Phase 5 is the 2026-08-28 rollout record and names two commands the reduction deleted; it is marked as a record, and its `init`-not-`update` conclusion still stands |
 | — | [contributor guardrails and scaffold decoupling](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) | **implemented 2026-08-28** — conditional doctor, standalone support |
-| — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **implemented 2026-08-31; the 2026-09-01 §7 amendment and the sections it corrected were deleted 2026-09-21; the drift subsystem, `agents update` and the fleet-migration skill deleted 2026-09-21, with the sections that specified them** — two-tier context, the router and symlink topology, asset embedding and the `scaffold:*` checks are the design in force and the reason this document stays. The amendment sections were deleted with the subsystems they corrected: the drift classifier and its digest catalog, the command that refreshed skills, and the fleet-migration skill are gone, and so are the two amendments that described them. |
+| — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **implemented 2026-08-31; the drift subsystem, `agents update` and the fleet-migration skill were deleted 2026-09-21, and the sections and amendments that specified them went with them.** The two-tier context, the router and symlink topology, asset embedding and the `scaffold:*` checks are the design in force. |
 | — | layout manifest and store-root freedom | **retired 2026-09-21, deleted 2026-10-12** — the whole subject was deleted: no `agents.layout/v2` manifest, no role→path `stores` map, no version floor or deploy-before-flip gate, no migration. The tool writes one fixed set of stores under `docs/`. The reasoning a reader cannot recover from the code is in git history with it. |
 | — | [`agents` and `bootstrap`: the boundary](2026-09-20-agents-and-bootstrap-boundary.md) | **review recorded 2026-09-20** — bootstrap reconciles the machine, `agents` reconciles a repository. Read §4 before adding a command that writes machine state: two owners already disagree about the same `$HOME` paths, and one of them is an incident. §5 declines `agents install-hooks`. §7's first item — the `~/.claude/skills` declaration that blocked `bootstrap plan workstation` — was **closed 2026-09-21** by deleting the row from `links.manifest`, which is what §6's rule 2 asks for. |
 | — | [what a query is](2026-10-09-what-a-query-is.md) | **landed 2026-10-09** — `plan` and `check` promise to change nothing, and `check workstation` upgraded Homebrew on 2026-10-08: the call is `brew bundle check`, whose subcommand reads and reports and whose `brew` wrapper auto-updates before dispatching. Proposes removing the `packages` check rather than repairing it, since with the command gone it would report "every Brewfile entry is installed" having asked nothing, and dropping `Run` from the check machine interface so no future check can execute anything. CI does not change: the stage-zero job's liveness assertion cannot be replaced by a state check, and its exit code stays reported. Names the one declared read-subprocess, the fifteen enforcement sites the removal makes wrong, and the hazard the broken check was hiding. |
