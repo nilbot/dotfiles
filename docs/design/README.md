@@ -9,11 +9,11 @@ it holds rather than for the skill set used to write it.
 | `docs/plans/` | step-by-step implementation plans |
 | `docs/journal/` | dated record of what happened and retrospective execution notes |
 | `docs/qna/` | answers indexed by the question you would ask on hitting it again |
-| `docs/archive/` | executed plans, retired specs, retired designs, past measurements — how it got here |
 
-Nothing in `docs/archive/` is rewritten to stay true. A record edited to match
-today is not a record, and the reasoning behind a retired decision is why nobody
-rebuilds it.
+A document whose subject is gone is deleted rather than kept as a record. This
+store is read by agents that act on what they find, so a retired design is an
+instruction with a warning label; git history holds every one of them, and
+`git log --diff-filter=D -- docs/` lists what went.
 
 ## Specs
 
@@ -34,16 +34,16 @@ the reasoning for a reversal nobody should rebuild is still worth keeping.
 | # | Spec | Status |
 |---|---|---|
 | 2 | [dotfiles hygiene](2026-08-07-spec-2-dotfiles-hygiene.md) | implemented |
-| 3 | [`agents distill`](../archive/specs/2026-08-07-spec-3-agents-distill.md) | **retired** — archived, never implemented |
+| 3 | `agents distill` | **retired** — deleted 2026-10-12, never implemented |
 | 4 | the wiring DSL | **deleted 2026-10-12** — designed 2026-08-22, never implemented, and its purpose went with the mechanism it configured: `agents wire` removes the hook entries an earlier version wrote and adds none, because nothing records harness lifecycle events any more |
 | 5 | [the verification gate](2026-08-11-spec-5-verification-gate.md) | implemented and merged; **test matrix amended 2026-09-20** — `ubuntu-24.04-arm` runs `agents` (a shipped target no leg had run on), `bootstrap.d` keeps x86_64 Linux only, and a new `macos-dotfiles` job runs the real `./bootstrap plan` on macOS in 24s. **2026-09-21**: its historical baseline cites three artifacts the reduction deleted; the measurements are kept and marked at the point of use, because recomputing a baseline destroys it |
 | 6 | [releases and distribution](2026-08-11-spec-6-releases-and-distribution.md) | implemented; **§5.1 amended 2026-09-20** — the release requires a green `master` run for the tagged commit instead of re-running the verification matrix, and four targets rather than three. Read Amendment 1 before touching `release.yml`: the guard is one API call and four of its details fail it silently. **§5.2 amended 2026-09-21** — this repository's copy of the Homebrew formula is deleted, and the tap is updated by editing the formula it already has rather than by pushing a rendered duplicate over it. Read §5.2 before touching the tap: `checksums.txt` lists the digests in a different order than the formula's four slots, and a paste in line order fails only in a user's `brew install`. |
-| 7 | [capture cheaply, review before tracking](../archive/design/2026-08-12-spec-7-capture-and-review.md) | **archived 2026-09-21** — the capture instruction and the review queue were retired 2026-08-20, and the 2026-09-21 reduction deleted the machine-local trace store that §1–2 kept in force. Nothing in it describes a surviving mechanism, so it is a record now, not a design in force |
+| 7 | capture cheaply, review before tracking | **archived 2026-09-21** — the capture instruction and the review queue were retired 2026-08-20, and the 2026-09-21 reduction deleted the machine-local trace store that §1–2 kept in force. Nothing in it describes a surviving mechanism, so it is a record now, not a design in force |
 | — | [antigravity multi-harness onboarding](2026-08-28-antigravity-multi-harness-onboarding.md) | **implemented 2026-08-28** — adapter, dialect, dual-layer instruction topology. §Phase 5 is the 2026-08-28 rollout record and names two commands the reduction deleted; it is marked as a record, and its `init`-not-`update` conclusion still stands |
 | — | [contributor guardrails and scaffold decoupling](2026-08-28-contributor-guardrails-and-scaffold-decoupling.md) | **implemented 2026-08-28** — conditional doctor, standalone support |
 | — | [binary identity and standalone resolution](2026-08-28-binary-identity-and-standalone-resolution.md) | **implemented 2026-08-28** — the explicit `DotfilesRoot()` contract. **Amended 2026-09-21** — §3.2's `agents hook` entry point is deleted (dispatch is now keyed on the invoked hook name) and §3.1's doctor check list was rewritten to the checks that exist. **Superseded in part 2026-10-07, deleted from the tree 2026-10-09** — §2's resolution rules and its mode matrix are replaced, and `DotfilesRoot()`, `main.dotfilesRoot` and `AGENTS_DOTFILES_ROOT` are gone. Kept as the record of the heuristic it removed and of why an explicit mode was not enough; the design in force is [one record for binary identity](2026-10-07-one-record-for-binary-identity.md) |
 | — | [two-tier context and llm migration architecture](2026-08-29-two-tier-context-and-llm-migration-architecture.md) | **implemented 2026-08-31; §7 amended 2026-09-01; store paths amended 2026-09-19; §4, §5, §7 and §10's phases 2–4 deleted 2026-09-21** — two-tier context, the router and symlink topology, asset embedding and the `scaffold:*` checks are the design in force and the reason this document stays. Amendment 3 records what the reduction deleted: the drift subsystem and its digest catalog, `agents update`, and the `migrating-fleet-context` migration skill. Amendments 1 and 2 are retained as history — Amendment 1's corrections describe a skill that no longer ships, and Amendment 2's `.agents/layout.json` authority was itself deleted. |
-| — | [layout manifest and store-root freedom](../archive/design/2026-09-18-layout-manifest-and-store-root-design.md) | **archived 2026-09-21** — the whole subject was deleted: no `agents.layout/v2` manifest, no role→path `stores` map, no version floor or deploy-before-flip gate, no migration. The tool writes one fixed set of stores under `docs/`. Kept because it is the record of a reviewed, approved decision that was then reversed, which is the reasoning nobody should have to reconstruct. |
+| — | layout manifest and store-root freedom | **archived 2026-09-21** — the whole subject was deleted: no `agents.layout/v2` manifest, no role→path `stores` map, no version floor or deploy-before-flip gate, no migration. The tool writes one fixed set of stores under `docs/`. Kept because it is the record of a reviewed, approved decision that was then reversed, which is the reasoning nobody should have to reconstruct. |
 | — | [`agents` and `bootstrap`: the boundary](2026-09-20-agents-and-bootstrap-boundary.md) | **review recorded 2026-09-20** — bootstrap reconciles the machine, `agents` reconciles a repository. Read §4 before adding a command that writes machine state: two owners already disagree about the same `$HOME` paths, and one of them is an incident. §5 declines `agents install-hooks`. §7's first item — the `~/.claude/skills` declaration that blocked `bootstrap plan workstation` — was **closed 2026-09-21** by deleting the row from `links.manifest`, which is what §6's rule 2 asks for. |
 | — | [what a query is](2026-10-09-what-a-query-is.md) | **proposed 2026-10-09, reviewed** — `plan` and `check` promise to change nothing, and `check workstation` upgraded Homebrew on 2026-10-08: the call is `brew bundle check`, whose subcommand reads and reports and whose `brew` wrapper auto-updates before dispatching. Proposes removing the `packages` check rather than repairing it, since with the command gone it would report "every Brewfile entry is installed" having asked nothing, and dropping `Run` from the check machine interface so no future check can execute anything. CI does not change: the stage-zero job's liveness assertion cannot be replaced by a state check, and its exit code stays reported. Names the one declared read-subprocess, the fifteen enforcement sites the removal makes wrong, and the hazard the broken check was hiding. |
 
@@ -73,12 +73,12 @@ catalogued here because of one ordering constraint (spec 1 §8).
 
 - [`fixtures/`](fixtures/) — real hook payloads captured from live agent runs,
   read directly by `agents/internal/harness` tests. Sanitized.
-- [the capture experiment](../archive/analysis/2026-08-12-capture-instruction-experiment.md)
+- the capture experiment
   — the two-arm protocol behind spec 7 §3a. Its result, that an instruction alone
   causes drafting, is what the 2026-08-19 redesign was built on and what the
   2026-09-21 reduction deleted the consumer of. The measurement stands; only its
   reader is gone.
 - Implementation plans are in [`../plans/`](../plans/).
-- Pre-2026-08-20 historical plans are in [`../archive/plans/`](../archive/plans/).
-- Designs whose subject was deleted are deleted from this store, not archived:
-git history holds them, and `git log --diff-filter=D -- docs/design` lists them.
+- Pre-2026-08-20 historical plans are in `../archive/plans/`.
+- Nothing is archived: a document whose subject is gone is deleted, and git
+history holds it. `git log --diff-filter=D -- docs/` lists everything that went.

@@ -15,7 +15,7 @@ security boundaries CI must not cross.
 fail-open boundary, is the repo-tracked context design: deleted 2026-10-12 with
 the system it described. Where this document cites it, the citation is to a
 design no longer in the tree; its content is in git history and its plan is in
-the [archive](../archive/plans/2026-08-07-agents-repo-context.md).
+the archive.
 **Carries obligations from:** [spec 2](2026-08-07-spec-2-dotfiles-hygiene.md),
 implemented. Its largest known gap — no phase of it has ever run on Linux — is
 closed here or nowhere.
@@ -33,7 +33,7 @@ binary stamps, which live in
 > This is recorded because the false conclusion is easy to re-derive:
 > `githook.builtin` (`githook.go:354`) returns `0` for `pre-commit`, which reads
 > like an absent guard. It returns `0` because the wiring is in `main.go`,
-> exactly as [spec 1's plan](../archive/plans/2026-08-07-agents-repo-context.md)
+> exactly as spec 1's plan
 > Task 17 said it would be. **Anyone auditing this must read `runGitHook` to its
 > end; `internal/githook` alone shows the opposite.**
 

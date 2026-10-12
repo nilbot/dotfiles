@@ -126,6 +126,6 @@ agents help --render=markdown
 | `.agents/` | Tier 2 repository engineering guidelines (`.agents/AGENTS.md`), bundled skills (`.agents/skills/`), and Antigravity's wiring config (`.agents/hooks.json`) |
 | `fish/`, `tmux/`, `macOS/`, `starship.toml` | tracked configuration, reconciled by `bootstrap.d/links.manifest` |
 | `git/` | partly the manifest's (`gitignore_global`, the local template) and partly `install-hooks.sh`'s: `~/.gitattributes` and `core.hooksPath` are the installer's, not the manifest's |
-| `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question, `archive/` immutable pre-2026-08-20 history |
+| `docs/` | 4-store layout: `design/` living specs, `plans/` implementation plans, `journal/` dated records, `qna/` answers by question |
 
 Start with [the spec index](docs/design/README.md).
