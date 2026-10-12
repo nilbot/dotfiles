@@ -44,10 +44,11 @@ opening the section.
 An amendment goes with its subject when the section it annotates is deleted too — or
 rewritten until the text it annotated is gone: then delete both and let git history hold
 them, as the two-tier document did. An amendment whose decision was reversed stays where
-it is, because the reversal is the record — the decoupling note in
-`contributor-guardrails` annotates an argument that is still live. An amendment naming no
-section annotates the document as a whole, so it goes only when the document goes; one
-naming several annotates all of them, and goes when every one has gone.
+it is, even when its section has gone, because the reversal is the record — the
+decoupling note in `contributor-guardrails` annotates an argument that is still live. An
+amendment naming no section annotates the document as a whole, so it goes only when the
+document goes. One naming several is several annotations sharing a date: trim the part
+whose section has gone, and delete the amendment when the last has gone.
 
 ## Specs
 
