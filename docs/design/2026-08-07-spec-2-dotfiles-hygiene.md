@@ -3,8 +3,8 @@
 **Date:** 2026-08-07 (scope) / 2026-08-10 (design; implementation language changed from shell to Go the same day)
 **Status:** implemented. The plan it was executed under,
 `2026-08-10-dotfiles-bootstrap`, is **not in this store**: pre-2026-08-20 plans
-lived in `docs/archive/plans/`, deleted on 2026-10-12, and the branch it names
-(`claude/spec-2-dotfiles-hygiene-5f92d4`) is in git history rather than here.
+lived in `docs/archive/plans/`, deleted on 2026-10-12, and the branch it names was
+pruned with the other dead branches on 2026-10-13.
 **Read [the appendix](#appendix-what-has-changed-since-this-was-written) before acting
 on any section.** It is the index of what has moved under this document since
 2026-08-07, and where a section and the appendix disagree, the appendix is the state of
