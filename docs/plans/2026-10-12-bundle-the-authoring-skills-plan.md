@@ -30,19 +30,25 @@ They belong in the binary for the same reason.
 3. Widen the two guards that name one skill by hand.
    `TestInstalledSkillMatchesTheBinary` (`agents/docs_test.go:175`) and
    `TestInstalledSkillNamesNoDeletedCommand` (`:204`) each carry
-   `"recording-what-you-learn"` as a constant. Both should iterate
-   `bundledSkills`, so a third skill cannot be installed unguarded.
-4. **Close the gap that let v0.8.1 exist.** No guard reads `assets/skills/**`:
-   the backwards check in `agents/docs_test.go` walks `.agents/skills/**` and the
-   two stores, and nothing in the tree reads the assets at all. That is how
+   `"recording-what-you-learn"` as a constant, and both should iterate the bundled
+   set. That needs an exported way to enumerate it first: `bundledSkills` is
+   unexported in `internal/scaffold` and `docs_test.go` is package `main`, and
+   `SkillAssetPath` resolves a name without listing any.
+4. **Ask the assets the three questions no guard asks.** `SkillCurrent`
+   (`agents/internal/scaffold/scaffold.go:356`) reads an embedded skill, but only
+   to compare its digest with the installed copy. Nothing opens `assets/**` to
+   check what the text *says*: the backwards checks in `agents/docs_test.go` walk
+   `.agents/skills/**` and the two stores, and no test, walk or CI step reaches the
+   assets for path, command or citation validity. That is how
    `recording-what-you-learn` shipped pointing at
    `docs/design/2026-08-19-knowledge-is-documentation.md` after that design was
-   deleted — the pointer was in an asset no check opened. The same three questions
-   apply to the two new files: does every path they name resolve, does every
-   command they name exist, and does every citation still point at something.
-   Widen the walk to the assets, or pin each asset directly.
-5. `agents/README.md` and the generated block in the root `README.md` say what
-   `init` installs. Both need the three names.
+   deleted, and how v0.8.1 came to carry two more of the same. Widen a walk to the
+   assets or pin each one, and ask of each: does every path it names resolve, does
+   every command it names exist, and does every citation still point at something.
+5. `agents/README.md:9` names what `init` installs today, so it needs the three
+   names. The root README's generated block (`README.md:102-112`) is a command
+   table rendered from each command's `Summary`, so it will not carry them on its
+   own — `init`'s Summary is `agents/commands.go:22`.
 
 ## Two things to settle first
 
