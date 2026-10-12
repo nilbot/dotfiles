@@ -38,8 +38,7 @@ every push to `master` runs two container jobs:
 Beyond stage zero, `apply workstation` has been observed running every phase to
 completion and exiting 0 on both images (2026-08-17), but that is **not gated,
 and its exit code is not a convergence claim** — the verify phase reports and
-returns nil by design, so `apply` exits 0 while verify reports 3 failures on
-Debian. Those three, plus the two standing gaps — `plan` exits 2 for
+returns nil by design, so `apply` exits 0 while verify reports failures on Debian. Those three, plus the two standing gaps — `plan` exits 2 for
 `workstation` on a machine lacking Homebrew or fish, and Linux has no managed
 nerd font — are recorded with the rest in
 [spec 2](docs/design/2026-08-07-spec-2-dotfiles-hygiene.md#known-gaps-2026-08-11),
@@ -57,8 +56,8 @@ compiled this checkout into
 disagreed about which binary the hook chain ran — measured here as
 `bootstrap apply workstation` exiting 2 in the devtools preflight. The decision is
 2026-10-09: the checkout build is gone, and the chain names the released binary.
-Provisioning belongs to `./bootstrap`. For an inner loop,
-`go build -o /tmp/agents .` writes no global path and installs nothing.
+Provisioning belongs to `./bootstrap`. For an inner loop, `cd agents && go build -o /tmp/agents .` writes no global path
+and installs nothing.
 
 `make release` ran `script/package-release.sh` and nothing else; the script is
 the entry point, and the Makefile that wrapped it is gone.
@@ -87,8 +86,7 @@ Repositories follow a **Two-Tier Agent Context** structure:
 - **Tier 1 (Root Router)**: Standardized, lightweight `AGENTS.md` (with `CLAUDE.md -> AGENTS.md` symlink) serving as the entrypoint bootstrap router pointing to durable docs and domain rules.
 - **Tier 2 (Domain Context & Durable Knowledge)**: Repository-specific domain guidelines in `.agents/AGENTS.md`, executable skills in `.agents/skills/`, and durable project knowledge organized in a **4-store layout** under `docs/` (`design/`, `plans/`, `journal/`, `qna/`).
 
-`agents help <command>` explains any command in full, and `agents help --all`
-adds `guard`, the one command only the hook invokes. When to write something
+`agents help <command>` explains any command in full, and `agents help` leaves out `githook`, the one command only a chain entry invokes. When to write something
 down is in `.agents/skills/recording-what-you-learn/`.
 
 The prose here is hand-written because knowing *when* to reach for a command is

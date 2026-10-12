@@ -131,7 +131,7 @@ Ordered, independently repeatable.
 | 10 | packages | native stage-zero → Homebrew → `Brewfile` | ✓ | — |
 | 20 | config | reconcile every row of `links.manifest` | ✓ | ✓ |
 | 30 | fish | `/etc/shells`, login shell, fisher plugins | ✓ | — |
-| 40 | devtools | `uv`, build `agents`, global Git hooks | ✓ | — |
+| 40 | devtools | `uv`, the released `agents` from the tap, global Git hooks | ✓ | — |
 | 50 | verify | the same checks `check` runs | ✓ | ✓ |
 
 **The `dotfiles` profile is preflight + config + verify: no sudo, no network, no
@@ -280,8 +280,9 @@ become a real file is a finding. A `seed` target that has become a symlink into
 the repo is a finding — that second one is the `~/.gitconfig` regression spec 1
 fixed and the fish regression §7 fixes.
 
-**Harness skill directories are ordinary rows.** Today `claude/skills` is linked
-by a hand-written Makefile line and `gemini/skills` by nothing at all — two
+**Harness skill directories are ordinary rows.** `claude/skills` was linked
+by a hand-written Makefile line until both went on 2026-10-09, and
+`bootstrap.d/links.manifest` declares neither row now — two
 harnesses already diverging, the same drift spec 1 opened with. A third harness
 becomes one row.
 
@@ -562,8 +563,8 @@ bootstrap.d/
   internal/change/              Interface, Applier, Planner -- owns ALL I/O
   internal/manifest/            row parsing, the Kind type
   internal/phase/               the six phases -- imports no I/O package
-  internal/check/               the eight checks
-  internal/migrate/             reconciling and reclaiming migrations
+  internal/check/               the seven checks
+  internal/migrate/             reconciling migrations (the reclaiming kind is deleted)
 ```
 
 The directory keeps its `.d` suffix: the module *path* is what Go cares about,
