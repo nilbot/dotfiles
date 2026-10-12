@@ -28,15 +28,16 @@ deleted command is a runtime error in a job, not a compile error in a package.
 Nothing local fails. The full set of callers in this repository:
 
 ```bash
-git grep -n 'agents <name>' -- .github/ bootstrap bootstrap.d/ git/ .agents/ global/ docs/ '*.go' '*.sh'
+git grep -n 'agents <name>'
 ```
 
-*(Path list corrected 2026-10-12. It named `Makefile` and `claude/`, both since
-deleted — `git grep` ignores a pathspec that matches nothing, so the command still
-ran and the loss was silent. The build entry point is now `bootstrap` and
-`bootstrap.d/`, and the harness-loaded documents are under `.agents/` and `global/`,
-which the old list missed. That omission matters more than the two dead paths: those
-are the callers with the long half-life this entry is about.)*
+*(Corrected 2026-10-12. The recipe used to enumerate paths, and the enumeration was
+the defect: it named `Makefile` and `claude/`, both since deleted — `git grep` ignores
+a pathspec matching nothing, so the command still ran and the loss was silent — and it
+never named the root `AGENTS.md`, which `CLAUDE.md` symlinks to and which every harness
+loads in every session. That omission is worse than the two dead paths: it is the
+caller with the longest half-life in this repository. The whole tree is the scope this
+entry's own rule asks for.)*
 
 `claude/` matters as much as `.github/` — the skills there are symlinked into
 `~/.claude/` and load in every session in every repository, so a stale command

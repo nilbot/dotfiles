@@ -79,7 +79,7 @@ action committed to git:
 **The conclusion holds. §2's mechanism does not.** Everything §2 attributes to
 `agents update` and `agents drift` names commands that were removed on
 2026-09-21, when the tool was cut to six. It has seven since `githook` landed on
-2026-10-07, which `--all` lists:
+2026-10-09 (`35d9322`), which `--all` lists:
 
 ```text
 $ agents help --all

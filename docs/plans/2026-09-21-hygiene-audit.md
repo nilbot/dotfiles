@@ -4,8 +4,8 @@ The gate is green. That is not the same as mergeable, and this file is the list 
 why. It exists so four parallel workstreams can be assigned without overlapping,
 and so the reviewer can check the audit rather than reconstruct it.
 
-**Status:** executed 2026-10-12 — every debt below is closed, and D6 turned out not
-to be a fault. The notes under each item say what closed it; the measurements stay as
+**Status:** executed 2026-10-12 — D1 to D5 are closed, and D6 turned out not to be a
+fault. Each debt carries a note saying what closed it; the measurements stay as
 written, because they are what the audit found.
 
 ## State at the time of writing
@@ -23,6 +23,9 @@ two skills, and stopped declaring two manifest rows.
 transcript caching, and `agents update` for fleet skill refresh. It also still
 advertises installation from a release pipeline. Nothing tests it.
 
+*Closed: `agents/README.md` names none of the deleted commands now, and
+`agents/docs_test.go` guards it as a living document.*
+
 **D2. Design docs in `docs/design/` name deleted commands.** Counts by document:
 `2026-09-18-layout-manifest-and-store-root-design.md` 47 references,
 `2026-08-29-two-tier-context-and-llm-migration-architecture.md` 20,
@@ -39,7 +42,8 @@ advertises installation from a release pipeline. Nothing tests it.
 `spec-7-capture-and-review`, `knowledge-is-documentation` and
 `binary-identity-and-standalone-resolution`. The four that remain are guarded by
 `TestLivingDocumentsNameNoDeletedCommand`: a deleted command named in `docs/design/`
-has to be marked as gone on the same line.)*
+has to say it is gone — on the line itself, or anywhere in a document carrying a
+`## Follow-up, ` section, which exempts the whole file.)*
 
 Not all of these are faults, and saying which is which is the work:
 
@@ -59,6 +63,9 @@ Not all of these are faults, and saying which is which is the work:
 the layout manifest as "implemented 2026-09-19 — v0.6.0 pending its release
 gate" and the boundary review as "`bootstrap plan workstation` is blocked".
 
+*Closed: the index records the layout manifest as retired and deleted, and the
+boundary review's blocker as closed.*
+
 **D4. The machine-global instruction file does not exist in the form the
 decision requires.** Measured: `~/.claude/CLAUDE.md` is a symlink to the tracked
 `claude/CLAUDE.md`; `~/.dsh/AGENTS.md` does not exist, and DSH's
@@ -68,6 +75,9 @@ language rule that is in no dotfiles file and would not survive this machine.
 The owner's decision: universal rules in one shared file, harness-specific rules
 in that harness's own file, one file per harness at its native path.
 
+*Closed: `global/AGENTS.md` is tracked, and `bootstrap.d/links.manifest:22-24` declares
+the three harness paths at it.*
+
 **D5. Q&A entries that contradict the code.** `docs/qna/` is a living store —
 `AGENTS.md` tells an agent to read it *before asserting* — so an entry whose
 answer is now false is a trap. Specifically
@@ -75,12 +85,14 @@ answer is now false is a trap. Specifically
 removes) and `why-does-agents-init-never-update-existing-instructions.md` (names
 `agents update` and `drift`).
 
-**D6. Not a fault, recorded so nobody "fixes" them.** Seven relative links
-resolve to nothing across all of `docs/`: three are `%s`/`...`/`target`
+*Closed: both carry a dated follow-up that retires the answer's mechanism.*
+
+**D6. Not a fault, recorded so nobody "fixes" them.** Seven relative links resolved
+to nothing across all of `docs/` when this was written: three are `%s`/`...`/`target`
 placeholders inside plan bodies, two are `../plans/a-plan.md` template paths, one
-points at an experiment script removed by an earlier spec, and one was inside an
-archived analysis that has since been deleted with `docs/archive/`. Plan placeholders
-are not defects, and neither were immutable archives.
+pointed at an experiment script removed by an earlier spec, and one was inside an
+archived analysis. The last of those went with `docs/archive/` on 2026-10-12. Plan
+placeholders are not defects, and neither were immutable archives.
 
 ## Workstreams
 
