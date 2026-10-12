@@ -200,9 +200,9 @@ per spec 1 §6's fail-open rule.
 
 So **CI's default "non-zero fails the step" is the correct disposition reading**,
 and needs no wrapping. Verified on this provisioned machine, 2026-08-14:
-`./bootstrap plan dotfiles` and `./bootstrap check dotfiles` both exit `0`. Whether `plan dotfiles` still does inside a bare container is phase 5's
-open question, and the answer does not change this reading — it changes what
-phase 5 must fix.
+`./bootstrap plan dotfiles` and `./bootstrap check dotfiles` both exit `0`. Whether `plan dotfiles` still exits `0` inside a bare container is unverified,
+and the answer does not change this reading — it changes what the container
+jobs must cover.
 
 Explicit assertion is reserved for **negative paths** — `expect 2` proves a
 refusal still refuses, which "non-zero fails" cannot express and which is the
@@ -429,13 +429,14 @@ agents nosuchcommand           # exit 3
 cd agents && go test -count=1 ./...
 ```
 
+and by the coverage check in the `docs` job: walk the tree, fail on any node
+with an empty `Summary`, `Usage`, or `Detail`.
+
 **`agents` with no arguments keeps exiting `3` on stderr** while `agents help`
 exits `0` on stdout. Same rendered text, different disposition: a bare
 invocation is a usage error and an explicit `help` request is not. Only the text
 is shared, and only the text is what derivation is for.
 
-plus the coverage check in the `docs` job: walk the tree, fail on any node with
-an empty `Summary`, `Usage`, or `Detail`.
 
 **Demonstrated to fail by:** blanking one leaf's `Detail` and observing the
 coverage check red; changing a constant's comment without changing the test's own table
