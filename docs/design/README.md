@@ -43,8 +43,8 @@ opening the section.
 
 An amendment goes with the passage it annotates: when that passage is deleted, or
 rewritten away, the amendment goes too, and git history holds both, as the two-tier
-document did. An amendment that stays while part of what it annotates has gone is edited
-to drop the dead reference. The exception is a reversal: an amendment recording a decision
+document did. An amendment that stays while part or all of what it annotates has gone is
+edited to drop the dead reference. The exception is a reversal: an amendment recording a decision
 that was reversed survives while the document stands, because the reversal is the record —
 the decoupling note in `contributor-guardrails` is that case, and it annotates an argument
 still live. An amendment that sits outside every section and names none annotates the
