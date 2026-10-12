@@ -56,7 +56,7 @@ that kind, and a regression becomes a test failure instead of a discovery.
 ```
 
 `./bootstrap` resolves the repository root from `$0`, not from `pwd`.
-`softlinks.sh` uses `pwd` today and silently links the wrong tree when run from
+`softlinks.sh` used `pwd` and silently linked the wrong tree when run from
 anywhere else.
 
 Two routes to a wrong root are silent, and the shim closes both — the first by
@@ -119,7 +119,10 @@ a future reader will otherwise re-litigate the auto-install branch.
 to the verification gate and distribution became spec 6.)*
 
 **If [spec 6](2026-08-11-spec-6-releases-and-distribution.md) publishes verified
-release binaries, the shim stops needing Go at all.** Its structure becomes:
+release binaries, the shim stops needing Go at all.** That is not true of spec 6 as
+written: its pipeline builds and publishes `agents`, and this shim runs a
+`bootstrap` binary, so the seam waits on a `bootstrap` release that nothing builds
+today. Its structure becomes:
 
 1. A released binary matching this checkout is cached and verified → `exec` it.
 2. Otherwise, if a release exists for this platform → download, verify checksum,
@@ -162,17 +165,19 @@ what Homebrew itself requires, and nothing else:
 - Arch/Manjaro — `base-devel curl file git`
 
 Everything above stage zero comes from the `Brewfile`, on both platforms. The
-alternative — per-distro native package lists, which `super-install-dep.sh` does
-today — needs two or three manifests kept in sync across distros whose package
+alternative — per-distro native package lists, which `super-install-dep.sh` did —
+needs two or three manifests kept in sync across distros whose package
 names disagree (`fd` vs `fd-find`, `bat` vs `batcat`), and several tools in use
 here are not consistently packaged natively at all.
 
 The PATH assumption already exists: `fish/mypre.fish` adds
 `/home/linuxbrew/.linuxbrew/bin` on Linux and `/opt/homebrew/bin` on macOS.
 
-The `Brewfile` carries platform sections, because casks are macOS-only. The
-current `brew/*.list` files are **audited, not mechanically translated** — see
-§9 for what does not survive the audit.
+The `Brewfile` carries platform sections, because casks are macOS-only. It
+replaced the three `brew/*.list` files — deleted 2026-08-11 when both platforms
+were unified on Homebrew (`30369c3`) — and those lists were **audited, not
+mechanically translated**: of their thirty entries, `micromamba` was dropped and
+`youtube-dl` replaced by `yt-dlp`, so the `Brewfile` is not their concatenation.
 
 ### 3.2 Fish
 
@@ -332,9 +337,11 @@ the Makefile drifted apart in the first place.
 
 ## 7. Fish: zero symlinks under `~/.config/fish`
 
-`~/.config/fish` is a symlink to `dotfiles/fish/`, so fisher writes `functions/`,
+`~/.config/fish` was a symlink to `dotfiles/fish/`, so fisher wrote `functions/`,
 `completions/`, `conf.d/`, `fish_plugins` and `fish_variables` into the tracked
-repo, held back only by `.gitignore`.
+repo, held back only by `.gitignore`. The design replaces it with a real directory:
+`bootstrap.d/links.manifest:28` declares it `dir`, and seeds the two files fisher
+writes from templates, `config.fish` and `fish_plugins`.
 
 Per-file symlinking does **not** fix this, and that is the important part.
 Third-party installers write to `config.fish` by appending managed blocks, so
@@ -764,7 +771,7 @@ Three defects this found, all fixed, none reproducible on macOS:
 every phase to completion on both images and exits 0. That exit code is not a
 convergence claim: `Verify` reports and returns nil by design, so `apply` exits
 0 while its own verify phase reports failures. On Debian it reports `5 ok, 0
-warn, 3 fail`, and those three are what remains open on Linux:
+warn, 3 fail`, and those three were what remained open on Linux:
 
 - **`packages` — closed 2026-10-09 by removal rather than repair.** "Homebrew is
   not installed" was the resolve-vs-PATH defect a fourth time, this one in
@@ -774,8 +781,10 @@ warn, 3 fail`, and those three are what remains open on Linux:
 - **`login-shell`** — `chsh` runs and succeeds, but a running process's shell
   cannot change underneath it, so the check can only ever report the shell the
   container started with. Asserting the real effect needs a fresh login.
-- **`agents`** — the phase built it to `~/bin`, which is not on the container's PATH;
-the personal build was removed on 2026-10-09, so re-check this against the tap binary.
+- **`agents`** — the `devtools` phase built it to `~/bin`, which is not on the
+  container's PATH. The personal build was removed on 2026-10-09, and
+  `.github/workflows/verify.yml` now probes for the tap's binary with the Homebrew
+  prefix on `PATH` — the re-check the removal called for.
 
 `brew bundle` is now exercised in full on Debian: `complete! 30 Brewfile
 dependencies now installed`, which is every `brew` line in the file — the
@@ -841,7 +850,7 @@ authority; `$SHELL` is a hint.
 | `migrate` moves untracked fisher state and could lose it | Each migration refuses unless preconditions hold; the move is within one filesystem and non-destructive to the source until it succeeds. |
 | A reclaiming migration irreversibly deletes untracked data | Reclaiming migrations never run from a bare `migrate`; they must be named, and each refuses if anything on `PATH` still resolves inside the target. §8.1. |
 | Bootstrap grows into an unmaintainable program | One package per concern; all machine access through `change.Interface`; an architecture test on the phase package's import set. |
-| Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go; spec 5's published artifact is what removes it. §2.1, §2.2. |
+| Go is a stage-zero dependency the old design did not have | The shim installs nothing. It refuses with the exact one-liner for the platform — `brew install go`, `apt-get`/`pacman`, or the go.dev download. An earlier version did install via Homebrew, until `set -e` not applying inside `$( )` let a failed install reach the build as an empty command. One manual step on a machine without Go. §2.2's seam would remove it and is unrealised: spec 6 publishes `agents`, while the shim runs a `bootstrap` binary, which has no release path. §2.1, §2.2. |
 | The shim is shell, so it inherits the defects that motivated the switch | It does no reconciliation, and has no dry-run mode to keep honest. Its whole job is to reach Go. |
 | Removals lose something later wanted | Per-group commits naming contents and rationale; `git show <sha>:<path>` recovers exactly. |
 

@@ -407,16 +407,26 @@ exits `3`.
 ### The exit-code table, and `bootstrap`
 
 Help renders the table from the constants rather than restating it, which
-collapses two of the four descriptions in the baseline. A test pins the constants
-against the table written inside `agents/exitcode_doc_test.go`: spec 1 is design intent, the code is the
-implementation, and when they disagree the test surfaces it and a human decides
-which was wrong.
+collapses descriptions the baseline carried separately. A test pins the constants
+against the table written inside `agents/exitcode_doc_test.go`
+(`TestExitCodeTableMatchesSpecOne`): spec 1 §6 defines the vocabulary, the code is
+the implementation, and when they disagree the test surfaces it while a human
+decides which was wrong.
 
-`bootstrap` then needs `exitAdvisory` resolved — a path that means it, or the
-constant deleted. Whether it also wants `5` is decided by whether it has a path
-meaning *I tried and could not*, distinct from *this machine is in a state I will
-not write over*. That is an audit of existing `exitBlock` returns, not an
-argument from spec 1's authority or from matching `agents`.
+**`bootstrap` and the exit-code vocabulary it shares with `agents`.** `exitAdvisory`
+needed a producer, not a deletion: `bootstrap check` returns `1` when checks warn
+and none fails, but the `1` was produced inside `bootstrap.d/internal/check` as a
+bare literal while the name stayed in `bootstrap.d/main.go`, so a grep of
+`bootstrap.d/main.go` reported the behaviour as absent when it had always been
+there. `runCheck` (`bootstrap.d/main.go:300`) now maps each number to its name in
+one place, with a default that fails closed to `exitBlock`.
+
+`TestEveryDeclaredExitCodeHasAProducer` (`bootstrap.d/main_internal_test.go`) fails
+if any declared code is returned by no path, and that is the whole of it: it counts
+identifier uses, so it does not pin the mapping itself, and swapping the advisory
+arm's return value leaves every package green. `bootstrap` declares five codes and
+stops at `4` — `exitOK` 0, `exitAdvisory` 1, `exitBlock` 2, `exitMalformed` 3,
+`exitNotApplicable` 4 — and takes no `5`.
 
 **Verified by:**
 
@@ -457,14 +467,26 @@ does not define. The check scans inline code spans and fenced blocks for
 the direction that hurts: a document confidently naming a command that no longer
 exists.
 
-**Scope of the backward check:** `README.md`, `agents/README.md`, the project
-`CLAUDE.md` and the tracked global `global/AGENTS.md`, and every `.md` under
-`.agents/skills/` — the walk also covers `claude/skills/`, which no longer
-exists, and a walk over a directory that is not there finds nothing and reports
-nothing. It **excludes**
-`docs/archive/plans/` and `docs/design/`: those are dated records
-of what was true when written, the executed bootstrap plan legitimately names
-`make githooks`, and a record silently rewritten to stay true is not a record.
+**The backward check is two tests in `agents/docs_test.go` over the same documents,
+with different scopes.** `TestLivingDocumentsNameOnlyRealCommands` fails when an
+`agents` subcommand named in a living document is not in the registry, which is how
+a rename or a typo in a skill, a README or an instruction file gets caught. It reads
+`README.md`, `agents/README.md`, `git/README.md`, the project `CLAUDE.md`, the
+tracked global `global/AGENTS.md`, and every `.md` under `.agents/skills/`.
+
+`TestLivingDocumentsNameNoDeletedCommand` covers a wider list — those roots **plus**
+`docs/qna/` and `docs/design/`, the two stores the root `AGENTS.md` sends an agent to
+before it asserts — and fails when a document names one of the verbs the tool has
+deleted, unless the same line says the command is gone. Plans and specifications are
+outside the first test because they are dated records: an executed plan legitimately
+names a target that no longer exists, and a record silently rewritten to stay true is
+not a record. `agents/docs_test.go` states that rule in the same words, and names the
+`make githooks` it protects.
+
+Where the guard walks a directory, a missing root is an error: a `claude/skills/`
+that had been deleted went on being walked, and reporting nothing, for eighteen
+days. The listed files are not held to that — a missing one is skipped, so deleting
+`git/README.md` or `CLAUDE.md` would narrow the guard in silence.
 
 **Harness guidance lived in `claude/skills/`** — not in either `CLAUDE.md`, and
 not in `.agents/skills/`. `bootstrap.d/links.manifest` used to symlink
@@ -481,14 +503,11 @@ global rows are `:22-24` today.)*
 
 The two artifacts answer different questions and only one can be generated. The
 rendered block answers *what is this command*; the skill answers *which command
-is this situation* — when a finding was worth the deleted `agents handoff draft`
-rather than a
-comment, why the deleted `agents review` stood between a draft and the tracked record, when
-the deleted `agents trace show` answered what grep could not. The `Agent`-audience coverage check
-is what keeps the second honest as the first grows: without it a new command
-lands, gets a generated reference entry, and no agent ever reaches for it — the
-shape spec 7 measured when `CLAUDE.md` said *how* to write a handoff and never
-*that* one should, and twenty sessions produced none.
+is this situation* — judgment, which is why it cannot be generated. The
+`Agent`-audience coverage check is what keeps the second honest as the first
+grows: without it a new command lands, gets a generated reference entry, and no
+agent ever reaches for it — the shape spec 7 measured when `CLAUDE.md` said *how*
+to write a handoff and never *that* one should, and twenty sessions produced none.
 
 Neither `CLAUDE.md` becomes a manual. The project one declares itself "only the
 pointer" to `.agents/`; the global one is kept to rules a session acts on.
